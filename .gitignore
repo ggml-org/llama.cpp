@@ -98,12 +98,13 @@ examples/server/*.mjs.hpp
 
 # Python
 
-__pycache__
-.venv
-/Pipfile
-dist
-poetry.lock
+/.venv
+/__pycache__/
+*/poetry.lock
 poetry.toml
+
+# Nix
+/result
 
 # Test binaries
 /tests/test-backend-ops
