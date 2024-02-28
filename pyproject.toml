@@ -7,7 +7,7 @@ readme = "README.md"
 homepage = "https://ggml.ai"
 repository = "https://github.com/ggerganov/llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
-packages = [{ include = "__init__.py", from = "." }]
+packages = [{ include = "*.py", from = "." }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -21,7 +21,7 @@ sentencepiece = ">=0.1.98,<0.2.0"
 transformers = ">=4.35.2,<5.0.0"
 protobuf = ">=4.21.0,<5.0.0"
 gguf = { path = "./gguf-py" }
-torch = {version = "^2.2.0", source = "pytorch"}
+torch = { version = "^2.2.0", source = "pytorch" }
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
