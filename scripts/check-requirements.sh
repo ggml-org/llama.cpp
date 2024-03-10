@@ -167,11 +167,11 @@ if (( do_cleanup )); then
 fi
 
 check_convert_script examples/convert-legacy-llama.py
-for py in convert-*.py; do
+for py in convert_*.py; do
     # skip convert-hf-to-gguf-update.py
     # TODO: the check is failing for some reason:
     #       https://github.com/ggerganov/llama.cpp/actions/runs/8875330981/job/24364557177?pr=6920
-    [[ $py == convert-hf-to-gguf-update.py ]] && continue
+    [[ $py == convert_hf_to_gguf_update.py ]] && continue
 
     check_convert_script "$py"
 done

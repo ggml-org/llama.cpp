@@ -688,7 +688,7 @@ function gg_run_embd_bge_small {
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    python3 ../convert-hf-to-gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
+    python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
     model_f16="${path_models}/ggml-model-f16.gguf"
     model_q8_0="${path_models}/ggml-model-q8_0.gguf"
