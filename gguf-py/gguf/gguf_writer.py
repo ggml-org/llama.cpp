@@ -400,6 +400,9 @@ class GGUFWriter:
     def add_parallel_residual(self, use: bool) -> None:
         self.add_bool(Keys.LLM.USE_PARALLEL_RESIDUAL.format(arch=self.arch), use)
 
+    def add_decoder_start_token_id(self, id: int) -> None:
+        self.add_uint32(Keys.LLM.DECODER_START_TOKEN_ID.format(arch=self.arch), id)
+
     def add_head_count(self, count: int) -> None:
         self.add_uint32(Keys.Attention.HEAD_COUNT.format(arch=self.arch), count)
 
@@ -447,6 +450,9 @@ class GGUFWriter:
 
     def add_kv_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KV_LORA_RANK.format(arch=self.arch), length)
+
+    def add_relative_attn_buckets_count(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.REL_BUCKETS_COUNT.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
@@ -538,6 +544,12 @@ class GGUFWriter:
     def add_add_space_prefix(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_PREFIX, value)
 
+    def add_remove_extra_whitespaces(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.REMOVE_EXTRA_WS, value)
+
+    def add_precompiled_charsmap(self, charsmap: Sequence[bytes]) -> None:
+        self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
+
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]]) -> None:
         if not isinstance(value, str):
             template_default = None
@@ -599,9 +611,12 @@ class GGUFWriter:
             kv_data += self._pack("Q", len(encoded_val))
             kv_data += encoded_val
         elif vtype == GGUFValueType.ARRAY and isinstance(val, Sequence) and val:
-            ltype = GGUFValueType.get_type(val[0])
-            if not all(GGUFValueType.get_type(i) is ltype for i in val[1:]):
-                raise ValueError("All items in a GGUF array should be of the same type")
+            if isinstance(val, bytes):
+                ltype = GGUFValueType.UINT8
+            else:
+                ltype = GGUFValueType.get_type(val[0])
+                if not all(GGUFValueType.get_type(i) is ltype for i in val[1:]):
+                    raise ValueError("All items in a GGUF array should be of the same type")
             kv_data += self._pack("I", ltype)
             kv_data += self._pack("Q", len(val))
             for item in val:
