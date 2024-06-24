@@ -643,7 +643,7 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
     static constexpr int qi = QI3_S;
 };
 
-static int get_mmq_x_max_host(const int cc) {
+static constexpr int get_mmq_x_max_host(int cc) {
 #ifdef CUDA_USE_TENSOR_CORES
     return cc >= CC_VOLTA && cc < CC_OFFSET_AMD ? MMQ_MAX_BATCH_SIZE : 64;
 #else
@@ -652,7 +652,7 @@ static int get_mmq_x_max_host(const int cc) {
 }
 
 // Round rows to this value for --split-mode row:
-static int get_mmq_y_host(const int cc) {
+static constexpr int get_mmq_y_host(int cc) {
     return cc >= CC_VOLTA ? 128 : 64;
 }
 
