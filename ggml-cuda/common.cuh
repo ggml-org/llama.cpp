@@ -146,23 +146,6 @@
 #define CC_RDNA2      (CC_OFFSET_AMD + 1030)
 #define CC_RDNA3      (CC_OFFSET_AMD + 1100)
 
-// define this if you want to always fallback to MMQ kernels and not use cuBLAS for matrix multiplication
-// on modern hardware, using cuBLAS is recommended as it utilizes F16 tensor cores which are very performant
-// for large computational tasks. the drawback is that this requires some extra amount of VRAM:
-// -  7B quantum model: +100-200 MB
-// - 13B quantum model: +200-400 MB
-//
-//#define GGML_CUDA_FORCE_MMQ
-
-// TODO: improve this to be correct for more hardware
-//       for example, currently fails for GeForce GTX 1660 which is TURING arch (> VOLTA) but does not have tensor cores
-#if !defined(GGML_CUDA_FORCE_MMQ)
-#define CUDA_USE_TENSOR_CORES
-#endif
-
-#define MMVQ_MAX_BATCH_SIZE  8 // max batch size to use MMVQ kernels
-#define  MMQ_MAX_BATCH_SIZE 64 // max batch size to use MMQ kernels when tensor cores are available
-
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #if defined(_MSC_VER)
@@ -343,15 +326,15 @@ static __device__ __forceinline__ half2 __shfl_xor(half2 var, int laneMask, int 
 #define INT8_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_TURING
 
-static bool fast_fp16_available(const int cc) {
+static constexpr bool fast_fp16_available(const int cc) {
     return cc >= CC_PASCAL && cc != 610;
 }
 
-static bool fp16_mma_available(const int cc) {
+static constexpr bool fp16_mma_available(const int cc) {
     return cc < CC_OFFSET_AMD && cc >= CC_VOLTA;
 }
 
-static bool int8_mma_available(const int cc) {
+static constexpr bool int8_mma_available(const int cc) {
     return cc < CC_OFFSET_AMD && cc >= CC_TURING;
 }
 
@@ -642,19 +625,6 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
     static constexpr int qr = QR3_S;
     static constexpr int qi = QI3_S;
 };
-
-static constexpr int get_mmq_x_max_host(int cc) {
-#ifdef CUDA_USE_TENSOR_CORES
-    return cc >= CC_VOLTA && cc < CC_OFFSET_AMD ? MMQ_MAX_BATCH_SIZE : 64;
-#else
-    return cc >= CC_VOLTA && cc < CC_OFFSET_AMD ? 128 : 64;
-#endif // CUDA_USE_TENSOR_CORES
-}
-
-// Round rows to this value for --split-mode row:
-static constexpr int get_mmq_y_host(int cc) {
-    return cc >= CC_VOLTA ? 128 : 64;
-}
 
 //////////////////////
 

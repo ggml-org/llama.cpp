@@ -7,6 +7,8 @@
 #include <climits>
 #include <cstdint>
 
+#define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
+
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int & kbx0, const int & i_max, const int & stride);
 typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int & k0);
 typedef void (*mmq_write_back_t)(const float * __restrict__ sum, float * __restrict__ dst, const int & stride, const int & i_max, const int & j_max);
@@ -24,25 +26,42 @@ struct tile_x_sizes {
     int sc;
 };
 
-// get_mmq_x_max_host is in common.cuh so that it can be used to determine the correct way to round for --split-mode row
-
-static constexpr __device__ int get_mmq_x_max_device() {
-#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
-    return 64;
+static constexpr int get_mmq_x_max_host(const int cc) {
+    return int8_mma_available(cc) ? 128 :
+#ifdef GGML_CUDA_FORCE_MMQ
+        cc >= CC_VOLTA && cc < CC_OFFSET_AMD ? 128                     : 64;
 #else
-#if __CUDA_ARCH__ >= CC_VOLTA
-#ifdef CUDA_USE_TENSOR_CORES
-    return MMQ_MAX_BATCH_SIZE;
-#else
-    return 128;
-#endif // CUDA_USE_TENSOR_CORES
-#else
-    return 64;
-#endif // __CUDA_ARCH__ >= CC_VOLTA
-#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+        cc >= CC_VOLTA && cc < CC_OFFSET_AMD ? MMQ_DP4A_MAX_BATCH_SIZE : 64;
+#endif // GGML_CUDA_FORCE_MMQ
 }
 
-// get_mmq_y_host is in common.cuh so that it can be used to determine the correct way to round for --split-mode row
+static constexpr __device__ int get_mmq_x_max_device() {
+#ifdef INT8_MMA_AVAILABLE
+    return 128;
+#else // INT8_MMA_AVAILABLE
+
+#if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+    return 128;
+#else // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+
+#if __CUDA_ARCH__ >= CC_VOLTA
+#ifdef GGML_CUDA_FORCE_MMQ
+    return MMQ_DP4A_MAX_BATCH_SIZE;
+#else // GGML_CUDA_FORCE_MMQ
+    return 128;
+#endif // GGML_CUDA_FORCE_MMQ
+#else // __CUDA_ARCH__ >= CC_VOLTA
+
+    return 64;
+#endif // __CUDA_ARCH__ >= CC_VOLTA
+
+#endif // defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
+#endif // INT8_MMA_AVAILABLE
+}
+
+static constexpr int get_mmq_y_host(const int cc) {
+    return int8_mma_available(cc) || cc >= CC_VOLTA ? 128 : 64;
+}
 
 static constexpr __device__ int get_mmq_y_device() {
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
@@ -2590,4 +2609,4 @@ void ggml_cuda_op_mul_mat_q(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
-bool ggml_cuda_supports_mmq(enum ggml_type type);
+bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11);
