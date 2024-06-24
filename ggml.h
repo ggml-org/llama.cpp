@@ -591,11 +591,7 @@ extern "C" {
         struct ggml_tensor * grad;
         struct ggml_tensor * src[GGML_MAX_SRC];
 
-        // performance
-        int     perf_runs;
-        int64_t perf_cycles;
-        int64_t perf_time_us;
-
+        // source tensor and offset for views
         struct ggml_tensor * view_src;
         size_t               view_offs;
 
@@ -605,7 +601,7 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-        char padding[8];
+        // char padding[4];
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -652,11 +648,6 @@ extern "C" {
         struct ggml_hash_set visited_hash_table;
 
         enum ggml_cgraph_eval_order order;
-
-        // performance
-        int     perf_runs;
-        int64_t perf_cycles;
-        int64_t perf_time_us;
     };
 
     // scratch buffer
@@ -671,28 +662,6 @@ extern "C" {
         size_t mem_size;   // bytes
         void * mem_buffer; // if NULL, memory will be allocated internally
         bool   no_alloc;   // don't allocate memory for the tensor data
-    };
-
-
-    // compute types
-
-    // NOTE: the INIT or FINALIZE pass is not scheduled unless explicitly enabled.
-    // This behavior was changed since https://github.com/ggerganov/llama.cpp/pull/1995.
-    enum ggml_task_type {
-        GGML_TASK_TYPE_INIT = 0,
-        GGML_TASK_TYPE_COMPUTE,
-        GGML_TASK_TYPE_FINALIZE,
-    };
-
-    struct ggml_compute_params {
-        enum ggml_task_type type;
-
-        // ith = thread index, nth = number of threads
-        int ith, nth;
-
-        // work buffer for all threads
-        size_t wsize;
-        void * wdata;
     };
 
     // numa strategies

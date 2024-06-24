@@ -12785,12 +12785,6 @@ static int llama_decode_internal(
             }
         }
 
-#ifdef GGML_PERF
-        // print timing information per ggml operation (for debugging purposes)
-        // requires GGML_PERF to be defined
-        ggml_graph_print(gf);
-#endif
-
         // plot the computation graph in dot format (for debugging purposes)
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");

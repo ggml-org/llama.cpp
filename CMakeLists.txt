@@ -144,9 +144,6 @@ option(LLAMA_BUILD_SERVER                    "llama: build server example"      
 option(LLAMA_LASX                            "llama: enable lasx"                               ON)
 option(LLAMA_LSX                             "llama: enable lsx"                                ON)
 
-# add perf arguments
-option(LLAMA_PERF                            "llama: enable perf"                               OFF)
-
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
 
@@ -868,10 +865,6 @@ if (LLAMA_CPU_HBM)
     add_compile_definitions(GGML_USE_CPU_HBM)
 
     target_link_libraries(ggml PUBLIC memkind)
-endif()
-
-if (LLAMA_PERF)
-    add_compile_definitions(GGML_PERF)
 endif()
 
 function(get_flags CCID CCVER)

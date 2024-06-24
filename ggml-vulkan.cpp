@@ -513,8 +513,8 @@ static size_t vk_skip_checks;
 static size_t vk_output_tensor;
 
 static void ggml_vk_print_tensor(ggml_backend * ctx, const ggml_tensor * tensor, const char * name);
-static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_compute_params * params, ggml_tensor * tensor);
-static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_compute_params * params, ggml_tensor * tensor);
+static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor * tensor);
+static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor * tensor);
 #endif
 
 typedef void (*ggml_vk_func_t)(ggml_backend_vk_context * ctx, vk_context * subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -5644,7 +5644,7 @@ static void ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
     }
 }
 
-static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_compute_params * params, ggml_tensor * tensor){
+static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor * tensor){
     ggml_tensor_extra_gpu * extra = nullptr;
 
     switch (tensor->op) {
@@ -5697,17 +5697,10 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_compute_
         return false;
     }
 
-    if (params->ith != 0) {
-        return true;
-    }
-    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE) {
-        return true;
-    }
-
     VK_LOG_DEBUG("ggml_vk_compute_forward(" << tensor << ", name=" << tensor->name << ", op=" << ggml_op_name(tensor->op) << ", type=" << tensor->type << ", ne0=" << tensor->ne[0] << ", ne1=" << tensor->ne[1] << ", ne2=" << tensor->ne[2] << ", ne3=" << tensor->ne[3] << ", nb0=" << tensor->nb[0] << ", nb1=" << tensor->nb[1] << ", nb2=" << tensor->nb[2] << ", nb3=" << tensor->nb[3] << ", view_src=" << tensor->view_src << ", view_offs=" << tensor->view_offs << ")");
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
-    ggml_vk_check_results_0(ctx, params, tensor);
+    ggml_vk_check_results_0(ctx, tensor);
 #endif
 
     vk_context& subctx = ctx->gc.contexts[extra->ctx_idx];
@@ -6214,9 +6207,6 @@ GGML_CALL static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backen
         ggml_vk_build_graph(ctx,cgraph->nodes[i], i == last_node);
     }
 
-    ggml_compute_params params = {};
-    params.type = GGML_TASK_TYPE_COMPUTE;
-    params.ith = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
@@ -6224,13 +6214,13 @@ GGML_CALL static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backen
             continue;
         }
 
-        bool ok = ggml_vk_compute_forward(ctx, &params, node);
+        bool ok = ggml_vk_compute_forward(ctx, node);
         if (!ok) {
             fprintf(stderr, "%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
 #ifdef GGML_VULKAN_CHECK_RESULTS
         else {
-            ggml_vk_check_results_1(ctx, &params, node);
+            ggml_vk_check_results_1(ctx, node);
         }
 #endif
         GGML_ASSERT(ok);
@@ -6600,11 +6590,8 @@ void * comp_result;
 size_t comp_size;
 size_t comp_nb[GGML_MAX_DIMS];
 size_t check_counter = 0;
-static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_compute_params * params, ggml_tensor * tensor) {
-    if (params->ith != 0) {
-        return;
-    }
-    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE || tensor->op == GGML_OP_TRANSPOSE) {
+static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor * tensor) {
+        if (tensor->op == GGML_OP_TRANSPOSE) {
         return;
     }
 
@@ -6908,11 +6895,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_compute_
     ggml_free(ggml_ctx);
 }
 
-static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_compute_params * params, ggml_tensor * tensor) {
-    if (params->ith != 0) {
-        return;
-    }
-    if (params->type == GGML_TASK_TYPE_INIT || params->type == GGML_TASK_TYPE_FINALIZE || tensor->op == GGML_OP_TRANSPOSE) {
+static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor * tensor) {
+    if (tensor->op == GGML_OP_TRANSPOSE) {
         return;
     }
     if (!(vk_output_tensor > 0 && vk_output_tensor == check_counter) && check_counter <= vk_skip_checks) {
