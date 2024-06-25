@@ -101,7 +101,9 @@ int main(int argc, char** argv) {
     auto grammar = llama_grammar_init(
             grammar_rules.data(),
             grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
-
+    if (grammar == nullptr) {
+        throw std::runtime_error("Failed to initialize llama_grammar");
+    }
     // Read the input file
     std::string input_str;
     {

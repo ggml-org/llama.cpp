@@ -36,10 +36,10 @@ static llama_grammar* build_grammar(const std::string & grammar_str) {
 static bool test_build_grammar_fails(const std::string & grammar_str) {
     fprintf(stderr, "⚫ Testing failure for grammar: %s\n", grammar_str.c_str());
     bool grammar_fails = false;
-    try {
-        build_grammar(grammar_str);
+    llama_grammar * grammar = build_grammar(grammar_str);
+    if (grammar != nullptr) {
         fprintf(stderr, "  ❌ Expected build failure, but succeeded\n");
-    } catch (const std::exception & err) {
+    } else {
         grammar_fails = true;
         fprintf(stdout, "  ✅︎\n");
     }
