@@ -3,7 +3,7 @@ ARG UBUNTU_VERSION=22.04
 FROM ubuntu:$UBUNTU_VERSION as build
 
 RUN apt-get update && \
-    apt-get install -y build-essential git libcurl4-openssl-dev
+    apt-get install -y build-essential git libcurl4-openssl-dev curl
 
 WORKDIR /app
 
@@ -21,5 +21,7 @@ RUN apt-get update && \
 COPY --from=build /app/llama-server /llama-server
 
 ENV LC_ALL=C.utf8
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 ENTRYPOINT [ "/llama-server" ]

@@ -43,8 +43,10 @@ ENV CXX=/opt/rocm/llvm/bin/clang++
 # Enable cURL
 ENV LLAMA_CURL=1
 RUN apt-get update && \
-    apt-get install -y libcurl4-openssl-dev
+    apt-get install -y libcurl4-openssl-dev curl
 
 RUN make -j$(nproc) llama-server
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 ENTRYPOINT [ "/app/llama-server" ]
