@@ -148,6 +148,250 @@ static void test_schema(const std::string & test_desc, const std::string & schem
 }
 
 static void test_simple_grammar() {
+    test_schema(
+        "min 0",
+        R"""({
+            "type": "integer",
+            "minimum": 0
+        })""",
+        // Passing strings
+        {
+            "0",
+            "10",
+            "12",
+            "10000",
+        },
+        // Failing strings
+        {
+            "-1",
+            "-10",
+            "-10000",
+            "-100000000000000000000000000000000",
+            "100000000000000000000000000000000",
+            "00",
+            "01",
+            "-0",
+        }
+    );
+    test_schema(
+        "min 2",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": 2
+        })""",
+        // Passing strings
+        {
+            "2",
+            "3",
+            "4",
+            "10",
+            "20",
+            "1234567890000000",
+        },
+        // Failing strings
+        {
+            "0",
+            "1",
+            "-1",
+            "-100",
+            "0",
+            "1",
+            "01",
+            "02",
+            "12345678900000000",
+        }
+    );
+    test_schema(
+        "min 456",
+        R"""({
+            "type": "integer",
+            "minimum": 456
+        })""",
+        // Passing strings
+        {
+            "456",
+            "4560",
+            "457",
+            "460",
+            "500",
+        },
+        // Failing strings
+        {
+            "455",
+            "356",
+            "50",
+            "050",
+            "-1",
+            "-456",
+        }
+    );
+    test_schema(
+        "min -123",
+        R"""({
+            "type": "integer",
+            "minimum": -123
+        })""",
+        // Passing strings
+        {
+            "-123",
+            "-122",
+            "-11",
+            "-1",
+            "0",
+            "1",
+            "123",
+            "1234",
+            "2345",
+        },
+        // Failing strings
+        {
+            "-1234",
+            "-124",
+        }
+    );
+
+    test_schema(
+        "max 9999",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": 9999
+        })""",
+        // Passing strings
+        {
+            "-99999",
+            "0",
+            "9999",
+        },
+        // Failing strings
+        {
+            "10000",
+            "99991",
+        }
+    );
+    test_schema(
+        "max -9999",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": -9999
+        })""",
+        // Passing strings
+        {
+            "-10000",
+            "-9999",
+        },
+        // Failing strings
+        {
+            "-9998",
+            "0",
+            "9999",
+        }
+    );
+    test_schema(
+        "min 5 max 30",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 30
+        })""",
+        // Passing strings
+        {
+            "5",
+            "10",
+            "30",
+        },
+        // Failing strings
+        {
+            "05",
+            "4",
+            "-1",
+            "31",
+            "123",
+            "0123",
+        }
+    );
+    test_schema(
+        "min -1 max 1",
+        R"""({
+            "type": "integer",
+            "minimum": -1,
+            "maximum": 1
+        })""",
+        // Passing strings
+        {
+            "-1",
+            "0",
+            "1",
+        },
+        // Failing strings
+        {
+            "-11",
+            "-10",
+            "-2",
+            "2",
+            "10",
+            "11",
+        }
+    );
+    test_schema(
+        "min -123 max 42",
+        R"""({
+            "type": "integer",
+            "minimum": -123,
+            "maximum": 42
+        })""",
+        // Passing strings
+        {
+            "-123",
+            "-122",
+            "-13",
+            "-11",
+            "-2",
+            "-1",
+            "0",
+            "1",
+            "5",
+            "10",
+            "39",
+            "40",
+            "42",
+        },
+        // Failing strings
+        {
+            "-0123",
+            "-124",
+            "-1123",
+            "-200",
+            "43",
+            "123",
+            "0123",
+        }
+    );
+    test_schema(
+        "exclusive min / max",
+        // Schema
+        R"""({
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "exclusiveMaximum": 10000
+        })""",
+        // Passing strings
+        {
+            "1",
+            "9999",
+        },
+        // Failing strings
+        {
+            "0",
+            "01",
+            "10000",
+            "99999",
+        }
+    );
+
     // Test case for a simple grammar
     test_grammar(
         "simple grammar",
@@ -772,7 +1016,6 @@ static void test_json_schema() {
             "foo",
         }
     );
-
 
     test_schema(
         "min+max items",

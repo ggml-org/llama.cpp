@@ -81,6 +81,232 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
     };
 
     test({
+        SUCCESS,
+        "min 0",
+        R"""({
+            "type": "integer",
+            "minimum": 0
+        })""",
+        R"""(
+            root ::= ([0] | [1-9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 1",
+        R"""({
+            "type": "integer",
+            "minimum": 1
+        })""",
+        R"""(
+            root ::= ([1-9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 3",
+        R"""({
+            "type": "integer",
+            "minimum": 3
+        })""",
+        R"""(
+            root ::= ([1-2] [0-9]{1,15} | [3-9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 9",
+        R"""({
+            "type": "integer",
+            "minimum": 9
+        })""",
+        R"""(
+            root ::= ([1-8] [0-9]{1,15} | [9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 10",
+        R"""({
+            "type": "integer",
+            "minimum": 10
+        })""",
+        R"""(
+            root ::= ([1] ([0-9]{1,15}) | [2-9] [0-9]{1,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 25",
+        R"""({
+            "type": "integer",
+            "minimum": 25
+        })""",
+        R"""(
+            root ::= ([1] [0-9]{2,15} | [2] ([0-4] [0-9]{1,14} | [5-9] [0-9]{0,14}) | [3-9] [0-9]{1,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "max 30",
+        R"""({
+            "type": "integer",
+            "maximum": 30
+        })""",
+        R"""(
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-2] [0-9] | [3] "0")) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min -5",
+        R"""({
+            "type": "integer",
+            "minimum": -5
+        })""",
+        R"""(
+            root ::= ("-" ([0-5]) | [0] | [1-9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min -123",
+        R"""({
+            "type": "integer",
+            "minimum": -123
+        })""",
+        R"""(
+            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0] | [1-9] [0-9]{0,15}) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "max -5",
+        R"""({
+            "type": "integer",
+            "maximum": -5
+        })""",
+        R"""(
+            root ::= ("-" ([0-4] [0-9]{1,15} | [5-9] [0-9]{0,15})) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "max 1",
+        R"""({
+            "type": "integer",
+            "maximum": 1
+        })""",
+        R"""(
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-1]) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "max 100",
+        R"""({
+            "type": "integer",
+            "maximum": 100
+        })""",
+        R"""(
+            root ::= ("-" [1-9] [0-9]{0,15} | [0-9] | ([1-8] [0-9] | [9] [0-9]) | "100") space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 0 max 23",
+        R"""({
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+        })""",
+        R"""(
+            root ::= ([0-9] | ([1] [0-9] | [2] [0-3])) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 15 max 300",
+        R"""({
+            "type": "integer",
+            "minimum": 15,
+            "maximum": 300
+        })""",
+        R"""(
+            root ::= (([1] ([5-9]) | [2-9] [0-9]) | ([1-2] [0-9]{2} | [3] "00")) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min 5 max 30",
+        R"""({
+            "type": "integer",
+            "minimum": 5,
+            "maximum": 30
+        })""",
+        R"""(
+            root ::= ([5-9] | ([1-2] [0-9] | [3] "0")) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min -123 max 42",
+        R"""({
+            "type": "integer",
+            "minimum": -123,
+            "maximum": 42
+        })""",
+        R"""(
+            root ::= ("-" ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-1] [0-9] | [2] [0-3])) | [0-9] | ([1-3] [0-9] | [4] [0-2])) space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min -10 max 10",
+        R"""({
+            "type": "integer",
+            "minimum": -10,
+            "maximum": 10
+        })""",
+        R"""(
+            root ::= ("-" ([0-9] | "10") | [0-9] | "10") space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
         FAILURE,
         "unknown type",
         R"""({
@@ -385,6 +611,44 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             item ::= number | integer
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            root ::= "[" space item ("," space item){2,4} "]" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min + max items with min + max values across zero",
+        R"""({
+            "items": {
+                "type": "integer",
+                "minimum": -12,
+                "maximum": 207
+            },
+            "minItems": 3,
+            "maxItems": 5
+        })""",
+        R"""(
+            item ::= ("-" ([0-9] | "1" [0-2]) | [0-9] | ([1-8] [0-9] | [9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7])) space
+            root ::= "[" space item ("," space item){2,4} "]" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "min + max items with min + max values",
+        R"""({
+            "items": {
+                "type": "integer",
+                "minimum": 12,
+                "maximum": 207
+            },
+            "minItems": 3,
+            "maxItems": 5
+        })""",
+        R"""(
+            item ::= (([1] ([2-9]) | [2-9] [0-9]) | ([1] [0-9]{2} | [2] "0" [0-7])) space
             root ::= "[" space item ("," space item){2,4} "]" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""

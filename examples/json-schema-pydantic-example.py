@@ -53,6 +53,7 @@ if __name__ == '__main__':
         question: str
         concise_answer: str
         justification: str
+        stars: Annotated[int, Field(ge=1, le=5)]
 
     class PyramidalSummary(BaseModel):
         title: str
