@@ -10,7 +10,7 @@
 name: Publish Docker image
 
 on:
-  pull_request:
+  #pull_request:
   push:
     branches:
       - master
@@ -22,7 +22,7 @@ concurrency:
 jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
-    if: github.event.pull_request.draft == false
+    #if: github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
     env:
