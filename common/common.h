@@ -52,6 +52,12 @@ int32_t cpu_get_num_math();
 // CLI argument parsing
 //
 
+// dimensionality reduction methods, used by cvector-generator
+enum dimre_method {
+    DIMRE_METHOD_PCA,
+    DIMRE_METHOD_MEAN,
+};
+
 struct gpt_params {
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
@@ -238,13 +244,12 @@ struct gpt_params {
     bool compute_ppl    = true;  // whether to compute perplexity
 
     // cvector-generator params
-    int n_completions = 64;
-    int n_pca_batch = 20;
+    int n_pca_batch = 100;
     int n_pca_iterations = 1000;
-    std::string cvector_outfile          = "control_vector.gguf";
-    std::string cvector_completions_file = "examples/cvector-generator/completions.txt";
-    std::string cvector_positive_file    = "examples/cvector-generator/positive.txt";
-    std::string cvector_negative_file    = "examples/cvector-generator/negative.txt";
+    dimre_method cvector_dimre_method = DIMRE_METHOD_PCA;
+    std::string cvector_outfile       = "control_vector.gguf";
+    std::string cvector_positive_file = "examples/cvector-generator/positive.txt";
+    std::string cvector_negative_file = "examples/cvector-generator/negative.txt";
 };
 
 void gpt_params_handle_model_default(gpt_params & params);

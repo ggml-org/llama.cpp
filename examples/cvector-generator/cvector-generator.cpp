@@ -2,6 +2,7 @@
 #include "llama.h"
 #include "ggml.h"
 #include "pca.hpp"
+#include "mean.hpp"
 
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
@@ -38,9 +39,10 @@ static void print_usage(int argc, char ** argv, const gpt_params & params) {
     gpt_params_print_usage(argc, argv, params);
 
     printf("\nexample usage:\n");
-    printf("\n    CPU only:   %s -m ./dolphin-2.0-mistral-7b.Q4_K_M.gguf\n", argv[0]);
-    printf("\n    with GPU:   %s -m ./dolphin-2.0-mistral-7b.Q4_K_M.gguf -ngl 99\n", argv[0]);
-    printf("\n    advanced:   %s -m ./dolphin-2.0-mistral-7b.Q4_K_M.gguf -ngl 99 --completions 128 --pca-iter 2000 --pca-batch 100\n", argv[0]);
+    printf("\n    CPU only:   %s -m ./llama-3.Q4_K_M.gguf\n", argv[0]);
+    printf("\n    with GPU:   %s -m ./llama-3.Q4_K_M.gguf -ngl 99\n", argv[0]);
+    printf("\n    advanced:   %s -m ./llama-3.Q4_K_M.gguf -ngl 99 --pca-iter 2000 --pca-batch 100\n", argv[0]);
+    printf("\n    using mean: %s -m ./llama-3.Q4_K_M.gguf --method mean\n", argv[0]);
     printf("\n");
 }
 
@@ -223,23 +225,30 @@ struct train_context {
 
     // build the v_diff tensors from v_diff_tmp (v_diff need to be transposed)
     // TODO @ngxson : maybe add option NOT to transpose v_diff; will be useful for "mean" method
-    void build_v_diff() {
+    void build_v_diff(bool transpose) {
         printf("build_v_diff\n");
         for (int il = 0; il < n_layers - 1; il++) {
             auto & diff_tmp = v_diff_tmp[il];
             int n_elem = diff_tmp.size() / sizeof(float);
             GGML_ASSERT(n_elem % n_embd == 0);
             int n_rows = n_elem / n_embd;
-            struct ggml_tensor * diff = ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_rows, n_embd);
+            struct ggml_tensor * diff = transpose
+                ? ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_rows, n_embd)
+                : ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_embd, n_rows);
             ggml_set_name(diff, (std::string("diff_") + std::to_string(il)).c_str());
-            // copy data & transpose
             diff->data = malloc(ggml_nbytes(diff)); // TODO: get rid of this malloc if possible
-            float * arr = (float *) diff_tmp.data();
-            for (int ir = 0; ir < n_rows; ++ir) {
-                for (int ic = 0; ic < n_embd; ++ic) {
-                    float f = arr[ir*n_embd + ic];
-                    ggml_set_f32_nd(diff, ir, ic, 0, 0, f);
+            if (transpose) {
+                // copy data & transpose
+                float * arr = (float *) diff_tmp.data();
+                for (int ir = 0; ir < n_rows; ++ir) {
+                    for (int ic = 0; ic < n_embd; ++ic) {
+                        float f = arr[ir*n_embd + ic];
+                        ggml_set_f32_nd(diff, ir, ic, 0, 0, f);
+                    }
                 }
+            } else {
+                // only copy
+                memcpy(diff->data, diff_tmp.data(), ggml_nbytes(diff));
             }
             v_diff.push_back(diff);
             print_debug_tensor(diff);
@@ -263,8 +272,8 @@ struct tokenized_prompt {
 
     tokenized_prompt(llama_context * ctx, std::string pos, std::string neg) {
         const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
-        tokens_pos = ::llama_tokenize(ctx, pos, add_bos);
-        tokens_neg = ::llama_tokenize(ctx, neg, add_bos);
+        tokens_pos = ::llama_tokenize(ctx, pos, add_bos, true);
+        tokens_neg = ::llama_tokenize(ctx, neg, add_bos, true);
         max_seq_len = std::max(tokens_pos.size(), tokens_neg.size());
         padding_seq(ctx, tokens_pos, max_seq_len);
         padding_seq(ctx, tokens_neg, max_seq_len);
@@ -373,20 +382,8 @@ static int prepare_entries(gpt_params & params, train_context & ctx_train) {
         fprintf(stderr, "must provide at least one prompt pair\n");
         return 1;
     }
-
-    // create templated prompts
-    std::vector<std::string> completions = ctrlvec_load_prompt_file(params.cvector_completions_file, false);
-    auto format_template = [](std::string persona, std::string suffix) {
-        // entry in positive/negative.txt must already be formatted i.e. "[INST] Act as if you're extremely happy. [/INST] "
-        return persona + suffix;
-    };
-    for (size_t i = 0; i < positive_prompts.size(); ++i) {
-        for (int j = 0; j < std::min((int) completions.size(), params.n_completions); ++j) {
-            // TODO replicate the truncations done by the python implementation
-            ctx_train.positive_entries.push_back(format_template(positive_prompts[i], completions[j]));
-            ctx_train.negative_entries.push_back(format_template(negative_prompts[i], completions[j]));
-        }
-    }
+    ctx_train.positive_entries = positive_prompts;
+    ctx_train.negative_entries = negative_prompts;
     return 0;
 }
 
@@ -480,15 +477,22 @@ int main(int argc, char ** argv) {
     llama_free(ctx);
     llama_free_model(model);
 
-    // prepare ctx_train for PCA
-    ctx_train.build_v_diff();
+    bool use_pca = params.cvector_dimre_method == DIMRE_METHOD_PCA;
 
-    // run PCA
-    PCA::pca_params pca_params;
-    pca_params.n_threads = params.n_threads;
-    pca_params.n_batch = params.n_pca_batch;
-    pca_params.n_iterations = params.n_pca_iterations;
-    PCA::run_pca(pca_params, ctx_train.v_diff, ctx_train.v_final);
+    // prepare ctx_train for PCA
+    ctx_train.build_v_diff(use_pca);
+
+    if (use_pca) {
+        // run PCA
+        PCA::pca_params pca_params;
+        pca_params.n_threads = params.n_threads;
+        pca_params.n_batch = params.n_pca_batch;
+        pca_params.n_iterations = params.n_pca_iterations;
+        PCA::run_pca(pca_params, ctx_train.v_diff, ctx_train.v_final);
+    } else {
+        // run mean
+        mean::run(ctx_train.v_diff, ctx_train.v_final);
+    }
 
     // write output vectors to gguf
     export_gguf(ctx_train.v_final, params.cvector_outfile, model_hint);

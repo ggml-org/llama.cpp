@@ -290,7 +290,7 @@ static void power_iteration(
         }
 
         printf("%s: layer %d/%d, iteration: %d / total: %d (batch = %d) ...\n",
-            __func__, params.i_layer+1, params.n_layers, iter, n_iters, params.n_batch);
+            __func__, params.i_layer+1, params.n_layers, iter+1, n_iters, params.n_batch);
     }
 
     // get output tensor
@@ -298,6 +298,9 @@ static void power_iteration(
     ggml_backend_tensor_get(last_eigenvector, output->data, 0, ggml_nbytes(last_eigenvector));
     //print_debug_tensor(output);
     ggml_gallocr_free(allocr);
+
+    // TODO @ngxson : The output vector is randomly inverted
+    // Solution: https://github.com/ggerganov/llama.cpp/pull/8069#issuecomment-2185328171
 }
 
 static void run_pca(
