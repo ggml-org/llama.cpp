@@ -1538,9 +1538,11 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "       --lora FNAME",           "apply LoRA adapter (implies --no-mmap)" });
     options.push_back({ "*",           "       --lora-scaled FNAME S",  "apply LoRA adapter with user defined scaling S (implies --no-mmap)" });
     options.push_back({ "*",           "       --lora-base FNAME",      "optional model to use as a base for the layers modified by the LoRA adapter" });
-    options.push_back({ "*",           "       --control-vector FNAME", "add a control vector" });
+    options.push_back({ "*",           "       --control-vector FNAME", "add a control vector\n"
+                                                                        "note: this argument can be repeated to add multiple control vectors" });
     options.push_back({ "*",           "       --control-vector-scaled FNAME SCALE",
-                                                                        "add a control vector with user defined scaling SCALE" });
+                                                                        "add a control vector with user defined scaling SCALE\n"
+                                                                        "note: this argument can be repeated to add multiple scaled control vectors" });
     options.push_back({ "*",           "       --control-vector-layer-range START END",
                                                                         "layer range to apply the control vector(s) to, start and end inclusive" });
     options.push_back({ "*",           "-m,    --model FNAME",          "model path (default: models/$filename with filename from --hf-file\n"
