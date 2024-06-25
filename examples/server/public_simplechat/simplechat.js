@@ -222,8 +222,8 @@ class SimpleChat {
      * @param {Object} obj
      */
     request_jsonstr_extend(obj) {
-        for(let k in gMe.chatRequestOptions) {
-            obj[k] = gMe.chatRequestOptions[k];
+        for(let k in gMe.apiRequestOptions) {
+            obj[k] = gMe.apiRequestOptions[k];
         }
         if (gMe.bStream) {
             obj["stream"] = true;
@@ -740,11 +740,12 @@ class Me {
             "Authorization": "", // Authorization: Bearer OPENAI_API_KEY
         }
         // Add needed fields wrt json object to be sent wrt LLM web services completions endpoint.
-        this.chatRequestOptions = {
+        this.apiRequestOptions = {
             "model": "gpt-3.5-turbo",
             "temperature": 0.7,
             "max_tokens": 1024,
             "n_predict": 1024,
+            "cache_prompt": false,
             //"frequency_penalty": 1.2,
             //"presence_penalty": 1.2,
         };
@@ -800,51 +801,55 @@ class Me {
 
             ui.el_create_append_p(`bStream:${this.bStream}`, elDiv);
 
+            ui.el_create_append_p(`bTrimGarbage:${this.bTrimGarbage}`, elDiv);
+
+            ui.el_create_append_p(`ApiEndPoint:${this.apiEP}`, elDiv);
+
+            ui.el_create_append_p(`iRecentUserMsgCnt:${this.iRecentUserMsgCnt}`, elDiv);
+
             ui.el_create_append_p(`bCompletionFreshChatAlways:${this.bCompletionFreshChatAlways}`, elDiv);
 
             ui.el_create_append_p(`bCompletionInsertStandardRolePrefix:${this.bCompletionInsertStandardRolePrefix}`, elDiv);
 
-            ui.el_create_append_p(`bTrimGarbage:${this.bTrimGarbage}`, elDiv);
-
-            ui.el_create_append_p(`iRecentUserMsgCnt:${this.iRecentUserMsgCnt}`, elDiv);
-
-            ui.el_create_append_p(`ApiEndPoint:${this.apiEP}`, elDiv);
-
         }
 
-        ui.el_create_append_p(`chatRequestOptions:${JSON.stringify(this.chatRequestOptions, null, " - ")}`, elDiv);
+        ui.el_create_append_p(`apiRequestOptions:${JSON.stringify(this.apiRequestOptions, null, " - ")}`, elDiv);
         ui.el_create_append_p(`headers:${JSON.stringify(this.headers, null, " - ")}`, elDiv);
 
     }
 
     /**
-     * Auto create ui input elements for fields in ChatRequestOptions
+     * Auto create ui input elements for fields in apiRequestOptions
      * Currently supports text and number field types.
      * @param {HTMLDivElement} elDiv
      */
-    show_settings_chatrequestoptions(elDiv) {
+    show_settings_apirequestoptions(elDiv) {
         let typeDict = {
             "string": "text",
             "number": "number",
         };
         let fs = document.createElement("fieldset");
         let legend = document.createElement("legend");
-        legend.innerText = "ChatRequestOptions";
+        legend.innerText = "ApiRequestOptions";
         fs.appendChild(legend);
         elDiv.appendChild(fs);
-        for(const k in this.chatRequestOptions) {
-            let val = this.chatRequestOptions[k];
+        for(const k in this.apiRequestOptions) {
+            let val = this.apiRequestOptions[k];
             let type = typeof(val);
-            if (!((type == "string") || (type == "number"))) {
-                continue;
+            if (((type == "string") || (type == "number"))) {
+                let inp = ui.el_creatediv_input(`Set${k}`, k, typeDict[type], this.apiRequestOptions[k], (val)=>{
+                    if (type == "number") {
+                        val = Number(val);
+                    }
+                    this.apiRequestOptions[k] = val;
+                });
+                fs.appendChild(inp.div);
+            } else if (type == "boolean") {
+                let bbtn = ui.el_creatediv_boolbutton(`Set{k}`, k, {true: "true", false: "false"}, val, (userVal)=>{
+                    this.apiRequestOptions[k] = userVal;
+                });
+                fs.appendChild(bbtn.div);
             }
-            let inp = ui.el_creatediv_input(`Set${k}`, k, typeDict[type], this.chatRequestOptions[k], (val)=>{
-                if (type == "number") {
-                    val = Number(val);
-                }
-                this.chatRequestOptions[k] = val;
-            });
-            fs.appendChild(inp.div);
         }
     }
 
@@ -870,6 +875,23 @@ class Me {
         });
         elDiv.appendChild(bb.div);
 
+        bb = ui.el_creatediv_boolbutton("SetTrimGarbage", "TrimGarbage", {true: "[+] yes trim", false: "[-] dont trim"}, this.bTrimGarbage, (val)=>{
+            this.bTrimGarbage = val;
+        });
+        elDiv.appendChild(bb.div);
+
+        this.show_settings_apirequestoptions(elDiv);
+
+        let sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
+            this.apiEP = ApiEP.Type[val];
+        });
+        elDiv.appendChild(sel.div);
+
+        sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
+            this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
+        });
+        elDiv.appendChild(sel.div);
+
         bb = ui.el_creatediv_boolbutton("SetCompletionFreshChatAlways", "CompletionFreshChatAlways", {true: "[+] yes fresh", false: "[-] no, with history"}, this.bCompletionFreshChatAlways, (val)=>{
             this.bCompletionFreshChatAlways = val;
         });
@@ -879,23 +901,6 @@ class Me {
             this.bCompletionInsertStandardRolePrefix = val;
         });
         elDiv.appendChild(bb.div);
-
-        bb = ui.el_creatediv_boolbutton("SetTrimGarbage", "TrimGarbage", {true: "[+] yes trim", false: "[-] dont trim"}, this.bTrimGarbage, (val)=>{
-            this.bTrimGarbage = val;
-        });
-        elDiv.appendChild(bb.div);
-
-        let sel = ui.el_creatediv_select("SetChatHistoryInCtxt", "ChatHistoryInCtxt", this.sRecentUserMsgCnt, this.iRecentUserMsgCnt, (val)=>{
-            this.iRecentUserMsgCnt = this.sRecentUserMsgCnt[val];
-        });
-        elDiv.appendChild(sel.div);
-
-        sel = ui.el_creatediv_select("SetApiEP", "ApiEndPoint", ApiEP.Type, this.apiEP, (val)=>{
-            this.apiEP = ApiEP.Type[val];
-        });
-        elDiv.appendChild(sel.div);
-
-        this.show_settings_chatrequestoptions(elDiv);
 
     }
 

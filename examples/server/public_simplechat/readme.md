@@ -3,6 +3,13 @@
 
 by Humans for All.
 
+## quickstart
+
+To run from the build dir
+
+bin/llama-server -m path/model.gguf --path ../examples/server/public_simplechat
+
+Continue reading for the details.
 
 ## overview
 
@@ -13,6 +20,8 @@ own system prompts.
 
 This allows seeing the generated text / ai-model response in oneshot at the end, after it is fully generated,
 or potentially as it is being generated, in a streamed manner from the server/ai-model.
+
+![Chat and Settings screens](./simplechat_screens.webp "Chat and Settings screens")
 
 Auto saves the chat session locally as and when the chat is progressing and inturn at a later time when you
 open SimpleChat, option is provided to restore the old chat session, if a matching one exists.
@@ -170,16 +179,22 @@ It is attached to the document object. Some of these can also be updated using t
     The histogram/freq based trimming logic is currently tuned for english language wrt its
     is-it-a-alpabetic|numeral-char regex match logic.
 
-  chatRequestOptions - maintains the list of options/fields to send along with chat request,
+  apiRequestOptions - maintains the list of options/fields to send along with api request,
   irrespective of whether /chat/completions or /completions endpoint.
 
     If you want to add additional options/fields to send to the server/ai-model, and or
     modify the existing options value or remove them, for now you can update this global var
     using browser's development-tools/console.
 
-    For string and numeric fields in chatRequestOptions, including even those added by a user
-    at runtime by directly modifying gMe.chatRequestOptions, setting ui entries will be auto
+    For string, numeric and boolean fields in apiRequestOptions, including even those added by a
+    user at runtime by directly modifying gMe.apiRequestOptions, setting ui entries will be auto
     created.
+
+    cache_prompt option supported by example/server is allowed to be controlled by user, so that
+    any caching supported wrt system-prompt and chat history, if usable can get used. When chat
+    history sliding window is enabled, cache_prompt logic may or may not kick in at the backend
+    wrt same, based on aspects related to model, positional encoding, attention mechanism etal.
+    However system prompt should ideally get the benefit of caching.
 
   headers - maintains the list of http headers sent when request is made to the server. By default
   Content-Type is set to application/json. Additionally Authorization entry is provided, which can
@@ -197,10 +212,10 @@ It is attached to the document object. Some of these can also be updated using t
     >0 : Send the latest chat history from the latest system prompt, limited to specified cnt.
 
 
-By using gMe's iRecentUserMsgCnt and chatRequestOptions.max_tokens one can try to control the
-implications of loading of the ai-model's context window by chat history, wrt chat response to
-some extent in a simple crude way. You may also want to control the context size enabled when
-the server loads ai-model, on the server end.
+By using gMe's iRecentUserMsgCnt and apiRequestOptions.max_tokens/n_predict one can try to control
+the implications of loading of the ai-model's context window by chat history, wrt chat response to
+some extent in a simple crude way. You may also want to control the context size enabled when the
+server loads ai-model, on the server end.
 
 
 Sometimes the browser may be stuborn with caching of the file, so your updates to html/css/js
@@ -237,12 +252,12 @@ also be started with a model context size of 1k or more, to be on safe side.
   internal n_predict, for now add the same here on the client side, maybe later add max_tokens
   to /completions endpoint handling code on server side.
 
-NOTE: One may want to experiment with frequency/presence penalty fields in chatRequestOptions
-wrt the set of fields sent to server along with the user query. To check how the model behaves
+NOTE: One may want to experiment with frequency/presence penalty fields in apiRequestOptions
+wrt the set of fields sent to server along with the user query, to check how the model behaves
 wrt repeatations in general in the generated text response.
 
 A end-user can change these behaviour by editing gMe from browser's devel-tool/console or by
-using the providing settings ui.
+using the provided settings ui (for settings exposed through the ui).
 
 
 ### OpenAi / Equivalent API WebService
@@ -253,7 +268,7 @@ for a minimal chatting experimentation by setting the below.
 * the baseUrl in settings ui
   * https://api.openai.com/v1 or similar
 
-* Wrt request body - gMe.chatRequestOptions
+* Wrt request body - gMe.apiRequestOptions
   * model (settings ui)
   * any additional fields if required in future
 
