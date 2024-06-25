@@ -365,8 +365,31 @@ bool llama_should_add_bos_token(const llama_model * model);
 // Chat template utils
 //
 
+// same with llama_chat_message, but uses std::string
+struct llama_chat_msg {
+    std::string role;
+    std::string content;
+};
+
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
 bool llama_chat_verify_template(const std::string & tmpl);
+
+// CPP wrapper for llama_chat_apply_template
+std::string llama_chat_apply_template(const struct llama_model * model,
+        const std::string & tmpl,
+        const std::vector<llama_chat_msg> & chat,
+        bool add_ass);
+
+// Format single message, while taking into account the position of that message in chat history
+std::string llama_chat_format_single(const struct llama_model * model,
+        const std::string & tmpl,
+        const std::vector<llama_chat_msg> & past_msg,
+        const llama_chat_msg & new_msg,
+        bool add_ass);
+
+// Returns an example of formatted chat
+std::string llama_chat_format_example(const struct llama_model * model,
+        const std::string & tmpl);
 
 //
 // KV cache utils

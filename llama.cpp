@@ -18818,10 +18818,10 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "<|im_start|>assistant\n";
         }
-    } else if (tmpl == "llama2" || tmpl.find("[INST]") != std::string::npos) {
+    } else if (tmpl == "llama2" || tmpl == "mistral" || tmpl.find("[INST]") != std::string::npos) {
         // llama2 template and its variants
         // [variant] support system message
-        bool support_system_message = tmpl.find("<<SYS>>") != std::string::npos;
+        bool support_system_message = tmpl.find("<<SYS>>") != std::string::npos || tmpl == "mistral";
         // [variant] space before + after response
         bool space_around_response = tmpl.find("' ' + eos_token") != std::string::npos;
         // [variant] add BOS inside history

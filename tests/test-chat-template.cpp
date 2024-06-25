@@ -7,6 +7,7 @@
 #include <cassert>
 
 #include "llama.h"
+#include "common.h"
 
 int main(void) {
     llama_chat_message conversation[] = {
@@ -119,5 +120,24 @@ int main(void) {
         std::cout << output << "\n-------------------------\n";
         assert(output == expected);
     }
+
+    // test llama_chat_format_single
+    std::cout << "\n\n=== llama_chat_format_single ===\n\n";
+    std::vector<llama_chat_msg> chat2;
+    chat2.push_back({"system", "You are a helpful assistant"});
+    chat2.push_back({"user", "Hello"});
+    chat2.push_back({"assistant", "I am assistant"});
+    llama_chat_msg new_msg{"user", "How are you"};
+
+    auto fmt_single = [&](std::string tmpl) {
+        auto output = llama_chat_format_single(nullptr, tmpl, chat2, new_msg, true);
+        std::cout << "fmt_single(" << tmpl << ")\n" << output << "\n-------------------------\n";
+        return output;
+    };
+    assert(fmt_single("chatml") == "<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n");
+    assert(fmt_single("llama2") == "[INST] How are you [/INST]");
+    assert(fmt_single("gemma") == "<start_of_turn>user\nHow are you<end_of_turn>\n<start_of_turn>model\n");
+    assert(fmt_single("llama3") == "<|start_header_id|>user<|end_header_id|>\n\nHow are you<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
+
     return 0;
 }
