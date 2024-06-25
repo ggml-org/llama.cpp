@@ -319,6 +319,27 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
 
         markdown_content += "\n"
 
+        markdown_content += "### Tensor Data Offset\n"
+        markdown_content += '\n'
+        markdown_content += 'This table contains the offset and data segment relative to start of file\n'
+        markdown_content += '\n'
+
+        tensor_mapping_table: list[dict[str, str | int]] = []
+        for key, tensor in enumerate(reader.tensors):
+            data_offset_pretty = '{0:#16x}'.format(tensor.data_offset)
+            data_size_pretty = '{0:#16x}'.format(tensor.n_bytes)
+            tensor_mapping_table.append({"t_id":key, "layer_name":tensor.name, "data_offset":data_offset_pretty, "data_size":data_size_pretty})
+
+        tensors_mapping_table_header_map = [
+            {'key_name':'t_id',         'header_name':'T_ID',               'align':'right'},
+            {'key_name':'layer_name',   'header_name':'Tensor Layer Name',  'align':'left'},
+            {'key_name':'data_offset',  'header_name':'Data Offset (B)',    'align':'right'},
+            {'key_name':'data_size',    'header_name':'Data Size (B)',      'align':'right'},
+        ]
+
+        markdown_content += markdown_table_with_alignment_support(tensors_mapping_table_header_map, tensor_mapping_table)
+        markdown_content += "\n"
+
         for group in tensor_prefix_order:
             tensors = tensor_groups[group]
             group_elements = sum(tensor.n_elements for tensor in tensors)
@@ -370,6 +391,8 @@ def main() -> None:
     parser.add_argument("--no-tensors", action="store_true", help="Don't dump tensor metadata")
     parser.add_argument("--json",       action="store_true", help="Produce JSON output")
     parser.add_argument("--json-array", action="store_true", help="Include full array values in JSON output (long)")
+    parser.add_argument("--data-offset",    action="store_true", help="Start of data offset")
+    parser.add_argument("--data-alignment", action="store_true", help="Data alignment applied globally to data field")
     parser.add_argument("--markdown",   action="store_true", help="Produce markdown output")
     parser.add_argument("--verbose",    action="store_true", help="increase output verbosity")
 
@@ -377,7 +400,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
-    if not args.json and not args.markdown:
+    if not args.json and not args.markdown and not args.data_offset and not args.data_alignment:
         logger.info(f'* Loading: {args.model}')
 
     reader = GGUFReader(args.model, 'r')
@@ -386,6 +409,10 @@ def main() -> None:
         dump_metadata_json(reader, args)
     elif args.markdown:
         dump_markdown_metadata(reader, args)
+    elif args.data_offset:
+        print(reader.data_offset)  # noqa: NP100
+    elif args.data_alignment:
+        print(reader.alignment)  # noqa: NP100
     else:
         dump_metadata(reader, args)
 
