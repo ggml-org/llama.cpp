@@ -295,11 +295,14 @@ if (GGML_CUDA)
 
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_CUDA)
 
-        add_compile_definitions(GGML_CUDA_USE_GRAPHS)
         add_compile_definitions(GGML_CUDA_DMMV_X=${GGML_CUDA_DMMV_X})
         add_compile_definitions(GGML_CUDA_MMV_Y=${GGML_CUDA_MMV_Y})
         add_compile_definitions(K_QUANTS_PER_ITERATION=${GGML_CUDA_KQUANTS_ITER})
         add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
+
+        if (GGML_CUDA_USE_GRAPHS)
+            add_compile_definitions(GGML_CUDA_USE_GRAPHS)
+        endif()
 
         if (GGML_CUDA_FORCE_DMMV)
             add_compile_definitions(GGML_CUDA_FORCE_DMMV)
