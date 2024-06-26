@@ -994,6 +994,31 @@ static void test_json_schema() {
     );
 
     test_schema(
+        "",
+        // Schema
+        R"""(
+            {
+                "type": ["array", "null"],
+                "items": { "type": "string" }
+            }
+        )""",
+        // Passing strings
+        {
+            "null",
+            "[]",
+            "[\"123\"]",
+            "[\"foo\", \"bar\"]",
+        },
+        // Failing strings
+        {
+            "",
+            "[123]",
+            "\"foo\"",
+            "[\"foo\", 42]",
+        }
+    );
+
+    test_schema(
         "min+max items",
         // Schema
         R"""({

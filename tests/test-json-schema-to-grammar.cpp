@@ -504,6 +504,38 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "string array",
+        R"""({
+            "type": "array",
+            "prefixItems": { "type": "string" }
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= "[" space (string ("," space string)*)? "]" space
+            space ::= | " " | "\n" [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "nullable string array",
+        R"""({
+            "type": ["array", "null"],
+            "prefixItems": { "type": "string" }
+        })""",
+        R"""(
+            alternative-0 ::= "[" space (string ("," space string)*)? "]" space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            null ::= "null" space
+            root ::= alternative-0 | null
+            space ::= | " " | "\n" [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "tuple1",
         R"""({
             "prefixItems": [{ "type": "string" }]

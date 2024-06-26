@@ -616,7 +616,7 @@ export class SchemaConverter {
     } else if (schema.oneOf || schema.anyOf) {
       return this._addRule(ruleName, this._generateUnionRule(name, schema.oneOf || schema.anyOf));
     } else if (Array.isArray(schemaType)) {
-      return this._addRule(ruleName, this._generateUnionRule(name, schemaType.map(t => ({ type: t }))));
+      return this._addRule(ruleName, this._generateUnionRule(name, schemaType.map(t => ({...schema, type: t}))));
     } else if ('const' in schema) {
       return this._addRule(ruleName, this._generateConstantRule(schema.const) + ' space');
     } else if ('enum' in schema) {

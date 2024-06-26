@@ -565,7 +565,7 @@ class SchemaConverter:
             return self._add_rule(rule_name, self._generate_union_rule(name, schema.get('oneOf') or schema['anyOf']))
 
         elif isinstance(schema_type, list):
-            return self._add_rule(rule_name, self._generate_union_rule(name, [{'type': t} for t in schema_type]))
+            return self._add_rule(rule_name, self._generate_union_rule(name, [{**schema, 'type': t} for t in schema_type]))
 
         elif 'const' in schema:
             return self._add_rule(rule_name, self._generate_constant_rule(schema['const']) + ' space')
