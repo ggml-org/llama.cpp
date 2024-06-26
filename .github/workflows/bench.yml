@@ -109,7 +109,7 @@ jobs:
         run: |
           set -eux
           cmake -B build \
-              -DLLAMA_NATIVE=OFF \
+              -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
               -DLLAMA_CURL=ON \
               -DLLAMA_CUBLAS=ON \

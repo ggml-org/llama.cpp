@@ -160,9 +160,9 @@ effectiveStdenv.mkDerivation (
     };
 
     postPatch = ''
-      substituteInPlace ./ggml-metal.m \
+      substituteInPlace ./ggml/src/ggml-metal.m \
         --replace '[bundle pathForResource:@"ggml-metal" ofType:@"metal"];' "@\"$out/bin/ggml-metal.metal\";"
-      substituteInPlace ./ggml-metal.m \
+      substituteInPlace ./ggml/src/ggml-metal.m \
         --replace '[bundle pathForResource:@"default" ofType:@"metallib"];' "@\"$out/bin/default.metallib\";"
     '';
 
@@ -205,17 +205,17 @@ effectiveStdenv.mkDerivation (
 
     cmakeFlags =
       [
-        (cmakeBool "LLAMA_NATIVE" false)
         (cmakeBool "LLAMA_BUILD_SERVER" true)
         (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
         (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
-        (cmakeBool "LLAMA_BLAS" useBlas)
-        (cmakeBool "LLAMA_CLBLAST" useOpenCL)
-        (cmakeBool "LLAMA_CUDA" useCuda)
-        (cmakeBool "LLAMA_HIPBLAS" useRocm)
-        (cmakeBool "LLAMA_METAL" useMetalKit)
-        (cmakeBool "LLAMA_VULKAN" useVulkan)
-        (cmakeBool "LLAMA_STATIC" enableStatic)
+        (cmakeBool "GGML_NATIVE" false)
+        (cmakeBool "GGML_BLAS" useBlas)
+        (cmakeBool "GGML_CLBLAST" useOpenCL)
+        (cmakeBool "GGML_CUDA" useCuda)
+        (cmakeBool "GGML_HIPBLAS" useRocm)
+        (cmakeBool "GGML_METAL" useMetalKit)
+        (cmakeBool "GGML_VULKAN" useVulkan)
+        (cmakeBool "GGML_STATIC" enableStatic)
       ]
       ++ optionals useCuda [
         (
@@ -231,7 +231,7 @@ effectiveStdenv.mkDerivation (
       ]
       ++ optionals useMetalKit [
         (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
-        (cmakeBool "LLAMA_METAL_EMBED_LIBRARY" (!precompileMetalShaders))
+        (cmakeBool "GGML_METAL_EMBED_LIBRARY" (!precompileMetalShaders))
       ];
 
     # Environment variables needed for ROCm
@@ -244,7 +244,7 @@ effectiveStdenv.mkDerivation (
     # if they haven't been added yet.
     postInstall = ''
       mkdir -p $out/include
-      cp $src/llama.h $out/include/
+      cp $src/include/llama.h $out/include/
     '';
 
     # Define the shells here, but don't add in the inputsFrom to avoid recursion.

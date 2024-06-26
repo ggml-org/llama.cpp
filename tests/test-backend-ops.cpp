@@ -1,7 +1,6 @@
 #include <ggml.h>
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
-#include <ggml-backend-impl.h>
 
 #include <algorithm>
 #include <array>

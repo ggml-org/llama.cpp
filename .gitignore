@@ -56,6 +56,7 @@ CMakeSettings.json
 compile_commands.json
 ggml-metal-embed.metal
 llama-batched-swift
+/rpc-server
 out/
 tmp/
 

@@ -47,7 +47,7 @@ jobs:
           sysctl -a
           mkdir build
           cd build
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL_EMBED_LIBRARY=ON -DLLAMA_CURL=ON ..
+          cmake -DLLAMA_FATAL_WARNINGS=ON -DGGML_METAL_EMBED_LIBRARY=ON -DLLAMA_CURL=ON ..
           cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -105,7 +105,7 @@ jobs:
           sysctl -a
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
           # https://github.com/ggerganov/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
-          cmake -B build -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL=OFF -DLLAMA_CURL=ON
+          cmake -B build -DLLAMA_FATAL_WARNINGS=ON -DGGML_METAL=OFF -DLLAMA_CURL=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -305,7 +305,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DLLAMA_OPENMP=OFF
+          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DGGML_OPENMP=OFF
           cmake --build . --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Test
@@ -335,7 +335,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -DLLAMA_RPC=ON ..
+          cmake -DGGML_RPC=ON ..
           cmake --build . --config Release -j $(nproc)
 
       - name: Test
@@ -363,7 +363,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake -DLLAMA_VULKAN=ON ..
+          cmake -DGGML_VULKAN=ON ..
           cmake --build . --config Release -j $(nproc)
 
   ubuntu-22-cmake-hip:
@@ -384,13 +384,13 @@ jobs:
       - name: Build with native CMake HIP support
         id: cmake_build
         run: |
-          cmake -B build -S . -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" -DLLAMA_HIPBLAS=ON
+          cmake -B build -S . -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" -DGGML_HIPBLAS=ON
           cmake --build build --config Release -j $(nproc)
 
       - name: Build with legacy HIP support
         id: cmake_build_legacy_hip
         run: |
-          cmake -B build2 -S . -DCMAKE_C_COMPILER=hipcc -DCMAKE_CXX_COMPILER=hipcc -DLLAMA_HIPBLAS=ON
+          cmake -B build2 -S . -DCMAKE_C_COMPILER=hipcc -DCMAKE_CXX_COMPILER=hipcc -DGGML_HIPBLAS=ON
           cmake --build build2 --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl:
@@ -431,7 +431,7 @@ jobs:
           source /opt/intel/oneapi/setvars.sh
           mkdir build
           cd build
-          cmake -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
+          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
           cmake --build . --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
@@ -472,10 +472,10 @@ jobs:
           source /opt/intel/oneapi/setvars.sh
           mkdir build
           cd build
-          cmake -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_SYCL_F16=ON ..
+          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON ..
           cmake --build . --config Release -j $(nproc)
 
-  # TODO: build with LLAMA_NO_METAL because test-backend-ops fail on "Apple Paravirtual device" and I don't know
+  # TODO: build with GGML_NO_METAL because test-backend-ops fail on "Apple Paravirtual device" and I don't know
   #       how to debug it.
   #       ref: https://github.com/ggerganov/llama.cpp/actions/runs/7131777249/job/19420981052#step:5:1124
   macOS-latest-make:
@@ -497,15 +497,15 @@ jobs:
         env:
             LLAMA_FATAL_WARNINGS: 1
         run: |
-          LLAMA_NO_METAL=1 make -j $(sysctl -n hw.logicalcpu)
+          GGML_NO_METAL=1 make -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: make_test
         run: |
-          LLAMA_NO_METAL=1 make tests -j $(sysctl -n hw.logicalcpu)
-          LLAMA_NO_METAL=1 make test  -j $(sysctl -n hw.logicalcpu)
+          GGML_NO_METAL=1 make tests -j $(sysctl -n hw.logicalcpu)
+          GGML_NO_METAL=1 make test  -j $(sysctl -n hw.logicalcpu)
 
-  # TODO: build with LLAMA_METAL=OFF because test-backend-ops fail on "Apple Paravirtual device" and I don't know
+  # TODO: build with GGML_METAL=OFF because test-backend-ops fail on "Apple Paravirtual device" and I don't know
   #       how to debug it.
   #       ref: https://github.com/ggerganov/llama.cpp/actions/runs/7132125951/job/19422043567?pr=4359#step:5:6584
   #       would be great if we fix these
@@ -529,7 +529,7 @@ jobs:
           sysctl -a
           mkdir build
           cd build
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL=OFF ..
+          cmake -DLLAMA_FATAL_WARNINGS=ON -DGGML_METAL=OFF ..
           cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
@@ -559,13 +559,14 @@ jobs:
           mkdir build
           cd build
           cmake -G Xcode .. \
-            -DLLAMA_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-cmake-tvos:
     runs-on: macos-latest
@@ -588,13 +589,14 @@ jobs:
           mkdir build
           cd build
           cmake -G Xcode .. \
-            -DLLAMA_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=tvOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-swift:
     runs-on: macos-latest
@@ -662,7 +664,7 @@ jobs:
       - name: Build using make w/ OpenBLAS
         shell: msys2 {0}
         run: |
-            make LLAMA_OPENBLAS=1 -j $(nproc)
+            make GGML_OPENBLAS=1 -j $(nproc)
 
       - name: Build using CMake
         shell: msys2 {0}
@@ -678,7 +680,7 @@ jobs:
       - name: Build using CMake w/ OpenBLAS
         shell: msys2 {0}
         run: |
-            cmake -B build -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS
+            cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows-latest-cmake:
@@ -693,25 +695,25 @@ jobs:
       matrix:
         include:
           - build: 'rpc-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_RPC=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'noavx-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_FMA=OFF -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DBUILD_SHARED_LIBS=ON'
           - build: 'avx2-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'avx-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX2=OFF -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_AVX2=OFF -DBUILD_SHARED_LIBS=ON'
           - build: 'avx512-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX512=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_AVX512=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'openblas-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_BLAS=ON -DBUILD_SHARED_LIBS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_BLAS=ON -DBUILD_SHARED_LIBS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'kompute-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'vulkan-x64'
-            defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_VULKAN=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_VULKAN=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'llvm-arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
           - build: 'msvc-arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc.cmake -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
 
     steps:
       - name: Clone
@@ -724,7 +726,7 @@ jobs:
         id: clone_kompute
         if: ${{ matrix.build == 'kompute-x64' }}
         run: |
-          git submodule update --init kompute
+          git submodule update --init ggml/src/kompute
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -854,7 +856,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake .. -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_CUDA=ON -DBUILD_SHARED_LIBS=ON
+          cmake .. -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=ON
           cmake --build . --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Determine tag name
@@ -987,7 +989,7 @@ jobs:
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake -G "Unix Makefiles" -B build -S . -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" -DLLAMA_HIPBLAS=ON
+          cmake -G "Unix Makefiles" -B build -S . -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" -DGGML_HIPBLAS=ON
           cmake --build build --config Release
 
   ios-xcode-build:

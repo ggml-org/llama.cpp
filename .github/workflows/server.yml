@@ -92,12 +92,12 @@ jobs:
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
           cmake -B build \
-              -DLLAMA_NATIVE=OFF \
+              -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
               -DLLAMA_CURL=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
-              -DLLAMA_OPENMP=OFF ;
+              -DGGML_OPENMP=OFF ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
       - name: Build
@@ -105,7 +105,7 @@ jobs:
         if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
-              -DLLAMA_NATIVE=OFF \
+              -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
               -DLLAMA_CURL=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \

@@ -29,13 +29,13 @@ You can also run multiple `rpc-server` instances on the same host, each with a d
 
 ## Usage
 
-On each host, build the corresponding backend with `cmake` and add `-DLLAMA_RPC=ON` to the build options.
+On each host, build the corresponding backend with `cmake` and add `-DGGML_RPC=ON` to the build options.
 For example, to build the CUDA backend with RPC support:
 
 ```bash
 mkdir build-rpc-cuda
 cd build-rpc-cuda
-cmake .. -DLLAMA_CUDA=ON -DLLAMA_RPC=ON
+cmake .. -DGGML_CUDA=ON -DGGML_RPC=ON
 cmake --build . --config Release
 ```
 
@@ -58,12 +58,12 @@ $ CUDA_VISIBLE_DEVICES=0 bin/rpc-server -p 50052
 This way you can run multiple `rpc-server` instances on the same host, each with a different CUDA device.
 
 
-On the main host build `llama.cpp` only with `-DLLAMA_RPC=ON`:
+On the main host build `llama.cpp` only with `-DGGML_RPC=ON`:
 
 ```bash
 mkdir build-rpc
 cd build-rpc
-cmake .. -DLLAMA_RPC=ON
+cmake .. -DGGML_RPC=ON
 cmake --build . --config Release
 ```
 

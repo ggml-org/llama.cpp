@@ -115,12 +115,12 @@ The docker build option is currently limited to *intel GPU* targets.
 ### Build image
 ```sh
 # Using FP16
-docker build -t llama-cpp-sycl --build-arg="LLAMA_SYCL_F16=ON" -f .devops/llama-cli-intel.Dockerfile .
+docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" -f .devops/llama-cli-intel.Dockerfile .
 ```
 
 *Notes*:
 
-To build in default FP32 *(Slower than FP16 alternative)*, you can remove the `--build-arg="LLAMA_SYCL_F16=ON"` argument from the previous command.
+To build in default FP32 *(Slower than FP16 alternative)*, you can remove the `--build-arg="GGML_SYCL_F16=ON"` argument from the previous command.
 
 You can also use the `.devops/llama-server-intel.Dockerfile`, which builds the *"server"* alternative.
 
@@ -244,10 +244,10 @@ source /opt/intel/oneapi/setvars.sh
 # Build LLAMA with MKL BLAS acceleration for intel GPU
 
 # Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 # Option 2: Use FP16
-cmake -B build -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_SYCL_F16=ON
+cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
 
 # build all binary
 cmake --build build --config Release -j -v
@@ -264,10 +264,10 @@ export CPLUS_INCLUDE_DIR=/path/to/oneMKL/include:$CPLUS_INCLUDE_DIR
 # Build LLAMA with Nvidia BLAS acceleration through SYCL
 
 # Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -DLLAMA_SYCL=ON -DLLAMA_SYCL_TARGET=NVIDIA -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
 
 # Option 2: Use FP16
-cmake -B build -DLLAMA_SYCL=ON -DLLAMA_SYCL_TARGET=NVIDIA -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_SYCL_F16=ON
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON
 
 # build all binary
 cmake --build build --config Release -j -v
@@ -422,10 +422,10 @@ On the oneAPI command line window, step into the llama.cpp main directory and ru
 @call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
 
 # Option 1: Use FP32 (recommended for better performance in most cases)
-cmake -B build -G "Ninja" -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release
 
 # Option 2: Or FP16
-cmake -B build -G "Ninja" -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release -DLLAMA_SYCL_F16=ON
+cmake -B build -G "Ninja" -DGGML_SYCL=ON -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx  -DCMAKE_BUILD_TYPE=Release -DGGML_SYCL_F16=ON
 
 cmake --build build --config Release -j
 ```
@@ -440,7 +440,7 @@ Or, use CMake presets to build:
 cmake --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-cli
 
-cmake -DLLAMA_SYCL_F16=ON --preset x64-windows-sycl-release
+cmake -DGGML_SYCL_F16=ON --preset x64-windows-sycl-release
 cmake --build build-x64-windows-sycl-release -j --target llama-cli
 
 cmake --preset x64-windows-sycl-debug
@@ -544,9 +544,9 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 | Name               | Value                             | Function                                    |
 |--------------------|-----------------------------------|---------------------------------------------|
-| LLAMA_SYCL         | ON (mandatory)                    | Enable build with SYCL code path.           |
-| LLAMA_SYCL_TARGET  | INTEL *(default)* \| NVIDIA       | Set the SYCL target device type.            |
-| LLAMA_SYCL_F16     | OFF *(default)* \|ON *(optional)* | Enable FP16 build with SYCL code path.      |
+| GGML_SYCL          | ON (mandatory)                    | Enable build with SYCL code path.           |
+| GGML_SYCL_TARGET   | INTEL *(default)* \| NVIDIA       | Set the SYCL target device type.            |
+| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)* | Enable FP16 build with SYCL code path.      |
 | CMAKE_C_COMPILER   | icx                               | Set *icx* compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | icpx *(Linux)*, icx *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 

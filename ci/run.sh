@@ -36,11 +36,11 @@ SRC=`pwd`
 CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=ON"
 
 if [ ! -z ${GG_BUILD_METAL} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DLLAMA_METAL_SHADER_DEBUG=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_METAL=ON"
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DLLAMA_CUDA=1"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=1"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -50,7 +50,7 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
         exit 1
     fi
 
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DLLAMA_SYCL=1 DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_SYCL_F16=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 ## helpers
 
@@ -284,7 +284,7 @@ function gg_run_open_llama_7b_v2 {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DLLAMA_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../examples/convert-legacy-llama.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
@@ -550,7 +550,7 @@ function gg_run_pythia_2_8b {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DLLAMA_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert-hf-to-gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf

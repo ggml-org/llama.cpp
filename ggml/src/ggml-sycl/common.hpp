@@ -17,6 +17,7 @@
 #include <iostream>
 
 #include "dpct/helper.hpp"
+#include "ggml-sycl.h"
 #include "presets.hpp"
 
 #define GGML_COMMON_DECL_SYCL

@@ -2,31 +2,31 @@
 Kompute:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-kompute.h
-            - ggml-kompute.cpp
+            - ggml/include/ggml-kompute.h
+            - ggml/src/ggml-kompute.cpp
             - README-kompute.md
 Apple Metal:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-metal.h
-            - ggml-metal.cpp
+            - ggml/include/ggml-metal.h
+            - ggml/src/ggml-metal.cpp
             - README-metal.md
 SYCL:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-sycl.h
-            - ggml-sycl.cpp
+            - ggml/include/ggml-sycl.h
+            - ggml/src/ggml-sycl.cpp
             - README-sycl.md
 Nvidia GPU:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml-cuda.h
-            - ggml-cuda/**
+            - ggml/include/ggml-cuda.h
+            - ggml/src/ggml-cuda/**
 Vulkan:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml_vk_generate_shaders.py
-            - ggml-vulkan*
+            - ggml/ggml_vk_generate_shaders.py
+            - ggml/src/ggml-vulkan*
 documentation:
     - changed-files:
         - any-glob-to-any-file:
@@ -73,10 +73,10 @@ server:
 ggml:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml.c
-            - ggml.h
-            - ggml-*.c
-            - ggml-*.h
+            - ggml/include/ggml*.h
+            - ggml/src/ggml*.c
+            - ggml/src/ggml*.cpp
+            - ggml/src/ggml*.h
             - ggml-cuda/**
 nix:
     - changed-files:

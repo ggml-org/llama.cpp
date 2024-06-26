@@ -380,7 +380,7 @@ fi
 
 if [[ "$backend" == "cuda" ]]; then
     printf "[+] Building with CUDA backend\n"
-    LLAMA_CUDA=1 make -j llama-server $log
+    GGML_CUDA=1 make -j llama-server $log
 elif [[ "$backend" == "cpu" ]]; then
     printf "[+] Building with CPU backend\n"
     make -j llama-server $log

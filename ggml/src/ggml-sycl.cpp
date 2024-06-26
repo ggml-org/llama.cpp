@@ -37,6 +37,7 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-sycl/backend.hpp"
+#include "ggml-sycl/presets.hpp"
 
 bool   ggml_sycl_loaded(void);
 void   ggml_sycl_free_data(struct ggml_tensor * tensor);
