@@ -148,12 +148,6 @@ ifndef UNAME_M
 UNAME_M := $(shell uname -m)
 endif
 
-MK_CFLAGS     += -O3
-MK_CXXFLAGS   += -O3
-ifndef LLAMA_DEBUG
-MK_NVCCFLAGS  += -O3
-endif # LLAMA_DEBUG
-
 # In GNU make default CXX is g++ instead of c++.  Let's fix that so that users
 # of non-gcc compilers don't have to provide g++ alias or wrapper.
 DEFCC  := cc
@@ -312,7 +306,10 @@ ifdef LLAMA_DEBUG
 		MK_CPPFLAGS += -D_GLIBCXX_ASSERTIONS
 	endif
 else
-	MK_CPPFLAGS += -DNDEBUG
+	MK_CPPFLAGS   += -DNDEBUG
+	MK_CFLAGS     += -O3
+	MK_CXXFLAGS   += -O3
+	MK_NVCCFLAGS  += -O3
 endif
 
 ifdef LLAMA_SANITIZE_THREAD
