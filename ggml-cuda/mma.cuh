@@ -23,7 +23,7 @@ struct mma_int_A_I16K4 {
 
     __device__ __forceinline__ void load(const int * __restrict__ xs0, const int & stride) {
 #if defined(INT8_MMA_AVAILABLE)
-        const int * xs = xs0 + (threadIdx.x%I)*stride + (threadIdx.x/I)*(K/2);
+        const int * xs = xs0 + (threadIdx.x%I)*stride;
         asm("ldmatrix.sync.aligned.m8n8.x2.b16 {%0, %1}, [%2];"
             : "+r"(x[0]), "+r"(x[1])
             : "l"(xs));
