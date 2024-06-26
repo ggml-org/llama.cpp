@@ -15,8 +15,6 @@
 
 using json = nlohmann::ordered_json;
 
-//#define INCLUDE_FAILING_TESTS 1
-
 static llama_grammar* build_grammar(const std::string & grammar_str) {
     auto parsed_grammar = grammar_parser::parse(grammar_str.c_str());
 
@@ -754,7 +752,7 @@ static void test_json_schema() {
         )""",
         // Passing strings
         {
-            "{}",
+            R"""({})""",
             R"""({"foo": "bar"})""",
         },
         // Failing strings
@@ -762,7 +760,7 @@ static void test_json_schema() {
             "",
             "[]",
             "null",
-            "\"\"",
+            R"""("")""",
             "true",
         }
     );
@@ -770,16 +768,14 @@ static void test_json_schema() {
     test_schema(
         "exotic formats (list)",
         // Schema
-        R"""(
-            {
+        R"""({
             "items": [
                 { "format": "date" },
                 { "format": "uuid" },
                 { "format": "time" },
                 { "format": "date-time" }
             ]
-            }
-        )""",
+        })""",
         // Passing strings
         {
             // "{}", // NOTE: This string passes for this schema on https://www.jsonschemavalidator.net/ -- should it?
@@ -798,125 +794,113 @@ static void test_json_schema() {
     test_schema(
         "string",
         // Schema
-        R"""(
-            {
-                "type": "string"
-            }
-        )""",
+        R"""({
+            "type": "string"
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("")""",
         },
         // Failing strings
         {
-            "{}",
-            "\"foo\": \"bar\"",
+            R"""({})""",
+            R"""("foo": "bar")""",
         }
     );
 
     test_schema(
         "string w/ min length 1",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "minLength": 1
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "minLength": 1
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
+            R"""("foo")""",
+            R"""("bar")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "{}",
-            "\"foo\": \"bar\"",
+            R"""("")""",
+            R"""({})""",
+            R"""("foo": "bar")""",
         }
     );
 
     test_schema(
         "string w/ min length 3",
         // Schema
-        R"""(
-            {
+        R"""({
                 "type": "string",
                 "minLength": 3
-            }
-        )""",
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"foobar\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("foobar")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "\"f\"",
-            "\"fo\"",
+            R"""("")""",
+            R"""("f")""",
+            R"""("fo")""",
         }
     );
 
     test_schema(
         "string w/ max length",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "maxLength": 3
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "maxLength": 3
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"\"",
-            "\"f\"",
-            "\"fo\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("")""",
+            R"""("f")""",
+            R"""("fo")""",
         },
         // Failing strings
         {
-            "\"foobar\"",
+            R"""("foobar")""",
         }
     );
 
     test_schema(
         "string w/ min & max length",
         // Schema
-        R"""(
-            {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 4
-            }
-        )""",
+        R"""({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4
+        })""",
         // Passing strings
         {
-            "\"foo\"",
-            "\"bar\"",
-            "\"f\"",
-            "\"barf\"",
+            R"""("foo")""",
+            R"""("bar")""",
+            R"""("f")""",
+            R"""("barf")""",
         },
         // Failing strings
         {
-            "\"\"",
-            "\"barfo\"",
-            "\"foobar\"",
+            R"""("")""",
+            R"""("barfo")""",
+            R"""("foobar")""",
         }
     );
 
     test_schema(
         "boolean",
         // Schema
-        R"""(
-            {
-                "type": "boolean"
-            }
-        )""",
+        R"""({
+            "type": "boolean"
+        })""",
         // Passing strings
         {
             "true",
@@ -924,122 +908,112 @@ static void test_json_schema() {
         },
         // Failing strings
         {
-            "\"\"",
-            "\"true\"",
-            "True",
-            "FALSE",
+            R"""("")""",
+            R"""("true")""",
+            R"""(True)""",
+            R"""(FALSE)""",
         }
     );
 
     test_schema(
         "integer",
         // Schema
-        R"""(
-            {
-                "type": "integer"
-            }
-        )""",
+        R"""({
+            "type": "integer"
+        })""",
         // Passing strings
         {
-            "0",
-            "12345",
-            "1234567890123456"
+            R"""(0)""",
+            R"""(12345)""",
+            R"""(1234567890123456)""",
         },
         // Failing strings
         {
-            "",
-            "01",
-            "007",
-            "12345678901234567"
+            R"""()""",
+            R"""(01)""",
+            R"""(007)""",
+            R"""(12345678901234567  )""",
         }
     );
 
     test_schema(
         "string const",
         // Schema
-        R"""(
-            {
-                "const": "foo"
-            }
-        )""",
+        R"""({
+            "const": "foo"
+        })""",
         // Passing strings
         {
-            "\"foo\"",
+            R"""("foo")""",
         },
         // Failing strings
         {
-            "foo",
-            "\"bar\"",
+            R"""(foo)""",
+            R"""("bar")""",
         }
     );
 
     test_schema(
         "non-string const",
         // Schema
-        R"""(
-            {
-                "const": true
-            }
-        )""",
+        R"""({
+            "const": true
+        })""",
         // Passing strings
         {
-            "true",
+            R"""(true)""",
         },
         // Failing strings
         {
-            "",
-            "foo",
-            "\"true\"",
+            R"""()""",
+            R"""(foo)""",
+            R"""("true")""",
         }
     );
 
     test_schema(
         "non-string const",
         // Schema
-        R"""(
-            {
-                "enum": ["red", "amber", "green", null, 42, ["foo"]]
-            }
-        )""",
+        R"""({
+            "enum": ["red", "amber", "green", null, 42, ["foo"]]
+        })""",
         // Passing strings
         {
-            "\"red\"",
-            "null",
-            "42",
-            "[\"foo\"]",
+            R"""("red")""",
+            R"""(null)""",
+            R"""(42)""",
+            R"""(["foo"])""",
         },
         // Failing strings
         {
-            "",
-            "420",
-            "true",
-            "foo",
+            R"""()""",
+            R"""(420)""",
+            R"""(true)""",
+            R"""(foo)""",
         }
     );
 
     test_schema(
         "min+max items",
         // Schema
-        R"""(
-            {
-                "items": {
-                    "type": ["number", "integer"]
-                },
-                "minItems": 3,
-                "maxItems": 5
-            }
-        )""",
+        R"""({
+            "items": {
+                "type": ["number", "integer"]
+            },
+            "minItems": 3,
+            "maxItems": 5
+        })""",
         // Passing strings
         {
-            "[1, 2, 3]",
-            "[1, 2, 3, 4]",
-            "[1, 2, 3, 4, 5]",
+            R"""([1, 2, 3])""",
+            R"""([1, 2, 3, 4])""",
+            R"""([1, 2, 3, 4, 5])""",
         },
         // Failing strings
         {
-            "[1, 2]",
-            "[1, 2, 3, 4, 5, 6]",
-            "1"
+            R"""([1, 2])""",
+            R"""([1, 2, 3, 4, 5, 6])""",
+            R"""(1)""",
         }
     );
 
@@ -1047,16 +1021,14 @@ static void test_json_schema() {
     test_schema(
         "object properties",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
                 "street_name": { "type": "string" },
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             }
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
@@ -1066,12 +1038,8 @@ static void test_json_schema() {
             // "By extension, even an empty object is valid"
             R"""({})""",
             // "By default, providing additional properties is valid"
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: The following should pass, but currently FAILS. Additional properties should be permitted by default.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -1084,13 +1052,35 @@ static void test_json_schema() {
         }
     );
 
+    test_schema(
+        "additional properties can't override other properties",
+        R"""({
+            "properties": {
+                "a": {"type": "integer"},
+                "b": {"type": "integer"}
+            },
+            "additionalProperties": true
+        })""",
+        // Passing strings
+        {
+            R"""({"a": 42})""",
+            R"""({"c": ""})""",
+            R"""({"a": 42, "c": ""})""",
+            R"""({"a_": ""})""",
+        },
+        // Failing strings
+        {
+            R"""()""",
+            R"""({"a": ""})""",
+            R"""({"a": "", "b": ""})""",
+        }
+    );
 
     // Properties (from: https://json-schema.org/understanding-json-schema/reference/object#properties)
     test_schema(
         "object properties, additionalProperties: true",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
@@ -1098,26 +1088,18 @@ static void test_json_schema() {
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             },
             "additionalProperties": true
-            }
-        )""",
+        })""",
         // Passing strings
         {
             // "By extension, even an empty object is valid"
             R"""({})""",
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: Following line should pass and doesn't
             R"""({"number":1600,"street_name":"Pennsylvania","street_type":"Avenue"})""",
             // "By default, leaving out properties is valid"
-            // TODO: Following line should pass and doesn't
             R"""({ "street_name": "Pennsylvania" })""",
-            // TODO: Following line should pass and doesn't
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             // "By default, providing additional properties is valid"
-            // TODO: The following should pass, but currently FAILS. Additional properties should be permitted by default.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -1132,8 +1114,7 @@ static void test_json_schema() {
     test_schema(
         "required + optional props each in original order",
         // Schema
-        R"""(
-            {
+        R"""({
             "type": "object",
             "properties": {
                 "number": { "type": "number" },
@@ -1141,18 +1122,15 @@ static void test_json_schema() {
                 "street_type": { "enum": ["Street", "Avenue", "Boulevard"] }
             },
             "additionalProperties": false
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({ "street_name": "Pennsylvania" })""",
             R"""({ "number": 1600, "street_type":"Avenue"})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue"})""",
-#ifdef INCLUDE_FAILING_TESTS
-            // TODO: Spaces should be permitted around enum values, but currently they fail to pass.
+            // Spaces are permitted around enum values
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
-#endif
         },
         // Failing strings
         {
@@ -1166,18 +1144,16 @@ static void test_json_schema() {
     test_schema(
         "required + optional props each in original order",
         // Schema
-        R"""(
-            {
-                "properties": {
-                    "b": {"type": "string"},
-                    "a": {"type": "string"},
-                    "d": {"type": "string"},
-                    "c": {"type": "string"}
-                },
-                "required": ["a", "b"],
-                "additionalProperties": false
-            }
-        )""",
+        R"""({
+            "properties": {
+                "b": {"type": "string"},
+                "a": {"type": "string"},
+                "d": {"type": "string"},
+                "c": {"type": "string"}
+            },
+            "required": ["a", "b"],
+            "additionalProperties": false
+        })""",
         // Passing strings
         {
             R"""({"b": "foo", "a": "bar"})""",
@@ -1197,8 +1173,7 @@ static void test_json_schema() {
     test_schema(
         "required props",
         // Schema
-        R"""(
-            {
+        R"""({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "$id": "https://example.com/product.schema.json",
             "title": "Product",
@@ -1244,8 +1219,7 @@ static void test_json_schema() {
                 }
             },
             "required": [ "productId", "productName", "price" ]
-            }
-        )""",
+        })""",
         // Passing strings
         {
             R"""({"productId": 1, "productName": "A green door", "price": 12.50})""",

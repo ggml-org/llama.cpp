@@ -614,6 +614,75 @@ private:
         return _add_rule(name, "\"\\\"\" " + to_rule(transform()) + " \"\\\"\" space");
     }
 
+    /*
+        Returns a rule that matches a JSON string that is none of the provided strings
+
+        not_strings({"a"})
+            -> ["] ( [a] char+ | [^"a] char* )? ["] space
+        not_strings({"and", "also"})
+            -> ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["] space
+    */
+    std::string _not_strings(const std::vector<std::string> & strings) {
+
+        struct TrieNode {
+            std::map<char, TrieNode> children;
+            bool is_end_of_string;
+
+            TrieNode() : is_end_of_string(false) {}
+
+            void insert(const std::string & string) {
+                auto node = this;
+                for (char c : string) {
+                    node = &node->children[c];
+                }
+                node->is_end_of_string = true;
+            }
+        };
+
+        TrieNode trie;
+        for (const auto & s : strings) {
+            trie.insert(s);
+        }
+
+        std::string char_rule = _add_primitive("char", PRIMITIVE_RULES.at("char"));
+        std::ostringstream out;
+        out << "[\"] ( ";
+        std::function<void(const TrieNode &)> visit = [&](const TrieNode & node) {
+            std::ostringstream rejects;
+            auto first = true;
+            for (const auto & kv : node.children) {
+                rejects << kv.first;
+                if (first) {
+                    first = false;
+                } else {
+                    out << " | ";
+                }
+                out << "[" << kv.first << "]";
+                if (!kv.second.children.empty()) {
+                    out << " (";
+                    visit(kv.second);
+                    out << ")";
+                } else if (kv.second.is_end_of_string) {
+                    out << " " << char_rule << "+";
+                }
+            }
+            if (!node.children.empty()) {
+                if (!first) {
+                    out << " | ";
+                }
+                out << "[^\"" << rejects.str() << "] " << char_rule << "*";
+            }
+        };
+        visit(trie);
+
+        out << " )";
+        if (!trie.is_end_of_string) {
+            out << "?";
+        }
+        out << " [\"] space";
+        return out.str();
+    }
+
     std::string _resolve_ref(const std::string & ref) {
         std::string ref_name = ref.substr(ref.find_last_of('/') + 1);
         if (_rules.find(ref_name) == _rules.end() && _refs_being_resolved.find(ref) == _refs_being_resolved.end()) {
@@ -634,6 +703,7 @@ private:
         std::vector<std::string> required_props;
         std::vector<std::string> optional_props;
         std::unordered_map<std::string, std::string> prop_kv_rule_names;
+        std::vector<std::string> prop_names;
         for (const auto & kv : properties) {
             const auto &prop_name = kv.first;
             const auto &prop_schema = kv.second;
@@ -648,11 +718,18 @@ private:
             } else {
                 optional_props.push_back(prop_name);
             }
+            prop_names.push_back(prop_name);
         }
-        if (additional_properties.is_object() || (additional_properties.is_boolean() && additional_properties.get<bool>())) {
+        if (!(additional_properties.is_boolean() && !additional_properties.get<bool>())) {
             std::string sub_name = name + (name.empty() ? "" : "-") + "additional";
-            std::string value_rule = visit(additional_properties.is_object() ? additional_properties : json::object(), sub_name + "-value");
-            std::string kv_rule = _add_rule(sub_name + "-kv", _add_primitive("string", PRIMITIVE_RULES.at("string")) + " \":\" space " + value_rule);
+            std::string value_rule =
+                additional_properties.is_object() ? visit(additional_properties, sub_name + "-value")
+                : _add_primitive("value", PRIMITIVE_RULES.at("value"));
+
+            auto key_rule =
+                prop_names.empty() ? _add_primitive("string", PRIMITIVE_RULES.at("string"))
+                : _add_rule(sub_name + "-k", _not_strings(prop_names));
+            std::string kv_rule = _add_rule(sub_name + "-kv", key_rule + " \":\" space " + value_rule);
             prop_kv_rule_names["*"] = kv_rule;
             optional_props.push_back("*");
         }
@@ -678,15 +755,11 @@ private:
                 }
                 std::string k = ks[0];
                 std::string kv_rule_name = prop_kv_rule_names[k];
-                if (k == "*") {
-                    res = _add_rule(
-                        name + (name.empty() ? "" : "-") + "additional-kvs",
-                        kv_rule_name + " ( \",\" space " + kv_rule_name + " )*"
-                    );
-                } else if (first_is_optional) {
-                    res = "( \",\" space " + kv_rule_name + " )?";
+                std::string comma_ref = "( \",\" space " + kv_rule_name + " )";
+                if (first_is_optional) {
+                    res = comma_ref + (k == "*" ? "*" : "?");
                 } else {
-                    res = kv_rule_name;
+                    res = kv_rule_name + (k == "*" ? " " + comma_ref + "*" : "");
                 }
                 if (ks.size() > 1) {
                     res += " " + _add_rule(
@@ -824,13 +897,13 @@ public:
             }
             return _add_rule(rule_name, _generate_union_rule(name, schema_types));
         } else if (schema.contains("const")) {
-            return _add_rule(rule_name, _generate_constant_rule(schema["const"]));
+            return _add_rule(rule_name, _generate_constant_rule(schema["const"]) + " space");
         } else if (schema.contains("enum")) {
             std::vector<std::string> enum_values;
             for (const auto & v : schema["enum"]) {
                 enum_values.push_back(_generate_constant_rule(v));
             }
-            return _add_rule(rule_name, join(enum_values.begin(), enum_values.end(), " | "));
+            return _add_rule(rule_name, "(" + join(enum_values.begin(), enum_values.end(), " | ") + ") space");
         } else if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
                     (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {

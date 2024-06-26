@@ -532,6 +532,64 @@ export class SchemaConverter {
     return this._addRule(name, "\"\\\"\" " + toRule(transform()) + " \"\\\"\" space")
   }
 
+  _notStrings(strings) {
+    class TrieNode {
+      constructor() {
+        this.children = {};
+        this.isEndOfString = false;
+      }
+
+      insert(str) {
+        let node = this;
+        for (const c of str) {
+          node = node.children[c] = node.children[c] || new TrieNode();
+        }
+        node.isEndOfString = true;
+      }
+    }
+
+    const trie = new TrieNode();
+    for (const s of strings) {
+      trie.insert(s);
+    }
+
+    const charRuleName = this._addPrimitive('char', PRIMITIVE_RULES['char']);
+    const out = ['["] ( '];
+
+    const visit = (node) => {
+      const rejects = [];
+      let first = true;
+      for (const c of Object.keys(node.children).sort()) {
+        const child = node.children[c];
+        rejects.push(c);
+        if (first) {
+          first = false;
+        } else {
+          out.push(' | ');
+        }
+        out.push(`[${c}]`);
+        if (Object.keys(child.children).length > 0) {
+          out.push(' (');
+          visit(child);
+          out.push(')');
+        } else if (child.isEndOfString) {
+          out.push(` ${charRuleName}+`);
+        }
+      }
+      if (Object.keys(node.children).length > 0) {
+        if (!first) {
+          out.push(' | ');
+        }
+        out.push(`[^"${rejects.join('')}] ${charRuleName}*`);
+      }
+    };
+
+    visit(trie);
+
+    out.push(` )${trie.isEndOfString ? '' : '?'} ["] space`);
+    return out.join('');
+  }
+
   _resolveRef(ref) {
     let refName = ref.split('/').pop();
     if (!(refName in this._rules) && !this._refsBeingResolved.has(ref)) {
@@ -560,9 +618,9 @@ export class SchemaConverter {
     } else if (Array.isArray(schemaType)) {
       return this._addRule(ruleName, this._generateUnionRule(name, schemaType.map(t => ({ type: t }))));
     } else if ('const' in schema) {
-      return this._addRule(ruleName, this._generateConstantRule(schema.const));
+      return this._addRule(ruleName, this._generateConstantRule(schema.const) + ' space');
     } else if ('enum' in schema) {
-      const rule = schema.enum.map(v => this._generateConstantRule(v)).join(' | ');
+      const rule = '(' + schema.enum.map(v => this._generateConstantRule(v)).join(' | ') + ') space';
       return this._addRule(ruleName, rule);
     } else if ((schemaType === undefined || schemaType === 'object') &&
                ('properties' in schema ||
@@ -599,7 +657,7 @@ export class SchemaConverter {
         }
       }
 
-      return this._addRule(ruleName, this._buildObjectRule(properties, required, name, /* additionalProperties= */ false));
+      return this._addRule(ruleName, this._buildObjectRule(properties, required, name, null));
     } else if ((schemaType === undefined || schemaType === 'array') && ('items' in schema || 'prefixItems' in schema)) {
       const items = schema.items ?? schema.prefixItems;
       if (Array.isArray(items)) {
@@ -693,12 +751,19 @@ export class SchemaConverter {
     const requiredProps = sortedProps.filter(k => required.has(k));
     const optionalProps = sortedProps.filter(k => !required.has(k));
 
-    if (typeof additionalProperties === 'object' || additionalProperties === true) {
+    if (additionalProperties !== false) {
       const subName = `${name ?? ''}${name ? '-' : ''}additional`;
-      const valueRule = this.visit(additionalProperties === true ? {} : additionalProperties, `${subName}-value`);
+      const valueRule =
+        additionalProperties != null && typeof additionalProperties === 'object' ? this.visit(additionalProperties, `${subName}-value`)
+        : this._addPrimitive('value', PRIMITIVE_RULES['value']);
+
+      const key_rule =
+        sortedProps.length === 0 ? this._addPrimitive('string', PRIMITIVE_RULES['string'])
+        : this._addRule(`${subName}-k`, this._notStrings(sortedProps));
+
       propKvRuleNames['*'] = this._addRule(
         `${subName}-kv`,
-        `${this._addPrimitive('string', PRIMITIVE_RULES['string'])} ":" space ${valueRule}`);
+        `${key_rule} ":" space ${valueRule}`);
       optionalProps.push('*');
     }
 
@@ -715,15 +780,11 @@ export class SchemaConverter {
         const [k, ...rest] = ks;
         const kvRuleName = propKvRuleNames[k];
         let res;
-        if (k === '*') {
-            res = this._addRule(
-                `${name ?? ''}${name ? '-' : ''}additional-kvs`,
-                `${kvRuleName} ( "," space ` + kvRuleName + ` )*`
-            )
-        } else if (firstIsOptional) {
-          res = `( "," space ${kvRuleName} )?`;
+        const commaRef = `( "," space ${kvRuleName} )`;
+        if (firstIsOptional) {
+          res = commaRef + (k === '*' ? '*' : '?');
         } else {
-          res = kvRuleName;
+          res = kvRuleName + (k === '*' ? ' ' + commaRef + '*' : '');
         }
         if (rest.length > 0) {
           res += ' ' + this._addRule(

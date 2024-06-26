@@ -473,7 +473,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "const": "foo"
         })""",
         R"""(
-            root ::= "\"foo\""
+            root ::= "\"foo\"" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -485,7 +485,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "const": 123
         })""",
         R"""(
-            root ::= "123"
+            root ::= "123" space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -497,7 +497,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "enum": ["red", "amber", "green", null, 42, ["foo"]]
         })""",
         R"""(
-            root ::= "\"red\"" | "\"amber\"" | "\"green\"" | "null" | "42" | "[\"foo\"]"
+            root ::= ("\"red\"" | "\"amber\"" | "\"green\"" | "null" | "42" | "[\"foo\"]") space
             space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
@@ -816,13 +816,12 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             additional-kv ::= string ":" space additional-value
-            additional-kvs ::= additional-kv ( "," space additional-kv )*
             additional-value ::= "[" space (number ("," space number)*)? "]" space
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space  (additional-kvs )? "}" space
+            root ::= "{" space  (additional-kv ( "," space additional-kv )* )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
             string ::= "\"" char* "\"" space
         )"""
@@ -899,13 +898,13 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             a-kv ::= "\"a\"" space ":" space number
-            additional-kv ::= string ":" space string
-            additional-kvs ::= additional-kv ( "," space additional-kv )*
+            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["] space
+            additional-kv ::= additional-k ":" space string
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space a-kv ( "," space ( additional-kvs ) )? "}" space
+            root ::= "{" space a-kv ( "," space ( additional-kv ( "," space additional-kv )* ) )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
             string ::= "\"" char* "\"" space
         )"""
@@ -923,16 +922,15 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             a-kv ::= "\"a\"" space ":" space number
-            a-rest ::= additional-kvs
-            additional-kv ::= string ":" space number
-            additional-kvs ::= additional-kv ( "," space additional-kv )*
+            a-rest ::= ( "," space additional-kv )*
+            additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["] space
+            additional-kv ::= additional-k ":" space number
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space  (a-kv a-rest | additional-kvs )? "}" space
+            root ::= "{" space  (a-kv a-rest | additional-kv ( "," space additional-kv )* )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
-            string ::= "\"" char* "\"" space
         )"""
     });
 
@@ -942,25 +940,100 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""({
             "type": "object",
             "properties": {
-                "a": {"type": "number"},
-                "b": {"type": "number"}
+                "and": {"type": "number"},
+                "also": {"type": "number"}
             },
-            "required": ["a"],
+            "required": ["and"],
             "additionalProperties": {"type": "number"}
         })""",
         R"""(
-            a-kv ::= "\"a\"" space ":" space number
-            additional-kv ::= string ":" space number
-            additional-kvs ::= additional-kv ( "," space additional-kv )*
-            b-kv ::= "\"b\"" space ":" space number
-            b-rest ::= additional-kvs
+            additional-k ::= ["] ( [a] ([l] ([s] ([o] char+ | [^"o] char*) | [^"s] char*) | [n] ([d] char+ | [^"d] char*) | [^"ln] char*) | [^"a] char* )? ["] space
+            additional-kv ::= additional-k ":" space number
+            also-kv ::= "\"also\"" space ":" space number
+            also-rest ::= ( "," space additional-kv )*
+            and-kv ::= "\"and\"" space ":" space number
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space a-kv ( "," space ( b-kv b-rest | additional-kvs ) )? "}" space
+            root ::= "{" space and-kv ( "," space ( also-kv also-rest | additional-kv ( "," space additional-kv )* ) )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
-            string ::= "\"" char* "\"" space
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "optional props with empty name",
+        R"""({
+            "properties": {
+                "": {"type": "integer"},
+                "a": {"type": "integer"}
+            },
+            "additionalProperties": {"type": "integer"}
+        })""",
+        R"""(
+            -kv ::= "\"\"" space ":" space root
+            -rest ::= ( "," space a-kv )? a-rest
+            a-kv ::= "\"a\"" space ":" space integer
+            a-rest ::= ( "," space additional-kv )*
+            additional-k ::= ["] ( [a] char+ | [^"a] char* ) ["] space
+            additional-kv ::= additional-k ":" space integer
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            integer ::= ("-"? integral-part) space
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= ("-"? integral-part) space
+            root0 ::= "{" space  (-kv -rest | a-kv a-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "optional props with nested names",
+        R"""({
+            "properties": {
+                "a": {"type": "integer"},
+                "aa": {"type": "integer"}
+            },
+            "additionalProperties": {"type": "integer"}
+        })""",
+        R"""(
+            a-kv ::= "\"a\"" space ":" space integer
+            a-rest ::= ( "," space aa-kv )? aa-rest
+            aa-kv ::= "\"aa\"" space ":" space integer
+            aa-rest ::= ( "," space additional-kv )*
+            additional-k ::= ["] ( [a] ([a] char+ | [^"a] char*) | [^"a] char* )? ["] space
+            additional-kv ::= additional-k ":" space integer
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            integer ::= ("-"? integral-part) space
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= "{" space  (a-kv a-rest | aa-kv aa-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            space ::= | " " | "\n" [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "optional props with common prefix",
+        R"""({
+            "properties": {
+                "ab": {"type": "integer"},
+                "ac": {"type": "integer"}
+            },
+            "additionalProperties": {"type": "integer"}
+        })""",
+        R"""(
+            ab-kv ::= "\"ab\"" space ":" space integer
+            ab-rest ::= ( "," space ac-kv )? ac-rest
+            ac-kv ::= "\"ac\"" space ":" space integer
+            ac-rest ::= ( "," space additional-kv )*
+            additional-k ::= ["] ( [a] ([b] char+ | [c] char+ | [^"bc] char*) | [^"a] char* )? ["] space
+            additional-kv ::= additional-k ":" space integer
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            integer ::= ("-"? integral-part) space
+            integral-part ::= [0] | [1-9] [0-9]{0,15}
+            root ::= "{" space  (ab-kv ab-rest | ac-kv ac-rest | additional-kv ( "," space additional-kv )* )? "}" space
+            space ::= | " " | "\n" [ \t]{0,20}
         )"""
     });
 
@@ -1015,15 +1088,28 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             alternative-0 ::= foo
             alternative-1 ::= bar
-            bar ::= "{" space  (bar-b-kv )? "}" space
+            array ::= "[" space ( value ("," space value)* )? "]" space
+            bar ::= "{" space  (bar-b-kv bar-b-rest | bar-additional-kv ( "," space bar-additional-kv )* )? "}" space
+            bar-additional-k ::= ["] ( [b] char+ | [^"b] char* )? ["] space
+            bar-additional-kv ::= bar-additional-k ":" space value
             bar-b-kv ::= "\"b\"" space ":" space number
+            bar-b-rest ::= ( "," space bar-additional-kv )*
+            boolean ::= ("true" | "false") space
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
-            foo ::= "{" space  (foo-a-kv )? "}" space
+            foo ::= "{" space  (foo-a-kv foo-a-rest | foo-additional-kv ( "," space foo-additional-kv )* )? "}" space
             foo-a-kv ::= "\"a\"" space ":" space number
+            foo-a-rest ::= ( "," space foo-additional-kv )*
+            foo-additional-k ::= ["] ( [a] char+ | [^"a] char* )? ["] space
+            foo-additional-kv ::= foo-additional-k ":" space value
             integral-part ::= [0] | [1-9] [0-9]{0,15}
+            null ::= "null" space
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
             root ::= alternative-0 | alternative-1
             space ::= | " " | "\n" [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
         )"""
     });
 
@@ -1059,15 +1145,25 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         })""",
         R"""(
             a-kv ::= "\"a\"" space ":" space number
+            additional-k ::= ["] ( [a] char+ | [b] char+ | [c] char+ | [d] char+ | [^"abcd] char* )? ["] space
+            additional-kv ::= additional-k ":" space value
+            array ::= "[" space ( value ("," space value)* )? "]" space
             b-kv ::= "\"b\"" space ":" space number
+            boolean ::= ("true" | "false") space
             c-kv ::= "\"c\"" space ":" space number
+            c-rest ::= ( "," space additional-kv )*
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             d-kv ::= "\"d\"" space ":" space number
-            d-rest ::= ( "," space c-kv )?
+            d-rest ::= ( "," space c-kv )? c-rest
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
+            null ::= "null" space
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
-            root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv ) )? "}" space
+            object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
+            root ::= "{" space a-kv "," space b-kv ( "," space ( d-kv d-rest | c-kv c-rest | additional-kv ( "," space additional-kv )* ) )? "}" space
             space ::= | " " | "\n" [ \t]{0,20}
+            string ::= "\"" char* "\"" space
+            value ::= object | array | string | number | boolean | null
         )"""
     });
 

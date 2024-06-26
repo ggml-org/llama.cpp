@@ -82,7 +82,7 @@ Feature: llama.cpp server
 
     Examples: Prompts
       | response_format                                                     | n_predicted | re_content             |
-      | {"type": "json_object", "schema": {"const": "42"}}                  | 5           | "42"                   |
+      | {"type": "json_object", "schema": {"const": "42"}}                  | 6           | "42"                   |
       | {"type": "json_object", "schema": {"items": [{"type": "integer"}]}} | 10          | \[ -300 \]             |
       | {"type": "json_object"}                                             | 10          | \{ " Jacky.            |
 

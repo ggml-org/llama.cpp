@@ -3,7 +3,7 @@
 #! pip install pydantic
 #! python json-schema-pydantic-example.py
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, Extra, TypeAdapter
 from annotated_types import MinLen
 from typing import Annotated, List, Optional
 import json, requests
@@ -50,12 +50,16 @@ else:
 if __name__ == '__main__':
 
     class QAPair(BaseModel):
+        class Config:
+            extra = 'forbid'  # triggers additionalProperties: false in the JSON schema
         question: str
         concise_answer: str
         justification: str
         stars: Annotated[int, Field(ge=1, le=5)]
 
     class PyramidalSummary(BaseModel):
+        class Config:
+            extra = 'forbid'  # triggers additionalProperties: false in the JSON schema
         title: str
         summary: str
         question_answers: Annotated[List[QAPair], MinLen(2)]
