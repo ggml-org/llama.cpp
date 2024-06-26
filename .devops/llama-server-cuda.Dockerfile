@@ -21,7 +21,7 @@ COPY . .
 # Set nvcc architecture
 ENV CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
 # Enable CUDA
-ENV LLAMA_CUDA=1
+ENV GGML_CUDA=1
 # Enable cURL
 ENV LLAMA_CURL=1
 

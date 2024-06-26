@@ -14,7 +14,7 @@ RUN wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key 
 # Build it
 WORKDIR /app
 COPY . .
-RUN cmake -B build -DLLAMA_VULKAN=1 -DLLAMA_CURL=1 && \
+RUN cmake -B build -DGGML_VULKAN=1 -DLLAMA_CURL=1 && \
     cmake --build build --config Release --target llama-server
 
 # Clean up

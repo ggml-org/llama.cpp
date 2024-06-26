@@ -32,7 +32,7 @@ CPU inference for Meta's Lllama2 models using default options.
 %setup -n llama.cpp-master
 
 %build
-make -j LLAMA_CUDA=1
+make -j GGML_CUDA=1
 
 %install
 mkdir -p %{buildroot}%{_bindir}/
