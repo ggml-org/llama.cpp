@@ -126,19 +126,244 @@ You can use GBNF grammars:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
     - in JavaScript with [json-schema-to-grammar.mjs](../examples/server/public/json-schema-to-grammar.mjs) (this is used by the [server](../examples/server)'s Web UI)
 
-Take a look at [tests](../../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggerganov/llama.cpp/pull/5978, https://github.com/ggerganov/llama.cpp/pull/6659 & https://github.com/ggerganov/llama.cpp/pull/6555).
+Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggerganov/llama.cpp/pull/5978, https://github.com/ggerganov/llama.cpp/pull/6659 & https://github.com/ggerganov/llama.cpp/pull/6555).
 
-Here is also a non-exhaustive list of **unsupported** features:
+```bash
+llama-cli \
+  -hfr bartowski/Phi-3-medium-128k-instruct-GGUF \
+  -hff Phi-3-medium-128k-instruct-Q8_0.gguf \
+  -j '{
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+            },
+            "age": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 150
+            }
+        },
+        "required": ["name", "age"],
+        "additionalProperties": false
+    },
+    "minItems": 10,
+    "maxItems": 100
+  }' \
+  -p 'Generate a {name, age}[] JSON array with famous actors of all ages.'
+```
 
-- `additionalProperties`: to be fixed in https://github.com/ggerganov/llama.cpp/pull/7840
-- `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum`
-    - `integer` constraints to be implemented in https://github.com/ggerganov/llama.cpp/pull/7797
-- Remote `$ref`s in the C++ version (Python & JavaScript versions fetch https refs)
-- Mixing `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggerganov/llama.cpp/issues/7703)
-- `string` formats `uri`, `email`
+<details>
+
+<summary>Show grammar</summary>
+
+You can convert any schema in command-line with:
+
+```bash
+examples/json_schema_to_grammar.py name-age-schema.json
+```
+
+```
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+item ::= "{" space item-name-kv "," space item-age-kv "}" space
+item-age ::= ([0-9] | ([1-8] [0-9] | [9] [0-9]) | "1" ([0-4] [0-9] | [5] "0")) space
+item-age-kv ::= "\"age\"" space ":" space item-age
+item-name ::= "\"" char{1,100} "\"" space
+item-name-kv ::= "\"name\"" space ":" space item-name
+root ::= "[" space item ("," space item){9,99} "]" space
+space ::= | " " | "\n" [ \t]{0,20}
+```
+
+</details>
+
+Here is also a list of known limitations (contributions welcome):
+
+- Unsupported features are skipped silently. It is currently advised to use the command-line Python converter (see above) to see any warnings, and to inspect the resulting grammar / test it w/ [llama-gbnf-validator](../examples/gbnf-validator/gbnf-validator.cpp).
+- Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggerganov/llama.cpp/issues/7703)
+- [prefixItems](https://json-schema.org/draft/2020-12/json-schema-core#name-prefixitems) is broken (but [items](https://json-schema.org/draft/2020-12/json-schema-core#name-items) works)
+- `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum`: only supported for `"type": "integer"` for now, not `number`
+- Nested `$ref`s are broken (https://github.com/ggerganov/llama.cpp/issues/8073)
+- [pattern](https://json-schema.org/draft/2020-12/json-schema-validation#name-pattern)s must start with `^` and end with `$`
+- Remote `$ref`s not supported in the C++ version (Python & JavaScript versions fetch https refs)
+- `string` [formats](https://json-schema.org/draft/2020-12/json-schema-validation#name-defined-formats) lack `uri`, `email`
+- No [`patternProperties`](https://json-schema.org/draft/2020-12/json-schema-core#name-patternproperties)
+
+And a non-exhaustive list of other unsupported features that are unlikely to be implemented (hard and/or too slow to support w/ stateless grammars):
+
+- [`uniqueItems`](https://json-schema.org/draft/2020-12/json-schema-validation#name-uniqueitems)
 - [`contains`](https://json-schema.org/draft/2020-12/json-schema-core#name-contains) / `minContains`
-- `uniqueItems`
 - `$anchor` (cf. [dereferencing](https://json-schema.org/draft/2020-12/json-schema-core#name-dereferencing))
 - [`not`](https://json-schema.org/draft/2020-12/json-schema-core#name-not)
 - [Conditionals](https://json-schema.org/draft/2020-12/json-schema-core#name-keywords-for-applying-subsche) `if` / `then` / `else` / `dependentSchemas`
-- [`patternProperties`](https://json-schema.org/draft/2020-12/json-schema-core#name-patternproperties)
+
+### A word about additionalProperties
+
+> [!WARNING]
+> By default, `object`s accept [additional properties](https://json-schema.org/understanding-json-schema/reference/object#additionalproperties), which you might not want / not expect, and which will make sampling slower (not just because of the extra tokens, but also generates a slower grammar).
+> You can set `"additionalProperties": false` on the schema of any object to ensure only properties listed in `properties` are generated (not needed for non-`object` types, e.g. `array` or `string`).
+
+If you're using [Pydantic](https://pydantic.dev/) to generate schemas, you can disable additional properties with the `extra` config on each model class:
+
+```python
+# pip install pydantic
+import json
+from typing import Annotated, List
+from pydantic import BaseModel, Extra, Field
+class QAPair(BaseModel):
+    class Config:
+        extra = 'forbid'  # triggers additionalProperties: false in the JSON schema
+    question: str
+    concise_answer: str
+    justification: str
+
+class Summary(BaseModel):
+    class Config:
+        extra = 'forbid'
+    key_facts: List[Annotated[str, Field(pattern='- .{5,}')]]
+    question_answers: List[Annotated[List[QAPair], Field(min_items=5)]]
+
+print(json.dumps(Summary.model_json_schema(), indent=2))
+```
+
+<details>
+<summary>Show JSON schema & grammar</summary>
+
+```json
+{
+  "$defs": {
+    "QAPair": {
+      "additionalProperties": false,
+      "properties": {
+        "question": {
+          "title": "Question",
+          "type": "string"
+        },
+        "concise_answer": {
+          "title": "Concise Answer",
+          "type": "string"
+        },
+        "justification": {
+          "title": "Justification",
+          "type": "string"
+        }
+      },
+      "required": [
+        "question",
+        "concise_answer",
+        "justification"
+      ],
+      "title": "QAPair",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "key_facts": {
+      "items": {
+        "pattern": "^- .{5,}$",
+        "type": "string"
+      },
+      "title": "Key Facts",
+      "type": "array"
+    },
+    "question_answers": {
+      "items": {
+        "items": {
+          "$ref": "#/$defs/QAPair"
+        },
+        "minItems": 5,
+        "type": "array"
+      },
+      "title": "Question Answers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "key_facts",
+    "question_answers"
+  ],
+  "title": "Summary",
+  "type": "object"
+}
+```
+
+```
+QAPair ::= "{" space QAPair-question-kv "," space QAPair-concise-answer-kv "," space QAPair-justification-kv "}" space
+QAPair-concise-answer-kv ::= "\"concise_answer\"" space ":" space string
+QAPair-justification-kv ::= "\"justification\"" space ":" space string
+QAPair-question-kv ::= "\"question\"" space ":" space string
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+dot ::= [^\x0A\x0D]
+key-facts ::= "[" space (key-facts-item ("," space key-facts-item)*)? "]" space
+key-facts-item ::= "\"" "- " key-facts-item-1{5,} "\"" space
+key-facts-item-1 ::= dot
+key-facts-kv ::= "\"key_facts\"" space ":" space key-facts
+question-answers ::= "[" space (question-answers-item ("," space question-answers-item)*)? "]" space
+question-answers-item ::= "[" space question-answers-item-item ("," space question-answers-item-item){4,} "]" space
+question-answers-item-item ::= QAPair
+question-answers-kv ::= "\"question_answers\"" space ":" space question-answers
+root ::= "{" space key-facts-kv "," space question-answers-kv "}" space
+space ::= | " " | "\n" [ \t]{0,20}
+string ::= "\"" char* "\"" space
+```
+
+</details>
+
+If you're using [Zod](https://zod.dev/), you can make your objects explicitly strict w/ `z.object(...).strict()` or `z.strictObject(...)`.
+
+Note however that [zod-to-json-schema](https://github.com/StefanTerdell/zod-to-json-schema) currently always seems to set `"additionalProperties": false` anyway (even w/ zod schemas on which `nonstrict()` / `passthrough()` was called).
+
+```js
+import { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+
+const Foo = z.object({
+  age: z.number().positive(),
+  email: z.string().email(),
+}).strict();
+
+console.log(zodToJsonSchema(Foo));
+```
+
+<details>
+<summary>Show JSON schema & grammar</summary>
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "age": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "email": {
+      "type": "string",
+      "format": "email"
+    }
+  },
+  "required": [
+    "age",
+    "email"
+  ],
+  "additionalProperties": false,
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}
+```
+
+```
+age-kv ::= "\"age\"" space ":" space number
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+decimal-part ::= [0-9]{1,16}
+email-kv ::= "\"email\"" space ":" space string
+integral-part ::= [0] | [1-9] [0-9]{0,15}
+number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+root ::= "{" space age-kv "," space email-kv "}" space
+space ::= | " " | "\n" [ \t]{0,20}
+string ::= "\"" char* "\"" space
+```
+
+</details>
