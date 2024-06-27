@@ -5152,10 +5152,10 @@ static void llm_load_vocab(
         if (gen_name.find("code") != std::string::npos) {
             if (model.arch == LLM_ARCH_LLAMA
               && 32010 < vocab.id_to_token.size()
-              && vocab.id_to_token[32007].text == "<PRE>"
-              && vocab.id_to_token[32008].text == "<SUF>"
-              && vocab.id_to_token[32009].text == "<MID>"
-              && vocab.id_to_token[32010].text == "<EOT>") {
+              && vocab.id_to_token[32007].text.find("<PRE>") != std::string::npos
+              && vocab.id_to_token[32008].text.find("<SUF>") != std::string::npos
+              && vocab.id_to_token[32009].text.find("<MID>") != std::string::npos
+              && vocab.id_to_token[32010].text.find("<EOT>") != std::string::npos) {
                 vocab.special_prefix_id = 32007;
                 vocab.special_suffix_id = 32008;
                 vocab.special_middle_id = 32009;
