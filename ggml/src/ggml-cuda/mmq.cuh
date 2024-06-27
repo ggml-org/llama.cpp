@@ -2475,7 +2475,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const dim3 block_nums_mmq(nsm, 1, 1);
 
-    ggml_cuda_pool & pool = ctx.pool();
+    ggml_cuda_pool & pool = ctx.pool(id);
     ggml_cuda_pool_alloc<float> tmp_fixup(pool, block_nums_mmq.x * mmq_x*mmq_y);
 
     if (args.ne01 % mmq_y == 0) {
