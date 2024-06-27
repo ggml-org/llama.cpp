@@ -5,7 +5,7 @@
 #include <string>
 #include <unistd.h>
 #include "llama.h"
-#include "common/common.h"
+#include "common.h"
 
 // Write C++ code here.
 //
