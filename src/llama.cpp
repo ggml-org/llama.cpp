@@ -2038,6 +2038,7 @@ enum e_model {
     MODEL_8x22B,
     MODEL_16x12B,
     MODEL_10B_128x3_66B,
+    MODEL_57B_A14B,
 };
 
 static const size_t kiB = 1024;
@@ -4267,6 +4268,7 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_8x22B:         return "8x22B";
         case MODEL_16x12B:        return "16x12B";
         case MODEL_10B_128x3_66B: return "10B+128x3.66B";
+        case MODEL_57B_A14B:      return "57B.A14B";
         default:                  return "?B";
     }
 }
@@ -4588,6 +4590,7 @@ static void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
                     case 24: model.type = e_model::MODEL_A2_7B; break;
+                    case 28: model.type = e_model::MODEL_57B_A14B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
