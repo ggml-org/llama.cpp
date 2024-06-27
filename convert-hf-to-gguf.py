@@ -487,6 +487,9 @@ class Model:
         if chkhsh == "7967bfa498ade6b757b064f31e964dddbb80f8f9a4d68d4ba7998fcf281c531a":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-code
             res = "jina-v2-code"
+        if chkhsh == "7fc505bd3104ca1083b150b17d088b59534ede9bde81f0dd2090967d7fe52cee":
+            # ref: https://huggingface.co/LumiOpen/Viking-7B
+            res = "viking"
 
         if res is None:
             logger.warning("\n")

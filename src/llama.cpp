@@ -5067,6 +5067,9 @@ static void llm_load_vocab(
             } else if (
                 tokenizer_pre == "poro-chat") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_PORO;
+            } else if (
+                tokenizer_pre == "viking") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_VIKING;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -13700,6 +13703,12 @@ struct llm_tokenizer_bpe {
                 break;
             case LLAMA_VOCAB_PRE_TYPE_PORO:
                 regex_exprs = {
+                    " ?[^(\\s|.,!?…。，、।۔،)]+",
+                };
+                break;
+            case LLAMA_VOCAB_PRE_TYPE_VIKING:
+                regex_exprs = {
+                    "\\p{N}",
                     " ?[^(\\s|.,!?…。，、।۔،)]+",
                 };
                 break;
