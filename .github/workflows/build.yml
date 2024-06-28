@@ -799,6 +799,7 @@ jobs:
           7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
           $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
           cd build
+          $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
           & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
       - name: Determine tag name
