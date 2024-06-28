@@ -810,7 +810,7 @@ int main(int argc, char ** argv) {
                         is_antiprompt = true;
                     }
 
-                    chat_add_and_format(model, chat_msgs, "system", assistant_ss.str());
+                    chat_add_and_format(model, chat_msgs, "assistant", assistant_ss.str());
                     is_interacting = true;
                     printf("\n");
                 }
