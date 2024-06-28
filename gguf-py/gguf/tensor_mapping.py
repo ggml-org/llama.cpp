@@ -187,6 +187,10 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
         ),
 
+        MODEL_TENSOR.ATTN_POST_NORM: (
+            "model.layers.{bid}.post_attention_layernorm",     # gemma2
+        ),
+
         # Rotary embeddings
         MODEL_TENSOR.ATTN_ROT_EMBD: (
             "model.layers.{bid}.self_attn.rotary_emb.inv_freq",        # llama-hf
@@ -208,6 +212,16 @@ class TensorNameMap:
             "h.{bid}.ln_2",                                                  # gpt2
             "model.layers.{bid}.ffn_norm",                                   # internlm2
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
+        ),
+
+        # Post feed-forward norm
+        MODEL_TENSOR.FFN_PRE_NORM: (
+            "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
+        ),
+
+        # Post feed-forward norm
+        MODEL_TENSOR.FFN_POST_NORM: (
+            "model.layers.{bid}.post_feedforward_layernorm", # gemma2
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
