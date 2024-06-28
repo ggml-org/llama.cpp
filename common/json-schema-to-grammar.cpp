@@ -316,7 +316,7 @@ std::unordered_map<char, std::string> GRAMMAR_LITERAL_ESCAPES = {
 };
 
 std::unordered_set<char> NON_LITERAL_SET = {'|', '.', '(', ')', '[', ']', '{', '}', '*', '+', '?'};
-std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
+std::unordered_set<char> ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = {'^', '$', '.', '[', ']', '(', ')', '|', '{', '}', '*', '+', '?'};
 
 template <typename Iterator>
 std::string join(Iterator begin, Iterator end, const std::string & separator) {
@@ -720,7 +720,7 @@ private:
             }
             prop_names.push_back(prop_name);
         }
-        if (!(additional_properties.is_boolean() && !additional_properties.get<bool>())) {
+        if ((additional_properties.is_boolean() && additional_properties.get<bool>()) || additional_properties.is_object()) {
             std::string sub_name = name + (name.empty() ? "" : "-") + "additional";
             std::string value_rule =
                 additional_properties.is_object() ? visit(additional_properties, sub_name + "-value")

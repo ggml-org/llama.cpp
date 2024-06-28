@@ -259,7 +259,7 @@ const GRAMMAR_RANGE_LITERAL_ESCAPE_RE = /[\n\r"\]\-\\]/g;
 const GRAMMAR_LITERAL_ESCAPES = { '\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]' };
 
 const NON_LITERAL_SET = new Set('|.()[]{}*+?');
-const ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = new Set('[]()|{}*+?');
+const ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = new Set('^$.[]()|{}*+?');
 
 export class SchemaConverter {
   constructor(options) {
@@ -751,7 +751,7 @@ export class SchemaConverter {
     const requiredProps = sortedProps.filter(k => required.has(k));
     const optionalProps = sortedProps.filter(k => !required.has(k));
 
-    if (additionalProperties !== false) {
+    if (additionalProperties) {
       const subName = `${name ?? ''}${name ? '-' : ''}additional`;
       const valueRule =
         additionalProperties != null && typeof additionalProperties === 'object' ? this.visit(additionalProperties, `${subName}-value`)

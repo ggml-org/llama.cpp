@@ -182,6 +182,8 @@ space ::= | " " | "\n" [ \t]{0,20}
 
 Here is also a list of known limitations (contributions welcome):
 
+- `additionalProperties` defaults to `false` (produces faster grammars + reduces hallucinations).
+- `"additionalProperties": true` may produce keys that contain unescaped newlines.
 - Unsupported features are skipped silently. It is currently advised to use the command-line Python converter (see above) to see any warnings, and to inspect the resulting grammar / test it w/ [llama-gbnf-validator](../examples/gbnf-validator/gbnf-validator.cpp).
 - Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggerganov/llama.cpp/issues/7703)
 - [prefixItems](https://json-schema.org/draft/2020-12/json-schema-core#name-prefixitems) is broken (but [items](https://json-schema.org/draft/2020-12/json-schema-core#name-items) works)
@@ -203,10 +205,11 @@ And a non-exhaustive list of other unsupported features that are unlikely to be 
 ### A word about additionalProperties
 
 > [!WARNING]
-> By default, `object`s accept [additional properties](https://json-schema.org/understanding-json-schema/reference/object#additionalproperties), which you might not want / not expect, and which will make sampling slower (not just because of the extra tokens, but also generates a slower grammar).
-> You can set `"additionalProperties": false` on the schema of any object to ensure only properties listed in `properties` are generated (not needed for non-`object` types, e.g. `array` or `string`).
+> The JSON schemas spec states `object`s accept [additional properties](https://json-schema.org/understanding-json-schema/reference/object#additionalproperties) by default.
+> Since this is slow and seems prone to hallucinations, we default to no additional properties.
+> You can set `"additionalProperties": true` in the the schema of any object to explicitly allow additional properties.
 
-If you're using [Pydantic](https://pydantic.dev/) to generate schemas, you can disable additional properties with the `extra` config on each model class:
+If you're using [Pydantic](https://pydantic.dev/) to generate schemas, you can enable additional properties with the `extra` config on each model class:
 
 ```python
 # pip install pydantic
@@ -215,14 +218,14 @@ from typing import Annotated, List
 from pydantic import BaseModel, Extra, Field
 class QAPair(BaseModel):
     class Config:
-        extra = 'forbid'  # triggers additionalProperties: false in the JSON schema
+        extra = 'allow'  # triggers additionalProperties: true in the JSON schema
     question: str
     concise_answer: str
     justification: str
 
 class Summary(BaseModel):
     class Config:
-        extra = 'forbid'
+        extra = 'allow'
     key_facts: List[Annotated[str, Field(pattern='- .{5,}')]]
     question_answers: List[Annotated[List[QAPair], Field(min_items=5)]]
 
@@ -236,7 +239,7 @@ print(json.dumps(Summary.model_json_schema(), indent=2))
 {
   "$defs": {
     "QAPair": {
-      "additionalProperties": false,
+      "additionalProperties": true,
       "properties": {
         "question": {
           "title": "Question",
@@ -260,7 +263,7 @@ print(json.dumps(Summary.model_json_schema(), indent=2))
       "type": "object"
     }
   },
-  "additionalProperties": false,
+  "additionalProperties": true,
   "properties": {
     "key_facts": {
       "items": {
@@ -292,30 +295,40 @@ print(json.dumps(Summary.model_json_schema(), indent=2))
 ```
 
 ```
-QAPair ::= "{" space QAPair-question-kv "," space QAPair-concise-answer-kv "," space QAPair-justification-kv "}" space
+QAPair ::= "{" space QAPair-question-kv "," space QAPair-concise-answer-kv "," space QAPair-justification-kv ( "," space ( QAPair-additional-kv ( "," space QAPair-additional-kv )* ) )? "}" space
+QAPair-additional-k ::= ["] ( [c] ([o] ([n] ([c] ([i] ([s] ([e] ([_] ([a] ([n] ([s] ([w] ([e] ([r] char+ | [^"r] char*) | [^"e] char*) | [^"w] char*) | [^"s] char*) | [^"n] char*) | [^"a] char*) | [^"_] char*) | [^"e] char*) | [^"s] char*) | [^"i] char*) | [^"c] char*) | [^"n] char*) | [^"o] char*) | [j] ([u] ([s] ([t] ([i] ([f] ([i] ([c] ([a] ([t] ([i] ([o] ([n] char+ | [^"n] char*) | [^"o] char*) | [^"i] char*) | [^"t] char*) | [^"a] char*) | [^"c] char*) | [^"i] char*) | [^"f] char*) | [^"i] char*) | [^"t] char*) | [^"s] char*) | [^"u] char*) | [q] ([u] ([e] ([s] ([t] ([i] ([o] ([n] char+ | [^"n] char*) | [^"o] char*) | [^"i] char*) | [^"t] char*) | [^"s] char*) | [^"e] char*) | [^"u] char*) | [^"cjq] char* )? ["] space
+QAPair-additional-kv ::= QAPair-additional-k ":" space value
 QAPair-concise-answer-kv ::= "\"concise_answer\"" space ":" space string
 QAPair-justification-kv ::= "\"justification\"" space ":" space string
 QAPair-question-kv ::= "\"question\"" space ":" space string
+additional-k ::= ["] ( [k] ([e] ([y] ([_] ([f] ([a] ([c] ([t] ([s] char+ | [^"s] char*) | [^"t] char*) | [^"c] char*) | [^"a] char*) | [^"f] char*) | [^"_] char*) | [^"y] char*) | [^"e] char*) | [q] ([u] ([e] ([s] ([t] ([i] ([o] ([n] ([_] ([a] ([n] ([s] ([w] ([e] ([r] ([s] char+ | [^"s] char*) | [^"r] char*) | [^"e] char*) | [^"w] char*) | [^"s] char*) | [^"n] char*) | [^"a] char*) | [^"_] char*) | [^"n] char*) | [^"o] char*) | [^"i] char*) | [^"t] char*) | [^"s] char*) | [^"e] char*) | [^"u] char*) | [^"kq] char* )? ["] space
+additional-kv ::= additional-k ":" space value
+array ::= "[" space ( value ("," space value)* )? "]" space
+boolean ::= ("true" | "false") space
 char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+decimal-part ::= [0-9]{1,16}
 dot ::= [^\x0A\x0D]
+integral-part ::= [0] | [1-9] [0-9]{0,15}
 key-facts ::= "[" space (key-facts-item ("," space key-facts-item)*)? "]" space
 key-facts-item ::= "\"" "- " key-facts-item-1{5,} "\"" space
 key-facts-item-1 ::= dot
 key-facts-kv ::= "\"key_facts\"" space ":" space key-facts
+null ::= "null" space
+number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)? space
+object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? "}" space
 question-answers ::= "[" space (question-answers-item ("," space question-answers-item)*)? "]" space
 question-answers-item ::= "[" space question-answers-item-item ("," space question-answers-item-item){4,} "]" space
 question-answers-item-item ::= QAPair
 question-answers-kv ::= "\"question_answers\"" space ":" space question-answers
-root ::= "{" space key-facts-kv "," space question-answers-kv "}" space
+root ::= "{" space key-facts-kv "," space question-answers-kv ( "," space ( additional-kv ( "," space additional-kv )* ) )? "}" space
 space ::= | " " | "\n" [ \t]{0,20}
 string ::= "\"" char* "\"" space
+value ::= object | array | string | number | boolean | null
 ```
 
 </details>
 
-If you're using [Zod](https://zod.dev/), you can make your objects explicitly strict w/ `z.object(...).strict()` or `z.strictObject(...)`.
-
-Note however that [zod-to-json-schema](https://github.com/StefanTerdell/zod-to-json-schema) currently always seems to set `"additionalProperties": false` anyway (even w/ zod schemas on which `nonstrict()` / `passthrough()` was called).
+If you're using [Zod](https://zod.dev/), you can make your objects to explicitly allow extra properties w/ `nonstrict()` / `passthrough()` (or explicitly no extra props w/ `z.object(...).strict()` or `z.strictObject(...)`) but note that [zod-to-json-schema](https://github.com/StefanTerdell/zod-to-json-schema) currently always sets `"additionalProperties": false` anyway.
 
 ```js
 import { z } from 'zod';

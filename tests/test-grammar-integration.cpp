@@ -994,6 +994,40 @@ static void test_json_schema() {
     );
 
     test_schema(
+        "simple pattern",
+        // Schema
+        R"""({
+            "pattern": "^[a-zA-Z0-9_-]*$"
+        })""",
+        // Passing strings
+        {
+            R"""("")""",
+            R"""("He_llo-12")""",
+        },
+        // Failing strings
+        {
+            R"""("!")""",
+            R"""("Hello World")""",
+        }
+    );
+
+    test_schema(
+        "pattern with escapes",
+        // Schema
+        R"""({
+            "pattern": "^a\\^\\$\\.\\[\\]\\(\\)\\|\\{\\}\\*\\+\\?b$"
+        })""",
+        // Passing strings
+        {
+            R"""("a^$.[]()|{}*+?b")""",
+        },
+        // Failing strings
+        {
+            R"""("ab")""",
+        }
+    );
+
+    test_schema(
         "",
         // Schema
         R"""(
@@ -1062,8 +1096,6 @@ static void test_json_schema() {
             R"""({ "number": 1600, "street_name": "Pennsylvania" })""",
             // "By extension, even an empty object is valid"
             R"""({})""",
-            // "By default, providing additional properties is valid"
-            R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
             R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type": "Avenue" })""",
         },
         // Failing strings
@@ -1074,6 +1106,9 @@ static void test_json_schema() {
             R"""({ "street_name": "Pennsylvania", "number": 1600 })""",
             // Reorder properties
             R"""({ "number": "1600", "street_name": "Pennsylvania", "street_type":"Avenue"})""",
+            // "Additional properties default to false for generation, even though the spec says true.
+            R"""({ "number": 1600, "street_name": "Pennsylvania", "street_type":"Avenue", "direction":"NW"})""",
+
         }
     );
 
