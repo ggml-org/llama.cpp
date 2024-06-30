@@ -261,7 +261,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     {
-        auto prompt = params.conversation
+        auto prompt = (params.conversation && params.enable_chat_template)
             ? chat_add_and_format(model, chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
             : params.prompt;
         if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
@@ -810,7 +810,9 @@ int main(int argc, char ** argv) {
                         is_antiprompt = true;
                     }
 
-                    chat_add_and_format(model, chat_msgs, "assistant", assistant_ss.str());
+                    if (params.enable_chat_template) {
+                        chat_add_and_format(model, chat_msgs, "assistant", assistant_ss.str());
+                    }
                     is_interacting = true;
                     printf("\n");
                 }
@@ -872,12 +874,13 @@ int main(int argc, char ** argv) {
                         string_process_escapes(buffer);
                     }
 
-                    std::string user_inp = params.conversation
+                    bool format_chat = params.conversation && params.enable_chat_template;
+                    std::string user_inp = format_chat
                         ? chat_add_and_format(model, chat_msgs, "user", std::move(buffer))
                         : std::move(buffer);
                     // TODO: one inconvenient of current chat template implementation is that we can't distinguish between user input and special tokens (prefix/postfix)
                     const auto line_pfx = ::llama_tokenize(ctx, params.input_prefix, false, true);
-                    const auto line_inp = ::llama_tokenize(ctx, user_inp,            false, params.conversation);
+                    const auto line_inp = ::llama_tokenize(ctx, user_inp,            false, format_chat);
                     const auto line_sfx = ::llama_tokenize(ctx, params.input_suffix, false, true);
 
                     LOG("input tokens: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, line_inp).c_str());
