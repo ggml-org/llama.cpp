@@ -66,6 +66,7 @@ class Keys:
         Q_LORA_RANK       = "{arch}.attention.q_lora_rank"
         KV_LORA_RANK      = "{arch}.attention.kv_lora_rank"
         REL_BUCKETS_COUNT = "{arch}.attention.relative_buckets_count"
+        SLIDING_WINDOW    = "{arch}.attention.sliding_window"
 
     class Rope:
         DIMENSION_COUNT         = "{arch}.rope.dimension_count"
