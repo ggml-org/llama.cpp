@@ -220,6 +220,10 @@ Unless otherwise noted these projects are open-source with permissive licensing:
 - [akx/ggify](https://github.com/akx/ggify) – download PyTorch models from HuggingFace Hub and convert them to GGML
 - [crashr/gppm](https://github.com/crashr/gppm) – launch llama.cpp instances utilizing NVIDIA Tesla P40 or P100 GPUs with reduced idle power consumption
 
+**Infrastructure:**
+
+- [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
+
 ---
 
 Here is a typical run using LLaMA v2 13B on M2 Ultra:
