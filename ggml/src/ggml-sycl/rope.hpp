@@ -10,15 +10,13 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_BACKEND_HPP
-#define GGML_SYCL_BACKEND_HPP
+#ifndef GGML_SYCL_ROPE_HPP
+#define GGML_SYCL_ROPE_HPP
 
 #include "common.hpp"
-#include "convert.hpp"
-#include "dequantize.hpp"
-#include "dmmv.hpp"
-#include "mmq.hpp"
-#include "mmvq.hpp"
-#include "rope.hpp"
 
-#endif // GGML_SYCL_BACKEND_HPP
+void ggml_sycl_op_rope(
+    ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
+    const float *src0_dd, const float *src1_dd, float *dst_dd, const queue_ptr &main_stream);
+
+#endif // GGML_SYCL_ROPE_HPP
