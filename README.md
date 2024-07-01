@@ -108,6 +108,7 @@ Typically finetunes of the base models below are supported as well.
 - [X] [Falcon](https://huggingface.co/models?search=tiiuae/falcon)
 - [X] [Chinese LLaMA / Alpaca](https://github.com/ymcui/Chinese-LLaMA-Alpaca) and [Chinese LLaMA-2 / Alpaca-2](https://github.com/ymcui/Chinese-LLaMA-Alpaca-2)
 - [X] [Vigogne (French)](https://github.com/bofenghuang/vigogne)
+- [X] [BERT](https://github.com/ggerganov/llama.cpp/pull/5423)
 - [X] [Koala](https://bair.berkeley.edu/blog/2023/04/03/koala/)
 - [X] [Baichuan 1 & 2](https://huggingface.co/models?search=baichuan-inc/Baichuan) + [derivations](https://huggingface.co/hiyouga/baichuan-7b-sft)
 - [X] [Aquila 1 & 2](https://huggingface.co/models?search=BAAI/Aquila)
