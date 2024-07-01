@@ -17,6 +17,7 @@
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
+  curl,
   useBlas ? builtins.all (x: !x) [
     useCuda
     useMetalKit
@@ -27,6 +28,7 @@
   useMetalKit ? stdenv.isAarch64 && stdenv.isDarwin,
   useMpi ? false, # Increases the runtime closure size by ~700M
   useRocm ? config.rocmSupport,
+  enableCurl ? true,
   useVulkan ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
@@ -196,13 +198,15 @@ effectiveStdenv.mkDerivation (
       ++ optionals useMpi [ mpi ]
       ++ optionals useRocm rocmBuildInputs
       ++ optionals useBlas [ blas ]
-      ++ optionals useVulkan vulkanBuildInputs;
+      ++ optionals useVulkan vulkanBuildInputs
+      ++ optionals enableCurl [ curl ];
 
     cmakeFlags =
       [
         (cmakeBool "LLAMA_BUILD_SERVER" true)
         (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
         (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
+        (cmakeBool "LLAMA_CURL" enableCurl)
         (cmakeBool "GGML_NATIVE" false)
         (cmakeBool "GGML_BLAS" useBlas)
         (cmakeBool "GGML_CUDA" useCuda)
