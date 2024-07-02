@@ -26,6 +26,9 @@ torch = { version = "^2.2.0", source = "pytorch" }
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
 
+
+# Force wheel + cpu
+# For discussion and context see https://github.com/python-poetry/poetry#6409
 [[tool.poetry.source]]
 name = "pytorch"
 url = "https://download.pytorch.org/whl/cpu"
