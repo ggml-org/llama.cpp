@@ -34,4 +34,3 @@ fi
 
 #use multiple GPUs with same max compute units
 #ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "${INPUT2}" -n 400 -e -ngl 33 -s 0
-

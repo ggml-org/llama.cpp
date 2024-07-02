@@ -7030,4 +7030,3 @@ const std::vector<range_nfd> unicode_ranges_nfd = {  // start, last, nfd
 {0x02FA1C, 0x02FA1C, 0x009F3B},
 {0x02FA1D, 0x02FA1D, 0x02A600},
 };
-

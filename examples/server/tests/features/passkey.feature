@@ -52,4 +52,3 @@ Feature: Passkey / Self-extend with context shift
       #| TheBloke/Llama-2-7B-GGUF        | llama-2-7b.Q2_K.gguf        | 4096        | 3   | 16384 | 512     | 4    | 512    | 500    | 300   | 1234    | 5           | 1234           |
       #| TheBloke/Mixtral-8x7B-v0.1-GGUF | mixtral-8x7b-v0.1.Q2_K.gguf | 32768       | 2   | 16384 | 512     | 4    | 512    | 500    | 100   | 0987    | 5           | 0
       # 987           |
-

@@ -487,4 +487,3 @@ void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
         GGML_ASSERT(false);
     }
 }
-

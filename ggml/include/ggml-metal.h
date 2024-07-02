@@ -63,4 +63,3 @@ GGML_API void ggml_backend_metal_capture_next_compute(ggml_backend_t backend);
 #ifdef __cplusplus
 }
 #endif
-

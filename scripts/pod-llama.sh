@@ -210,4 +210,3 @@ fi
 # more benches
 #GGML_CUDA=1 make -j && ./llama-batched-bench ./models/codellama-7b/ggml-model-q4_k.gguf  4096 1 99 1 512,3200 128,128,800 1
 #GGML_CUDA=1 make -j && ./llama-batched-bench ./models/codellama-13b/ggml-model-q4_k.gguf 4096 1 99 1 512,3200 128,128,800 1
-
