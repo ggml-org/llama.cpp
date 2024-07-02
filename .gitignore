@@ -99,7 +99,7 @@ examples/server/*.mjs.hpp
 # Python
 
 /.venv
-/__pycache__/
+__pycache__/
 */poetry.lock
 poetry.toml
 
