@@ -757,7 +757,7 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cache_type_v = argv[++i];
         return true;
     }
-    if (arg == "--multiline-input") {
+    if (arg == "-mli" || arg == "--multiline-input") {
         params.multiline_input = true;
         return true;
     }
