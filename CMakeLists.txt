@@ -156,7 +156,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 install(
-    FILES convert-hf-to-gguf.py
+    FILES convert_hf_to_gguf.py
     PERMISSIONS
         OWNER_READ
         OWNER_WRITE
@@ -165,6 +165,8 @@ install(
         GROUP_EXECUTE
         WORLD_READ
         WORLD_EXECUTE
+    RENAME
+        convert-hf-to-gguf.py
     DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 configure_file(cmake/llama.pc.in
