@@ -295,5 +295,60 @@ struct ggml_backend_sycl_context {
     }
 };
 
+// common host functions
+
+static inline int get_work_group_size(const sycl::device& device) {
+    dpct::device_info prop;
+    dpct::get_device_info(prop, device);
+    return prop.get_max_work_group_size();
+}
+
+
+// common device functions
+
+static __dpct_inline__ float warp_reduce_sum(float x,
+    const sycl::nd_item<3>& item_ct1) {
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        /*
+        DPCT1096:98: The right-most dimension of the work-group used in the SYCL
+        kernel that calls this function may be less than "32". The function
+        "dpct::permute_sub_group_by_xor" may return an unexpected result on the
+        CPU device. Modify the size of the work-group to ensure that the value
+        of the right-most dimension is a multiple of "32".
+        */
+        x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
+    }
+    return x;
+}
+
+static __dpct_inline__ sycl::float2
+warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        a.x() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.x(),
+            mask);
+        a.y() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.y(),
+            mask);
+    }
+    return a;
+}
+
+static __dpct_inline__ float warp_reduce_max(float x,
+    const sycl::nd_item<3>& item_ct1) {
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        /*
+        DPCT1096:97: The right-most dimension of the work-group used in the SYCL
+        kernel that calls this function may be less than "32". The function
+        "dpct::permute_sub_group_by_xor" may return an unexpected result on the
+        CPU device. Modify the size of the work-group to ensure that the value
+        of the right-most dimension is a multiple of "32".
+        */
+        x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
+            item_ct1.get_sub_group(), x, mask));
+    }
+    return x;
+}
 
 #endif // GGML_SYCL_COMMON_HPP
