@@ -50,7 +50,7 @@ class TOKENIZER_TYPE(IntEnum):
 
 # TODO: this string has to exercise as much pre-tokenizer functionality as possible
 #       will be updated with time - contributions welcome
-chktxt = "\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶‍🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български ''''''```````\"\"\"\"......!!!!!!?????? I've been 'told he's there, 'RE you sure? 'M not sure I'll make it, 'D you like some tea? We'Ve a'lL"
+chktxt = '\n \n\n \n\n\n \t \t\t \t\n  \n   \n    \n     \n🚀 (normal) 😶‍🌫️ (multiple emojis concatenated) ✅ 🦙🦙 3 33 333 3333 33333 333333 3333333 33333333 3.3 3..3 3...3 កាន់តែពិសេសអាច😁 ?我想在apple工作1314151天～ ------======= нещо на Български \'\'\'\'\'\'```````\"\"\"\"......!!!!!!?????? I\'ve been \'told he\'s there, \'RE you sure? \'M not sure I\'ll make it, \'D you like some tea? We\'Ve a\'lL'
 
 if len(sys.argv) == 2:
     token = sys.argv[1]
@@ -99,7 +99,7 @@ def download_file_with_auth(url, token, save_path):
     response = sess.get(url, headers=headers)
     response.raise_for_status()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with open(save_path, "wb") as f:
+    with open(save_path, 'wb') as f:
         f.write(response.content)
     logger.info(f"File {save_path} downloaded successfully")
 
@@ -156,9 +156,7 @@ for model in models:
         else:
             tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
     except OSError as e:
-        logger.error(
-            f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}"
-        )
+        logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
         continue  # Skip to the next model if the tokenizer can't be loaded
 
     chktok = tokenizer.encode(chktxt)
@@ -178,15 +176,13 @@ for model in models:
         pre_tokenizer = cfg["pre_tokenizer"]
         logger.info("pre_tokenizer: " + json.dumps(pre_tokenizer, indent=4))
         if "ignore_merges" in cfg["model"]:
-            logger.info(
-                "ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4)
-            )
+            logger.info("ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4))
 
     logger.info("")
 
-    src_ifs += f'        if chkhsh == "{chkhsh}":\n'
+    src_ifs += f"        if chkhsh == \"{chkhsh}\":\n"
     src_ifs += f"            # ref: {model['repo']}\n"
-    src_ifs += f'            res = "{name}"\n'
+    src_ifs += f"            res = \"{name}\"\n"
 
 src_func = f"""
     def get_vocab_base_pre(self, tokenizer) -> str:
@@ -347,8 +343,6 @@ logger.info("\nRun the following commands to generate the vocab files for testin
 for model in models:
     name = model["name"]
 
-    print(
-        f"python3 convert-hf-to-gguf.py models/tokenizers/{name}/ --outfile models/ggml-vocab-{name}.gguf --vocab-only"
-    )  # noqa: NP100
+    print(f"python3 convert-hf-to-gguf.py models/tokenizers/{name}/ --outfile models/ggml-vocab-{name}.gguf --vocab-only") # noqa: NP100
 
 logger.info("\n")
