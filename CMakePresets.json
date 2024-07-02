@@ -19,6 +19,7 @@
         "cacheVariables": {
             "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
             "CMAKE_CXX_COMPILER": "icx",
+            "CMAKE_C_COMPILER": "cl",
             "GGML_SYCL": "ON",
             "CMAKE_INSTALL_RPATH": "$ORIGIN;$ORIGIN/.."
         }
