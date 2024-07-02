@@ -3120,7 +3120,8 @@ def main() -> None:
         "auto": gguf.LlamaFileType.GUESSED,
     }
 
-    if args.use_temp_file and (args.split_max_tensors > 0 or args.split_max_size != "0"):
+    is_split = args.split_max_tensors > 0 or args.split_max_size != "0"
+    if args.use_temp_file and is_split:
         logger.error("Error: Cannot use temp file when splitting")
         sys.exit(1)
 
@@ -3157,11 +3158,12 @@ def main() -> None:
         if args.vocab_only:
             logger.info("Exporting model vocab...")
             model_instance.write_vocab()
-            logger.info("Model vocab successfully exported.")
+            logger.info(f"Model vocab successfully exported to {model_instance.fname_out}")
         else:
             logger.info("Exporting model...")
             model_instance.write()
-            logger.info("Model successfully exported.")
+            out_path = f"{model_instance.fname_out.parent}{os.sep}" if is_split else model_instance.fname_out
+            logger.info(f"Model successfully exported to {out_path}")
 
 
 if __name__ == '__main__':
