@@ -62,6 +62,11 @@ TEST_TARGETS = \
 	tests/test-tokenizer-1-bpe \
 	tests/test-tokenizer-1-spm
 
+# Legacy build targets that were renamed in #7809, but should still be removed when the project is cleaned
+LEGACY_TARGETS = main quantize quantize-stats perplexity imatrix embedding vdot q8dot train-text-from-scratch convert-llama2c-to-ggml \
+	simple batched batched-bench save-load-state server gguf gguf-split eval-callback llama-bench libllava.a llava-cli baby-llama \
+	retrieval speculative infill tokenize benchmark-matmult parallel finetune export-lora lookahead lookup passkey gritlm
+
 # Deprecation aliases
 ifdef LLAMA_CUBLAS
 $(error LLAMA_CUBLAS is removed. Use GGML_CUDA instead.)
@@ -1086,6 +1091,7 @@ clean:
 	rm -vrf ggml/src/ggml-cuda/template-instances/*.o
 	rm -rvf $(BUILD_TARGETS)
 	rm -rvf $(TEST_TARGETS)
+	rm -rvf $(LEGACY_TARGETS)
 	find examples pocs -type f -name "*.o" -delete
 
 #
