@@ -227,6 +227,10 @@ typedef float2 dfloat2;
 #define RDNA2
 #endif
 
+#if defined(__gfx1010__) || defined(__gfx1012__)
+#define RDNA1
+#endif
+
 #ifndef __has_builtin
     #define __has_builtin(x) 0
 #endif
