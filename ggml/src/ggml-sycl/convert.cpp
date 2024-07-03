@@ -152,12 +152,15 @@ static void dequantize_row_q4_K_sycl(const void *vx, dst_t *y, const int k,
         dpct::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(12), cgh);
+            cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
-                                 dequantize_block_q4_K(vx, y, item_ct1);
+                                 dequantize_block_q4_K(vx, y, scale_local_acc.get_pointer(), item_ct1);
                              });
+        });
     }
 }
 

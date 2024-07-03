@@ -351,4 +351,10 @@ static __dpct_inline__ float warp_reduce_max(float x,
     return x;
 }
 
+// Helper for vec loading aligned data
+template <typename Tp, int n>
+inline sycl::vec<Tp, n> vec_aligned_load(const Tp* aligned_ptr) {
+    return *reinterpret_cast<const sycl::vec<Tp, n>*>(aligned_ptr);
+}
+
 #endif // GGML_SYCL_COMMON_HPP
