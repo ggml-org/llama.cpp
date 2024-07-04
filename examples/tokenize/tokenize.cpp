@@ -30,6 +30,7 @@ static void print_usage_information(const char * argv0, FILE * stream) {
     fprintf(stream, "    --stdin                              read prompt from standard input.\n");
     fprintf(stream, "    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
     fprintf(stream, "    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
+    fprintf(stream, "    --show-count                         print the total number of tokens.\n");
 }
 
 static void llama_log_callback_null(ggml_log_level level, const char * text, void * user_data) {
@@ -195,6 +196,7 @@ int main(int raw_argc, char ** raw_argv) {
     bool printing_ids = false;
     bool no_bos = false;
     bool disable_logging = false;
+    bool show_token_count = false;
     const char * model_path = NULL;
     const char * prompt_path = NULL;
     const char * prompt_arg = NULL;
@@ -248,6 +250,9 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "--log-disable") {
             disable_logging = true;
+        }
+        else if (arg == "--show-count") {
+            show_token_count = true;
         }
         else {
             fprintf(stderr, "Error: unknown option '%s'\n", argv[iarg].c_str());
@@ -384,6 +389,9 @@ int main(int raw_argc, char ** raw_argv) {
         printf("]\n");
     }
 
+    if (show_token_count) {
+        printf("Total number of tokens: %ld\n", tokens.size());
+    }
     // silence valgrind
     llama_free(ctx);
     llama_free_model(model);
