@@ -37,7 +37,8 @@ static gpt_params               * g_params;
 static std::vector<llama_token> * g_input_tokens;
 static std::ostringstream       * g_output_ss;
 static std::vector<llama_token> * g_output_tokens;
-static bool is_interacting = false;
+static bool is_interacting  = false;
+static bool need_insert_eot = false;
 
 static bool file_exists(const std::string & path) {
     std::ifstream f(path.c_str());
@@ -99,7 +100,8 @@ static void write_logfile(
 static void sigint_handler(int signo) {
     if (signo == SIGINT) {
         if (!is_interacting && g_params->interactive) {
-            is_interacting = true;
+            is_interacting  = true;
+            need_insert_eot = true;
         } else {
             console::cleanup();
             printf("\n");
@@ -224,7 +226,14 @@ int main(int argc, char ** argv) {
                 __func__, n_ctx_train, n_ctx);
     }
 
-    LOG_TEE("%s: chat template example: %s\n", __func__, llama_chat_format_example(model, params.chat_template).c_str());
+    // print chat template example in conversation mode
+    if (params.conversation) {
+        if (params.enable_chat_template) {
+            LOG_TEE("%s: chat template example: %s\n", __func__, llama_chat_format_example(model, params.chat_template).c_str());
+        } else {
+            LOG_TEE("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
+        }
+    }
 
     // print system information
     {
@@ -263,7 +272,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     {
-        auto prompt = (params.conversation && params.enable_chat_template)
+        auto prompt = (params.conversation && params.enable_chat_template && !params.prompt.empty())
             ? chat_add_and_format(model, chat_msgs, "system", params.prompt) // format the system prompt in conversation mode
             : params.prompt;
         if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
@@ -904,6 +913,13 @@ int main(int argc, char ** argv) {
                     const auto line_sfx = ::llama_tokenize(ctx, params.input_suffix, false, true);
 
                     LOG("input tokens: %s\n", LOG_TOKENS_TOSTR_PRETTY(ctx, line_inp).c_str());
+
+                    // if user stop generation mid-way, we must add EOT to finish model's last response
+                    if (need_insert_eot && format_chat) {
+                        llama_token eot = llama_token_eot(model);
+                        embd_inp.push_back(eot == -1 ? llama_token_eos(model) : eot);
+                        need_insert_eot = false;
+                    }
 
                     embd_inp.insert(embd_inp.end(), line_pfx.begin(), line_pfx.end());
                     embd_inp.insert(embd_inp.end(), line_inp.begin(), line_inp.end());
