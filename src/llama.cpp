@@ -14781,7 +14781,7 @@ private:
                 size_t prefix_offset = input_offset;
                 unicode_cpt_from_utf8(input, prefix_offset);
                 return { &input[input_offset], prefix_offset - input_offset, prefix_offset - input_offset };
-            } catch(std::invalid_argument & ex) {
+            } catch (std::invalid_argument & /*ex*/) {
                 // if no, consume 1 byte and return U+FFFD - REPLACEMENT CHARACTER
                 return { "\xEF\xBF\xBD", 3, 1 };
             }
@@ -19725,7 +19725,7 @@ static std::string llama_decode_text(const std::string & text) {
         const auto utf8 = unicode_cpt_to_utf8(cpt);
         try {
             decoded_text += unicode_utf8_to_byte(utf8);
-        } catch (const std::out_of_range & e) {
+        } catch (const std::out_of_range & /*e*/) {
             decoded_text += "[UNK_BYTE_0x";
             for (const auto c : utf8) {
                 decoded_text += format("%02x", (uint8_t) c);
