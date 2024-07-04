@@ -165,8 +165,6 @@ install(
         GROUP_EXECUTE
         WORLD_READ
         WORLD_EXECUTE
-    RENAME
-        convert-hf-to-gguf.py
     DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 configure_file(cmake/llama.pc.in
