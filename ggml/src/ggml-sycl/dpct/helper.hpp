@@ -255,7 +255,7 @@ namespace dpct
         void set_pitch(size_t pitch) { _pitch = pitch; }
 
         size_t get_x() { return _x; }
-        void set_x(size_t x) { _x = x; };
+        void set_x(size_t x) { _x = x; }
 
         size_t get_y() { return _y; }
         void set_y(size_t y) { _y = y; }
@@ -1056,7 +1056,7 @@ namespace dpct
 #error "Only support Windows and Linux."
 #endif
                 next_free = mapped_address_space;
-            };
+            }
 
         public:
             using buffer_id_t = int;
@@ -1077,7 +1077,7 @@ namespace dpct
 #else
 #error "Only support Windows and Linux."
 #endif
-            };
+            }
 
             mem_mgr(const mem_mgr &) = delete;
             mem_mgr &operator=(const mem_mgr &) = delete;
