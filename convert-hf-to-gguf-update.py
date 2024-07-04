@@ -45,6 +45,7 @@ class TOKENIZER_TYPE(IntEnum):
     SPM = auto()
     BPE = auto()
     WPM = auto()
+    UGM = auto()
 
 
 # TODO: this string has to exercise as much pre-tokenizer functionality as possible
@@ -89,6 +90,7 @@ models = [
     {"name": "gemma",          "tokt": TOKENIZER_TYPE.SPM, "repo": "https://huggingface.co/google/gemma-2b", },
     {"name": "gemma-2",        "tokt": TOKENIZER_TYPE.SPM, "repo": "https://huggingface.co/google/gemma-2-9b", },
     {"name": "jais",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/core42/jais-13b", },
+    {"name": "t5",             "tokt": TOKENIZER_TYPE.UGM, "repo": "https://huggingface.co/google-t5/t5-small", },
 ]
 
 
@@ -110,8 +112,12 @@ def download_model(model):
     os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
 
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
+
     if tokt == TOKENIZER_TYPE.SPM:
         files.append("tokenizer.model")
+
+    if tokt == TOKENIZER_TYPE.UGM:
+        files.append("spiece.model")
 
     for file in files:
         save_path = f"models/tokenizers/{name}/{file}"
@@ -135,7 +141,7 @@ for model in models:
     name = model["name"]
     tokt = model["tokt"]
 
-    if tokt == TOKENIZER_TYPE.SPM:
+    if tokt == TOKENIZER_TYPE.SPM or tokt == TOKENIZER_TYPE.UGM:
         continue
 
     # Skip if the tokenizer folder does not exist or there are other download issues previously
@@ -145,7 +151,10 @@ for model in models:
 
     # create the tokenizer
     try:
-        tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
+        if name == "t5":
+            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
     except OSError as e:
         logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
         continue  # Skip to the next model if the tokenizer can't be loaded
@@ -266,6 +275,7 @@ tests = [
     "\n =",
     "' era",
     "Hello, y'all! How are you 😁 ?我想在apple工作1314151天～",
+    "!!!!!!",
     "3",
     "33",
     "333",
@@ -304,7 +314,10 @@ for model in models:
 
     # create the tokenizer
     try:
-        tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
+        if name == "t5":
+            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
     except OSError as e:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop

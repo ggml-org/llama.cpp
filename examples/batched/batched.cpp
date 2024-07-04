@@ -93,13 +93,33 @@ int main(int argc, char ** argv) {
 
     // create a llama_batch
     // we use this object to submit token data for decoding
-    llama_batch batch = llama_batch_init(std::max(tokens_list.size(), (size_t)n_parallel), 0, 1);
+    llama_batch batch = llama_batch_init(std::max(tokens_list.size(), (size_t) n_parallel), 0, n_parallel);
+
+    std::vector<llama_seq_id> seq_ids(n_parallel, 0);
+    for (int32_t i = 0; i < n_parallel; ++i) {
+        seq_ids[i] = i;
+    }
 
     // evaluate the initial prompt
     for (size_t i = 0; i < tokens_list.size(); ++i) {
-        llama_batch_add(batch, tokens_list[i], i, { 0 }, false);
+        llama_batch_add(batch, tokens_list[i], i, seq_ids, false);
     }
     GGML_ASSERT(batch.n_tokens == (int) tokens_list.size());
+
+    if (llama_model_has_encoder(model)) {
+        if (llama_encode(ctx, batch)) {
+            LOG_TEE("%s : failed to eval\n", __func__);
+            return 1;
+        }
+
+        llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
+        if (decoder_start_token_id == -1) {
+            decoder_start_token_id = llama_token_bos(model);
+        }
+
+        llama_batch_clear(batch);
+        llama_batch_add(batch, decoder_start_token_id, 0, seq_ids, false);
+    }
 
     // llama_decode will output logits only for the last token of the prompt
     batch.logits[batch.n_tokens - 1] = true;
@@ -109,11 +129,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // assign the system KV cache to all parallel sequences
-    // this way, the parallel sequences will "reuse" the prompt tokens without having to copy them
-    for (int32_t i = 1; i < n_parallel; ++i) {
-        llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
-    }
+    //// assign the system KV cache to all parallel sequences
+    //// this way, the parallel sequences will "reuse" the prompt tokens without having to copy them
+    //for (int32_t i = 1; i < n_parallel; ++i) {
+    //    llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+    //}
 
     if (n_parallel > 1) {
         LOG_TEE("\n\n%s: generating %d sequences ...\n", __func__, n_parallel);

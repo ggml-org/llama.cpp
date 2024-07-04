@@ -485,6 +485,13 @@ extern "C" {
     // Get a llama model tensor
     LLAMA_API struct ggml_tensor * llama_get_model_tensor(struct llama_model * model, const char * name);
 
+    // Returns true if the model contains an encoder that requires llama_encode() call
+    LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
+
+    // For encoder-decoder models, this function returns id of the token that must be provided
+    // to the decoder to start generating output sequence. For other models, it returns -1.
+    LLAMA_API llama_token llama_model_decoder_start_token(const struct llama_model * model);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
@@ -769,6 +776,14 @@ extern "C" {
 
     // Frees a batch of tokens allocated with llama_batch_init()
     LLAMA_API void llama_batch_free(struct llama_batch batch);
+
+    // Processes a batch of tokens with the ecoder part of the encoder-decoder model.
+    // Stores the encoder output internally for later use by the decoder cross-attention layers.
+    //   0 - success
+    // < 0 - error
+    LLAMA_API int32_t llama_encode(
+            struct llama_context * ctx,
+              struct llama_batch   batch);
 
     // Positive return values does not mean a fatal error, but rather a warning.
     //   0 - success

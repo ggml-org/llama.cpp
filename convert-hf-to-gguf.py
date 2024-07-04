@@ -2853,10 +2853,16 @@ class DeepseekV2Model(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@Model.register("T5ForConditionalGeneration")
 @Model.register("T5WithLMHeadModel")
+@Model.register("T5ForConditionalGeneration")
+@Model.register("MT5ForConditionalGeneration")
+@Model.register("UMT5ForConditionalGeneration")
 class T5Model(Model):
     model_arch = gguf.MODEL_ARCH.T5
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.shared_token_embeddings_found = False
 
     def set_vocab(self):
         # to avoid TypeError: Descriptors cannot be created directly
@@ -2865,17 +2871,29 @@ class T5Model(Model):
         from sentencepiece import SentencePieceProcessor
         from sentencepiece import sentencepiece_model_pb2 as model
 
-        tokenizer_path = self.dir_model / 'spiece.model'
+        tokenizer_path = self.dir_model / 'tokenizer.model'
+
+        # many older models use spiece.model tokenizer model filename
+        if not tokenizer_path.is_file():
+            tokenizer_path = self.dir_model / 'spiece.model'
 
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
         sentencepiece_model = model.ModelProto()
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
+
+        # some models like Pile-T5 family use BPE tokenizer instead of Unigram
+        if sentencepiece_model.trainer_spec.model_type == 2: # BPE
+            # assure the tokenizer model file name is correct
+            assert tokenizer_path.name == 'tokenizer.model'
+            return self._set_vocab_sentencepiece()
+        else:
+            assert sentencepiece_model.trainer_spec.model_type == 1 # UNIGRAM
+
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
         remove_whitespaces = sentencepiece_model.normalizer_spec.remove_extra_whitespaces
         precompiled_charsmap = sentencepiece_model.normalizer_spec.precompiled_charsmap
-        assert sentencepiece_model.trainer_spec.model_type == 1 # UNIGRAM
 
         tokenizer = SentencePieceProcessor()
         tokenizer.LoadFromFile(str(tokenizer_path))
@@ -2945,7 +2963,10 @@ class T5Model(Model):
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_name("T5")
-        self.gguf_writer.add_context_length(self.hparams["n_positions"])
+        if (n_ctx := self.find_hparam(["n_positions"], optional=True)) is None:
+            logger.warning("Couldn't find context length in config.json, assuming default value of 512")
+            n_ctx = 512
+        self.gguf_writer.add_context_length(n_ctx)
         self.gguf_writer.add_embedding_length(self.hparams["d_model"])
         self.gguf_writer.add_feed_forward_length(self.hparams["d_ff"])
         self.gguf_writer.add_block_count(self.hparams["num_layers"])
@@ -2961,12 +2982,17 @@ class T5Model(Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
-        # Sometimes T5 and Flan-T5 based models contain "encoder.embed_tokens.weight" tensor or
-        # "decoder.embed_tokens.weight" tensors that are duplicates of "shared.weight" tensor
-        # To prevent errors caused by an unnecessary unmapped tensor, skip both of them and use only "shared.weight".
-        if name == "decoder.embed_tokens.weight" or name == "encoder.embed_tokens.weight":
-            logger.debug(f"Skipping tensor {name!r} in safetensors so that convert can end normally.")
-            return []
+        # T5 based models contain shared token embeddings tensors saved randomly as either "encoder.embed_tokens.weight",
+        # "decoder.embed_tokens.weight" or "shared.weight" tensor. In some models there are even multiple of them stored
+        # in the safetensors files. We use the first tensor from these three as the token embeddings for both encoder
+        # and decoder and ignore the remaining ones.
+        if name in ["decoder.embed_tokens.weight", "encoder.embed_tokens.weight", "shared.weight"]:
+            if not self.shared_token_embeddings_found:
+                name = "shared.weight"
+                self.shared_token_embeddings_found = True
+            else:
+                logger.debug(f"Skipping shared tensor {name!r} in safetensors so that convert can end normally.")
+                return []
 
         return [(self.map_tensor_name(name), data_torch)]
 
