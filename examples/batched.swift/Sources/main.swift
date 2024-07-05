@@ -229,7 +229,7 @@ private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
 
 private func token_to_piece(token: llama_token, buffer: inout [CChar]) -> String? {
     var result = [CChar](repeating: 0, count: 8)
-    let nTokens = llama_token_to_piece(model, token, &result, Int32(result.count), false)
+    let nTokens = llama_token_to_piece(model, token, &result, Int32(result.count), 0, false)
     if nTokens < 0 {
         let actualTokensCount = -Int(nTokens)
         result = .init(repeating: 0, count: actualTokensCount)
@@ -238,6 +238,7 @@ private func token_to_piece(token: llama_token, buffer: inout [CChar]) -> String
             token,
             &result,
             Int32(result.count),
+            0,
             false
         )
         assert(check == actualTokensCount)

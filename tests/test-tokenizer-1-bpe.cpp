@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <atomic>
 
 int main(int argc, char **argv) {
     if (argc < 2 || argc > 3) {
@@ -63,7 +64,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    GGML_ASSERT(llama_vocab_type(model) == LLAMA_VOCAB_TYPE_BPE);
+    //GGML_ASSERT(llama_vocab_type(model) == LLAMA_VOCAB_TYPE_BPE);
+    if (llama_vocab_type(model) != LLAMA_VOCAB_TYPE_BPE) {
+        return 99;
+    }
 
 #ifdef _WIN32
     // We need this for unicode console support
@@ -74,7 +78,7 @@ int main(int argc, char **argv) {
     const int n_vocab = llama_n_vocab(model);
 
     for (int i = 0; i < n_vocab; ++i) {
-        std::string str = llama_detokenize_bpe(ctx, std::vector<int>(1, i));
+        std::string str = llama_detokenize(ctx, std::vector<int>(1, i));
         try {
             auto cps = unicode_cpts_from_utf8(str);
             std::vector<llama_token> tokens = llama_tokenize(ctx, str, false, true);
@@ -90,7 +94,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "]\n");
                 return 2;
             }
-            std::string check = llama_detokenize_bpe(ctx, tokens);
+            std::string check = llama_detokenize(ctx, tokens);
             if (check != str) {
                 fprintf(stderr, "%s : error: token %d detokenizes to '%s'(%zu) but tokenization of this detokenizes to '%s'(%zu)\n",
                     __func__, i, str.c_str(), str.length(), check.c_str(), check.length());
@@ -108,26 +112,23 @@ int main(int argc, char **argv) {
 
         std::vector<std::thread> threads(nthread);
 
+        std::atomic_int errcode = {};
+
         for (int i = 0; i < nthread; ++i) {
-            threads[i] = std::thread([i, nthread, ctx]() {
-                for (uint32_t cp = i; cp < 0x0010ffff; cp += nthread) {
-                    if (!( // NOLINT
-                                (cp < 0x03       || cp >  0x05)   && cp != 0x0b && cp != 0x11 &&
-                                (cp < 0x13       || cp >  0x17)   && cp != 0x19 &&
-                                (cp < 0x1c       || cp >  0x1e)   &&
-                                (cp < 0xd800     || cp >  0xdfff) &&
-                                (cp < 0x00040000 || cp >= 0x000e0000)
-                        )) {
+            threads[i] = std::thread([i, nthread, ctx, &errcode]() {
+                for (uint32_t cp = i; !errcode && cp < 0x00110000; cp += nthread) {
+                    if ((0x0000D800 <= cp && cp <= 0x0000DFFF) ||  // surrogates \p{Cs}
+                        (0x00040000 <= cp && cp <= 0x000E0000)) {  // undefined  \p{Cn}
                         continue;
                     }
 
                     std::string str = unicode_cpt_to_utf8(cp);
                     std::vector<llama_token> tokens = llama_tokenize(ctx, str, false);
-                    std::string check = llama_detokenize_bpe(ctx, tokens);
+                    std::string check = llama_detokenize(ctx, tokens);
                     if (cp != 9601 && str != check) {
-                        fprintf(stderr, "error: codepoint %x detokenizes to '%s'(%zu) instead of '%s'(%zu)\n",
+                        fprintf(stderr, "error: codepoint 0x%x detokenizes to '%s'(%zu) instead of '%s'(%zu)\n",
                                 cp, check.c_str(), check.length(), str.c_str(), str.length());
-                        std::exit(3);
+                        errcode = 3;
                     }
                 }
             });
@@ -135,6 +136,10 @@ int main(int argc, char **argv) {
 
         for (auto & t : threads) {
             t.join();
+        }
+
+        if (errcode) {
+            return errcode;
         }
     }
 

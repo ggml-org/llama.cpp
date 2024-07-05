@@ -350,21 +350,13 @@ std::string llama_token_to_piece(
                        llama_token   token,
                        bool          special = true);
 
-// TODO: these should be moved in llama.h C-style API under single `llama_detokenize` function
-//       that takes into account the tokenizer type and decides how to handle the leading space
-//
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`
-// removes the leading space from the first non-BOS token
-std::string llama_detokenize_spm(
+// optionally renders special/control tokens
+std::string llama_detokenize(
                          llama_context * ctx,
-        const std::vector<llama_token> & tokens);
-
-// detokenizes a vector of tokens into a string
-// should work similar to Python's `tokenizer.decode`
-std::string llama_detokenize_bpe(
-                         llama_context * ctx,
-        const std::vector<llama_token> & tokens);
+        const std::vector<llama_token> & tokens,
+                                  bool   special = true);
 
 // Uses the value from the model metadata if possible, otherwise
 // defaults to true when model type is SPM, otherwise false.
