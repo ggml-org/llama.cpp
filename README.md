@@ -976,21 +976,10 @@ docker run --gpus all -v /path/to/models:/models local/llama.cpp:server-cuda -m 
 - Collaborators can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
 - Collaborators will be invited based on contributions
 - Any help with managing issues and PRs is very appreciated!
+- See [good first issues](https://github.com/ggerganov/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
+- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
 - Make sure to read this: [Inference at the edge](https://github.com/ggerganov/llama.cpp/discussions/205)
 - A bit of backstory for those who are interested: [Changelog podcast](https://changelog.com/podcast/532)
-
-### Coding guidelines
-
-- Avoid adding third-party dependencies, extra files, extra headers, etc.
-- Always consider cross-compatibility with other operating systems and architectures
-- Avoid fancy looking modern STL constructs, use basic `for` loops, avoid templates, keep it simple
-- There are no strict rules for the code style, but try to follow the patterns in the code (indentation, spaces, etc.). Vertical alignment makes things more readable and easier to batch edit
-- Clean-up any trailing whitespaces, use 4 spaces for indentation, brackets on the same line, `void * ptr`, `int & a`
-- See [good first issues](https://github.com/ggerganov/llama.cpp/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) for tasks suitable for first contributions
-- Tensors store data in row-major order. We refer to dimension 0 as columns, 1 as rows, 2 as matrices
-- Matrix multiplication is unconventional: [`C = ggml_mul_mat(ctx, A, B)`](https://github.com/ggerganov/llama.cpp/blob/880e352277fc017df4d5794f0c21c44e1eae2b84/ggml.h#L1058-L1064) means $C^T = A B^T \Leftrightarrow C = B A^T.$
-
-![matmul](media/matmul.png)
 
 ### Docs
 
