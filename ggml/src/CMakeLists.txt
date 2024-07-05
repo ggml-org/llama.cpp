@@ -490,7 +490,7 @@ if (GGML_SYCL)
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=nvptx64-nvidia-cuda")
         add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
     else()
-        add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
+        add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     endif()
 
     file(GLOB   GGML_HEADERS_SYCL "ggml-sycl/*.hpp")

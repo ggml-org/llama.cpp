@@ -57,6 +57,7 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
     const int nwarps = nthreads / WARP_SIZE;
     assert(nwarps % WARP_SIZE == 0);
     start += item_ct1.get_local_id(2);
+    int nreduce = nwarps / WARP_SIZE;
 
     if (end >= ne_elements) {
         end = ne_elements;
@@ -87,7 +88,6 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         */
         item_ct1.barrier();
         tmp = 0.f;
-        int nreduce = nwarps / WARP_SIZE;
         for (size_t i = 0; i < nreduce; i += 1)
         {
             tmp += s_sum[lane_id + i * WARP_SIZE];
@@ -122,7 +122,11 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         better performance if there is no access to global memory.
         */
         item_ct1.barrier();
-        tmp = s_sum[lane_id];
+        tmp = 0.f;
+        for (size_t i = 0; i < nreduce; i += 1)
+        {
+            tmp += s_sum[lane_id + i * WARP_SIZE];
+        }
         tmp = warp_reduce_sum(tmp, item_ct1);
     }
 
