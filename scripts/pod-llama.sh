@@ -75,7 +75,7 @@ if [ "$1" -eq "1" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/tinyllama-1b  --outfile ./models/tinyllama-1b/ggml-model-f16.gguf  --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/tinyllama-1b  --outfile ./models/tinyllama-1b/ggml-model-f16.gguf  --outtype f16
 
     ./llama-quantize ./models/tinyllama-1b/ggml-model-f16.gguf ./models/tinyllama-1b/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/tinyllama-1b/ggml-model-f16.gguf ./models/tinyllama-1b/ggml-model-q4_k.gguf q4_k
@@ -90,7 +90,7 @@ if [ "$1" -eq "2" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-7b  --outfile ./models/codellama-7b/ggml-model-f16.gguf  --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-7b  --outfile ./models/codellama-7b/ggml-model-f16.gguf  --outtype f16
 
     ./llama-quantize ./models/codellama-7b/ggml-model-f16.gguf ./models/codellama-7b/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-7b/ggml-model-f16.gguf ./models/codellama-7b/ggml-model-q4_k.gguf q4_k
@@ -105,7 +105,7 @@ if [ "$1" -eq "3" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-13b --outfile ./models/codellama-13b/ggml-model-f16.gguf --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-13b --outfile ./models/codellama-13b/ggml-model-f16.gguf --outtype f16
 
     ./llama-quantize ./models/codellama-13b/ggml-model-f16.gguf ./models/codellama-13b/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-13b/ggml-model-f16.gguf ./models/codellama-13b/ggml-model-q4_k.gguf q4_k
@@ -120,7 +120,7 @@ if [ "$1" -eq "4" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-34b --outfile ./models/codellama-34b/ggml-model-f16.gguf --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-34b --outfile ./models/codellama-34b/ggml-model-f16.gguf --outtype f16
 
     ./llama-quantize ./models/codellama-34b/ggml-model-f16.gguf ./models/codellama-34b/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-34b/ggml-model-f16.gguf ./models/codellama-34b/ggml-model-q4_k.gguf q4_k
@@ -135,7 +135,7 @@ if [ "$1" -eq "5" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-7b-instruct  --outfile ./models/codellama-7b-instruct/ggml-model-f16.gguf  --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-7b-instruct  --outfile ./models/codellama-7b-instruct/ggml-model-f16.gguf  --outtype f16
 
     ./llama-quantize ./models/codellama-7b-instruct/ggml-model-f16.gguf ./models/codellama-7b-instruct/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-7b-instruct/ggml-model-f16.gguf ./models/codellama-7b-instruct/ggml-model-q4_k.gguf q4_k
@@ -150,7 +150,7 @@ if [ "$1" -eq "6" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-13b-instruct --outfile ./models/codellama-13b-instruct/ggml-model-f16.gguf --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-13b-instruct --outfile ./models/codellama-13b-instruct/ggml-model-f16.gguf --outtype f16
 
     ./llama-quantize ./models/codellama-13b-instruct/ggml-model-f16.gguf ./models/codellama-13b-instruct/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-13b-instruct/ggml-model-f16.gguf ./models/codellama-13b-instruct/ggml-model-q4_k.gguf q4_k
@@ -165,7 +165,7 @@ if [ "$1" -eq "7" ]; then
 
     cd /workspace/llama.cpp
 
-    python3 examples/convert-legacy-llama.py ./models/codellama-34b-instruct --outfile ./models/codellama-34b-instruct/ggml-model-f16.gguf --outtype f16
+    python3 examples/convert_legacy_llama.py ./models/codellama-34b-instruct --outfile ./models/codellama-34b-instruct/ggml-model-f16.gguf --outtype f16
 
     ./llama-quantize ./models/codellama-34b-instruct/ggml-model-f16.gguf ./models/codellama-34b-instruct/ggml-model-q4_0.gguf q4_0
     ./llama-quantize ./models/codellama-34b-instruct/ggml-model-f16.gguf ./models/codellama-34b-instruct/ggml-model-q4_k.gguf q4_k

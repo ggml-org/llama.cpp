@@ -17,7 +17,7 @@ Also, it is important to check that the examples and main ggml backends (CUDA, M
 ### 1. Convert the model to GGUF
 
 This step is done in python with a `convert` script using the [gguf](https://pypi.org/project/gguf/) library.
-Depending on the model architecture, you can use either [convert-hf-to-gguf.py](../convert-hf-to-gguf.py) or [examples/convert-legacy-llama.py](../examples/convert-legacy-llama.py) (for `llama/llama2` models in `.pth` format).
+Depending on the model architecture, you can use either [convert_hf_to_gguf.py](../convert_hf_to_gguf.py) or [examples/convert_legacy_llama.py](../examples/convert_legacy_llama.py) (for `llama/llama2` models in `.pth` format).
 
 The convert script reads the model configuration, tokenizer, tensor names+data and converts them to GGUF metadata and tensors.
 

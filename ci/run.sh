@@ -287,7 +287,7 @@ function gg_run_open_llama_7b_v2 {
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    python3 ../examples/convert-legacy-llama.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
+    python3 ../examples/convert_legacy_llama.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
     model_f16="${path_models}/ggml-model-f16.gguf"
     model_q8_0="${path_models}/ggml-model-q8_0.gguf"
@@ -421,7 +421,7 @@ function gg_run_pythia_1_4b {
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    python3 ../convert-hf-to-gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
+    python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
     model_f16="${path_models}/ggml-model-f16.gguf"
     model_q8_0="${path_models}/ggml-model-q8_0.gguf"
@@ -553,7 +553,7 @@ function gg_run_pythia_2_8b {
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
 
-    python3 ../convert-hf-to-gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
+    python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
     model_f16="${path_models}/ggml-model-f16.gguf"
     model_q8_0="${path_models}/ggml-model-q8_0.gguf"

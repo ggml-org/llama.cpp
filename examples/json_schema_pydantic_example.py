@@ -1,7 +1,7 @@
 # Usage:
 #! ./llama-server -m some-model.gguf &
 #! pip install pydantic
-#! python json-schema-pydantic-example.py
+#! python json_schema_pydantic_example.py
 
 from pydantic import BaseModel, Extra, TypeAdapter
 from annotated_types import MinLen

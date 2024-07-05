@@ -97,9 +97,9 @@ check_requirements() {
 }
 
 check_convert_script() {
-    local py=$1             # e.g. ./convert-hf-to-gguf.py
-    local pyname=${py##*/}  # e.g. convert-hf-to-gguf.py
-    pyname=${pyname%.py}    # e.g. convert-hf-to-gguf
+    local py=$1             # e.g. ./convert_hf_to_gguf.py
+    local pyname=${py##*/}  # e.g. convert_hf_to_gguf.py
+    pyname=${pyname%.py}    # e.g. convert_hf_to_gguf
 
     info "$py: beginning check"
 
@@ -166,9 +166,9 @@ if (( do_cleanup )); then
     rm -rf -- "$all_venv"
 fi
 
-check_convert_script examples/convert-legacy-llama.py
+check_convert_script examples/convert_legacy_llama.py
 for py in convert_*.py; do
-    # skip convert-hf-to-gguf-update.py
+    # skip convert_hf_to_gguf_update.py
     # TODO: the check is failing for some reason:
     #       https://github.com/ggerganov/llama.cpp/actions/runs/8875330981/job/24364557177?pr=6920
     [[ $py == convert_hf_to_gguf_update.py ]] && continue
