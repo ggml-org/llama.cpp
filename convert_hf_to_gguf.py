@@ -2445,7 +2445,7 @@ class Gemma2Model(Model):
             raise ValueError("query_pre_attn_scalar must be equal to n_embd / n_head")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unusem
+        del bid  # unused
 
         # lm_head is not used in llama.cpp, while autoawq will include this tensor in model
         # To prevent errors, skip loading lm_head.weight.
@@ -3226,10 +3226,6 @@ def parse_args() -> argparse.Namespace:
         help="extract only the vocab",
     )
     parser.add_argument(
-        "--awq-path", type=Path, default=None,
-        help="Path to scale awq cache file",
-    )
-    parser.add_argument(
         "--outfile", type=Path,
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
@@ -3305,19 +3301,6 @@ def main() -> None:
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO)
 
     dir_model = args.model
-
-    if args.awq_path:
-        sys.path.insert(1, str(Path(__file__).parent / 'awq-py'))
-        from awq.apply_awq import add_scale_weights  # type: ignore[import-not-found]
-        tmp_model_path = args.model / "weighted_model"
-        dir_model = tmp_model_path
-        if tmp_model_path.is_dir():
-            logger.info(f"{tmp_model_path} exists as a weighted model.")
-        else:
-            tmp_model_path.mkdir(parents=True, exist_ok=True)
-            logger.info("Saving new weighted model ...")
-            add_scale_weights(str(args.model), str(args.awq_path), str(tmp_model_path))
-            logger.info(f"Saved weighted model at {tmp_model_path}.")
 
     if not dir_model.is_dir():
         logger.error(f'Error: {args.model} is not a directory')
