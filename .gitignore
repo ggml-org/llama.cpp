@@ -47,6 +47,7 @@ build*
 !build-info.cpp.in
 !build-info.sh
 !build.zig
+!docs/build.md
 /libllama.so
 /llama-*
 android-ndk-*

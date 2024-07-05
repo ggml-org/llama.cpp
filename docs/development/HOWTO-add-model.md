@@ -1,4 +1,4 @@
-## Add a new model architecture to `llama.cpp`
+# Add a new model architecture to `llama.cpp`
 
 Adding a model requires few steps:
 
