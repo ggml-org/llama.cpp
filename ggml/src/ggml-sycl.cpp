@@ -49,7 +49,7 @@ bool   ggml_backend_is_sycl(ggml_backend_t backend);
 int    ggml_backend_sycl_get_device(ggml_backend_t backend);
 static bool ggml_backend_buffer_is_sycl_split(ggml_backend_buffer_t buffer);
 static inline int get_sycl_env(const char *env_name, int default_val);
-static inline int get_work_group_size(const sycl::device& device);
+
 
 void dev2dev_memcpy(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
@@ -1912,9 +1912,9 @@ static void soft_max_f32_submitter(const float * x, const float * mask, float * 
 static void soft_max_f32_sycl(const float * x, const float * mask,
                               float * dst, const int ncols_x, const int nrows_x,
                               const int nrows_y, const float scale, const float max_bias,
-                              queue_ptr stream) {
+                              queue_ptr stream, int device) {
     int nth = WARP_SIZE;
-    int max_block_size = get_work_group_size(stream->get_device());
+    int max_block_size = ggml_sycl_info().max_work_group_sizes[device];
     while (nth < ncols_x && nth < max_block_size) nth *= 2;
     if (nth>max_block_size) nth = max_block_size;
 
@@ -2156,6 +2156,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
         info.devices[i].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
+
+        info.max_work_group_sizes[i] = prop.get_max_work_group_size();
     }
 
     for (int id = 0; id < info.device_count; ++id) {
@@ -3031,7 +3033,7 @@ inline void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, const ggml_te
     memcpy(&max_bias, dst->op_params + 1, sizeof(float));
 
     soft_max_f32_sycl(src0_dd, src1 ? src1_dd : nullptr, dst_dd, ne00,
-                      nrows_x, nrows_y, scale, max_bias, main_stream);
+                      nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
 }
 
 inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
