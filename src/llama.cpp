@@ -4210,7 +4210,7 @@ struct llama_model_loader {
 #if defined(GGML_USE_CUDA)
         // 4 staging buffers for async uploads, each sized 1MB seems to be a good default for single NVMe drives.
         // NVMe raid configurations might require more / larger buffers.
-        constexpr size_t num_buffers = 4;
+        constexpr size_t n_buffers = 4;
         constexpr size_t buffer_size = 1 * 1024 * 1024; // 1MB
 
         std::vector<ggml_backend_buffer_t> host_buffers;
@@ -4236,7 +4236,7 @@ struct llama_model_loader {
 
             // If the cuda backend is active create pinned memory buffers and events for synchronisation.
             if (cuda_backend) {
-                for (size_t idx = 0; idx < num_buffers; ++idx) {
+                for (size_t idx = 0; idx < n_buffers; ++idx) {
                     host_buffers.emplace_back(ggml_backend_buft_alloc_buffer(llama_default_buffer_type_cpu(true), buffer_size));
                     host_ptrs.emplace_back(ggml_backend_buffer_get_base(host_buffers[idx]));
                     events.emplace_back(ggml_backend_event_new(cuda_backend));
@@ -4317,7 +4317,7 @@ struct llama_model_loader {
 
                             bytes_read += read_iteration;
                             ++buffer_idx;
-                            buffer_idx %= num_buffers;
+                            buffer_idx %= n_buffers;
                         }
                     }
                     else
@@ -4340,7 +4340,7 @@ struct llama_model_loader {
 #if defined(GGML_USE_CUDA)
         // free temporary resources used for async cuda uploads
         if (cuda_backend) {
-            for (size_t idx = 0; idx < num_buffers;++idx) {
+            for (size_t idx = 0; idx < n_buffers;++idx) {
                 ggml_backend_event_synchronize(events[idx]);
                 ggml_backend_event_free(events[idx]);
                 ggml_backend_buffer_free(host_buffers[idx]);
@@ -17488,8 +17488,8 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
     const llm_arch arch = qs.model.arch;
     const auto       tn = LLM_TN(arch);
 
-    auto use_more_bits = [](int i_layer, int num_layers) -> bool {
-        return i_layer < num_layers/8 || i_layer >= 7*num_layers/8 || (i_layer - num_layers/8)%3 == 2;
+    auto use_more_bits = [](int i_layer, int n_layers) -> bool {
+        return i_layer < n_layers/8 || i_layer >= 7*n_layers/8 || (i_layer - n_layers/8)%3 == 2;
     };
     const int n_expert = std::max(1, (int)qs.model.hparams.n_expert);
     auto layer_info = [n_expert] (int i_layer, int n_layer, const char * name) {
