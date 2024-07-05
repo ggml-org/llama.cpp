@@ -1175,4 +1175,5 @@ endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(ggml PRIVATE GGML_SHARED GGML_BUILD)
 endif()
