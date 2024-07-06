@@ -85,7 +85,7 @@ Building the program with BLAS support may lead to some performance improvements
 
 ### Accelerate Framework:
 
-  This is only available on Mac PCs and it's enabled by default. You can just build using the normal instructions.
+This is only available on Mac PCs and it's enabled by default. You can just build using the normal instructions.
 
 ### OpenBLAS:
 
