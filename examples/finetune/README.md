@@ -87,4 +87,4 @@ The LORA rank can be configured for each model tensor type separately with these
 
 The LORA rank of 'norm' tensors should always be 1.
 
-To see all available options use `finetune --help`.
+To see all available options use `llama-finetune --help`.
