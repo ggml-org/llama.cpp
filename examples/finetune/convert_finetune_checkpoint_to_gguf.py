@@ -74,7 +74,7 @@ class Tensor:
             if len(self.ne) == 0:
                 self.nbytes = 0
             else:
-                self.nbytes = int(np.product(self.ne)) * 4
+                self.nbytes = int(np.prod(self.ne)) * 4
         else:
             raise ValueError(f"Unhandled data type '{self.dtype}'")
 

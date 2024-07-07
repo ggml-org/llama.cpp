@@ -1,0 +1,2 @@
+docstring_parser~=0.15
+pydantic~=2.6.3

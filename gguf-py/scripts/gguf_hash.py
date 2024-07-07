@@ -63,9 +63,9 @@ def gguf_hash(reader: GGUFReader, filename: str, disable_progress_bar) -> None:
         bar.update(sum_weights_in_tensor)
 
         sha1_layer = hashlib.sha1()
-        sha1_layer.update(tensor.data)
-        sha1.update(tensor.data)
-        uuidv5_sha1.update(tensor.data)
+        sha1_layer.update(tensor.data.data)
+        sha1.update(tensor.data.data)
+        uuidv5_sha1.update(tensor.data.data)
         print("sha1    {0}  {1}:{2}".format(sha1_layer.hexdigest(), filename, tensor.name)) # noqa: NP100
 
     # Flush Hash Progress Bar

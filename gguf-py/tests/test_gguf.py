@@ -1,4 +1,4 @@
-import gguf  # noqa: F401
+import gguf  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
 # TODO: add tests
 

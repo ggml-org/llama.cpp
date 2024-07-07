@@ -265,7 +265,7 @@ class Model:
                     break
 
             for new_name, data in ((n, d.squeeze().numpy()) for n, d in self.modify_tensors(data_torch, name, bid)):
-                data: np.ndarray = data  # type hint
+                data: np.ndarray  # type hint
                 n_dims = len(data.shape)
                 data_dtype = data.dtype
                 data_qtype: gguf.GGMLQuantizationType | None = None
@@ -598,10 +598,6 @@ class Model:
         from sentencepiece import SentencePieceProcessor
 
         tokenizer_path = self.dir_model / 'tokenizer.model'
-
-        tokens: list[bytes] = []
-        scores: list[float] = []
-        toktypes: list[int] = []
 
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
@@ -2120,7 +2116,7 @@ class InternLM2Model(Model):
             logger.error(f'Error: Missing {tokenizer_path}')
             sys.exit(1)
 
-        sentencepiece_model = model.ModelProto()
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
 
@@ -2972,16 +2968,16 @@ class T5Model(Model):
         if not tokenizer_path.is_file():
             raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        sentencepiece_model = model.ModelProto()
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
 
         # some models like Pile-T5 family use BPE tokenizer instead of Unigram
-        if sentencepiece_model.trainer_spec.model_type == 2: # BPE
+        if sentencepiece_model.trainer_spec.model_type == 2:  # BPE
             # assure the tokenizer model file name is correct
             assert tokenizer_path.name == 'tokenizer.model'
             return self._set_vocab_sentencepiece()
         else:
-            assert sentencepiece_model.trainer_spec.model_type == 1 # UNIGRAM
+            assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
 
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
         remove_whitespaces = sentencepiece_model.normalizer_spec.remove_extra_whitespaces
@@ -3152,7 +3148,7 @@ class JaisModel(Model):
             # but Jais's PyTorch model simply precalculates the slope values and places them
             # in relative_pes.slopes
             n_head_closest_log2 = 2 ** math.floor(math.log2(self.hparams["n_head"]))
-            first_val = float(data_torch._data[0])
+            first_val = float(data_torch[0].item())
             self.max_alibi_bias = -round(math.log2(first_val) * n_head_closest_log2)
 
             return tensors
@@ -3186,7 +3182,7 @@ class ChatGLMModel(Model):
     def set_vocab_chatglm3(self):
         dir_model = self.dir_model
         hparams = self.hparams
-        tokens: list[bytearray] = []
+        tokens: list[bytes] = []
         toktypes: list[int] = []
         scores: list[float] = []
 
@@ -3335,7 +3331,7 @@ class ChatGLMModel(Model):
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
-        self.gguf_writer.add_name(self.hparams.get("_name_or_path").split("/")[1]) # THUDM/glm4-9b-chat or THUDM/chatglm3-6b
+        self.gguf_writer.add_name(self.hparams["_name_or_path"].split("/")[1]) # THUDM/glm4-9b-chat or THUDM/chatglm3-6b
         n_embed = self.hparams.get("hidden_size", self.hparams.get("n_embed"))
         n_head = self.hparams.get("n_head", self.hparams.get("num_attention_heads"))
         n_head_kv = self.hparams.get("multi_query_group_num", n_head)

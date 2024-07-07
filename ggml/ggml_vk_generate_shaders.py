@@ -99,6 +99,8 @@ async def main():
 
     tasks = []
 
+    base_dict = {"FLOAT_TYPE": "float"}
+
     for fp16 in (False, True):
         # MUL_MAT
         matmul_shaders(tasks, fp16, False)
@@ -106,8 +108,6 @@ async def main():
         matmul_shaders(tasks, fp16, True)
 
     for tname in type_names:
-        base_dict = {"FLOAT_TYPE": "float"}
-
         # mul mat vec
         data_a_key = f"DATA_A_{tname.upper()}"
         shader = f"mul_mat_vec_{tname}.comp" if tname.endswith("_k") else "mul_mat_vec.comp"

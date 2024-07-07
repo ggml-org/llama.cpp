@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -59,10 +61,11 @@ def main(args_in: list[str] | None = None) -> None:
         sys.exit(1)
 
     # start the benchmark
+    iterations = 0
+    data = {}
     try:
         start_benchmark(args)
 
-        iterations = 0
         with open("results.github.env", 'w') as github_env:
             # parse output
             with open('k6-results.json', 'r') as bench_results:
@@ -129,7 +132,7 @@ def main(args_in: list[str] | None = None) -> None:
                 timestamps, metric_values = zip(*values)
                 metric_values = [float(value) for value in metric_values]
                 prometheus_metrics[metric] = metric_values
-                timestamps_dt = [datetime.fromtimestamp(int(ts)) for ts in timestamps]
+                timestamps_dt = [str(datetime.fromtimestamp(int(ts))) for ts in timestamps]
                 plt.figure(figsize=(16, 10), dpi=80)
                 plt.plot(timestamps_dt, metric_values, label=metric)
                 plt.xticks(rotation=0, fontsize=14, horizontalalignment='center', alpha=.7)
@@ -156,7 +159,7 @@ def main(args_in: list[str] | None = None) -> None:
                 plt.close()
 
                 # Mermaid format in case images upload failed
-                with (open(f"{metric}.mermaid", 'w') as mermaid_f):
+                with open(f"{metric}.mermaid", 'w') as mermaid_f:
                     mermaid = (
                     f"""---
 config:
@@ -278,7 +281,7 @@ def start_server_background(args):
     }
     server_process = subprocess.Popen(
         args,
-        **pkwargs)
+        **pkwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
     def server_log(in_stream, out_stream):
         for line in iter(in_stream.readline, b''):

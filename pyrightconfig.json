@@ -1,3 +1,21 @@
 {
   "extraPaths": ["gguf-py"],
-}
+  "pythonVersion": "3.9",
+  "pythonPlatform": "All",
+  "reportUnusedImport": "warning",
+  "reportDuplicateImport": "error",
+  "reportDeprecated": "warning",
+  "reportUnnecessaryTypeIgnoreComment": "warning",
+  "executionEnvironments": [
+    {
+      // TODO: make this version override work correctly
+      "root": "gguf-py",
+      "pythonVersion": "3.8",
+    },
+    {
+      // uses match expressions in steps.py
+      "root": "examples/server/tests",
+      "pythonVersion": "3.10",
+    },
+  ],
+ }

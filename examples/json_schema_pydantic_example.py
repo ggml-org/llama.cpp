@@ -3,7 +3,7 @@
 #! pip install pydantic
 #! python json_schema_pydantic_example.py
 
-from pydantic import BaseModel, Extra, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter
 from annotated_types import MinLen
 from typing import Annotated, List, Optional
 import json, requests
@@ -17,6 +17,9 @@ if True:
 
         The response_model param takes a type (+ supports Pydantic) and behaves just as w/ Instructor (see below)
         '''
+        response_format = None
+        type_adapter = None
+
         if response_model:
             type_adapter = TypeAdapter(response_model)
             schema = type_adapter.json_schema()

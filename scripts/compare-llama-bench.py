@@ -123,13 +123,13 @@ builds = cursor.execute("SELECT DISTINCT build_commit FROM test;").fetchall()
 
 try:
     repo = git.Repo(".", search_parent_directories=True)
-except git.exc.InvalidGitRepositoryError:
+except git.InvalidGitRepositoryError:
     repo = None
 
 
-def find_parent_in_data(commit):
+def find_parent_in_data(commit: git.Commit):
     """Helper function to find the most recent parent measured in number of commits for which there is data."""
-    heap = [(0, commit)]
+    heap: list[tuple[int, git.Commit]] = [(0, commit)]
     seen_hexsha8 = set()
     while heap:
         depth, current_commit = heapq.heappop(heap)
@@ -144,7 +144,7 @@ def find_parent_in_data(commit):
     return None
 
 
-def get_all_parent_hexsha8s(commit):
+def get_all_parent_hexsha8s(commit: git.Commit):
     """Helper function to recursively get hexsha8 values for all parents of a commit."""
     unvisited = [commit]
     visited   = []

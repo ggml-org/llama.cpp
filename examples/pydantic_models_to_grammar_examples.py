@@ -1,6 +1,7 @@
 # Function calling example using pydantic models.
+from __future__ import annotations
+
 import datetime
-import importlib
 import json
 from enum import Enum
 from typing import Optional, Union
@@ -215,9 +216,9 @@ for call in json_data:
     if call["function"] == "Calculator":
         print(Calculator(**call["params"]).run())
     elif call["function"] == "get_current_datetime":
-        print(current_datetime_model(**call["params"]).run())
+        print(current_datetime_model(**call["params"]).run())  # pyright: ignore[reportAttributeAccessIssue]
     elif call["function"] == "get_current_weather":
-        print(current_weather_tool_model(**call["params"]).run())
+        print(current_weather_tool_model(**call["params"]).run())  # pyright: ignore[reportAttributeAccessIssue]
 # Should output something like this:
 # 2024-01-14 13:36:06
 # {"location": "London", "temperature": "42", "unit": "celsius"}

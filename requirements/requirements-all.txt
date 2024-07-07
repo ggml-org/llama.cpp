@@ -1,0 +1,12 @@
+-r ../examples/llava/requirements.txt
+-r ../examples/server/bench/requirements.txt
+-r ../examples/server/tests/requirements.txt
+
+-r ./requirements-compare-llama-bench.txt
+-r ./requirements-pydantic.txt
+-r ./requirements-test-tokenizer-random.txt
+
+-r ./requirements-convert_hf_to_gguf.txt
+-r ./requirements-convert_hf_to_gguf_update.txt
+-r ./requirements-convert_legacy_llama.txt
+-r ./requirements-convert_llama_ggml_to_gguf.txt

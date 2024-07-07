@@ -6,16 +6,19 @@ import re
 from copy import copy
 from enum import Enum
 from inspect import getdoc, isclass
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union, get_args, get_origin
 
 from docstring_parser import parse
-from pydantic import BaseModel, Field, create_model
+from pydantic import BaseModel, create_model
 
 if TYPE_CHECKING:
     from types import GenericAlias
 else:
     # python 3.8 compat
     from typing import _GenericAlias as GenericAlias
+
+# TODO: fix this
+# pyright: reportAttributeAccessIssue=information
 
 
 class PydanticDataType(Enum):
@@ -234,8 +237,9 @@ def generate_gbnf_float_rules(max_digit=None, min_digit=None, max_precision=None
 
     # Define the integer part rule
     integer_part_rule = (
-        "integer-part" + (f"-max{max_digit}" if max_digit is not None else "") + (
-        f"-min{min_digit}" if min_digit is not None else "")
+        "integer-part"
+        + (f"-max{max_digit}" if max_digit is not None else "")
+        + (f"-min{min_digit}" if min_digit is not None else "")
     )
 
     # Define the fractional part rule based on precision constraints
@@ -458,7 +462,7 @@ def generate_gbnf_grammar(model: type[BaseModel], processed_models: set[type[Bas
     if not issubclass(model, BaseModel):
         # For non-Pydantic classes, generate model_fields from __annotations__ or __init__
         if hasattr(model, "__annotations__") and model.__annotations__:
-            model_fields = {name: (typ, ...) for name, typ in model.__annotations__.items()}
+            model_fields = {name: (typ, ...) for name, typ in model.__annotations__.items()}  # pyright: ignore[reportGeneralTypeIssues]
         else:
             init_signature = inspect.signature(model.__init__)
             parameters = init_signature.parameters
@@ -680,7 +684,7 @@ def generate_markdown_documentation(
         str: Generated text documentation.
     """
     documentation = ""
-    pyd_models = [(model, True) for model in pydantic_models]
+    pyd_models: list[tuple[type[BaseModel], bool]] = [(model, True) for model in pydantic_models]
     for model, add_prefix in pyd_models:
         if add_prefix:
             documentation += f"{model_prefix}: {model.__name__}\n"
@@ -700,7 +704,7 @@ def generate_markdown_documentation(
             # Indenting the fields section
             documentation += f"  {fields_prefix}:\n"
         else:
-            documentation += f"  Fields:\n"
+            documentation += f"  Fields:\n"  # noqa: F541
         if isclass(model) and issubclass(model, BaseModel):
             for name, field_type in model.__annotations__.items():
                 # if name == "markdown_code_block":
@@ -778,7 +782,7 @@ def generate_field_markdown(
         return field_text
 
     if field_description != "":
-        field_text += f"        Description: " + field_description + "\n"
+        field_text += f"        Description: {field_description}\n"
 
     # Check for and include field-specific examples if available
     if hasattr(model, "Config") and hasattr(model.Config,
@@ -833,7 +837,7 @@ def generate_text_documentation(
         str: Generated text documentation.
     """
     documentation = ""
-    pyd_models = [(model, True) for model in pydantic_models]
+    pyd_models: list[tuple[type[BaseModel], bool]] = [(model, True) for model in pydantic_models]
     for model, add_prefix in pyd_models:
         if add_prefix:
             documentation += f"{model_prefix}: {model.__name__}\n"
@@ -1164,7 +1168,7 @@ def create_dynamic_model_from_function(func: Callable[..., Any]):
         dynamic_fields[param.name] = (
             param.annotation if param.annotation != inspect.Parameter.empty else str, default_value)
     # Creating the dynamic model
-    dynamic_model = create_model(f"{func.__name__}", **dynamic_fields)  # type: ignore[call-overload]
+    dynamic_model = create_model(f"{func.__name__}", **dynamic_fields)
 
     for name, param_doc in param_docs:
         dynamic_model.model_fields[name].description = param_doc.description
@@ -1228,9 +1232,6 @@ def map_grammar_names_to_pydantic_model_class(pydantic_model_list):
     return output
 
 
-from enum import Enum
-
-
 def json_schema_to_python_types(schema):
     type_map = {
         "any": Any,
@@ -1275,7 +1276,7 @@ def convert_dictionary_to_pydantic_model(dictionary: dict[str, Any], model_name:
                     if items != {}:
                         array = {"properties": items}
                         array_type = convert_dictionary_to_pydantic_model(array, f"{model_name}_{field_name}_items")
-                        fields[field_name] = (List[array_type], ...)  # type: ignore[valid-type]
+                        fields[field_name] = (List[array_type], ...)
                     else:
                         fields[field_name] = (list, ...)
                 elif field_type == "object":
@@ -1285,7 +1286,8 @@ def convert_dictionary_to_pydantic_model(dictionary: dict[str, Any], model_name:
                     required = field_data.get("enum", [])
                     for key, field in fields.items():
                         if key not in required:
-                            fields[key] = (Optional[fields[key][0]], ...)
+                            optional_type = fields[key][0]
+                            fields[key] = (Optional[optional_type], ...)
                 else:
                     field_type = json_schema_to_python_types(field_type)
                     fields[field_name] = (field_type, ...)
@@ -1305,6 +1307,7 @@ def convert_dictionary_to_pydantic_model(dictionary: dict[str, Any], model_name:
         required = dictionary.get("required", [])
         for key, field in fields.items():
             if key not in required:
-                fields[key] = (Optional[fields[key][0]], ...)
+                optional_type = fields[key][0]
+                fields[key] = (Optional[optional_type], ...)
     custom_model = create_model(model_name, **fields)
     return custom_model

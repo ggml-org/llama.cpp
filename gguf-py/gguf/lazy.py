@@ -16,16 +16,16 @@ logger = logging.getLogger(__name__)
 class LazyMeta(ABCMeta):
 
     def __new__(cls, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs):
-        def __getattr__(self, __name: str) -> Any:
-            meta_attr = getattr(self._meta, __name)
+        def __getattr__(self, name: str) -> Any:
+            meta_attr = getattr(self._meta, name)
             if callable(meta_attr):
                 return type(self)._wrap_fn(
-                    (lambda s, *args, **kwargs: getattr(s, __name)(*args, **kwargs)),
+                    (lambda s, *args, **kwargs: getattr(s, name)(*args, **kwargs)),
                     use_self=self,
                 )
             elif isinstance(meta_attr, self._tensor_type):
                 # e.g. self.T with torch.Tensor should still be wrapped
-                return type(self)._wrap_fn(lambda s: getattr(s, __name))(self)
+                return type(self)._wrap_fn(lambda s: getattr(s, name))(self)
             else:
                 # no need to wrap non-tensor properties,
                 # and they likely don't depend on the actual contents of the tensor
@@ -141,19 +141,21 @@ class LazyBase(ABC, metaclass=LazyMeta):
                         res = cls.meta_with_dtype_and_shape(meta_noop, res.shape)
 
             if isinstance(res, cls._tensor_type):
-                def collect_replace(t: LazyBase):
-                    if collect_replace.shared_lazy is None:
-                        collect_replace.shared_lazy = t._lazy
-                    else:
-                        collect_replace.shared_lazy.extend(t._lazy)
-                        t._lazy = collect_replace.shared_lazy
+                class CollectSharedLazy:
+                    # emulating a static variable
+                    shared_lazy: None | deque[LazyBase] = None
 
-                # emulating a static variable
-                collect_replace.shared_lazy = None
+                    @staticmethod
+                    def collect_replace(t: LazyBase):
+                        if CollectSharedLazy.shared_lazy is None:
+                            CollectSharedLazy.shared_lazy = t._lazy
+                        else:
+                            CollectSharedLazy.shared_lazy.extend(t._lazy)
+                            t._lazy = CollectSharedLazy.shared_lazy
 
-                LazyBase._recurse_apply(args, collect_replace)
+                LazyBase._recurse_apply(args, CollectSharedLazy.collect_replace)
 
-                shared_lazy = collect_replace.shared_lazy
+                shared_lazy = CollectSharedLazy.shared_lazy
 
                 return cls(meta=cls.eager_to_meta(res), lazy=shared_lazy, args=args, func=lambda a: fn(*a, **kwargs))
             else:
@@ -184,6 +186,7 @@ class LazyBase(ABC, metaclass=LazyMeta):
                 lt._args = cls._recurse_apply(lt._args, already_eager_to_eager)
                 lt._data = lt._func(lt._args)
                 # sanity check
+                assert lt._data is not None
                 assert lt._data.dtype == lt._meta.dtype
                 assert lt._data.shape == lt._meta.shape
 

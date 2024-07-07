@@ -108,6 +108,11 @@ check_convert_script() {
         fatal "$py missing requirements. Expected: $reqs"
     fi
 
+    # Check that all sub-requirements are added to top-level requirements.txt
+    if ! grep -qF "$reqs" requirements.txt; then
+        fatal "$reqs needs to be added to requirements.txt"
+    fi
+
     local venv="$workdir/$pyname-venv"
     python3 -m venv "$venv"
 
@@ -134,12 +139,7 @@ EOF
 
 readonly ignore_eq_eq='check_requirements: ignore "=="'
 
-for req in "$reqs_dir"/*; do
-    # Check that all sub-requirements are added to top-level requirements.txt
-    if ! grep -qF "$req" requirements.txt; then
-        fatal "$req needs to be added to requirements.txt"
-    fi
-
+for req in */**/requirements*.txt; do
     # Make sure exact release versions aren't being pinned in the requirements
     # Filters out the ignore string
     if grep -vF "$ignore_eq_eq" "$req" | grep -q '=='; then

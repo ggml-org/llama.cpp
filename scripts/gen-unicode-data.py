@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import array
 import unicodedata
 import requests
@@ -133,7 +135,7 @@ table_nfd.sort()
 
 
 # group ranges with same flags
-ranges_flags = [(0, codepoint_flags[0])]  # start, flags
+ranges_flags: list[tuple[int, int]] = [(0, codepoint_flags[0])]  # start, flags
 for codepoint, flags in enumerate(codepoint_flags):
     if flags != ranges_flags[-1][1]:
         ranges_flags.append((codepoint, flags))
@@ -141,11 +143,11 @@ ranges_flags.append((MAX_CODEPOINTS, 0x0000))
 
 
 # group ranges with same nfd
-ranges_nfd = [(0, 0, 0)]  # start, last, nfd
+ranges_nfd: list[tuple[int, int, int]] = [(0, 0, 0)]  # start, last, nfd
 for codepoint, norm in table_nfd:
     start = ranges_nfd[-1][0]
     if ranges_nfd[-1] != (start, codepoint - 1, norm):
-        ranges_nfd.append(None)
+        ranges_nfd.append(None)  # type: ignore[arg-type]  # dummy, will be replaced below
         start = codepoint
     ranges_nfd[-1] = (start, codepoint, norm)
 
@@ -179,13 +181,13 @@ for codepoint in table_whitespace:
 out("};\n")
 
 out("const std::unordered_map<uint32_t, uint32_t> unicode_map_lowercase = {")
-for tuple in table_lowercase:
-    out("{0x%06X, 0x%06X}," % tuple)
+for tuple_lw in table_lowercase:
+    out("{0x%06X, 0x%06X}," % tuple_lw)
 out("};\n")
 
 out("const std::unordered_map<uint32_t, uint32_t> unicode_map_uppercase = {")
-for tuple in table_uppercase:
-    out("{0x%06X, 0x%06X}," % tuple)
+for tuple_up in table_uppercase:
+    out("{0x%06X, 0x%06X}," % tuple_up)
 out("};\n")
 
 out("const std::vector<range_nfd> unicode_ranges_nfd = {  // start, last, nfd")

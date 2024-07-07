@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import argparse
 import itertools
 import json
@@ -188,7 +190,7 @@ def _generate_min_max_int(min_value: Optional[int], max_value: Optional[int], ou
     raise RuntimeError("At least one of min_value or max_value must be set")
 
 class BuiltinRule:
-    def __init__(self, content: str, deps: list = None):
+    def __init__(self, content: str, deps: list | None = None):
         self.content = content
         self.deps = deps or []
 
@@ -248,7 +250,7 @@ class SchemaConverter:
 
     def _format_literal(self, literal):
         escaped = GRAMMAR_LITERAL_ESCAPE_RE.sub(
-            lambda m: GRAMMAR_LITERAL_ESCAPES.get(m.group(0)), literal
+            lambda m: GRAMMAR_LITERAL_ESCAPES.get(m.group(0)) or m.group(0), literal
         )
         return f'"{escaped}"'
 
@@ -403,11 +405,11 @@ class SchemaConverter:
         i = 0
         length = len(pattern)
 
-        def to_rule(s: Tuple[str, bool]) -> str:
+        def to_rule(s: tuple[str, bool]) -> str:
             (txt, is_literal) = s
             return "\"" + txt + "\"" if is_literal else txt
 
-        def transform() -> Tuple[str, bool]:
+        def transform() -> tuple[str, bool]:
             '''
                 Parse a unit at index i (advancing it), and return its string representation + whether it's a literal.
             '''
@@ -420,7 +422,7 @@ class SchemaConverter:
             # We only need a flat structure here to apply repetition operators to the last item, and
             # to merge literals at the and (we're parsing grouped ( sequences ) recursively and don't treat '|' specially
             # (GBNF's syntax is luckily very close to regular expressions!)
-            seq: list[Tuple[str, bool]] = []
+            seq: list[tuple[str, bool]] = []
 
             def get_dot():
                 if self._dotall:

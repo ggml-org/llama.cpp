@@ -89,6 +89,22 @@ let
       ps.tiktoken
       ps.torchWithoutCuda
       ps.transformers
+
+      # server bench
+      ps.matplotlib
+
+      # server tests
+      ps.openai
+      ps.behave
+      ps.prometheus-client
+
+      # for examples/pydantic-models-to-grammar-examples.py
+      ps.docstring-parser
+      ps.pydantic
+
+      # for scripts/compare-llama-bench.py
+      ps.gitpython
+      ps.tabulate
     ]
   );
 

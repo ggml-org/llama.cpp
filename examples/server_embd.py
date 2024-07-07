@@ -1,13 +1,15 @@
 import asyncio
+import asyncio.threads
 import requests
 import numpy as np
+
 
 n = 8
 
 result = []
 
 async def requests_post_async(*args, **kwargs):
-    return await asyncio.to_thread(requests.post, *args, **kwargs)
+    return await asyncio.threads.to_thread(requests.post, *args, **kwargs)
 
 async def main():
     model_url = "http://127.0.0.1:6900"
