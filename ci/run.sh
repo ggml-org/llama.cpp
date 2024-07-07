@@ -103,6 +103,9 @@ function gg_run_ctest_debug {
 
     set -e
 
+    # Check cmake, make and ctest are installed
+    gg_check_build_requirements
+
     (time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                          ) 2>&1 | tee -a $OUT/${ci}-make.log
 
@@ -130,6 +133,9 @@ function gg_run_ctest_release {
     rm -rf build-ci-release && mkdir build-ci-release && cd build-ci-release
 
     set -e
+
+    # Check cmake, make and ctest are installed
+    gg_check_build_requirements
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
     (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
@@ -699,6 +705,20 @@ function gg_run_embd_bge_small {
     (time ./bin/llama-embedding --model ${model_q8_0} -p "I believe the meaning of life is" ) 2>&1 | tee -a $OUT/${ci}-tg-q8_0.log
 
     set +e
+}
+
+function gg_check_build_requirements {
+    if ! command -v cmake &> /dev/null; then
+        gg_printf 'cmake not found, please install'
+    fi
+
+    if ! command -v make &> /dev/null; then
+        gg_printf 'make not found, please install'
+    fi
+
+    if ! command -v ctest &> /dev/null; then
+        gg_printf 'ctest not found, please install'
+    fi
 }
 
 function gg_sum_embd_bge_small {
