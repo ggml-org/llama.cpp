@@ -1,0 +1,15 @@
+{
+  "name": "sha256",
+  "version": "0.0.2",
+  "repo": "jb55/sha256.c",
+  "description": "sha256 in c",
+  "keywords": ["sha256", "sha2"],
+  "src": ["sha256.c", "sha256.h"],
+  "dependencies": {
+    "jb55/rotate-bits.h": "0.1.1"
+  },
+  "development": {
+    "thlorenz/tap.c": "*"
+  }
+}
+
