@@ -98,7 +98,7 @@ Typically finetunes of the base models below are supported as well.
 - [x] [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) + [Pythia](https://github.com/EleutherAI/pythia)
 - [x] [ChatGLM3-6b](https://huggingface.co/THUDM/chatglm3-6b) + [ChatGLM4-9b](https://huggingface.co/THUDM/glm-4-9b)
 
-(instructions for supporting more models: [HOWTO-add-model.md](./docs/HOWTO-add-model.md))
+(instructions for supporting more models: [HOWTO-add-model.md](./docs/development/HOWTO-add-model.md))
 
 **Multimodal models:**
 
