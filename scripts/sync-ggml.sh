@@ -18,6 +18,7 @@ cp -rpv ../ggml/src/ggml-metal.metal    ./ggml/src/ggml-metal.metal
 cp -rpv ../ggml/src/ggml-quants.c       ./ggml/src/ggml-quants.c
 cp -rpv ../ggml/src/ggml-quants.h       ./ggml/src/ggml-quants.h
 cp -rpv ../ggml/src/ggml-rpc.cpp        ./ggml/src/ggml-rpc.cpp
+cp -rpv ../ggml/src/ggml-sycl/*         ./ggml/src/ggml-sycl/
 cp -rpv ../ggml/src/ggml-sycl.cpp       ./ggml/src/ggml-sycl.cpp
 cp -rpv ../ggml/src/ggml-vulkan.cpp     ./ggml/src/ggml-vulkan.cpp
 
