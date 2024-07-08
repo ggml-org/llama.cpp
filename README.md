@@ -96,6 +96,7 @@ Typically finetunes of the base models below are supported as well.
 - [x] [GritLM-7B](https://huggingface.co/GritLM/GritLM-7B) + [GritLM-8x7B](https://huggingface.co/GritLM/GritLM-8x7B)
 - [x] [OLMo](https://allenai.org/olmo)
 - [x] [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) + [Pythia](https://github.com/EleutherAI/pythia)
+- [x] [ChatGLM3-6b](https://huggingface.co/THUDM/chatglm3-6b) + [ChatGLM4-9b](https://huggingface.co/THUDM/glm-4-9b)
 
 (instructions for supporting more models: [HOWTO-add-model.md](./docs/HOWTO-add-model.md))
 
