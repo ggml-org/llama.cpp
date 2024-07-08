@@ -55,7 +55,7 @@ static void rope_norm(
     const int i = row*ne0 + i0;
     const int i2 = row/p_delta_rows;
 
-    const float theta_base = pos[i2]*powf(theta_scale, i0/2.0f);
+    const float theta_base = pos[i2] * sycl::pow(theta_scale, i0 / 2.0f);
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
 
@@ -98,7 +98,7 @@ static void rope_neox(
     const int i  = row*ne0 + i0/2;
     const int i2 = row/p_delta_rows;
 
-    const float theta_base = pos[i2]*powf(theta_scale, i0/2.0f);
+    const float theta_base = pos[i2] * sycl::pow(theta_scale, i0 / 2.0f);
 
     const float freq_factor = has_ff ? freq_factors[i0/2] : 1.0f;
 
