@@ -630,7 +630,7 @@ inline std::string LOG_TOKENS_TOSTR_PRETTY(const C & ctx, const T & tokens)
     buf << "[ ";
 
     bool first = true;
-    for (const auto &token : tokens)
+    for (const auto & token : tokens)
     {
         if (!first) {
             buf << ", ";
