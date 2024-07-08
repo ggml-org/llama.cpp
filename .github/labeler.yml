@@ -16,7 +16,9 @@ SYCL:
         - any-glob-to-any-file:
             - ggml/include/ggml-sycl.h
             - ggml/src/ggml-sycl.cpp
-            - README-sycl.md
+            - ggml/src/ggml-sycl/**
+            - docs/backend/SYCL.md
+            - examples/sycl/**
 Nvidia GPU:
     - changed-files:
         - any-glob-to-any-file:
