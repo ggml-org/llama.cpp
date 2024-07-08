@@ -18078,7 +18078,6 @@ static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_ten
     }
 
     const int n0 = cgraph->n_nodes;
-    UNUSED(n0);
 
     ggml_visit_parents(cgraph, tensor);
 
