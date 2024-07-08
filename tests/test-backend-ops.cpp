@@ -1268,16 +1268,12 @@ struct test_pool2d : public test_case {
 
 // GGML_OP_CONV_TRANSPOSE_1D
 struct test_conv_transpose_1d : public test_case {
-    
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
 
-    // stride
-    const int s0;
-    // padding
-    const int p0;
-    // dilation
-    const int d0;
+    const int s0; // stride
+    const int p0; // padding
+    const int d0; // dilation
 
     std::string vars() override {
         return VARS_TO_STR5(ne_input, ne_kernel, s0, p0, d0);
