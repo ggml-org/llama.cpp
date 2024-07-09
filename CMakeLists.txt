@@ -50,9 +50,6 @@ endif()
 # option list
 #
 
-# general
-option(LLAMA_CCACHE "llama: use ccache if available" ON)
-
 # debug
 option(LLAMA_ALL_WARNINGS           "llama: enable all compiler warnings"                   ON)
 option(LLAMA_ALL_WARNINGS_3RD_PARTY "llama: enable all compiler warnings in 3rd party libs" OFF)
@@ -77,7 +74,6 @@ option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 
 # override ggml options
-set(GGML_CCACHE             ${LLAMA_CCACHE})
 set(GGML_SANITIZE_THREAD    ${LLAMA_SANITIZE_THREAD})
 set(GGML_SANITIZE_ADDRESS   ${LLAMA_SANITIZE_ADDRESS})
 set(GGML_SANITIZE_UNDEFINED ${LLAMA_SANITIZE_UNDEFINED})

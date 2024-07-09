@@ -245,17 +245,22 @@ MK_CFLAGS    = -std=c11   -fPIC
 MK_CXXFLAGS  = -std=c++11 -fPIC
 MK_NVCCFLAGS = -std=c++11
 
-ifndef LLAMA_NO_CCACHE
+ifdef LLAMA_NO_CCACHE
+GGML_NO_CCACHE := 1
+DEPRECATE_WARNING := 1
+endif
+
+ifndef GGML_NO_CCACHE
 CCACHE := $(shell which ccache)
 ifdef CCACHE
 export CCACHE_SLOPPINESS = time_macros
-$(info I ccache found, compilation results will be cached. Disable with LLAMA_NO_CCACHE.)
+$(info I ccache found, compilation results will be cached. Disable with GGML_NO_CCACHE.)
 CC    := $(CCACHE) $(CC)
 CXX   := $(CCACHE) $(CXX)
 else
 $(info I ccache not found. Consider installing it for faster compilation.)
 endif # CCACHE
-endif # LLAMA_NO_CCACHE
+endif # GGML_NO_CCACHE
 
 # clock_gettime came in POSIX.1b (1993)
 # CLOCK_MONOTONIC came in POSIX.1-2001 / SUSv3 as optional
@@ -926,6 +931,7 @@ $(info   - LLAMA_NO_LLAMAFILE)
 $(info   - LLAMA_NO_ACCELERATE)
 $(info   - LLAMA_NO_OPENMP)
 $(info   - LLAMA_NO_METAL)
+$(info   - LLAMA_NO_CCACHE)
 $(info )
 endif
 
