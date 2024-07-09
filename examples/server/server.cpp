@@ -884,7 +884,8 @@ struct server_context {
 
     bool launch_slot_with_task(server_slot & slot, const server_task & task) {
         slot_params default_params;
-        llama_sampling_params default_sparams;
+        // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
+        llama_sampling_params default_sparams = params.sparams;
         auto & data = task.data;
 
         if (data.count("__oaicompat") != 0) {
