@@ -453,7 +453,7 @@ To learn more how to measure perplexity using llama.cpp, [read this documentatio
 - [How to build](./docs/build.md)
 - [Running on Docker](./docs/docker.md)
 - [Build on Android](./docs/android.md)
-- [Performance troubleshooting](./docs/token_generation_performance_tips.md)
+- [Performance troubleshooting](./docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggerganov/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
 **Seminal papers and background on the models**
