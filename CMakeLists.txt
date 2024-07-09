@@ -115,7 +115,10 @@ llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 # build the library
 #
 
-add_subdirectory(ggml)
+if (NOT TARGET ggml)
+    add_subdirectory(ggml)
+    # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
 add_subdirectory(src)
 
 #
