@@ -6,7 +6,6 @@ from typing import Any, Callable
 from collections import deque
 
 import numpy as np
-from numpy._typing import _Shape
 from numpy.typing import DTypeLike
 
 
@@ -219,7 +218,7 @@ class LazyNumpyTensor(LazyBase):
     _tensor_type = np.ndarray
 
     @classmethod
-    def meta_with_dtype_and_shape(cls, dtype: DTypeLike, shape: _Shape) -> np.ndarray[Any, Any]:
+    def meta_with_dtype_and_shape(cls, dtype: DTypeLike, shape: tuple[int, ...]) -> np.ndarray[Any, Any]:
         # The initial idea was to use np.nan as the fill value,
         # but non-float types like np.int16 can't use that.
         # So zero it is.
