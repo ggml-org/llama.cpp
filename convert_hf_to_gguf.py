@@ -2144,6 +2144,9 @@ class InternLM2Model(Model):
                 toktype = SentencePieceTokenTypes.UNUSED
             elif tokenizer.IsByte(token_id):
                 toktype = SentencePieceTokenTypes.BYTE
+            # take care of ununsed raw token
+            if piece.startswith('[UNUSED'):
+                toktype = SentencePieceTokenTypes.UNKNOWN
 
             tokens.append(text)
             scores.append(score)
@@ -2159,6 +2162,47 @@ class InternLM2Model(Model):
                     scores.append(-1000.0)
                     toktypes.append(SentencePieceTokenTypes.USER_DEFINED)
 
+        chat_eos_token = '<|im_end|>'
+        chat_eos_token_id = None
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                added_tokens_decoder = tokenizer_config_json.get("added_tokens_decoder", {})
+                for token_id, foken_data in added_tokens_decoder.items():
+                    token_id = int(token_id)
+                    token = foken_data["content"]
+                    if token == chat_eos_token:
+                        chat_eos_token_id = token_id
+                    token = token.encode("utf-8")
+                    if toktypes[token_id] != SentencePieceTokenTypes.UNKNOWN:
+                        assert(tokens[token_id] == token)
+                    tokens[token_id] = token
+                    scores[token_id] = -1000.0
+                    toktypes[token_id] = SentencePieceTokenTypes.USER_DEFINED
+                    if foken_data.get("special"):
+                        toktypes[token_id] = SentencePieceTokenTypes.CONTROL
+
+        tokenizer_file = self.dir_model / 'tokenizer.json'
+        if tokenizer_file.is_file():
+            with open(tokenizer_file, "r", encoding="utf-8") as f:
+                tokenizer_json = json.load(f)
+                added_tokens = tokenizer_json.get("added_tokens", [])
+                for foken_data in added_tokens:
+                    token_id = int(foken_data["id"])
+                    token = foken_data["content"]
+                    if token == chat_eos_token:
+                        chat_eos_token_id = token_id
+                    token = token.encode("utf-8")
+                    if toktypes[token_id] != SentencePieceTokenTypes.UNKNOWN:
+                        assert(tokens[token_id] == token)
+                    tokens[token_id] = token
+                    scores[token_id] = -1000.0
+                    toktypes[token_id] = SentencePieceTokenTypes.USER_DEFINED
+                    if foken_data.get("special"):
+                        toktypes[token_id] = SentencePieceTokenTypes.CONTROL
+
         self.gguf_writer.add_tokenizer_model("llama")
         self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
@@ -2168,27 +2212,15 @@ class InternLM2Model(Model):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         old_eos = special_vocab.special_token_ids["eos"]
-        if "chat" in os.path.basename(self.dir_model.absolute()):
+        if chat_eos_token_id is not None:
             # For the chat model, we replace the eos with '<|im_end|>'.
             # TODO: this is a hack, should be fixed
             #       https://github.com/ggerganov/llama.cpp/pull/6745#issuecomment-2067687048
-            special_vocab.special_token_ids["eos"] = self._try_get_sft_eos(tokenizer)
-            logger.warning(f"Replace eos:{old_eos} with a special token:{special_vocab.special_token_ids['eos']} \
-in chat mode so that the conversation can end normally.")
+            special_vocab.special_token_ids["eos"] = chat_eos_token_id
+            logger.warning(f"Replace eos:{old_eos} with a special token:{chat_eos_token_id}"
+                           " in chat mode so that the conversation can end normally.")
 
         special_vocab.add_to_gguf(self.gguf_writer)
-
-    def _try_get_sft_eos(self, tokenizer):
-        unused_145_list = tokenizer.Encode('[UNUSED_TOKEN_145]')
-        im_end_list = tokenizer.Encode('<|im_end|>')
-        eos_token = None
-        assert (len(unused_145_list) == 1) ^ (len(im_end_list) == 1)
-        if len(unused_145_list) == 1:
-            eos_token = unused_145_list[0]
-        if len(im_end_list) == 1:
-            eos_token = im_end_list[0]
-        assert eos_token
-        return eos_token
 
     def _hf_permute_qk(self, weights, n_head: int, n_head_kv: int):
         if n_head_kv is not None and n_head != n_head_kv:
@@ -2208,6 +2240,10 @@ in chat mode so that the conversation can end normally.")
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
         self.gguf_writer.add_file_type(self.ftype)
+        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
+            if self.hparams["rope_scaling"].get("type") == "linear":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_heads = self.hparams["num_attention_heads"]
