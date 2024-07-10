@@ -554,7 +554,7 @@ endif # GGML_BLIS
 
 ifndef GGML_NO_LLAMAFILE
 	MK_CPPFLAGS += -DGGML_USE_LLAMAFILE
-	OBJ_GGML    += ggml/src/sgemm.o
+	OBJ_GGML    += ggml/src/llamafile/sgemm.o
 endif
 
 ifdef GGML_RPC
@@ -983,9 +983,9 @@ ggml/src/ggml-blas.o: \
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 ifndef GGML_NO_LLAMAFILE
-ggml/src/sgemm.o: \
-	ggml/src/sgemm.cpp \
-	ggml/src/sgemm.h \
+ggml/src/llamafile/sgemm.o: \
+	ggml/src/llamafile/sgemm.cpp \
+	ggml/src/llamafile/sgemm.h \
 	ggml/include/ggml.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 endif # GGML_NO_LLAMAFILE
