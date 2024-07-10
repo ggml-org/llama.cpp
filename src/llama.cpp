@@ -57,6 +57,12 @@
     #include <io.h>
 #endif
 
+#if __cplusplus >= 202000L
+    #define LU8(x) (const char*)(u8##x)
+#else
+    #define LU8(x) u8##x
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -21511,12 +21517,12 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "<|assistant|>";
         }
-    } else if (tmpl == "minicpm" || tmpl_contains(u8"<用户>")) {
+    } else if (tmpl == "minicpm" || tmpl_contains(LU8("<用户>"))) {
         // MiniCPM-3B-OpenHermes-2.5-v2-GGUF
         for (auto message : chat) {
             std::string role(message->role);
             if (role == "user") {
-                ss << u8"<用户>";
+                ss << LU8("<用户>");
                 ss << trim(message->content);
                 ss << "<AI>";
             } else {
@@ -21532,7 +21538,7 @@ static int32_t llama_chat_apply_template_internal(
             } else if (role == "user") {
                 ss << "User: " << message->content << "\n\n";
             } else if (role == "assistant") {
-                ss << "Assistant: " << message->content << u8"<｜end▁of▁sentence｜>";
+                ss << "Assistant: " << message->content << LU8("<｜end▁of▁sentence｜>");
             }
         }
         if (add_ass) {
