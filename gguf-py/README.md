@@ -79,5 +79,4 @@ python -m twine upload dist/*
 ```
 
 ## TODO
-- [ ] Add tests
 - [ ] Include conversion scripts as command line entry points in this package.
