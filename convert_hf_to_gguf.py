@@ -1356,7 +1356,7 @@ class LlamaModel(Model):
 
     def set_vocab(self):
         try:
-            self. _set_vocab_sentencepiece()
+            self._set_vocab_sentencepiece()
         except FileNotFoundError:
             try:
                 self._set_vocab_llama_hf()
