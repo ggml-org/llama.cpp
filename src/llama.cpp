@@ -13200,6 +13200,8 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, -1);
             cb(cur, "result_norm", -1);
         } else {
+            GGML_ASSERT(n_outputs_enc > 0 && "call llama_encode() first");
+
             struct ggml_tensor * embd_enc       = llm_build_inp_embd_enc();
             struct ggml_tensor * pos_bucket_dec = llm_build_pos_bucket(true);
 
