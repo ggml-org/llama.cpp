@@ -1835,10 +1835,10 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q4_0_acc_ct1.get_pointer(),
-                            tile_x_d_q4_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q4_0_acc_ct1),
+                            get_pointer(tile_x_d_q4_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -1870,10 +1870,10 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q4_0_acc_ct1.get_pointer(),
-                            tile_x_d_q4_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q4_0_acc_ct1),
+                            get_pointer(tile_x_d_q4_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -1950,10 +1950,10 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_1<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q4_1_acc_ct1.get_pointer(),
-                            tile_x_dm_q4_1_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q4_1_acc_ct1),
+                            get_pointer(tile_x_dm_q4_1_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -1985,10 +1985,10 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_1<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q4_1_acc_ct1.get_pointer(),
-                            tile_x_dm_q4_1_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q4_1_acc_ct1),
+                            get_pointer(tile_x_dm_q4_1_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2065,10 +2065,10 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_0_acc_ct1.get_pointer(),
-                            tile_x_d_q5_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_0_acc_ct1),
+                            get_pointer(tile_x_d_q5_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2100,10 +2100,10 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_0_acc_ct1.get_pointer(),
-                            tile_x_d_q5_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_0_acc_ct1),
+                            get_pointer(tile_x_d_q5_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2180,10 +2180,10 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_1<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_1_acc_ct1.get_pointer(),
-                            tile_x_dm_q5_1_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_1_acc_ct1),
+                            get_pointer(tile_x_dm_q5_1_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2215,10 +2215,10 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_1<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_1_acc_ct1.get_pointer(),
-                            tile_x_dm_q5_1_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_1_acc_ct1),
+                            get_pointer(tile_x_dm_q5_1_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2295,10 +2295,10 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q8_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q8_0_acc_ct1.get_pointer(),
-                            tile_x_d_q8_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q8_0_acc_ct1),
+                            get_pointer(tile_x_d_q8_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2330,10 +2330,10 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q8_0<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_qs_q8_0_acc_ct1.get_pointer(),
-                            tile_x_d_q8_0_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_qs_q8_0_acc_ct1),
+                            get_pointer(tile_x_d_q8_0_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2412,11 +2412,11 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q2_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q2_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q2_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q2_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q2_K_acc_ct1),
+                            get_pointer(tile_x_dm_q2_K_acc_ct1),
+                            get_pointer(tile_x_sc_q2_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2450,11 +2450,11 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q2_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q2_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q2_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q2_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q2_K_acc_ct1),
+                            get_pointer(tile_x_dm_q2_K_acc_ct1),
+                            get_pointer(tile_x_sc_q2_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2537,12 +2537,12 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q3_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q3_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q3_K_acc_ct1.get_pointer(),
-                            tile_x_qh_q3_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q3_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q3_K_acc_ct1),
+                            get_pointer(tile_x_dm_q3_K_acc_ct1),
+                            get_pointer(tile_x_qh_q3_K_acc_ct1),
+                            get_pointer(tile_x_sc_q3_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2578,12 +2578,12 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q3_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q3_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q3_K_acc_ct1.get_pointer(),
-                            tile_x_qh_q3_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q3_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q3_K_acc_ct1),
+                            get_pointer(tile_x_dm_q3_K_acc_ct1),
+                            get_pointer(tile_x_qh_q3_K_acc_ct1),
+                            get_pointer(tile_x_sc_q3_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2663,11 +2663,11 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q4_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q4_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q4_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q4_K_acc_ct1),
+                            get_pointer(tile_x_dm_q4_K_acc_ct1),
+                            get_pointer(tile_x_sc_q4_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2701,11 +2701,11 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q4_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q4_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q4_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q4_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q4_K_acc_ct1),
+                            get_pointer(tile_x_dm_q4_K_acc_ct1),
+                            get_pointer(tile_x_sc_q4_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2784,11 +2784,11 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q5_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q5_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_K_acc_ct1),
+                            get_pointer(tile_x_dm_q5_K_acc_ct1),
+                            get_pointer(tile_x_sc_q5_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2822,11 +2822,11 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q5_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_q5_K_acc_ct1.get_pointer(),
-                            tile_x_dm_q5_K_acc_ct1.get_pointer(),
-                            tile_x_sc_q5_K_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_q5_K_acc_ct1),
+                            get_pointer(tile_x_dm_q5_K_acc_ct1),
+                            get_pointer(tile_x_sc_q5_K_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2905,11 +2905,11 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q6_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_acc_ct1.get_pointer(),
-                            tile_x_dm_acc_ct1.get_pointer(),
-                            tile_x_sc_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_acc_ct1),
+                            get_pointer(tile_x_dm_acc_ct1),
+                            get_pointer(tile_x_sc_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }
@@ -2943,11 +2943,11 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
                         mul_mat_q6_K<need_check>(
                             vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
                             nrows_dst, item_ct1,
-                            tile_x_ql_acc_ct1.get_pointer(),
-                            tile_x_dm_acc_ct1.get_pointer(),
-                            tile_x_sc_acc_ct1.get_pointer(),
-                            tile_y_qs_acc_ct1.get_pointer(),
-                            tile_y_ds_acc_ct1.get_pointer());
+                            get_pointer(tile_x_ql_acc_ct1),
+                            get_pointer(tile_x_dm_acc_ct1),
+                            get_pointer(tile_x_sc_acc_ct1),
+                            get_pointer(tile_y_qs_acc_ct1),
+                            get_pointer(tile_y_ds_acc_ct1));
                     });
             });
         }

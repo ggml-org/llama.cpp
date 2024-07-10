@@ -136,7 +136,7 @@ static void soft_max_f32_submitter(const float * x, const float * mask, float * 
                 soft_max_f32<vals_smem, ncols_template, block_size_template>(x, mask, dst, ncols_par,
                                                                              nrows_y, scale, max_bias, m0,
                                                                              m1, n_head_log2, item_ct1,
-                                                                             local_buf_acc.get_pointer());
+                                                                             get_pointer(local_buf_acc));
             });
     });
 }

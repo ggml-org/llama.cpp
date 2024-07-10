@@ -158,7 +158,7 @@ static void dequantize_row_q4_K_sycl(const void *vx, dst_t *y, const int k,
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
-                                 dequantize_block_q4_K(vx, y, scale_local_acc.get_pointer(), item_ct1);
+                                 dequantize_block_q4_K(vx, y, get_pointer(scale_local_acc), item_ct1);
                              });
         });
     }

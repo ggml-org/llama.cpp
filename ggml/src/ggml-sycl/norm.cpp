@@ -218,7 +218,7 @@ static void norm_f32_sycl(const float* x, float* dst, const int ncols,
                 [=](sycl::nd_item<3> item_ct1)
                 [[intel::reqd_sub_group_size(WARP_SIZE)]] {
                     norm_f32(x, dst, ncols, eps, item_ct1,
-                        s_sum_acc_ct1.get_pointer(), work_group_size);
+                        get_pointer(s_sum_acc_ct1), work_group_size);
                 });
             });
     }
@@ -265,7 +265,7 @@ static void group_norm_f32_sycl(const float* x, float* dst,
                 [[intel::reqd_sub_group_size(WARP_SIZE)]] {
                     group_norm_f32(x, dst, group_size, ne_elements,
                         eps_ct4, item_ct1,
-                        s_sum_acc_ct1.get_pointer(), work_group_size);
+                        get_pointer(s_sum_acc_ct1), work_group_size);
                 });
             });
     }
@@ -306,7 +306,7 @@ static void rms_norm_f32_sycl(const float* x, float* dst, const int ncols,
                 [=](sycl::nd_item<3> item_ct1)
                 [[intel::reqd_sub_group_size(WARP_SIZE)]] {
                     rms_norm_f32(x, dst, ncols, eps, item_ct1,
-                        s_sum_acc_ct1.get_pointer(), work_group_size);
+                        get_pointer(s_sum_acc_ct1), work_group_size);
                 });
             });
     }
