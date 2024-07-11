@@ -70,6 +70,10 @@ struct mma_int_A_I16K8 {
         }
 #endif // defined(INT8_MMA_AVAILABLE)
     }
+
+    __device__ __forceinline__ void load_low(const int * __restrict__ xs0, const int & stride) {
+        ((mma_int_A_I16K4 *) x)[0].load(xs0, stride);
+    }
 };
 
 struct mma_int_B_J8K4 {
