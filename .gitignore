@@ -61,6 +61,11 @@ llama-batched-swift
 out/
 tmp/
 
+# Deprecated
+
+/main
+/server
+
 # CI
 
 !.github/workflows/*.yml
