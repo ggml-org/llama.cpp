@@ -737,6 +737,8 @@ struct server_context {
             slot.ga_n = ga_n;
             slot.ga_w = ga_w;
 
+            slot.sparams = params.sparams;
+
             slot.reset();
 
             slots.push_back(slot);
