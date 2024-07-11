@@ -29,6 +29,7 @@ static void print_usage_information(const char * argv0, FILE * stream) {
     fprintf(stream, "    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
     fprintf(stream, "    --stdin                              read prompt from standard input.\n");
     fprintf(stream, "    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
+    fprintf(stream, "    --no-parse-special                   do not parse control tokens.\n");
     fprintf(stream, "    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
     fprintf(stream, "    --show-count                         print the total number of tokens.\n");
 }
@@ -195,6 +196,7 @@ int main(int raw_argc, char ** raw_argv) {
     // variables where to put any arguments we see.
     bool printing_ids = false;
     bool no_bos = false;
+    bool no_parse_special = false;
     bool disable_logging = false;
     bool show_token_count = false;
     const char * model_path = NULL;
@@ -228,6 +230,9 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "--no-bos") {
             no_bos = true;
+        }
+        else if (arg == "--no-parse-special") {
+            no_parse_special = true;
         }
         else if (arg == "-p" || arg == "--prompt") {
             if (prompt_set) {
@@ -359,9 +364,10 @@ int main(int raw_argc, char ** raw_argv) {
 
     const bool model_wants_add_bos = llama_should_add_bos_token(model);
     const bool add_bos = model_wants_add_bos && !no_bos;
+    const bool parse_special = !no_parse_special;
 
     std::vector<llama_token> tokens;
-    tokens = ::llama_tokenize(model, prompt, add_bos, true);
+    tokens = ::llama_tokenize(model, prompt, add_bos, parse_special);
 
     if (printing_ids) {
         printf("[");
