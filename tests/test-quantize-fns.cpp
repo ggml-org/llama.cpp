@@ -60,7 +60,7 @@ static float reference_quantization_error(ggml_type_traits_t & qfns, size_t test
     qfns.from_float(test_data, tmp_q.data(), test_size);
     qfns.to_float(tmp_q.data(), tmp_out.data(), test_size);
 
-    qfns.from_float_reference(test_data, tmp_q.data(), test_size);
+    qfns.from_float_ref(test_data, tmp_q.data(), test_size);
     qfns.to_float(tmp_q.data(), tmp_out_ref.data(), test_size);
 
     return array_rmse(tmp_out.data(), tmp_out_ref.data(), test_size);

@@ -154,7 +154,7 @@ static void test_roundtrip_on_chunk(
     }
 
     if (use_reference) {
-        qfns.from_float_reference(input_scratch, quantized_scratch, chunk_size);
+        qfns.from_float_ref(input_scratch, quantized_scratch, chunk_size);
     } else {
         qfns.from_float(input_scratch, quantized_scratch, chunk_size);
     }

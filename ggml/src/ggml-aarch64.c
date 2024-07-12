@@ -20,19 +20,19 @@
 
 // Functions to create the interleaved data layout formats
 
-// interleave 4 block_q4_0s in blocks of interleave_blcksize
+// interleave 4 block_q4_0s in blocks of blck_size_interleave
 // returns an interleaved block_q4_0x4
 // in the interleaved block_q4_0x4, place deltas for 4 block_q4_0 blocks
-// first, then interleave quants from 4 block_q4_0s in blocks of interleave_blcksize
+// first, then interleave quants from 4 block_q4_0s in blocks of blck_size_interleave
 //
 // - in                  : an array of block_q4_0 pointers
-// - interleave_blcksize : the block_q4_0 quants bytes are interleaved in blocks of
-//                         interleave_blcksize bytes
+// - blck_size_interleave : the block_q4_0 quants bytes are interleaved in blocks of
+//                         blck_size_interleave bytes
 // - xor_mask            : the mask to convert the nibbles in block_q4_0 quants bytes
 //                         from bias offset form to pure sign form (this saves subtract
 //                         operations durin unpacking)
 //
-static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int interleave_blcksize, unsigned int xor_mask) {
+static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave, unsigned int xor_mask) {
     block_q4_0x4 out;
 
     for (int i = 0; i < 4; i++) {
@@ -40,9 +40,9 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int interleave_b
     }
 
     for (int i = 0; i < QK4_0 * 2; i++) {
-        int src_offset = (i / (4 * interleave_blcksize)) * interleave_blcksize;
-        int src_id = (i % (4 * interleave_blcksize)) / interleave_blcksize;
-        src_offset += (i % interleave_blcksize);
+        int src_offset = (i / (4 * blck_size_interleave)) * blck_size_interleave;
+        int src_id = (i % (4 * blck_size_interleave)) / blck_size_interleave;
+        src_offset += (i % blck_size_interleave);
 
         out.qs[i] = in[src_id].qs[src_offset] ^ xor_mask;
     }
@@ -50,11 +50,11 @@ static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int interleave_b
     return out;
 }
 
-// interleave 8 block_q4_0s in blocks of interleave_blcksize
+// interleave 8 block_q4_0s in blocks of blck_size_interleave
 // returns an interleaved block_q4_0x8
 // in the interleaved block_q4_0x8, place deltas for 8 block_q4_0 blocks
-// first, then interleave quants from 8 block_q4_0s in blocks of interleave_blcksize
-static block_q4_0x8 make_block_q4_0x8(block_q4_0 * in, unsigned int interleave_blcksize, unsigned int xor_mask) {
+// first, then interleave quants from 8 block_q4_0s in blocks of blck_size_interleave
+static block_q4_0x8 make_block_q4_0x8(block_q4_0 * in, unsigned int blck_size_interleave, unsigned int xor_mask) {
     block_q4_0x8 out;
 
     for (int i = 0; i < 8; i++) {
@@ -62,9 +62,9 @@ static block_q4_0x8 make_block_q4_0x8(block_q4_0 * in, unsigned int interleave_b
     }
 
     for (int i = 0; i < QK4_0 * 4; i++) {
-        int src_offset = (i / (8 * interleave_blcksize)) * interleave_blcksize;
-        int src_id = (i % (8 * interleave_blcksize)) / interleave_blcksize;
-        src_offset += (i % interleave_blcksize);
+        int src_offset = (i / (8 * blck_size_interleave)) * blck_size_interleave;
+        int src_id = (i % (8 * blck_size_interleave)) / blck_size_interleave;
+        src_offset += (i % blck_size_interleave);
 
         out.qs[i] = in[src_id].qs[src_offset] ^ xor_mask;
     }
@@ -135,7 +135,7 @@ void quantize_q8_0_4x4(const float * restrict x, void * restrict vy, int64_t k) 
     }
 #else
     // scalar
-    const int interleave_blcksize = 4;
+    const int blck_size_interleave = 4;
     float srcv[4][QK8_0];
     float id[4];
 
@@ -155,12 +155,12 @@ void quantize_q8_0_4x4(const float * restrict x, void * restrict vy, int64_t k) 
         }
 
         for (int j = 0; j < QK8_0 * 4; j++) {
-            int src_offset = (j / (4 * interleave_blcksize)) * interleave_blcksize;
-            int src_id = (j % (4 * interleave_blcksize)) / interleave_blcksize;
-            src_offset += (j % interleave_blcksize);
+            int src_offset = (j / (4 * blck_size_interleave)) * blck_size_interleave;
+            int src_id = (j % (4 * blck_size_interleave)) / blck_size_interleave;
+            src_offset += (j % blck_size_interleave);
 
             float x0 = srcv[src_id][src_offset] * id[src_id];
-            y[i].qs[j] = roundf(x0);;
+            y[i].qs[j] = roundf(x0);
         }
     }
 #endif
@@ -253,7 +253,7 @@ void quantize_q8_0_4x8(const float * restrict x, void * restrict vy, int64_t k) 
     }
 #else
     // scalar
-    const int interleave_blcksize = 8;
+    const int blck_size_interleave = 8;
     float srcv[4][QK8_0];
     float id[4];
 
@@ -273,26 +273,30 @@ void quantize_q8_0_4x8(const float * restrict x, void * restrict vy, int64_t k) 
         }
 
         for (int j = 0; j < QK8_0 * 4; j++) {
-            int src_offset = (j / (4 * interleave_blcksize)) * interleave_blcksize;
-            int src_id = (j % (4 * interleave_blcksize)) / interleave_blcksize;
-            src_offset += (j % interleave_blcksize);
+            int src_offset = (j / (4 * blck_size_interleave)) * blck_size_interleave;
+            int src_id = (j % (4 * blck_size_interleave)) / blck_size_interleave;
+            src_offset += (j % blck_size_interleave);
 
             float x0 = srcv[src_id][src_offset] * id[src_id];
-            y[i].qs[j] = roundf(x0);;
+            y[i].qs[j] = roundf(x0);
         }
     }
 #endif
 }
 
-void quantize_mat_q8_0(const float * restrict x, void * restrict vy, int64_t nrow, int64_t n_per_row, int64_t interleave_blcksize) {
+void quantize_mat_q8_0(const float * restrict x, void * restrict vy, int64_t nrow, int64_t n_per_row, int64_t blck_size_interleave) {
     assert(nrow == 4);
     UNUSED(nrow);
-    if (interleave_blcksize == 4) quantize_q8_0_4x4(x, vy, n_per_row);
-    else if (interleave_blcksize == 8) quantize_q8_0_4x8(x, vy, n_per_row);
-    else assert(false);
+    if (blck_size_interleave == 4) {
+        quantize_q8_0_4x4(x, vy, n_per_row);
+    } else if (blck_size_interleave == 8) {
+        quantize_q8_0_4x8(x, vy, n_per_row);
+    } else {
+        assert(false);
+    }
 }
 
-static size_t quantize_q4_0_nr_bl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, int nrows_interleaved, int interleave_blcksize) {
+static size_t quantize_q4_0_nr_bl(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, int nrows_interleaved, int blck_size_interleave) {
     assert(n_per_row % QK4_0 == 0);
     const int nb = n_per_row / QK4_0;
 
@@ -311,15 +315,15 @@ static size_t quantize_q4_0_nr_bl(const float * restrict src, void * restrict ds
         for (int64_t x = 0; x < nb; x++) {
 
             for (int i  = 0; i < nrows_interleaved; i++ ) {
-                quantize_row_q4_0_reference(src + b + i * n_per_row + x * QK4_0, (block_q4_0 *) dst_tmp + i, QK4_0);
+                quantize_row_q4_0_ref(src + b + i * n_per_row + x * QK4_0, (block_q4_0 *) dst_tmp + i, QK4_0);
             }
 
             if (nrows_interleaved == 8) {
-                *(block_q4_0x8 *) out_ptr = make_block_q4_0x8(dst_tmp, interleave_blcksize, 0x88);
+                *(block_q4_0x8 *) out_ptr = make_block_q4_0x8(dst_tmp, blck_size_interleave, 0x88);
                 out_ptr = (block_q4_0x8 *) out_ptr + 1;
             }
             else if (nrows_interleaved == 4) {
-                *(block_q4_0x4 *) out_ptr = make_block_q4_0x4(dst_tmp, interleave_blcksize, 0x88);
+                *(block_q4_0x4 *) out_ptr = make_block_q4_0x4(dst_tmp, blck_size_interleave, 0x88);
                 out_ptr = (block_q4_0x4 *) out_ptr + 1;
             }
         }
