@@ -394,7 +394,7 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
 
 // backend registry
 
-#define GGML_REG_MAX_BACKENDS 16
+#define GGML_REG_MAX_BACKENDS 64
 
 struct ggml_backend_reg {
     char name[128];

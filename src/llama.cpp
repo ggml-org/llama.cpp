@@ -5883,13 +5883,6 @@ static bool llm_load_tensors(
 
     auto & hparams = model.hparams;
 
-#ifdef GGML_USE_SYCL
-    // disable MoE with SYCL until mul_mat_id is updated
-    if (hparams.n_expert > 0) {
-        n_gpu_layers = 0;
-    }
-#endif
-
     model.split_mode   = split_mode;
     model.main_gpu     = main_gpu;
     model.n_gpu_layers = n_gpu_layers;
