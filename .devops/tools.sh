@@ -8,7 +8,7 @@ arg1="$1"
 shift
 
 if [[ "$arg1" == '--convert' || "$arg1" == '-c' ]]; then
-    python3 ./convert-hf-to-gguf.py "$@"
+    python3 ./convert_hf_to_gguf.py "$@"
 elif [[ "$arg1" == '--quantize' || "$arg1" == '-q' ]]; then
     ./llama-quantize "$@"
 elif [[ "$arg1" == '--run' || "$arg1" == '-r' ]]; then
