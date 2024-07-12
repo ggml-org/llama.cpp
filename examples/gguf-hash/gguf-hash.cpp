@@ -347,7 +347,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
                 char hex_result[17];
                 for (int  offset = 0; offset < 8; offset++) {
                     unsigned int shift_bits_by = (8 * (8 - offset - 1));
-                    sprintf( ( hex_result + (2*offset)), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
+                    snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
                 }
 
                 if (hash_params.manifest_is_usable) {
@@ -384,7 +384,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 
                 char hex_result[41] = {0};
                 for (int  offset = 0; offset < 20; offset++) {
-                    sprintf( ( hex_result + (2*offset)), "%02x", result[offset]&0xff);
+                    snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", result[offset]&0xff);
                 }
 
                 if (hash_params.manifest_is_usable) {
@@ -421,7 +421,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 
                 char hex_result[SHA256_DIGEST_SIZE * 2 + 1] = {0};
                 for (int  offset = 0; offset < SHA256_DIGEST_SIZE; offset++) {
-                    sprintf( ( hex_result + (2*offset)), "%02x", result[offset]&0xff);
+                    snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", result[offset]&0xff);
                 }
 
                 if (hash_params.manifest_is_usable) {
@@ -460,7 +460,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
         char hex_result[17];
         for (int  offset = 0; offset < 8; offset++) {
             unsigned int shift_bits_by = (8 * (8 - offset - 1));
-            sprintf( ( hex_result + (2*offset)), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
+            snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
         }
 
         if (hash_params.manifest_is_usable) {
@@ -490,7 +490,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 
         char hex_result[41];
         for (int  offset = 0; offset < 20; offset++) {
-            sprintf( ( hex_result + (2*offset)), "%02x", result[offset]&0xff);
+            snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", result[offset]&0xff);
         }
 
         if (hash_params.manifest_is_usable) {
@@ -520,7 +520,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 
         char hex_result[SHA256_DIGEST_SIZE * 2 + 1] = {0};
         for (int  offset = 0; offset < SHA256_DIGEST_SIZE; offset++) {
-            sprintf( ( hex_result + (2*offset)), "%02x", result[offset]&0xff);
+            snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", result[offset]&0xff);
         }
 
         if (hash_params.manifest_is_usable) {
@@ -552,7 +552,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
         generate_uuidv5(result, uuid);
 
         char string_buffer[37] = {0};
-        sprintf(string_buffer, "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+        snprintf(string_buffer, sizeof(string_buffer), "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
             uuid[0], uuid[1], uuid[2], uuid[3],
             uuid[4], uuid[5], uuid[6], uuid[7],
             uuid[8], uuid[9], uuid[10], uuid[11],

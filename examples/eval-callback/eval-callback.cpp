@@ -99,7 +99,7 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
 
     char src1_str[128] = {0};
     if (src1) {
-        sprintf(src1_str, "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
+        snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
     }
 
     printf("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
