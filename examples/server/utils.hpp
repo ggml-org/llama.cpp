@@ -122,8 +122,26 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
 
     for (size_t i = 0; i < messages.size(); ++i) {
         const auto & curr_msg = messages[i];
-        std::string role    = json_value(curr_msg, "role",    std::string(""));
-        std::string content = json_value(curr_msg, "content", std::string(""));
+
+        std::string role = json_value(curr_msg, "role", std::string(""));
+
+        std::string content;
+        if (curr_msg.contains("content")) {
+            if (curr_msg["content"].is_string()) {
+                content = curr_msg["content"].get<std::string>();
+            } else if (curr_msg["content"].is_array()) {
+                for (const auto & part : curr_msg["content"]) {
+                    if (part.contains("text")) {
+                        content += "\n" + part["text"].get<std::string>();
+                    }
+                }
+            } else {
+                throw std::runtime_error("Invalid 'content' type (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
+            }
+        } else {
+            throw std::runtime_error("Missing 'content' (ref: https://github.com/ggerganov/llama.cpp/issues/8367)");
+        }
+
         chat.push_back({role, content});
     }
 
