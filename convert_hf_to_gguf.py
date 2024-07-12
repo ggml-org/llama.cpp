@@ -1203,11 +1203,10 @@ class RefactModel(Model):
 
         # TODO: how to determine special FIM tokens automatically?
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False,
-                                          special_token_types = ['prefix', 'suffix', 'middle', 'fsep', 'eot'])
+                                          special_token_types = ['prefix', 'suffix', 'middle', 'eot'])
         special_vocab._set_special_token("prefix", 1)
         special_vocab._set_special_token("suffix", 3)
         special_vocab._set_special_token("middle", 2)
-        special_vocab._set_special_token("fsep",   4) # is this correct?
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
