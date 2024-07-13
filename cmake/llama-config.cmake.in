@@ -8,6 +8,13 @@ set(GGML_CUDA       @GGML_CUDA@)
 set(GGML_METAL      @GGML_METAL@)
 set(GGML_HIPBLAS    @GGML_HIPBLAS@)
 set(GGML_ACCELERATE @GGML_ACCELERATE@)
+set(GGML_VULKAN @GGML_VULKAN@)
+set(GGML_VULKAN_CHECK_RESULTS @GGML_VULKAN_CHECK_RESULTS@)
+set(GGML_VULKAN_DEBUG @GGML_VULKAN_DEBUG@)
+set(GGML_VULKAN_MEMORY_DEBUG @GGML_VULKAN_MEMORY_DEBUG@)
+set(GGML_VULKAN_VALIDATE @GGML_VULKAN_VALIDATE@)
+set(GGML_SYCL @GGML_SYCL@)
+set(GGML_OPENMP @GGML_OPENMP@)
 
 @PACKAGE_INIT@
 
@@ -37,18 +44,36 @@ if (GGML_METAL)
     find_library(METALKIT_FRAMEWORK MetalKit REQUIRED)
 endif()
 
+if (GGML_VULKAN)
+    find_package(Vulkan REQUIRED)
+endif()
+
 if (GGML_HIPBLAS)
     find_package(hip REQUIRED)
     find_package(hipblas REQUIRED)
     find_package(rocblas REQUIRED)
 endif()
 
+if (GGML_SYCL)
+    find_package(IntelSYCL REQUIRED)
+    find_package(MKL REQUIRED)
+endif()
+
+if (GGML_OPENMP)
+    find_package(OpenMP REQUIRED)
+endif()
+
+
+find_library(ggml_LIBRARY ggml
+    REQUIRED
+    HINTS ${LLAMA_LIB_DIR})
+
 find_library(llama_LIBRARY llama
     REQUIRED
     HINTS ${LLAMA_LIB_DIR})
 
-set(_llama_link_deps "Threads::Threads" "@LLAMA_EXTRA_LIBS@")
-set(_llama_transient_defines "@LLAMA_TRANSIENT_DEFINES@")
+set(_llama_link_deps "${ggml_LIBRARY}" "@GGML_LINK_LIBRARIES@")
+set(_llama_transient_defines "@GGML_TRANSIENT_DEFINES@")
 
 add_library(llama UNKNOWN IMPORTED)
 

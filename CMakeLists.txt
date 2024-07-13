@@ -132,7 +132,16 @@ set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location o
 set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
-get_directory_property(LLAMA_TRANSIENT_DEFINES COMPILE_DEFINITIONS)
+
+# At the moment some compile definitions are placed within the ggml/src
+# directory but not exported on the `ggml` target. This could be improved by
+# determining _precisely_ which defines are necessary for the llama-config
+# package.
+#
+get_directory_property(GGML_DIR_DEFINES DIRECTORY ggml/src COMPILE_DEFINITIONS)
+get_target_property(GGML_TARGET_DEFINES ggml COMPILE_DEFINITIONS)
+set(GGML_TRANSIENT_DEFINES ${GGML_TARGET_DEFINES} ${GGML_DIR_DEFINES})
+get_target_property(GGML_LINK_LIBRARIES ggml LINK_LIBRARIES)
 
 set_target_properties(llama PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h)
 install(TARGETS llama LIBRARY PUBLIC_HEADER)

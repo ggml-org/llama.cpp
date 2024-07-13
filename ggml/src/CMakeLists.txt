@@ -527,13 +527,10 @@ if (GGML_RPC)
 endif()
 
 if (GGML_VULKAN)
-    find_package(Vulkan)
+    find_package(Vulkan COMPONENTS glslc REQUIRED)
 
     if (Vulkan_FOUND)
         message(STATUS "Vulkan found")
-
-        set(GGML_HEADERS_VULKAN ../include/ggml-vulkan.h)
-        set(GGML_SOURCES_VULKAN ggml-vulkan.cpp)
 
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_VULKAN)
 
@@ -563,7 +560,37 @@ if (GGML_VULKAN)
             add_compile_definitions(GGML_VULKAN_RUN_TESTS)
         endif()
 
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} Vulkan::Vulkan)
+        add_subdirectory(vulkan-shaders)
+
+        set (_ggml_vk_genshaders_cmd vulkan-shaders-gen)
+        set (_ggml_vk_header     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp)
+        set (_ggml_vk_source     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.cpp)
+        set (_ggml_vk_input_dir  ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders)
+        set (_ggml_vk_output_dir ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv)
+
+        file(GLOB _ggml_vk_shader_deps "${_ggml_vk_input_dir}/*.comp")
+
+        add_custom_command(
+            OUTPUT ${_ggml_vk_header}
+                   ${_ggml_vk_source}
+
+            COMMAND ${_ggml_vk_genshaders_cmd}
+                --glslc      ${Vulkan_GLSLC_EXECUTABLE}
+                --input-dir  ${_ggml_vk_input_dir}
+                --output-dir ${_ggml_vk_output_dir}
+                --target-hpp ${_ggml_vk_header}
+                --target-cpp ${_ggml_vk_source}
+                --no-clean
+
+            DEPENDS ${_ggml_vk_shader_deps}
+            COMMENT "Generate vulkan shaders"
+        )
+
+        set(GGML_HEADERS_VULKAN ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml-vulkan.h ${_ggml_vk_header})
+        set(GGML_SOURCES_VULKAN ggml-vulkan.cpp ${_ggml_vk_source})
+
+        set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS} Vulkan::Vulkan)
+        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
     else()
         message(WARNING "Vulkan not found")
     endif()
