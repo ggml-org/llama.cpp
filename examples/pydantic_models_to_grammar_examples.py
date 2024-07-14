@@ -20,6 +20,8 @@ def create_completion(prompt, grammar):
     response = requests.post("http://127.0.0.1:8080/completion", headers=headers, json=data)
     data = response.json()
 
+    assert data.get("error") is None, data
+
     print(data["content"])
     return data["content"]
 
