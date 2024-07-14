@@ -195,7 +195,7 @@ int main(int argc, char **argv) {
     const bool add_special = false;
 
     for (const auto & test_kv : k_tests) {
-        const std::vector<llama_token> res = llama_tokenize(ctx, test_kv.first, add_special, true);
+        const std::vector<llama_token> res = llama_tokenize(ctx, test_kv.first, add_special, false);
 
         printf("\n");
         printf("src: '%s'\n", test_kv.first.c_str());
@@ -253,7 +253,7 @@ int main(int argc, char **argv) {
         {
             const auto t_start = ggml_time_us();
 
-            res = llama_tokenize(ctx, text, add_special, true);
+            res = llama_tokenize(ctx, text, add_special, false);
 
             const auto t_end = ggml_time_us();
 
