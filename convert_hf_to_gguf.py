@@ -2504,11 +2504,6 @@ class Gemma2Model(Model):
         )
         self.gguf_writer.add_sliding_window(self.hparams["sliding_window"])
 
-        # sanity check
-        attn_scalar = self.hparams["query_pre_attn_scalar"]
-        if attn_scalar != hparams["hidden_size"] / hparams["num_attention_heads"]:
-            raise ValueError("query_pre_attn_scalar must be equal to n_embd / n_head")
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
