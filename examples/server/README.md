@@ -211,7 +211,7 @@ retrieval:
 
          --context-file FNAME     file to load context from (repeat to specify multiple files)
          --chunk-size N           minimum length of embedded text chunks (default: 64)
-         --chunk-separator STRING 
+         --chunk-separator STRING
                                   separator between chunks (default: '
                                   ')
 
@@ -256,7 +256,7 @@ server:
          --threads-http N         number of threads used to process HTTP requests (default: -1)
          --system-prompt-file FNAME
                                   set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications
-         --log-format {text,json} 
+         --log-format {text,json}
                                   log output format: json or text (default: json)
          --metrics                enable prometheus compatible metrics endpoint (default: disabled)
          --no-slots               disables slots monitoring endpoint (default: enabled)
