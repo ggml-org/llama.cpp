@@ -14,7 +14,9 @@
 
 #include "ggml-aarch64.h"
 
+#if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
+#endif
 
 #define UNUSED GGML_UNUSED
 
