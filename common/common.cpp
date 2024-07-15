@@ -797,6 +797,10 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         params.cont_batching = true;
         return true;
     }
+    if (arg == "-nocb" || arg == "--no-cont-batching") {
+        params.cont_batching = false;
+        return true;
+    }
     if (arg == "-fa" || arg == "--flash-attn") {
         params.flash_attn = true;
         return true;
@@ -1538,6 +1542,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "*",           "-np,   --parallel N",           "number of parallel sequences to decode (default: %d)", params.n_parallel });
     options.push_back({ "*",           "-ns,   --sequences N",          "number of sequences to decode (default: %d)", params.n_sequences });
     options.push_back({ "*",           "-cb,   --cont-batching",        "enable continuous batching (a.k.a dynamic batching) (default: %s)", params.cont_batching ? "enabled" : "disabled" });
+    options.push_back({ "*",           "-nocb, --no-cont-batching",     "disable continuous batching" });
 
     options.push_back({ "multi-modality" });
     options.push_back({ "*",           "       --mmproj FILE",          "path to a multimodal projector file for LLaVA. see examples/llava/README.md" });
