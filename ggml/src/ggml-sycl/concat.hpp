@@ -10,18 +10,12 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
-#ifndef GGML_SYCL_BACKEND_HPP
-#define GGML_SYCL_BACKEND_HPP
+#ifndef GGML_SYCL_CONCAT_HPP
+#define GGML_SYCL_CONCAT_HPP
 
-#include "concat.hpp"
 #include "common.hpp"
-#include "convert.hpp"
-#include "dequantize.hpp"
-#include "dmmv.hpp"
-#include "mmq.hpp"
-#include "mmvq.hpp"
-#include "rope.hpp"
-#include "norm.hpp"
-#include "softmax.hpp"
 
-#endif // GGML_SYCL_BACKEND_HPP
+void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
+                                const ggml_tensor *src1, ggml_tensor *dst);
+
+#endif // GGML_SYCL_CONCAT_HPP
