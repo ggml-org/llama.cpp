@@ -685,7 +685,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     if (arg == "--lora") {
         CHECK_ARG
         params.lora_adapter.emplace_back(argv[i], 1.0f);
-        params.use_mmap = false;
         return true;
     }
     if (arg == "--lora-scaled") {
@@ -693,7 +692,6 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
         const char* lora_adapter = argv[i];
         CHECK_ARG
         params.lora_adapter.emplace_back(lora_adapter, std::stof(argv[i]));
-        params.use_mmap = false;
         return true;
     }
     if (arg == "--lora-base") {
@@ -2089,19 +2087,14 @@ std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_par
     for (unsigned int i = 0; i < params.lora_adapter.size(); ++i) {
         const std::string & lora_adapter = std::get<0>(params.lora_adapter[i]);
         float lora_scale = std::get<1>(params.lora_adapter[i]);
-        int err = llama_model_apply_lora_from_file(model,
-                                             lora_adapter.c_str(),
-                                             lora_scale,
-                                             ((i > 0) || params.lora_base.empty())
-                                                ? NULL
-                                                : params.lora_base.c_str(),
-                                             params.n_threads);
-        if (err != 0) {
+        auto adapter = llama_lora_adapter_init(model, lora_adapter.c_str());
+        if (adapter == nullptr) {
             fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
             llama_free(lctx);
             llama_free_model(model);
             return std::make_tuple(nullptr, nullptr);
         }
+        llama_lora_adapter_set(lctx, adapter, lora_scale);
     }
 
     if (params.ignore_eos) {

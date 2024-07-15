@@ -424,6 +424,9 @@ class GGUFWriter:
                 fout.close()
             self.fout = None
 
+    def add_type(self, type_name: str) -> None:
+        self.add_string(Keys.General.TYPE, type_name)
+
     def add_architecture(self) -> None:
         self.add_string(Keys.General.ARCHITECTURE, self.arch)
 

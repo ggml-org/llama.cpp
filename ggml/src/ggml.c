@@ -19478,7 +19478,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
 
     fprintf(fp, "digraph G {\n");
     fprintf(fp, "  newrank = true;\n");
-    fprintf(fp, "  rankdir = LR;\n");
+    fprintf(fp, "  rankdir = TB;\n");
 
     for (int i = 0; i < gb->n_nodes; i++) {
         struct ggml_tensor * node = gb->nodes[i];
@@ -19540,7 +19540,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         }
 
         fprintf(fp, "CONST %d [%" PRId64 ", %" PRId64 "]", i, node->ne[0], node->ne[1]);
-        if (ggml_nelements(node) < 5) {
+        if (ggml_nelements(node) < 5 && node->data != NULL) {
             fprintf(fp, " | (");
             for (int j = 0; j < ggml_nelements(node); j++) {
                 if (node->type == GGML_TYPE_I8 || node->type == GGML_TYPE_I16 || node->type == GGML_TYPE_I32) {

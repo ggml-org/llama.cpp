@@ -43,7 +43,7 @@ def __apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.
         osize *= dim
     out = np.empty(shape=osize, dtype=otype)
     # compute over groups of 16 rows (arbitrary, but seems good for performance)
-    n_groups = rows.shape[0] // 16
+    n_groups = (rows.shape[0] // 16) or 1
     np.concatenate([func(group).ravel() for group in np.array_split(rows, n_groups)], axis=0, out=out)
     return out.reshape(oshape)
 
