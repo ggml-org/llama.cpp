@@ -1,7 +1,7 @@
 # Token generation performance troubleshooting
 
 ## Verifying that the model is running on the GPU with CUDA
-Make sure you compiled llama with the correct env variables according to [this guide](../README.md#CUDA), so that llama accepts the `-ngl N` (or `--n-gpu-layers N`) flag. When running llama, you may configure `N` to be very large, and llama will offload the maximum possible number of layers to the GPU, even if it's less than the number you configured. For example:
+Make sure you compiled llama with the correct env variables according to [this guide](/docs/build.md#cuda), so that llama accepts the `-ngl N` (or `--n-gpu-layers N`) flag. When running llama, you may configure `N` to be very large, and llama will offload the maximum possible number of layers to the GPU, even if it's less than the number you configured. For example:
 ```shell
 ./llama-cli -m "path/to/model.gguf" -ngl 200000 -p "Please sir, may I have some "
 ```

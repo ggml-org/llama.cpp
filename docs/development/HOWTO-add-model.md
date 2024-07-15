@@ -9,15 +9,15 @@ Adding a model requires few steps:
 After following these steps, you can open PR.
 
 Also, it is important to check that the examples and main ggml backends (CUDA, METAL, CPU) are working with the new architecture, especially:
-- [main](../examples/main)
-- [imatrix](../examples/imatrix)
-- [quantize](../examples/quantize)
-- [server](../examples/server)
+- [main](/examples/main/)
+- [imatrix](/examples/imatrix/)
+- [quantize](/examples/quantize/)
+- [server](/examples/server/)
 
 ### 1. Convert the model to GGUF
 
 This step is done in python with a `convert` script using the [gguf](https://pypi.org/project/gguf/) library.
-Depending on the model architecture, you can use either [convert_hf_to_gguf.py](../convert_hf_to_gguf.py) or [examples/convert_legacy_llama.py](../examples/convert_legacy_llama.py) (for `llama/llama2` models in `.pth` format).
+Depending on the model architecture, you can use either [convert_hf_to_gguf.py](/convert_hf_to_gguf.py) or [examples/convert_legacy_llama.py](/examples/convert_legacy_llama.py) (for `llama/llama2` models in `.pth` format).
 
 The convert script reads the model configuration, tokenizer, tensor names+data and converts them to GGUF metadata and tensors.
 
@@ -31,7 +31,7 @@ class MyModel(Model):
     model_arch = gguf.MODEL_ARCH.GROK
 ```
 
-2. Define the layout of the GGUF tensors in [constants.py](../gguf-py/gguf/constants.py)
+2. Define the layout of the GGUF tensors in [constants.py](/gguf-py/gguf/constants.py)
 
 Add an enum entry in `MODEL_ARCH`, the model human friendly name in `MODEL_ARCH_NAMES` and the GGUF tensor names in `MODEL_TENSORS`.
 
@@ -54,7 +54,7 @@ Example for `falcon` model:
 
 As a general rule, before adding a new tensor name to GGUF, be sure the equivalent naming does not already exist.
 
-Once you have found the GGUF tensor name equivalent, add it to the [tensor_mapping.py](../gguf-py/gguf/tensor_mapping.py) file.
+Once you have found the GGUF tensor name equivalent, add it to the [tensor_mapping.py](/gguf-py/gguf/tensor_mapping.py) file.
 
 If the tensor name is part of a repetitive layer/block, the key word `bid` substitutes it.
 
@@ -100,7 +100,7 @@ Have a look at existing implementation like `build_llama`, `build_dbrx` or `buil
 
 When implementing a new graph, please note that the underlying `ggml` backends might not support them all, support for missing backend operations can be added in another PR.
 
-Note: to debug the inference graph: you can use [llama-eval-callback](../examples/eval-callback).
+Note: to debug the inference graph: you can use [llama-eval-callback](/examples/eval-callback/).
 
 ## GGUF specification
 
