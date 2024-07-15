@@ -6561,7 +6561,7 @@ static void ggml_vk_print_tensor(ggml_backend_vk_context * ctx, const ggml_tenso
         ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) tensor->extra;
 
         vk_buffer buffer_gpu = extra->buffer_gpu.lock();
-        ggml_vk_buffer_read(ctx, buffer_gpu, extra->offset + tensor->view_offs, tensor_data, tensor_size);
+        ggml_vk_buffer_read(buffer_gpu, extra->offset + tensor->view_offs, tensor_data, tensor_size);
     }
 
     std::cerr << "TENSOR CHECK " << name << " (" << tensor->name << "): " << ggml_op_name(tensor->op) << std::endl;
@@ -6645,7 +6645,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 for (int i3 = 0; i3 < src0->ne[3]; i3++) {
                     for (int i2 = 0; i2 < src0->ne[2]; i2++) {
                         const int idx = i3*src0->ne[2] + i2;
-                        ggml_vk_buffer_read(ctx, buffer_gpu, offset + idx * src0->nb[2], ((char *)src0_clone->data + idx * src0_clone->nb[2]), src0->ne[1] * src0->nb[1]);
+                        ggml_vk_buffer_read(buffer_gpu, offset + idx * src0->nb[2], ((char *)src0_clone->data + idx * src0_clone->nb[2]), src0->ne[1] * src0->nb[1]);
                     }
                 }
 
@@ -6658,7 +6658,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 if (offset + src0_size >= buffer_gpu->size) {
                     src0_size = buffer_gpu->size - offset;
                 }
-                ggml_vk_buffer_read(ctx, buffer_gpu, offset, src0_clone->data, src0_size);
+                ggml_vk_buffer_read(buffer_gpu, offset, src0_clone->data, src0_size);
                 memcpy(src0_clone->nb, src0->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
@@ -6687,7 +6687,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 for (int i3 = 0; i3 < src1->ne[3]; i3++) {
                     for (int i2 = 0; i2 < src1->ne[2]; i2++) {
                         const int idx = i3*src1->ne[2] + i2;
-                        ggml_vk_buffer_read(ctx, buffer_gpu, offset + idx * src1->nb[2], ((char *)src1_clone->data + idx * src1_clone->nb[2]), src1->ne[1] * src1->nb[1]);
+                        ggml_vk_buffer_read(buffer_gpu, offset + idx * src1->nb[2], ((char *)src1_clone->data + idx * src1_clone->nb[2]), src1->ne[1] * src1->nb[1]);
                     }
                 }
 
@@ -6700,7 +6700,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 if (offset + src1_size >= buffer_gpu->size) {
                     src1_size = buffer_gpu->size - offset;
                 }
-                ggml_vk_buffer_read(ctx, buffer_gpu, offset, src1_clone->data, src1_size);
+                ggml_vk_buffer_read(buffer_gpu, offset, src1_clone->data, src1_size);
                 memcpy(src1_clone->nb, src1->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
@@ -6745,7 +6745,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 for (int i3 = 0; i3 < src2->ne[3]; i3++) {
                     for (int i2 = 0; i2 < src2->ne[2]; i2++) {
                         const int idx = i3*src2->ne[2] + i2;
-                        ggml_vk_buffer_read(ctx, buffer_gpu, offset + idx * src2->nb[2], ((char *)src2_clone->data + idx * src2_clone->nb[2]), src2->ne[1] * src2->nb[1]);
+                        ggml_vk_buffer_read(buffer_gpu, offset + idx * src2->nb[2], ((char *)src2_clone->data + idx * src2_clone->nb[2]), src2->ne[1] * src2->nb[1]);
                     }
                 }
 
@@ -6758,7 +6758,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 if (offset + src2_size >= buffer_gpu->size) {
                     src2_size = buffer_gpu->size - offset;
                 }
-                ggml_vk_buffer_read(ctx, buffer_gpu, offset, src2_clone->data, src2_size);
+                ggml_vk_buffer_read(buffer_gpu, offset, src2_clone->data, src2_size);
                 memcpy(src2_clone->nb, src2->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
@@ -6922,7 +6922,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor *
             tensor_size = buffer_gpu->size - (extra->offset + tensor->view_offs);
         }
 
-        ggml_vk_buffer_read(ctx, buffer_gpu, extra->offset + tensor->view_offs, tensor_data, tensor_size);
+        ggml_vk_buffer_read(buffer_gpu, extra->offset + tensor->view_offs, tensor_data, tensor_size);
     }
 
     float first_error_result = -1.0f;
