@@ -15,69 +15,281 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 
 The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
 
-**Command line options:**
+## Usage
 
-- `-v`, `--verbose`: Enable verbose server output. When using the `/completion` endpoint, this includes the tokenized prompt, the full request and the full response.
-- `-t N`, `--threads N`: Set the number of threads to use by CPU layers during generation. Not used by model layers that are offloaded to GPU. This option has no effect when using the maximum number of GPU layers. Default: `std::thread::hardware_concurrency()` (number of CPU cores).
-- `-tb N, --threads-batch N`: Set the number of threads to use by CPU layers during batch and prompt processing (>= 32 tokens). This option has no effect if a GPU is available. Default: `--threads`.
-- `--threads-http N`: Number of threads in the http server pool to process requests. Default: `max(std::thread::hardware_concurrency() - 1, --parallel N + 2)`
-- `-m FNAME`, `--model FNAME`: Specify the path to the LLaMA model file (e.g., `models/7B/ggml-model.gguf`).
-- `-mu MODEL_URL --model-url MODEL_URL`: Specify a remote http url to download the file. Default: unused
-- `-hfr REPO, --hf-repo REPO`: Hugging Face model repository. Default: unused
-- `-hff FILE, --hf-file FILE`: Hugging Face model file. Default: unused
-- `-a ALIAS`, `--alias ALIAS`: Set an alias for the model. The alias will be returned in API responses.
-- `-c N`, `--ctx-size N`: Set the size of the prompt context. The default is `512`, but LLaMA models were built with a context of `2048`, which will provide better results for longer input/inference. The size may differ in other models, for example, baichuan models were build with a context of `4096`.
-- `-ngl N`, `--n-gpu-layers N`: When compiled with GPU support, this option allows offloading some layers to the GPU for computation. Generally results in increased performance.
-- `-mg i, --main-gpu i`: When using multiple GPUs, this option controls which GPU is used for small tensors for which the overhead of splitting the computation across all GPUs is not worthwhile. The GPU in question will use slightly more VRAM to store a scratch buffer for temporary results. By default, GPU `0` is used.
-- `-ts SPLIT, --tensor-split SPLIT`: When using multiple GPUs, this option controls how large tensors should be split across all GPUs. `SPLIT` is a comma-separated list of non-negative values that assigns the proportion of data that each GPU should get in order. For example, "3,2" will assign 60% of the data to GPU 0 and 40% to GPU 1. By default, the data is split in proportion to VRAM, but this may not be optimal for performance.
-- `-b N`, `--batch-size N`: Set the batch size for prompt processing. Default: `2048`
-- `-ub N`, `--ubatch-size N`: Physical maximum batch size. Default: `512`
-- `--mlock`: Lock the model in memory, preventing it from being swapped out when memory-mapped.
-- `--no-mmap`: Do not memory-map the model. By default, models are mapped into memory, which allows the system to load only the necessary parts of the model as needed.
-- `--numa STRATEGY`: Attempt one of the below optimization strategies that may help on some NUMA systems
-- `--numa distribute`: Spread execution evenly over all nodes
-- `--numa isolate`: Only spawn threads on CPUs on the node that execution started on
-- `--numa numactl`: Use the CPU map provided by numactl. If run without this previously, it is recommended to drop the system page cache before using this. See https://github.com/ggerganov/llama.cpp/issues/1437
-- `--numa`: Attempt optimizations that may help on some NUMA systems.
-- `--lora FNAME`: Apply a LoRA (Low-Rank Adaptation) adapter to the model (implies --no-mmap). This allows you to adapt the pretrained model to specific tasks or domains.
-- `--lora-base FNAME`: Optional model to use as a base for the layers modified by the LoRA adapter. This flag is used in conjunction with the `--lora` flag, and specifies the base model for the adaptation.
-- `-to N`, `--timeout N`: Server read/write timeout in seconds. Default `600`
-- `--host`: Set the hostname or ip address to listen. Default `127.0.0.1`
-- `--port`: Set the port to listen. Default: `8080`
-- `--path`: Path from which to serve static files. Default: disabled
-- `--api-key`: Set an api key for request authorization. By default, the server responds to every request. With an api key set, the requests must have the Authorization header set with the api key as Bearer token. May be used multiple times to enable multiple valid keys.
-- `--api-key-file`: Path to file containing api keys delimited by new lines. If set, requests must include one of the keys for access. May be used in conjunction with `--api-key`s.
-- `--embeddings`: Enable embedding vector output and the OAI compatible endpoint /v1/embeddings. Physical batch size (`--ubatch-size`) must be carefully defined. Default: disabled
-- `-np N`, `--parallel N`: Set the number of slots for process requests. Default: `1`. Values > 1 will allow for higher throughput with multiple parallel requests but the results will **not** be deterministic due to differences in rounding error.
-- `-cb`, `--cont-batching`: Enable continuous batching (a.k.a dynamic batching).  Default: disabled
-- `-spf FNAME`, `--system-prompt-file FNAME` Set a file to load a system prompt (initial prompt of all slots). This is useful for chat applications. [See more](#change-system-prompt-on-runtime)
-- `--mmproj MMPROJ_FILE`: Path to a multimodal projector file for LLaVA.
-- `--grp-attn-n`: Set the group attention factor to extend context size through self-extend. Used together with group attention width `--grp-attn-w`. Default: `1`, which is disabled.
-- `--grp-attn-w`: Set the group attention width to extend context size through self-extend.  Used together with group attention factor `--grp-attn-n`. Default: `512`
-- `-n N, --n-predict N`: Set the maximum tokens to predict. Default: `-1`
-- `--slots-endpoint-disable`: To disable slots state monitoring endpoint. Slots state may contain user data, prompts included.
-- `--metrics`: enable prometheus `/metrics` compatible endpoint. Default: disabled
-- `--slot-save-path PATH`: Specifies the path where the state of slots (the prompt cache) can be stored. If not provided, the slot management endpoints will be disabled.
-- `--chat-template JINJA_TEMPLATE`: Set custom jinja chat template. This parameter accepts a string, not a file name.  Default: template taken from model's metadata. We only support [some pre-defined templates](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template)
-- `--log-disable`: Output logs to stdout only, not to `llama.log`. Default: enabled
-- `--log-format FORMAT`: Define the log output to FORMAT: json or text Default: `json`
-- `--rope-scaling` : RoPE scaling method. Defaults to linear unless otherwise specified by the model. Options are `none`, `linear`, `yarn`
-- `--rope-freq-base N` : RoPE frequency base (default: loaded from model)
-- `--rope-freq-scale N`: RoPE frequency scaling factor, expands context by a factor of 1/N (e.g. 0.25)
-- `--yarn-ext-factor N` : YaRN: extrapolation mix factor (Default: 1.0, 0.0 = full interpolation)
-- `--yarn-attn-factor N` : YaRN: scale sqrt(t) or attention magnitude (default: 1.0)
-- `--yarn-beta-slow N`: YaRN: High correction dim or alpha (default: 1.0)
-- `--yarn-beta-fast N`: YaRN: low correction dim or beta (default: 32.0)
-- `--pooling` : Pooling type for embeddings, use model default if unspecified. Options are `none`, `mean`, `cls`
-- `-dt N`, `--defrag-thold N`: KV cache defragmentation threshold (default: -1.0, < 0 = disabled)
-- `-fa`, `--flash-attn` : enable flash attention (default: disabled).
-- `-ctk TYPE`, `--cache-type-k TYPE` : KV cache data type for K (default: `f16`, options `f32`, `f16`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, or `q5_1`)
-- `-ctv TYPE`, `--cache-type-v TYPE` : KV cache type for V (default `f16`, see `-ctk` for options)
-- `--spm-infill` : Use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this.
+```
+usage: ./llama-server [options]
 
-**If compiled with `LLAMA_SERVER_SSL=ON`**
-- `--ssl-key-file FNAME`: path to file a PEM-encoded SSL private key
-- `--ssl-cert-file FNAME`: path to file a PEM-encoded SSL certificate
+general:
+
+  -h,    --help, --usage          print usage and exit
+         --version                show version and build info
+  -v,    --verbose                print verbose information
+         --verbosity N            set specific verbosity level (default: 0)
+         --verbose-prompt         print a verbose prompt before generation (default: false)
+         --no-display-prompt      don't print prompt at generation (default: false)
+  -co,   --color                  colorise output to distinguish prompt and user input from generations (default: false)
+  -s,    --seed SEED              RNG seed (default: -1, use random seed for < 0)
+  -t,    --threads N              number of threads to use during generation (default: 8)
+  -tb,   --threads-batch N        number of threads to use during batch and prompt processing (default: same as --threads)
+  -td,   --threads-draft N        number of threads to use during generation (default: same as --threads)
+  -tbd,  --threads-batch-draft N  number of threads to use during batch and prompt processing (default: same as --threads-draft)
+         --draft N                number of tokens to draft for speculative decoding (default: 5)
+  -ps,   --p-split N              speculative decoding split probability (default: 0.1)
+  -lcs,  --lookup-cache-static FNAME
+                                  path to static lookup cache to use for lookup decoding (not updated by generation)
+  -lcd,  --lookup-cache-dynamic FNAME
+                                  path to dynamic lookup cache to use for lookup decoding (updated by generation)
+  -c,    --ctx-size N             size of the prompt context (default: 0, 0 = loaded from model)
+  -n,    --predict N              number of tokens to predict (default: -1, -1 = infinity, -2 = until context filled)
+  -b,    --batch-size N           logical maximum batch size (default: 2048)
+  -ub,   --ubatch-size N          physical maximum batch size (default: 512)
+         --keep N                 number of tokens to keep from the initial prompt (default: 0, -1 = all)
+         --chunks N               max number of chunks to process (default: -1, -1 = all)
+  -fa,   --flash-attn             enable Flash Attention (default: disabled)
+  -p,    --prompt PROMPT          prompt to start generation with
+                                  in conversation mode, this will be used as system prompt
+                                  (default: '')
+  -f,    --file FNAME             a file containing the prompt (default: none)
+         --in-file FNAME          an input file (repeat to specify multiple files)
+  -bf,   --binary-file FNAME      binary file containing the prompt (default: none)
+  -e,    --escape                 process escapes sequences (\n, \r, \t, \', \", \\) (default: true)
+         --no-escape              do not process escape sequences
+  -ptc,  --print-token-count N    print token count every N tokens (default: -1)
+         --prompt-cache FNAME     file to cache prompt state for faster startup (default: none)
+         --prompt-cache-all       if specified, saves user input and generations to cache as well
+                                  not supported with --interactive or other interactive options
+         --prompt-cache-ro        if specified, uses the prompt cache but does not update it
+  -r,    --reverse-prompt PROMPT  halt generation at PROMPT, return control in interactive mode
+                                  can be specified more than once for multiple prompts
+  -sp,   --special                special tokens output enabled (default: false)
+  -cnv,  --conversation           run in conversation mode, does not print special tokens and suffix/prefix
+                                  if suffix/prefix are not specified, default chat template will be used
+                                  (default: false)
+  -i,    --interactive            run in interactive mode (default: false)
+  -if,   --interactive-first      run in interactive mode and wait for input right away (default: false)
+  -mli,  --multiline-input        allows you to write or paste multiple lines without ending each in '\'
+         --in-prefix-bos          prefix BOS to user inputs, preceding the `--in-prefix` string
+         --in-prefix STRING       string to prefix user inputs with (default: empty)
+         --in-suffix STRING       string to suffix after user inputs with (default: empty)
+         --spm-infill             use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled)
+
+sampling:
+
+         --samplers SAMPLERS      samplers that will be used for generation in the order, separated by ';'
+                                  (default: top_k;tfs_z;typical_p;top_p;min_p;temperature)
+         --sampling-seq SEQUENCE  simplified sequence for samplers that will be used (default: kfypmt)
+         --ignore-eos             ignore end of stream token and continue generating (implies --logit-bias EOS-inf)
+         --penalize-nl            penalize newline tokens (default: false)
+         --temp N                 temperature (default: 0.8)
+         --top-k N                top-k sampling (default: 40, 0 = disabled)
+         --top-p N                top-p sampling (default: 0.9, 1.0 = disabled)
+         --min-p N                min-p sampling (default: 0.1, 0.0 = disabled)
+         --tfs N                  tail free sampling, parameter z (default: 1.0, 1.0 = disabled)
+         --typical N              locally typical sampling, parameter p (default: 1.0, 1.0 = disabled)
+         --repeat-last-n N        last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size)
+         --repeat-penalty N       penalize repeat sequence of tokens (default: 1.0, 1.0 = disabled)
+         --presence-penalty N     repeat alpha presence penalty (default: 0.0, 0.0 = disabled)
+         --frequency-penalty N    repeat alpha frequency penalty (default: 0.0, 0.0 = disabled)
+         --dynatemp-range N       dynamic temperature range (default: 0.0, 0.0 = disabled)
+         --dynatemp-exp N         dynamic temperature exponent (default: 1.0)
+         --mirostat N             use Mirostat sampling.
+                                  Top K, Nucleus, Tail Free and Locally Typical samplers are ignored if used.
+                                  (default: 0, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)
+         --mirostat-lr N          Mirostat learning rate, parameter eta (default: 0.1)
+         --mirostat-ent N         Mirostat target entropy, parameter tau (default: 5.0)
+         -l TOKEN_ID(+/-)BIAS     modifies the likelihood of token appearing in the completion,
+                                  i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',
+                                  or `--logit-bias 15043-1` to decrease likelihood of token ' Hello'
+         --cfg-negative-prompt PROMPT
+                                  negative prompt to use for guidance (default: '')
+         --cfg-negative-prompt-file FNAME
+                                  negative prompt file to use for guidance
+         --cfg-scale N            strength of guidance (default: 1.0, 1.0 = disable)
+         --chat-template JINJA_TEMPLATE
+                                  set custom jinja chat template (default: template taken from model's metadata)
+                                  if suffix/prefix are specified, template will be disabled
+                                  only commonly used templates are accepted:
+                                  https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+
+grammar:
+
+         --grammar GRAMMAR        BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '')
+         --grammar-file FNAME     file to read grammar from
+  -j,    --json-schema SCHEMA     JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object
+                                  For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead
+
+embedding:
+
+         --pooling {none,mean,cls,last}
+                                  pooling type for embeddings, use model default if unspecified
+         --attention {causal,non-causal}
+                                  attention type for embeddings, use model default if unspecified
+
+context hacking:
+
+         --rope-scaling {none,linear,yarn}
+                                  RoPE frequency scaling method, defaults to linear unless specified by the model
+         --rope-scale N           RoPE context scaling factor, expands context by a factor of N
+         --rope-freq-base N       RoPE base frequency, used by NTK-aware scaling (default: loaded from model)
+         --rope-freq-scale N      RoPE frequency scaling factor, expands context by a factor of 1/N
+         --yarn-orig-ctx N        YaRN: original context size of model (default: 0 = model training context size)
+         --yarn-ext-factor N      YaRN: extrapolation mix factor (default: -1.0, 0.0 = full interpolation)
+         --yarn-attn-factor N     YaRN: scale sqrt(t) or attention magnitude (default: 1.0)
+         --yarn-beta-slow N       YaRN: high correction dim or alpha (default: 1.0)
+         --yarn-beta-fast N       YaRN: low correction dim or beta (default: 32.0)
+  -gan,  --grp-attn-n N           group-attention factor (default: 1)
+  -gaw,  --grp-attn-w N           group-attention width (default: 512.0)
+  -dkvc, --dump-kv-cache          verbose print of the KV cache
+  -nkvo, --no-kv-offload          disable KV offload
+  -ctk,  --cache-type-k TYPE      KV cache data type for K (default: f16)
+  -ctv,  --cache-type-v TYPE      KV cache data type for V (default: f16)
+
+perplexity:
+
+         --all-logits             return logits for all tokens in the batch (default: false)
+         --hellaswag              compute HellaSwag score over random tasks from datafile supplied with -f
+         --hellaswag-tasks N      number of tasks to use when computing the HellaSwag score (default: 400)
+         --winogrande             compute Winogrande score over random tasks from datafile supplied with -f
+         --winogrande-tasks N     number of tasks to use when computing the Winogrande score (default: 0)
+         --multiple-choice        compute multiple choice score over random tasks from datafile supplied with -f
+         --multiple-choice-tasks N
+                                  number of tasks to use when computing the multiple choice score (default: 0)
+         --kl-divergence          computes KL-divergence to logits provided via --kl-divergence-base
+         --ppl-stride N           stride for perplexity calculation (default: 0)
+         --ppl-output-type {0,1}  output type for perplexity calculation (default: 0)
+
+parallel:
+
+  -dt,   --defrag-thold N         KV cache defragmentation threshold (default: -1.0, < 0 - disabled)
+  -np,   --parallel N             number of parallel sequences to decode (default: 1)
+  -ns,   --sequences N            number of sequences to decode (default: 1)
+  -cb,   --cont-batching          enable continuous batching (a.k.a dynamic batching) (default: enabled)
+
+multi-modality:
+
+         --mmproj FILE            path to a multimodal projector file for LLaVA. see examples/llava/README.md
+         --image FILE             path to an image file. use with multimodal models. Specify multiple times for batching
+
+backend:
+
+         --rpc SERVERS            comma separated list of RPC servers
+         --mlock                  force system to keep model in RAM rather than swapping or compressing
+         --no-mmap                do not memory-map model (slower load but may reduce pageouts if not using mlock)
+         --numa TYPE              attempt optimizations that help on some NUMA systems
+                                    - distribute: spread execution evenly over all nodes
+                                    - isolate: only spawn threads on CPUs on the node that execution started on
+                                    - numactl: use the CPU map provided by numactl
+                                  if run without this previously, it is recommended to drop the system page cache before using this
+                                  see https://github.com/ggerganov/llama.cpp/issues/1437
+
+model:
+
+         --check-tensors          check model tensor data for invalid values (default: false)
+         --override-kv KEY=TYPE:VALUE
+                                  advanced option to override model metadata by key. may be specified multiple times.
+                                  types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false
+         --lora FNAME             apply LoRA adapter (implies --no-mmap)
+         --lora-scaled FNAME S    apply LoRA adapter with user defined scaling S (implies --no-mmap)
+         --lora-base FNAME        optional model to use as a base for the layers modified by the LoRA adapter
+         --control-vector FNAME   add a control vector
+                                  note: this argument can be repeated to add multiple control vectors
+         --control-vector-scaled FNAME SCALE
+                                  add a control vector with user defined scaling SCALE
+                                  note: this argument can be repeated to add multiple scaled control vectors
+         --control-vector-layer-range START END
+                                  layer range to apply the control vector(s) to, start and end inclusive
+  -m,    --model FNAME            model path (default: models/$filename with filename from --hf-file
+                                  or --model-url if set, otherwise models/7B/ggml-model-f16.gguf)
+  -md,   --model-draft FNAME      draft model for speculative decoding (default: unused)
+  -mu,   --model-url MODEL_URL    model download url (default: unused)
+  -hfr,  --hf-repo REPO           Hugging Face model repository (default: unused)
+  -hff,  --hf-file FILE           Hugging Face model file (default: unused)
+  -hft,  --hf-token TOKEN         Hugging Face access token (default: value from HF_TOKEN environment variable)
+
+retrieval:
+
+         --context-file FNAME     file to load context from (repeat to specify multiple files)
+         --chunk-size N           minimum length of embedded text chunks (default: 64)
+         --chunk-separator STRING 
+                                  separator between chunks (default: '
+                                  ')
+
+passkey:
+
+         --junk N                 number of times to repeat the junk text (default: 250)
+         --pos N                  position of the passkey in the junk text (default: -1)
+
+imatrix:
+
+  -o,    --output FNAME           output file (default: 'imatrix.dat')
+         --output-frequency N     output the imatrix every N iterations (default: 10)
+         --save-frequency N       save an imatrix copy every N iterations (default: 0)
+         --process-output         collect data for the output tensor (default: false)
+         --no-ppl                 do not compute perplexity (default: true)
+         --chunk N                start processing the input from chunk N (default: 0)
+
+bench:
+
+  -pps                            is the prompt shared across parallel sequences (default: false)
+  -npp n0,n1,...                  number of prompt tokens
+  -ntg n0,n1,...                  number of text generation tokens
+  -npl n0,n1,...                  number of parallel prompts
+
+embedding:
+
+         --embd-normalize         normalisation for embendings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
+         --embd-output-format     empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
+         --embd-separator         separator of embendings (default \n) for example "<#sep#>"
+
+server:
+
+         --host HOST              ip address to listen (default: 127.0.0.1)
+         --port PORT              port to listen (default: 8080)
+         --path PATH              path to serve static files from (default: )
+         --embedding(s)           enable embedding endpoint (default: disabled)
+         --api-key KEY            API key to use for authentication (default: none)
+         --api-key-file FNAME     path to file containing API keys (default: none)
+         --ssl-key-file FNAME     path to file a PEM-encoded SSL private key
+         --ssl-cert-file FNAME    path to file a PEM-encoded SSL certificate
+         --timeout N              server read/write timeout in seconds (default: 600)
+         --threads-http N         number of threads used to process HTTP requests (default: -1)
+         --system-prompt-file FNAME
+                                  set a file to load a system prompt (initial prompt of all slots), this is useful for chat applications
+         --log-format {text,json} 
+                                  log output format: json or text (default: json)
+         --metrics                enable prometheus compatible metrics endpoint (default: disabled)
+         --no-slots               disables slots monitoring endpoint (default: enabled)
+         --slot-save-path PATH    path to save slot kv cache (default: disabled)
+         --chat-template JINJA_TEMPLATE
+                                  set custom jinja chat template (default: template taken from model's metadata)
+                                  only commonly used templates are accepted:
+                                  https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
+  -sps,  --slot-prompt-similarity SIMILARITY
+                                  how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.50, 0.0 = disabled)
+
+
+logging:
+
+         --simple-io              use basic IO for better compatibility in subprocesses and limited consoles
+  -ld,   --logdir LOGDIR          path under which to save YAML logs (no logging if unset)
+         --log-test               Run simple logging test
+         --log-disable            Disable trace logs
+         --log-enable             Enable trace logs
+         --log-file FNAME         Specify a log filename (without extension)
+         --log-new                Create a separate new log file on start. Each log file will have unique name: "<name>.<ID>.log"
+         --log-append             Don't truncate the old log file.
+
+cvector:
+
+  -o,    --output FNAME           output file (default: 'control_vector.gguf')
+         --positive-file FNAME    positive prompts file, one prompt per line (default: 'examples/cvector-generator/positive.txt')
+         --negative-file FNAME    negative prompts file, one prompt per line (default: 'examples/cvector-generator/negative.txt')
+         --pca-batch N            batch size used for PCA. Larger batch runs faster, but uses more memory (default: 100)
+         --pca-iter N             number of iterations used for PCA (default: 1000)
+         --method {pca,mean}      dimensionality reduction method to be used (default: pca)
+```
+
 
 ## Build
 
