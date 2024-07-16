@@ -148,9 +148,16 @@ class Model:
                 tensor_names_from_parts.update(model_part.keys())
 
                 for name in model_part.keys():
-                    data = model_part.get_tensor(name) if self.is_safetensors else model_part[name]
-                    if self.lazy:
-                        data = LazyTorchTensor.from_eager(data)
+                    if self.is_safetensors:
+                        if self.lazy:
+                            data = model_part.get_slice(name)
+                            data = LazyTorchTensor.from_safetensors_slice(data)
+                        else:
+                            data = model_part.get_tensor(name)
+                    else:
+                        data = model_part[name]
+                        if self.lazy:
+                            data = LazyTorchTensor.from_eager(data)
                     yield name, data
 
         # only verify tensor name presence; it doesn't matter if they are not in the right files
@@ -3424,18 +3431,45 @@ class LazyTorchTensor(gguf.LazyBase):
         torch.float32: np.float32,
     }
 
+    # used for safetensors slices
+    # ref: https://github.com/huggingface/safetensors/blob/079781fd0dc455ba0fe851e2b4507c33d0c0d407/bindings/python/src/lib.rs#L1046
+    # TODO: uncomment U64, U32, and U16, ref: https://github.com/pytorch/pytorch/issues/58734
+    _dtype_str_map: dict[str, torch.dtype] = {
+        "F64": torch.float64,
+        "F32": torch.float32,
+        "BF16": torch.bfloat16,
+        "F16": torch.float16,
+        # "U64": torch.uint64,
+        "I64": torch.int64,
+        # "U32": torch.uint32,
+        "I32": torch.int32,
+        # "U16": torch.uint16,
+        "I16": torch.int16,
+        "U8": torch.uint8,
+        "I8": torch.int8,
+        "BOOL": torch.bool,
+        "F8_E4M3": torch.float8_e4m3fn,
+        "F8_E5M2": torch.float8_e5m2,
+    }
+
     def numpy(self) -> gguf.LazyNumpyTensor:
         dtype = self._dtype_map[self.dtype]
         return gguf.LazyNumpyTensor(
             meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(dtype, self.shape),
-            lazy=self._lazy,
             args=(self,),
-            func=(lambda s: s[0].numpy())
+            func=(lambda s: s.numpy())
         )
 
     @classmethod
-    def meta_with_dtype_and_shape(cls, dtype: torch.dtype, shape: torch.Size) -> Tensor:
+    def meta_with_dtype_and_shape(cls, dtype: torch.dtype, shape: tuple[int, ...]) -> Tensor:
         return torch.empty(size=shape, dtype=dtype, device="meta")
+
+    @classmethod
+    def from_safetensors_slice(cls, st_slice: Any) -> Tensor:
+        dtype = cls._dtype_str_map[st_slice.get_dtype()]
+        shape: tuple[int, ...] = tuple(st_slice.get_shape())
+        lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(st_slice,), func=lambda s: s[:])
+        return cast(torch.Tensor, lazy)
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
@@ -3447,7 +3481,7 @@ class LazyTorchTensor(gguf.LazyBase):
         if func is torch.Tensor.numpy:
             return args[0].numpy()
 
-        return LazyTorchTensor._wrap_fn(func)(*args, **kwargs)
+        return cls._wrap_fn(func)(*args, **kwargs)
 
 
 def parse_args() -> argparse.Namespace:
