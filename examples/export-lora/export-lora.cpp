@@ -190,6 +190,9 @@ static bool export_lora_params_parse(int argc, char ** argv, struct export_lora_
             if (params->n_threads <= 0) {
                 params->n_threads = std::thread::hardware_concurrency();
             }
+        } else if (arg == "-h" || arg == "--help") {
+            export_lora_print_usage(argc, argv, &default_params);
+            exit(0);
         } else {
             fprintf(stderr, "error: unknown argument: '%s'\n", arg.c_str());
             export_lora_print_usage(argc, argv, &default_params);
