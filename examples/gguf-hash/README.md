@@ -201,6 +201,6 @@ Verification results for test.gguf.manifest - Success
 
 These micro c libraries dependencies was installed via the [clib c package manager](https://github.com/clibs)
 
-- https://github.com/mofosyne/xxHash (From: https://github.com/Cyan4973/xxHash)
+- https://github.com/Cyan4973/xxHash
 - https://github.com/clibs/sha1/
 - https://github.com/jb55/sha256.c
