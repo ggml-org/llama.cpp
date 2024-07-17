@@ -6,7 +6,7 @@ ARG ROCM_VERSION=5.6
 # Target the CUDA build image
 ARG BASE_ROCM_DEV_CONTAINER=rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-complete
 
-FROM ${BASE_ROCM_DEV_CONTAINER} as build
+FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
 # List from https://github.com/ggerganov/llama.cpp/pull/1087#issuecomment-1682807878

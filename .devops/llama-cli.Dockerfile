@@ -1,6 +1,6 @@
 ARG UBUNTU_VERSION=22.04
 
-FROM ubuntu:$UBUNTU_VERSION as build
+FROM ubuntu:$UBUNTU_VERSION AS build
 
 RUN apt-get update && \
     apt-get install -y build-essential git
@@ -11,7 +11,7 @@ COPY . .
 
 RUN make -j$(nproc) llama-cli
 
-FROM ubuntu:$UBUNTU_VERSION as runtime
+FROM ubuntu:$UBUNTU_VERSION AS runtime
 
 RUN apt-get update && \
     apt-get install -y libgomp1

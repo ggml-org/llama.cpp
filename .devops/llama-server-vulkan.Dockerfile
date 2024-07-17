@@ -1,6 +1,6 @@
 ARG UBUNTU_VERSION=jammy
 
-FROM ubuntu:$UBUNTU_VERSION as build
+FROM ubuntu:$UBUNTU_VERSION AS build
 
 # Install build tools
 RUN apt update && apt install -y git build-essential cmake wget

@@ -1,6 +1,6 @@
 ARG UBUNTU_VERSION=22.04
 
-FROM ubuntu:$UBUNTU_VERSION as build
+FROM ubuntu:$UBUNTU_VERSION AS build
 
 RUN apt-get update && \
     apt-get install -y build-essential git libcurl4-openssl-dev curl
@@ -13,7 +13,7 @@ ENV LLAMA_CURL=1
 
 RUN make -j$(nproc) llama-server
 
-FROM ubuntu:$UBUNTU_VERSION as runtime
+FROM ubuntu:$UBUNTU_VERSION AS runtime
 
 RUN apt-get update && \
     apt-get install -y libcurl4-openssl-dev libgomp1

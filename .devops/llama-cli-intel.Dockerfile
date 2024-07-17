@@ -1,6 +1,6 @@
 ARG ONEAPI_VERSION=2024.1.1-devel-ubuntu22.04
 
-FROM intel/oneapi-basekit:$ONEAPI_VERSION as build
+FROM intel/oneapi-basekit:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=OFF
 RUN apt-get update && \
@@ -17,7 +17,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
     cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16} && \
     cmake --build build --config Release --target llama-cli
 
-FROM intel/oneapi-basekit:$ONEAPI_VERSION as runtime
+FROM intel/oneapi-basekit:$ONEAPI_VERSION AS runtime
 
 COPY --from=build /app/build/bin/llama-cli /llama-cli
 

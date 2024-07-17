@@ -6,7 +6,7 @@ ARG CUDA_VERSION=11.7.1
 # Target the CUDA build image
 ARG BASE_CUDA_DEV_CONTAINER=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
 
-FROM ${BASE_CUDA_DEV_CONTAINER} as build
+FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
 ARG CUDA_DOCKER_ARCH=all
