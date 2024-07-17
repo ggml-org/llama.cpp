@@ -31,7 +31,7 @@ int main(int argc, char ** argv) {
     int n_parallel = params.n_parallel;
 
     // total length of the sequences including the prompt
-    int n_predict = 32;
+    int n_predict = params.n_predict;
 
     // init LLM
 
