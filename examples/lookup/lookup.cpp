@@ -39,7 +39,6 @@ int main(int argc, char ** argv){
 
     // load the model
     std::tie(model, ctx) = llama_init_from_gpt_params(params);
-    GGML_ASSERT(llama_n_vocab(model) < (1 << 16));
 
     // tokenize the prompt
     std::vector<llama_token> inp;

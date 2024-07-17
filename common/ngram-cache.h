@@ -37,11 +37,18 @@ struct llama_ngram {
     }
 };
 
+struct llama_token_hash_function {
+    size_t operator()(const llama_token token) const {
+        // see https://probablydance.com/2018/06/16/fibonacci-hashing-the-optimization-that-the-world-forgot-or-a-better-alternative-to-integer-modulo/
+        return token * 11400714819323198485llu;
+    }
+};
+
 struct llama_ngram_hash_function {
     size_t operator()(const llama_ngram & ngram) const {
-        size_t hash = 0;
-        for (int i = 0; i < LLAMA_NGRAM_MAX; ++i) {
-            hash ^= std::hash<llama_token>{}(ngram.tokens[i]);
+        size_t hash = llama_token_hash_function{}(ngram.tokens[0]);
+        for (int i = 1; i < LLAMA_NGRAM_MAX; ++i) {
+            hash ^= llama_token_hash_function{}(ngram.tokens[i]);
         }
         return hash;
     }
