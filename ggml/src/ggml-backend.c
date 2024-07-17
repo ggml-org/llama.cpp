@@ -445,6 +445,11 @@ GGML_CALL static void ggml_backend_registry_init(void) {
     extern GGML_CALL void ggml_backend_kompute_reg_devices(void);
     ggml_backend_kompute_reg_devices();
 #endif
+
+#ifdef GGML_USE_CANN
+    extern GGML_CALL int ggml_backend_cann_reg_devices(void);
+    ggml_backend_cann_reg_devices();
+#endif
 }
 
 GGML_CALL void ggml_backend_register(const char * name, ggml_backend_init_fn init_fn, ggml_backend_buffer_type_t default_buffer_type, void * user_data) {

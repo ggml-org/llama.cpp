@@ -23,6 +23,10 @@
 #include "ggml-cuda.h"
 #include "ggml-sycl.h"
 
+#ifdef GGML_USE_CANN
+#include "ggml-cann.h"
+#endif
+
 // utils
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
@@ -115,6 +119,17 @@ static std::string get_gpu_info() {
     for (int i = 0; i < count; i++) {
         char buf[128];
         ggml_sycl_get_device_description(i, buf, sizeof(buf));
+        id += buf;
+        if (i < count - 1) {
+            id += "/";
+        }
+    }
+#endif
+#ifdef GGML_USE_CANN
+    uint32_t count = ggml_backend_cann_get_device_count();
+    for (uint32_t i = 0; i < count; i++) {
+        char buf[128];
+        ggml_backend_cann_get_device_description(i, buf, sizeof(buf));
         id += buf;
         if (i < count - 1) {
             id += "/";

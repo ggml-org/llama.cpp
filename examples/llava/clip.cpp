@@ -16,6 +16,10 @@
 #include "ggml-metal.h"
 #endif
 
+#ifdef GGML_USE_CANN
+#include "ggml-cann.h"
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -999,6 +1003,11 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
 #ifdef GGML_USE_METAL
     new_clip->backend = ggml_backend_metal_init();
     LOG_TEE("%s: CLIP using Metal backend\n", __func__);
+#endif
+
+#ifdef GGML_USE_CANN
+    new_clip->backend = ggml_backend_cann_init(0);
+    LOG_TEE("%s: CLIP using CANN backend\n", __func__);
 #endif
 
 

@@ -3341,7 +3341,7 @@ bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tenso
 }
 
 // check if t1 can be represented as a repeatition of t0
-static inline bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
+bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
     static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
 
     return ggml_is_empty(t0) ? ggml_is_empty(t1) :
@@ -13699,6 +13699,7 @@ static void ggml_compute_forward_soft_max(
     }
 }
 
+
 // ggml_compute_forward_soft_max_back
 
 static void ggml_compute_forward_soft_max_back_f32(
@@ -21989,6 +21990,14 @@ int ggml_cpu_has_sycl(void) {
 
 int ggml_cpu_has_rpc(void) {
 #if defined(GGML_USE_RPC)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+int ggml_cpu_has_cann(void) {
+#if defined(GGML_USE_CANN)
     return 1;
 #else
     return 0;
