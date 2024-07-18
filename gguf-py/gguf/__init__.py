@@ -5,3 +5,5 @@ from .gguf_writer import *
 from .quants import *
 from .tensor_mapping import *
 from .vocab import *
+from .utility import *
+from .metadata import *

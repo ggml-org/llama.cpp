@@ -22,6 +22,7 @@ classifiers = [
 python = ">=3.8"
 numpy = ">=1.17"
 tqdm = ">=4.27"
+pyyaml = ">=5.1"
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

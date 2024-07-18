@@ -252,6 +252,10 @@ def parse_args() -> argparse.Namespace:
         help="increase output verbosity",
     )
     parser.add_argument(
+        "--dry-run", action="store_true",
+        help="only print out what will be done, without writing any new files",
+    )
+    parser.add_argument(
         "--base", type=Path, required=True,
         help="directory containing base model file",
     )
@@ -300,6 +304,12 @@ if __name__ == '__main__':
     # load base model
     logger.info(f"Loading base model: {dir_base_model.name}")
     hparams = Model.load_hparams(dir_base_model)
+
+    with open(lora_config, "r") as f:
+        lparams: dict[str, Any] = json.load(f)
+
+    alpha: float = lparams["lora_alpha"]
+
     with torch.inference_mode():
         try:
             model_class = Model.from_model_architecture(hparams["architectures"][0])
@@ -309,6 +319,14 @@ if __name__ == '__main__':
 
         class LoraModel(model_class):
             model_arch = model_class.model_arch
+
+            def set_type(self):
+                self.gguf_writer.add_type(gguf.GGUFType.ADAPTER)
+                self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
+
+            def set_gguf_parameters(self):
+                self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, float(alpha))
+                super().set_gguf_parameters()
 
             def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
                 tensor_map: dict[str, PartialLoraTensor] = {}
@@ -357,18 +375,9 @@ if __name__ == '__main__':
             is_big_endian=args.bigendian,
             use_temp_file=False,
             eager=args.no_lazy,
-            model_name=None,
+            dry_run=args.dry_run,
         )
 
-        with open(lora_config, "r") as f:
-            lparams: dict[str, Any] = json.load(f)
-
-        alpha = lparams["lora_alpha"]
-
-        model_instance.gguf_writer.add_string(gguf.Keys.General.TYPE, gguf.GGUFType.ADAPTER)
-        model_instance.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
-        model_instance.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, float(alpha))
-        model_instance.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
         logger.info("Exporting model...")
         model_instance.write()
         logger.info(f"Model successfully exported to {model_instance.fname_out}")

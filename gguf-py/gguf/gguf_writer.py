@@ -7,6 +7,7 @@ import struct
 import tempfile
 from dataclasses import dataclass
 from enum import Enum, auto
+from math import prod
 from pathlib import Path
 from io import BufferedWriter
 from typing import IO, Any, Sequence, Mapping
@@ -106,6 +107,53 @@ class GGUFWriter:
 
         self.add_architecture()
 
+    def get_total_parameter_count(self) -> tuple[int, int, int, int]:
+        total_params = 0
+        shared_params = 0
+        expert_params = 0
+
+        expert_sum = 0
+        n_expert_tensors = 0
+
+        last_lora_a: tuple[str, TensorInfo] | None = None
+
+        for tensors in self.tensors:
+            for name, info in tensors.items():
+
+                shape = info.shape
+
+                if name.endswith(".lora_a"):
+                    last_lora_a = (name, info)
+                    continue
+                elif name.endswith(".lora_b"):
+                    if last_lora_a is None or last_lora_a[0] != name[:-1] + "a":
+                        # Bail when the LoRA pair can't be found trivially
+                        logger.warning("can't measure LoRA size correctly, tensor order is unusual")
+                        return 0, 0, 0, 0
+                    else:
+                        shape = (*shape[:-1], last_lora_a[1].shape[-1])
+
+                size = prod(shape)
+
+                if "_exps." in name:
+                    expert_params += (size // shape[-3])
+                    expert_sum += shape[-3]
+                    n_expert_tensors += 1
+                else:
+                    shared_params += size
+
+                total_params += size
+
+        # Hopefully this should work even for variable-expert-count models
+        expert_count = (expert_sum // n_expert_tensors) if n_expert_tensors > 0 else 0
+
+        # Negate the total to signal it's likely not exact
+        if last_lora_a is not None:
+            total_params = -total_params
+
+        # NOTE: keep the output in the same order as accepted by 'size_label' in gguf-py/gguf/utility.py
+        return total_params, shared_params, expert_params, expert_count
+
     def format_shard_names(self, path: Path) -> list[Path]:
         if len(self.tensors) == 1:
             return [path]
@@ -115,6 +163,7 @@ class GGUFWriter:
         if self.state is WriterState.EMPTY and self.fout is not None and (path is None or path == self.path):
             # allow calling this multiple times as long as the path is the same
             return
+
         if self.state is not WriterState.NO_FILE:
             raise ValueError(f'Expected output file to be not yet opened, got {self.state}')
 
@@ -136,6 +185,8 @@ class GGUFWriter:
 
         if self.dry_run:
             logger.info("Dry run, not writing files")
+            for name in filenames:
+                print(name)  # noqa: NP100
             exit()
 
         return filenames
@@ -430,29 +481,12 @@ class GGUFWriter:
     def add_architecture(self) -> None:
         self.add_string(Keys.General.ARCHITECTURE, self.arch)
 
-    def add_author(self, author: str) -> None:
-        self.add_string(Keys.General.AUTHOR, author)
+    def add_quantization_version(self, quantization_version: int) -> None:
+        self.add_uint32(Keys.General.QUANTIZATION_VERSION, quantization_version)
 
-    def add_version(self, version: str) -> None:
-        self.add_string(Keys.General.VERSION, version)
-
-    def add_tensor_data_layout(self, layout: str) -> None:
-        self.add_string(Keys.LLM.TENSOR_DATA_LAYOUT.format(arch=self.arch), layout)
-
-    def add_url(self, url: str) -> None:
-        self.add_string(Keys.General.URL, url)
-
-    def add_description(self, description: str) -> None:
-        self.add_string(Keys.General.DESCRIPTION, description)
-
-    def add_licence(self, licence: str) -> None:
-        self.add_string(Keys.General.LICENSE, licence)
-
-    def add_source_url(self, url: str) -> None:
-        self.add_string(Keys.General.SOURCE_URL, url)
-
-    def add_source_hf_repo(self, repo: str) -> None:
-        self.add_string(Keys.General.SOURCE_HF_REPO, repo)
+    def add_custom_alignment(self, alignment: int) -> None:
+        self.data_alignment = alignment
+        self.add_uint32(Keys.General.ALIGNMENT, alignment)
 
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
@@ -460,13 +494,101 @@ class GGUFWriter:
     def add_name(self, name: str) -> None:
         self.add_string(Keys.General.NAME, name)
 
-    def add_quantization_version(self, quantization_version: int) -> None:
-        self.add_uint32(
-            Keys.General.QUANTIZATION_VERSION, quantization_version)
+    def add_author(self, author: str) -> None:
+        self.add_string(Keys.General.AUTHOR, author)
 
-    def add_custom_alignment(self, alignment: int) -> None:
-        self.data_alignment = alignment
-        self.add_uint32(Keys.General.ALIGNMENT, alignment)
+    def add_version(self, version: str) -> None:
+        self.add_string(Keys.General.VERSION, version)
+
+    def add_organization(self, organization: str) -> None:
+        self.add_string(Keys.General.ORGANIZATION, organization)
+
+    def add_finetune(self, finetune: str) -> None:
+        self.add_string(Keys.General.FINETUNE, finetune)
+
+    def add_basename(self, basename: str) -> None:
+        self.add_string(Keys.General.BASENAME, basename)
+
+    def add_description(self, description: str) -> None:
+        self.add_string(Keys.General.DESCRIPTION, description)
+
+    def add_quantized_by(self, quantized: str) -> None:
+        self.add_string(Keys.General.QUANTIZED_BY, quantized)
+
+    def add_size_label(self, size_label: str) -> None:
+        self.add_string(Keys.General.SIZE_LABEL, size_label)
+
+    def add_license(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE, license)
+
+    def add_license_name(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE_NAME, license)
+
+    def add_license_link(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE_LINK, license)
+
+    def add_url(self, url: str) -> None:
+        self.add_string(Keys.General.URL, url)
+
+    def add_doi(self, doi: str) -> None:
+        self.add_string(Keys.General.DOI, doi)
+
+    def add_uuid(self, uuid: str) -> None:
+        self.add_string(Keys.General.UUID, uuid)
+
+    def add_repo_url(self, repo_url: str) -> None:
+        self.add_string(Keys.General.REPO_URL, repo_url)
+
+    def add_source_url(self, url: str) -> None:
+        self.add_string(Keys.General.SOURCE_URL, url)
+
+    def add_source_doi(self, doi: str) -> None:
+        self.add_string(Keys.General.SOURCE_DOI, doi)
+
+    def add_source_uuid(self, uuid: str) -> None:
+        self.add_string(Keys.General.SOURCE_UUID, uuid)
+
+    def add_source_repo_url(self, repo_url: str) -> None:
+        self.add_string(Keys.General.SOURCE_REPO_URL, repo_url)
+
+    def add_base_model_count(self, source_count: int) -> None:
+        self.add_uint32(Keys.General.BASE_MODEL_COUNT, source_count)
+
+    def add_base_model_name(self, source_id: int, name: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_NAME.format(id=source_id), name)
+
+    def add_base_model_author(self, source_id: int, author: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_AUTHOR.format(id=source_id), author)
+
+    def add_base_model_version(self, source_id: int, version: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_VERSION.format(id=source_id), version)
+
+    def add_base_model_organization(self, source_id: int, organization: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_ORGANIZATION.format(id=source_id), organization)
+
+    def add_base_model_url(self, source_id: int, url: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_URL.format(id=source_id), url)
+
+    def add_base_model_doi(self, source_id: int, doi: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_DOI.format(id=source_id), doi)
+
+    def add_base_model_uuid(self, source_id: int, uuid: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_UUID.format(id=source_id), uuid)
+
+    def add_base_model_repo_url(self, source_id: int, repo_url: str) -> None:
+        self.add_string(Keys.General.BASE_MODEL_REPO_URL.format(id=source_id), repo_url)
+
+    def add_tags(self, tags: Sequence[str]) -> None:
+        self.add_array(Keys.General.TAGS, tags)
+
+    def add_languages(self, languages: Sequence[str]) -> None:
+        self.add_array(Keys.General.LANGUAGES, languages)
+
+    def add_datasets(self, datasets: Sequence[str]) -> None:
+        self.add_array(Keys.General.DATASETS, datasets)
+
+    def add_tensor_data_layout(self, layout: str) -> None:
+        self.add_string(Keys.LLM.TENSOR_DATA_LAYOUT.format(arch=self.arch), layout)
 
     def add_vocab_size(self, size: int) -> None:
         self.add_uint32(Keys.LLM.VOCAB_SIZE.format(arch=self.arch), size)

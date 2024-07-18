@@ -78,5 +78,13 @@ python -m build
 python -m twine upload dist/*
 ```
 
+## Run Unit Tests
+
+From root of this repository you can run this command to run all the unit tests
+
+```bash
+python -m unittest discover ./gguf-py -v
+```
+
 ## TODO
 - [ ] Include conversion scripts as command line entry points in this package.
