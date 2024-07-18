@@ -194,13 +194,19 @@ endif ()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+# all public headers
 set(GGML_PUBLIC_HEADERS
     include/ggml.h
     include/ggml-alloc.h
     include/ggml-backend.h
-    "${GGML_HEADERS_CUDA}"
-    "${GGML_HEADERS_METAL}"
-    "${GGML_HEADERS_EXTRA}")
+    include/ggml-blas.h
+    include/ggml-cuda.h
+    include/ggml.h
+    include/ggml-kompute.h
+    include/ggml-metal.h
+    include/ggml-rpc.h
+    include/ggml-sycl.h
+    include/ggml-vulkan.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
