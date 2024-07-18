@@ -14,10 +14,10 @@
   <script type="module">
     import {
       html, h, signal, effect, computed, render, useSignal, useEffect, useRef, Component
-    } from '/index.js';
+    } from './index.js';
 
-    import { llama } from '/completion.js';
-    import { SchemaConverter } from '/json-schema-to-grammar.mjs';
+    import { llama } from './completion.js';
+    import { SchemaConverter } from './json-schema-to-grammar.mjs';
     import { promptFormats } from './prompt-formats.js';
     import { systemPrompts } from './system-prompts.js'; // multilingual is wip
     let selected_image = false;
@@ -225,7 +225,7 @@
         throw new Error("already running");
       }
       controller.value = new AbortController();
-      for await (const chunk of llama(prompt, llamaParams, { controller: controller.value })) {
+      for await (const chunk of llama(prompt, llamaParams, { controller: controller.value, api_url: URL.parse('.', document.baseURI).href })) {
         const data = chunk.data;
         if (data.stop) {
           while (

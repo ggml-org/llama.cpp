@@ -21,7 +21,7 @@ let generation_settings = null;
 //
 export async function* llama(prompt, params = {}, config = {}) {
   let controller = config.controller;
-  const api_url = config.api_url || "";
+  const api_url = config.api_url?.replace(/\/+$/, '') || "";
 
   if (!controller) {
     controller = new AbortController();
@@ -196,7 +196,7 @@ export const llamaComplete = async (params, controller, callback) => {
 // Get the model info from the server. This is useful for getting the context window and so on.
 export const llamaModelInfo = async (config = {}) => {
   if (!generation_settings) {
-    const api_url = config.api_url || "";
+    const api_url = config.api_url?.replace(/\/+$/, '') || "";
     const props = await fetch(`${api_url}/props`).then(r => r.json());
     generation_settings = props.default_generation_settings;
   }
