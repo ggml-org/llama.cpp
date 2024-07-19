@@ -114,7 +114,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_NODES   8192
-#define LLAMA_MAX_LAYERS  256
+#define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 160  // DeepSeekV2
 
 //
@@ -4007,7 +4007,9 @@ struct llama_model_loader {
                 throw std::runtime_error(format("%s is not a float32, int32 array", key.c_str()));
         }
 
-        GGML_ASSERT(arr_info.length <= N_MAX);
+        if (arr_info.length > N_MAX) {
+            throw std::runtime_error(format("array length %u for key %s exceeds max %u", (uint32_t) arr_info.length, key.c_str(), (uint32_t) N_MAX));
+        }
 
         std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
 
@@ -4043,8 +4045,6 @@ struct llama_model_loader {
     // get array of n <= N_MAX elements, or a single element repeated n times
     template<typename T, size_t N_MAX>
     bool get_key_or_arr(const std::string & key, std::array<T, N_MAX> & result, uint32_t n, const bool required = true) {
-        GGML_ASSERT(n <= N_MAX);
-
         const int kid = gguf_find_key(meta, key.c_str());
 
         if (kid < 0) {
@@ -4052,6 +4052,10 @@ struct llama_model_loader {
                 throw std::runtime_error(format("key not found in model: %s", key.c_str()));
             }
             return false;
+        }
+
+        if (n > N_MAX) {
+            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
         }
 
         if (gguf_get_kv_type(meta, kid) == GGUF_TYPE_ARRAY) {
@@ -19920,7 +19924,7 @@ size_t llama_state_get_size(const struct llama_context * ctx) {
     );
 
     // on session change it is very likely that the state size has changed - so we need to update this function
-    static_assert(LLAMA_SESSION_VERSION == 6, "So you just bumped the session version - good. But did you remember to update llama_state_get_size?");
+    static_assert(LLAMA_SESSION_VERSION == 7, "So you just bumped the session version - good. But did you remember to update llama_state_get_size?");
 
     return s_total;
 }
