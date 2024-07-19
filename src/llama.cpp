@@ -21607,7 +21607,7 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "<|assistant|>";
         }
-    } else if (tmpl == "chaglm4" || tmpl_contains("[gMASK]<sop>")) {
+    } else if (tmpl == "chatglm4" || tmpl_contains("[gMASK]<sop>")) {
         ss << "[gMASK]" << "<sop>";
         for (auto message : chat) {
             std::string role(message->role);
