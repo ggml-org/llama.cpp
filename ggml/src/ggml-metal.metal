@@ -4757,7 +4757,7 @@ void kernel_mul_mv_iq4_nl_f32_impl(
         device const float4 * y4 = (device const float4 *)yb;
         yl[0] = y4[0]; yl[1] = y4[4]; yl[2] = y4[1]; yl[3] = y4[5];
 
-        for (int row = 0; row < 2; ++row) {
+        for (int row = 0; row < 2 && first_row + row < ne01; ++row) {
 
             device const block_iq4_nl & xb = x[row*nb + ib];
             device const uint16_t * q4 = (device const uint16_t *)(xb.qs + 8*it);
@@ -4789,7 +4789,7 @@ void kernel_mul_mv_iq4_nl_f32_impl(
         yb += 16 * QK4_NL;
     }
 
-    for (int row = 0; row < 2; ++row) {
+    for (int row = 0; row < 2 && first_row + row < ne01; ++row) {
         all_sum = simd_sum(sumf[row]);
         if (tiisg == 0) {
             dst[r1*ne0 + im*ne0*ne1 + first_row + row] = all_sum;

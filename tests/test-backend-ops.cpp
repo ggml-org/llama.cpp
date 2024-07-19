@@ -79,8 +79,16 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
                 im = nullptr;
             }
         }
+
         ggml_quantize_chunk(tensor->type, data.data(), dataq.data(), 0, size/tensor->ne[0], tensor->ne[0], im);
         GGML_ASSERT(ggml_validate_row_data(tensor->type, dataq.data(), dataq.size()));
+        // TODO: other cases
+        //#pragma omp parallel for
+        //for (int i = 0; i < tensor->ne[1]; i++) {
+        //    ggml_quantize_chunk(tensor->type, data.data(), dataq.data(),
+        //        i * tensor->ne[0], 1, tensor->ne[0], im);
+        //}
+
         ggml_backend_tensor_set(tensor, dataq.data(), 0, dataq.size());
     } else if (tensor->type == GGML_TYPE_I8 || tensor->type == GGML_TYPE_I16 || tensor->type == GGML_TYPE_I32) {
         // This is going to create some weird integers though.
@@ -2220,6 +2228,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {64, 10, 10, 10}, eps));
     }
 
+#if 1
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
             test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 1, 256, { 1,  1}, {1, 1}));
@@ -2239,6 +2248,24 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
             test_cases.emplace_back(new test_mul_mat(type_a, type_b, 16, 16, 256, {10, 10}, {2, 2}));
         }
     }
+#else
+    // m = a rows
+    // n = b rows
+    // k = cols
+    std::uniform_int_distribution<> dist_m(1, 128);
+    std::uniform_int_distribution<> dist_n(16, 128);
+    std::uniform_int_distribution<> dist_k(1, 16);
+    for (int i = 0; i < 1000; i++) {
+        for (ggml_type type_a : all_types) {
+            for (ggml_type type_b : {GGML_TYPE_F32}) {
+                int m = dist_m(rng);
+                int n = dist_n(rng);
+                int k = dist_k(rng) * ggml_blck_size(type_a);
+                test_cases.emplace_back(new test_mul_mat(type_a, type_b, m, n, k, { 1,  1}, {1, 1}));
+            }
+        }
+    }
+#endif
 
     for (ggml_type type_a : other_types) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {

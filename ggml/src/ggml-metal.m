@@ -1786,10 +1786,6 @@ static enum ggml_status ggml_metal_graph_compute(
                                     }
                             };
 
-                            if (ggml_is_quantized(src0t)) {
-                                GGML_ASSERT(ne00 >= nth0*nth1);
-                            }
-
                             [encoder setComputePipelineState:pipeline];
                             [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
                             [encoder setBuffer:id_src1 offset:offs_src1 atIndex:1];
