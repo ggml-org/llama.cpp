@@ -62,6 +62,7 @@ class Metadata:
         # This is based on LLM_KV_NAMES mapping in llama.cpp
         metadata_override = Metadata.load_metadata_override(metadata_override_path)
 
+        metadata.name            = metadata_override.get(Keys.General.NAME,            metadata.name)
         metadata.author          = metadata_override.get(Keys.General.AUTHOR,          metadata.author)
         metadata.version         = metadata_override.get(Keys.General.VERSION,         metadata.version)
         metadata.organization    = metadata_override.get(Keys.General.ORGANIZATION,    metadata.organization)
