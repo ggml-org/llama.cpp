@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -244,26 +245,58 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
         else:
             pretty_type = str(field.types[-1].name)
 
+        def escape_markdown_inline_code(value_string):
+            # Find the longest contiguous sequence of backticks in the string then
+            # wrap string with appropriate number of backticks required to escape it
+            max_backticks = max((len(match.group(0)) for match in re.finditer(r'`+', value_string)), default=0)
+            inline_code_marker = '`' * (max_backticks + 1)
+
+            # If the string starts or ends with a backtick, add a space at the beginning and end
+            if value_string.startswith('`') or value_string.endswith('`'):
+                value_string = f" {value_string} "
+
+            return f"{inline_code_marker}{value_string}{inline_code_marker}"
+
         total_elements = len(field.data)
         value = ""
         if len(field.types) == 1:
             curr_type = field.types[0]
             if curr_type == GGUFValueType.STRING:
-                value = repr(str(bytes(field.parts[-1]), encoding='utf-8')[:60])
+                truncate_length = 60
+                value_string = str(bytes(field.parts[-1]), encoding='utf-8')
+                if len(value_string) > truncate_length:
+                    head = escape_markdown_inline_code(value_string[:truncate_length // 2])
+                    tail = escape_markdown_inline_code(value_string[-truncate_length // 2:])
+                    value = "{head}...{tail}".format(head=head, tail=tail)
+                else:
+                    value = escape_markdown_inline_code(value_string)
             elif curr_type in reader.gguf_scalar_to_np:
                 value = str(field.parts[-1][0])
         else:
             if field.types[0] == GGUFValueType.ARRAY:
                 curr_type = field.types[1]
+                array_elements = []
+
                 if curr_type == GGUFValueType.STRING:
                     render_element = min(5, total_elements)
                     for element_pos in range(render_element):
-                        value += repr(str(bytes(field.parts[-1 - element_pos]), encoding='utf-8')[:5]) + (", " if total_elements > 1 else "")
+                        truncate_length = 30
+                        value_string = str(bytes(field.parts[-1 - (total_elements - element_pos - 1) * 2]), encoding='utf-8')
+                        if len(value_string) > truncate_length:
+                            head = escape_markdown_inline_code(value_string[:truncate_length // 2])
+                            tail = escape_markdown_inline_code(value_string[-truncate_length // 2:])
+                            value = "{head}...{tail}".format(head=head, tail=tail)
+                        else:
+                            value = escape_markdown_inline_code(value_string)
+                        array_elements.append(value)
+
                 elif curr_type in reader.gguf_scalar_to_np:
                     render_element = min(7, total_elements)
                     for element_pos in range(render_element):
-                        value += str(field.parts[-1 - element_pos][0]) + (", " if total_elements > 1 else "")
-                value = f'[ {value}{" ..." if total_elements > 1 else ""} ]'
+                        array_elements.append(str(field.parts[-1 - (total_elements - element_pos - 1)][0]))
+
+                value = f'[ {", ".join(array_elements).strip()}{", ..." if total_elements > len(array_elements) else ""} ]'
+
         kv_dump_table.append({"n":n, "pretty_type":pretty_type, "total_elements":total_elements, "field_name":field.name, "value":value})
 
     kv_dump_table_header_map = [
@@ -382,7 +415,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             markdown_content += f"- Percentage of total elements: {group_percentage:.2f}%\n"
             markdown_content += "\n\n"
 
-        print(markdown_content)  # noqa: NP100
+    print(markdown_content)  # noqa: NP100
 
 
 def main() -> None:
