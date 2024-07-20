@@ -593,6 +593,9 @@ class Model:
         if chkhsh == "b53802fb28e26d645c3a310b34bfe07da813026ec7c7716883404d5e0f8b1901":
             # ref: https://huggingface.co/core42/jais-13b
             res = "jais"
+        if chkhsh == "63b97e4253352e6f357cc59ea5b583e3a680eaeaf2632188c2b952de2588485e":
+            # ref: https://huggingface.co/mistralai/Mistral-Nemo-Base-2407
+            res = "tekken"
 
         if res is None:
             logger.warning("\n")
