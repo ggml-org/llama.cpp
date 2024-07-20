@@ -21015,7 +21015,7 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
             gguf_tensor_info_sanitize(info);
 
             // make sure there is no duplicated tensor names
-            for (uint64_t j = 0; j < i; ++j) {
+            for (uint64_t j = 0; j < i && ok; ++j) {
                 if (strcmp(info->name.data, ctx->infos[j].name.data) == 0) {
                     fprintf(stderr, "%s: duplicated tensor name %s\n", __func__, info->name.data);
                     ok = false;

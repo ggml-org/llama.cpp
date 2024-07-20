@@ -92,6 +92,11 @@ static bool gguf_ex_read_0(const std::string & fname) {
 
     struct gguf_context * ctx = gguf_init_from_file(fname.c_str(), params);
 
+    if (!ctx) {
+        fprintf(stderr, "%s: failed to load '%s'\n", __func__, fname.c_str());
+        return false;
+    }
+
     printf("%s: version:      %d\n", __func__, gguf_get_version(ctx));
     printf("%s: alignment:   %zu\n", __func__, gguf_get_alignment(ctx));
     printf("%s: data offset: %zu\n", __func__, gguf_get_data_offset(ctx));
