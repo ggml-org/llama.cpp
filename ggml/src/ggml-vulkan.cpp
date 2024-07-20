@@ -236,8 +236,8 @@ struct vk_device_struct {
 };
 
 struct vk_buffer_struct {
-    vk::Buffer buffer;
-    vk::DeviceMemory device_memory;
+    vk::Buffer buffer = VK_NULL_HANDLE;
+    vk::DeviceMemory device_memory = VK_NULL_HANDLE;
     vk::MemoryPropertyFlags memory_property_flags;
     void * ptr;
     size_t size = 0;
