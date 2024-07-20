@@ -188,6 +188,27 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_imp
     return sumi*d8d8 + m8s8 / (QI8_1 / vdr);
 }
 
+template <int vdr> static __device__ __forceinline__ float vec_dot_q8_0_16_q8_1_impl(
+    const int * v, const int * u, const float * d8_0, const float & d8_1) {
+
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i0 = 0; i0 < vdr; i0 += QI8_0/2) {
+        int sumi = 0;
+
+#pragma unroll
+        for (int i = i0; i < i0 + QI8_0/2; ++i) {
+            // SIMD dot product of quantized values
+            sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
+        }
+
+        sumf += d8_0[i0/(QI8_0/2)]*sumi;
+    }
+
+    return d8_1*sumf;
+}
+
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4
 
