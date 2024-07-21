@@ -290,7 +290,7 @@ if __name__ == '__main__':
         fname_out = args.outfile
     else:
         # output in the same directory as the model by default
-        fname_out = dir_lora / 'ggml-lora-{ftype}.gguf'
+        fname_out = dir_lora
 
     if os.path.exists(input_model):
         # lazy import load_file only if lora is in safetensors format.
@@ -304,12 +304,6 @@ if __name__ == '__main__':
     # load base model
     logger.info(f"Loading base model: {dir_base_model.name}")
     hparams = Model.load_hparams(dir_base_model)
-
-    with open(lora_config, "r") as f:
-        lparams: dict[str, Any] = json.load(f)
-
-    alpha: float = lparams["lora_alpha"]
-
     with torch.inference_mode():
         try:
             model_class = Model.from_model_architecture(hparams["architectures"][0])
@@ -320,12 +314,21 @@ if __name__ == '__main__':
         class LoraModel(model_class):
             model_arch = model_class.model_arch
 
+            lora_alpha: float
+
+            def __init__(self, *args, dir_lora_model: Path, lora_alpha: float, **kwargs):
+
+                super().__init__(*args, **kwargs)
+
+                self.dir_model_card = dir_lora_model
+                self.lora_alpha = float(lora_alpha)
+
             def set_type(self):
                 self.gguf_writer.add_type(gguf.GGUFType.ADAPTER)
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
-                self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, float(alpha))
+                self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 super().set_gguf_parameters()
 
             def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
@@ -368,6 +371,11 @@ if __name__ == '__main__':
                     yield (dest_name + ".lora_a", lora_a)
                     yield (dest_name + ".lora_b", lora_b)
 
+        with open(lora_config, "r") as f:
+            lparams: dict[str, Any] = json.load(f)
+
+        alpha: float = lparams["lora_alpha"]
+
         model_instance = LoraModel(
             dir_base_model,
             ftype,
@@ -376,6 +384,8 @@ if __name__ == '__main__':
             use_temp_file=False,
             eager=args.no_lazy,
             dry_run=args.dry_run,
+            dir_lora_model=dir_lora,
+            lora_alpha=alpha,
         )
 
         logger.info("Exporting model...")

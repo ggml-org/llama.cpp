@@ -50,15 +50,15 @@ def naming_convention(model_name: str | None, base_name: str | None, finetune_st
     # Reference: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#gguf-naming-convention
 
     if base_name is not None:
-        name = base_name.strip().title().replace(' ', '-').replace('/', '-')
+        name = base_name.strip().replace(' ', '-').replace('/', '-')
     elif model_name is not None:
-        name = model_name.strip().title().replace(' ', '-').replace('/', '-')
+        name = model_name.strip().replace(' ', '-').replace('/', '-')
     else:
         name = "ggml-model"
 
     parameters = f"-{size_label}" if size_label is not None else ""
 
-    finetune = f"-{finetune_string.strip().title().replace(' ', '-')}" if finetune_string is not None else ""
+    finetune = f"-{finetune_string.strip().replace(' ', '-')}" if finetune_string is not None else ""
 
     version = f"-{version_string.strip().replace(' ', '-')}" if version_string is not None else ""
 

@@ -54,6 +54,7 @@ class Metadata:
 
         model_card = Metadata.load_model_card(model_path)
         hf_params = Metadata.load_hf_parameters(model_path)
+        # TODO: load adapter_config.json when possible, it usually contains the base model of the LoRA adapter
 
         # heuristics
         metadata = Metadata.apply_metadata_heuristic(metadata, model_card, hf_params, model_path, total_params)
@@ -177,6 +178,12 @@ class Metadata:
             org_component = None
 
         name_parts: list[str] = model_full_name_component.split('-')
+
+        # Remove empty parts
+        for i in reversed(range(len(name_parts))):
+            if len(name_parts[i]) == 0:
+                del name_parts[i]
+
         name_types: list[
             set[Literal["basename", "size_label", "finetune", "version", "type"]]
         ] = [set() for _ in name_parts]
@@ -223,9 +230,19 @@ class Metadata:
                 name_parts[i] = part
             # Some easy to recognize finetune names
             elif i > 0 and re.fullmatch(r'chat|instruct|vision|lora', part, re.IGNORECASE):
-                name_types[i].add("finetune")
-                if part.lower() == "lora":
-                    name_parts[i] = "LoRA"
+                if total_params < 0 and part.lower() == "lora":
+                    # ignore redundant "lora" in the finetune part when the output is a lora adapter
+                    name_types[i].add("type")
+                else:
+                    name_types[i].add("finetune")
+
+        # Ignore word-based size labels when there is at least a number-based one present
+        # TODO: should word-based size labels always be removed instead?
+        if any(c.isdecimal() for n, t in zip(name_parts, name_types) if "size_label" in t for c in n):
+            for n, t in zip(name_parts, name_types):
+                if "size_label" in t:
+                    if all(c.isalpha() for c in n):
+                        t.remove("size_label")
 
         at_start = True
         # Find the basename through the annotated name
@@ -240,18 +257,18 @@ class Metadata:
 
         # Remove the basename annotation from trailing version
         for part, t in zip(reversed(name_parts), reversed(name_types)):
-            if "basename" in t:
-                if len(t) > 1:
-                    t.remove("basename")
+            if "basename" in t and len(t) > 1:
+                t.remove("basename")
             else:
                 break
 
         basename = "-".join(n for n, t in zip(name_parts, name_types) if "basename" in t) or None
-        size_label = "-".join(s for s, t in zip(name_parts, name_types) if "size_label" in t) or None
+        # Deduplicate size labels using order-preserving 'dict' ('set' seems to sort the keys)
+        size_label = "-".join(dict.fromkeys(s for s, t in zip(name_parts, name_types) if "size_label" in t).keys()) or None
         finetune = "-".join(f for f, t in zip(name_parts, name_types) if "finetune" in t) or None
         # TODO: should the basename version always be excluded?
-        # TODO: should multiple versions be joined together?
-        version = ([v for v, t, in zip(name_parts, name_types) if "version" in t and "basename" not in t] or [None])[-1]
+        # NOTE: multiple finetune versions are joined together
+        version = "-".join(v for v, t, in zip(name_parts, name_types) if "version" in t and "basename" not in t) or None
 
         if size_label is None and finetune is None and version is None:
             # Too ambiguous, output nothing

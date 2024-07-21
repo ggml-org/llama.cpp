@@ -48,7 +48,7 @@ class Model:
 
     dir_model: Path
     ftype: gguf.LlamaFileType
-    fname_out: Path | None
+    fname_out: Path
     is_big_endian: bool
     endianess: gguf.GGUFEndian
     use_temp_file: bool
@@ -62,11 +62,12 @@ class Model:
     gguf_writer: gguf.GGUFWriter
     model_name: str | None
     metadata_override: Path | None
+    dir_model_card: Path
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
 
-    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path | None, is_big_endian: bool = False,
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False):
@@ -90,6 +91,7 @@ class Model:
         self.tensor_names = None
         self.metadata_override = metadata_override
         self.model_name = model_name
+        self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
 
         # Apply heuristics to figure out typical tensor encoding based on first layer tensor encoding type
         if self.ftype == gguf.LlamaFileType.GUESSED:
@@ -345,7 +347,7 @@ class Model:
 
         total_params, shared_params, expert_params, expert_count = self.gguf_writer.get_total_parameter_count()
 
-        self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model, self.model_name, total_params)
+        self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model_card, self.model_name, total_params)
 
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
@@ -359,27 +361,22 @@ class Model:
         output_type: str = self.ftype.name.partition("_")[2]
 
         # Filename Output
-        # Note: `not is_dir()` is used because `.is_file()` will not detect
-        #       file template strings as it doesn't actually exist as a file
-        if self.fname_out is not None and not self.fname_out.is_dir():
-            # Output path is a custom defined templated filename
-
-            # Process templated file name with the output ftype, useful with the "auto" ftype
-            self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
-        else:
+        if self.fname_out.is_dir():
             # Generate default filename based on model specification and available metadata
             if not vocab_only:
                 fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, self.metadata.size_label, output_type, model_type="LoRA" if total_params < 0 else None)
             else:
                 fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=None, model_type="vocab")
 
-            # Check if preferred output directory path was provided
-            if self.fname_out is not None and self.fname_out.is_dir():
-                # output path is a directory
-                self.fname_out = self.fname_out / f"{fname_default}.gguf"
-            else:
-                # output in the same directory as the model by default
-                self.fname_out = self.dir_model / f"{fname_default}.gguf"
+            # Use the default filename
+            self.fname_out = self.fname_out / f"{fname_default}.gguf"
+        else:
+            # Output path is a custom defined templated filename
+            # Note: `not is_dir()` is used because `.is_file()` will not detect
+            #       file template strings as it doesn't actually exist as a file
+
+            # Process templated file name with the output ftype, useful with the "auto" ftype
+            self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
 
         self.set_type()
 
@@ -3634,10 +3631,10 @@ def main() -> None:
         logger.error("Error: Cannot use temp file when splitting")
         sys.exit(1)
 
-    fname_out = None
-
     if args.outfile is not None:
         fname_out = args.outfile
+    else:
+        fname_out = dir_model
 
     logger.info(f"Loading model: {dir_model.name}")
 
@@ -3668,7 +3665,6 @@ def main() -> None:
         else:
             logger.info("Exporting model...")
             model_instance.write()
-            assert model_instance.fname_out is not None
             out_path = f"{model_instance.fname_out.parent}{os.sep}" if is_split else model_instance.fname_out
             logger.info(f"Model successfully exported to {out_path}")
 
