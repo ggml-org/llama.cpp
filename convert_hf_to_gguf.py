@@ -737,7 +737,7 @@ class Model:
                 added_tokens_json = json.load(f)
                 for key in added_tokens_json:
                     token_id = added_tokens_json[key]
-                    if (token_id >= vocab_size):
+                    if token_id >= vocab_size:
                         logger.warning(f'ignore token {token_id}: id is out of range, max={vocab_size - 1}')
                         continue
 
@@ -2005,7 +2005,7 @@ class Phi3MiniModel(Model):
 
                 for key in added_tokens_json:
                     token_id = added_tokens_json[key]
-                    if (token_id >= vocab_size):
+                    if token_id >= vocab_size:
                         logger.debug(f'ignore token {token_id}: id is out of range, max={vocab_size - 1}')
                         continue
 
@@ -2081,7 +2081,7 @@ class Phi3MiniModel(Model):
 
         # write rope scaling for long context (128k) model
         rope_scaling = self.find_hparam(['rope_scaling'], True)
-        if (rope_scaling is None):
+        if rope_scaling is None:
             return
 
         scale = max_pos_embds / orig_max_pos_embds
@@ -2728,7 +2728,7 @@ class JinaBertV2Model(BertModel):
 
             yield name, data
 
-    def set_vocab(self, *args, **kwargs):
+    def set_vocab(self):
         tokenizer_class = 'BertTokenizer'
         with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
             tokenizer_class = json.load(f)['tokenizer_class']
@@ -2876,7 +2876,7 @@ class ArcticModel(Model):
                     added_tokens_decoder = tokenizer_config_json["added_tokens_decoder"]
                     for token_id, token_json in added_tokens_decoder.items():
                         token_id = int(token_id)
-                        if (token_id >= vocab_size):
+                        if token_id >= vocab_size:
                             logger.debug(f'ignore token {token_id}: id is out of range, max={vocab_size - 1}')
                             continue
 
@@ -3125,7 +3125,7 @@ class T5Model(Model):
                 added_tokens_json = json.load(f)
                 for key in added_tokens_json:
                     token_id = added_tokens_json[key]
-                    if (token_id >= vocab_size):
+                    if token_id >= vocab_size:
                         logger.warning(f'ignore token {token_id}: id is out of range, max={vocab_size - 1}')
                         continue
 

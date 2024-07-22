@@ -132,6 +132,10 @@ class Tensor:
 
 
 class GGMLModel:
+
+    file_format: GGMLFormat
+    format_version: int
+
     def __init__(self):
         self.hyperparameters = None
         self.vocab = None
@@ -290,7 +294,7 @@ class GGMLToGGUF:
         if self.vocab_override is not None:
             vo = self.vocab_override
             logger.info('* Adding vocab item(s)')
-            for (idx, (vbytes, score, ttype)) in enumerate(vo.all_tokens()):
+            for (_, (vbytes, score, ttype)) in enumerate(vo.all_tokens()):
                 tokens.append(vbytes)
                 scores.append(score)
                 toktypes.append(ttype)
