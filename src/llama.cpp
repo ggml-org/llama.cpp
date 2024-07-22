@@ -3707,7 +3707,7 @@ struct llama_model_loader {
         }
 
         if (param_overrides_p != nullptr) {
-            for (const struct llama_model_kv_override *p = param_overrides_p; p->key[0] != 0; p++) {
+            for (const struct llama_model_kv_override * p = param_overrides_p; p->key[0] != 0; p++) {
                 kv_overrides.insert({std::string(p->key), *p});
             }
         }
@@ -3875,7 +3875,7 @@ struct llama_model_loader {
             ftype = (llama_ftype) (ftype | LLAMA_FTYPE_GUESSED);
 
             {
-                const int kid = gguf_find_key(meta, "general.file_type");
+                const int kid = gguf_find_key(meta, "general.file_type"); // TODO: use LLM_KV
                 if (kid >= 0) {
                     ftype = (llama_ftype) gguf_get_val_u32(meta, kid);
                 }
@@ -5369,6 +5369,7 @@ static void llm_load_vocab(
             if (merges_keyidx == -1) {
                 throw std::runtime_error("cannot find tokenizer merges in model file\n");
             }
+
             const int n_merges = gguf_get_arr_n(ctx, merges_keyidx);
             for (int i = 0; i < n_merges; i++) {
                 const std::string word = gguf_get_arr_str(ctx, merges_keyidx, i);
@@ -5406,16 +5407,6 @@ static void llm_load_vocab(
             vocab.special_pad_id  = 0;
             vocab.special_cls_id  = -1;
             vocab.special_mask_id = -1;
-
-            const int add_space_prefix_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_ADD_PREFIX).c_str());
-            if (add_space_prefix_keyidx != -1) {
-                vocab.tokenizer_add_space_prefix = gguf_get_val_bool(ctx, add_space_prefix_keyidx);
-            } // The default value of add_space_prefix is true.
-
-            const int remove_extra_whitespaces_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS).c_str());
-            if (remove_extra_whitespaces_keyidx != -1) {
-                vocab.tokenizer_remove_extra_whitespaces = gguf_get_val_bool(ctx, remove_extra_whitespaces_keyidx);
-            } // The default value of remove_extra_whitespaces is false.
 
             const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
             if (precompiled_charsmap_keyidx != -1) {
@@ -5553,10 +5544,8 @@ static void llm_load_vocab(
             vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
         }
 
-        const int add_space_prefix_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_ADD_PREFIX).c_str());
-        if (add_space_prefix_keyidx != -1) {
-            vocab.tokenizer_add_space_prefix = gguf_get_val_bool(ctx, add_space_prefix_keyidx);
-        }
+        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      vocab.tokenizer_add_space_prefix,         false);
+        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, vocab.tokenizer_remove_extra_whitespaces, false);
     }
 
     const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());
@@ -18288,8 +18277,9 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
 
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out, ml.meta);
-    gguf_set_val_u32(ctx_out, "general.quantization_version", GGML_QNT_VERSION);
-    gguf_set_val_u32(ctx_out, "general.file_type", ftype);
+    gguf_set_val_u32(ctx_out, "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
+    gguf_set_val_u32(ctx_out, "general.file_type", ftype); // TODO: use LLM_KV
+
     // Remove split metadata
     gguf_remove_key(ctx_out, ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
     gguf_remove_key(ctx_out, ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str());
