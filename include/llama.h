@@ -93,6 +93,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_VIKING         = 18,
         LLAMA_VOCAB_PRE_TYPE_JAIS           = 19,
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
+        LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
     };
 
     // note: these values should be synchronized with ggml_rope

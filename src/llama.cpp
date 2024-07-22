@@ -5521,6 +5521,10 @@ static void llm_load_vocab(
                 vocab.tokenizer_clean_spaces = false;
                 vocab.tokenizer_ignore_merges = true;
                 vocab.tokenizer_add_bos = true;
+            } else if (
+                tokenizer_pre == "smollm") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SMOLLM;
+                vocab.tokenizer_clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -15543,6 +15547,7 @@ struct llm_tokenizer_bpe {
             case LLAMA_VOCAB_PRE_TYPE_STARCODER:
             case LLAMA_VOCAB_PRE_TYPE_REFACT:
             case LLAMA_VOCAB_PRE_TYPE_COMMAND_R:
+            case LLAMA_VOCAB_PRE_TYPE_SMOLLM:
                 regex_exprs = {
                     "\\p{N}",
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
