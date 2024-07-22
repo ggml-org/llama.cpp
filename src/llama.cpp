@@ -5007,7 +5007,7 @@ static void llm_load_hparams(
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
                 switch (hparams.n_layer) {
-                    case 42: model.type = e_model::MODEL_SMALL; break;
+                    case 42: model.type = e_model::MODEL_7B; break;
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -5525,6 +5525,9 @@ static void llm_load_vocab(
                 tokenizer_pre == "smollm") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_SMOLLM;
                 vocab.tokenizer_clean_spaces = false;
+            } else if (
+                tokenizer_pre == "codeshell") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CODESHELL;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -15548,6 +15551,7 @@ struct llm_tokenizer_bpe {
             case LLAMA_VOCAB_PRE_TYPE_REFACT:
             case LLAMA_VOCAB_PRE_TYPE_COMMAND_R:
             case LLAMA_VOCAB_PRE_TYPE_SMOLLM:
+            case LLAMA_VOCAB_PRE_TYPE_CODESHELL:
                 regex_exprs = {
                     "\\p{N}",
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
@@ -19447,7 +19451,6 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_BAICHUAN:
         case LLM_ARCH_STARCODER:
         case LLM_ARCH_PLAMO:
-        case LLM_ARCH_CODESHELL:
         case LLM_ARCH_ORION:
         case LLM_ARCH_INTERNLM2:
         case LLM_ARCH_MINICPM:
@@ -19477,6 +19480,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_STARCODER2:
         case LLM_ARCH_OPENELM:
         case LLM_ARCH_GPTNEOX:
+        case LLM_ARCH_CODESHELL:
             return LLAMA_ROPE_TYPE_NEOX;
 
         // all model arches should be listed explicitly here
