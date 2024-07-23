@@ -128,7 +128,6 @@ struct gpt_params {
 
     // TODO: avoid tuple, use struct
     std::vector<std::tuple<std::string, float>> lora_adapter; // lora adapter path with user defined scale
-    std::string lora_base  = "";                              // base model path for the lora adapter
 
     std::vector<llama_control_vector_load_info> control_vectors; // control vector with user defined scale
 
@@ -255,6 +254,8 @@ struct gpt_params {
     std::string cvector_negative_file = "examples/cvector-generator/negative.txt";
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
+
+    std::string lora_outfile = "ggml-lora-merged-f16.gguf";
 };
 
 void gpt_params_handle_hf_token(gpt_params & params);

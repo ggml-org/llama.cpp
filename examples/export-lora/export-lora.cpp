@@ -1,465 +1,406 @@
-
 #include "common.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
 
+#include <map>
 #include <vector>
 #include <string>
 #include <thread>
+#include <fstream>
 
-struct lora_info {
-    std::string filename;
+static bool g_verbose = false;
+
+static std::string get_kv_str(struct gguf_context * ctx_gguf, const std::string & key){
+    int id = gguf_find_key(ctx_gguf, key.c_str());
+    return id < 0 ? "" : std::string(gguf_get_val_str(ctx_gguf, id));
+}
+
+static float get_kv_f32(struct gguf_context * ctx_gguf, const std::string & key) {
+    int id = gguf_find_key(ctx_gguf, key.c_str());
+    return id < 0 ? 0.0f : gguf_get_val_f32(ctx_gguf, id);
+}
+
+static void zeros(std::ofstream & file, size_t n) {
+    char zero = 0;
+    for (size_t i = 0; i < n; ++i) {
+        file.write(&zero, 1);
+    }
+}
+
+static std::string ggml_ne_string(const ggml_tensor * t) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(t->ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ", ";
+        }
+    }
+    return str;
+}
+
+static struct gguf_context * load_gguf(std::string & fname, struct ggml_context ** ctx_ggml) {
+    struct gguf_init_params params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ ctx_ggml,
+    };
+    struct gguf_context * ctx_gguf = gguf_init_from_file(fname.c_str(), params);
+    if (!ctx_gguf) {
+        throw std::runtime_error("failed to load input GGUF from " + fname);
+    }
+    return ctx_gguf;
+}
+
+static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
+    std::string result;
+    for (size_t pos = 0; ; pos += search.length()) {
+        auto new_pos = s.find(search, pos);
+        if (new_pos == std::string::npos) {
+            result += s.substr(pos, s.size() - pos);
+            break;
+        }
+        result += s.substr(pos, new_pos - pos) + replace;
+        pos = new_pos;
+    }
+    s = std::move(result);
+}
+
+struct file_input {
+    struct ggml_context * ctx_meta = nullptr;
+    struct gguf_context * ctx_gguf = nullptr;
+    std::ifstream f_in;
+    std::map<std::string, ggml_tensor *> tensors;
+    float alpha;
     float scale;
+
+    file_input(std::string & fname, float scale): f_in(fname, std::ios::binary), scale(scale) {
+        if (!f_in.is_open()) {
+            throw std::runtime_error("failed to open input gguf from " + fname);
+        }
+
+        ctx_gguf = load_gguf(fname, &ctx_meta);
+        alpha = get_kv_f32(ctx_gguf, "adapter.lora.alpha");
+        printf("%s: loaded gguf from %s\n", __func__, fname.c_str());
+
+        for (ggml_tensor * cur = ggml_get_first_tensor(ctx_meta); cur; cur = ggml_get_next_tensor(ctx_meta, cur)) {
+            std::string name(cur->name);
+            tensors[name] = cur;
+            if (g_verbose) {
+                printf("%s: %s\n", __func__, cur->name);
+            }
+        }
+    }
+
+    ggml_tensor * get_tensor(std::string name) {
+        if (tensors.find(name) == tensors.end()) {
+            return nullptr;
+        }
+        return tensors[name];
+    }
+
+    void read_tensor_data(std::string name, std::vector<uint8_t> & buf) {
+        if (tensors.find(name) == tensors.end()) {
+            throw std::runtime_error("cannot find tensor with name: " + name);
+        }
+        auto len = ggml_nbytes(tensors[name]);
+        if (buf.size() < len) {
+            buf.resize(len);
+        }
+        auto i_tensor_in = gguf_find_tensor(ctx_gguf, name.c_str()); // idx of tensor in the input file
+        auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor_in);
+        f_in.seekg(offset);
+        f_in.read((char* )buf.data(), len);
+    }
+
+    ~file_input() {
+        gguf_free(ctx_gguf);
+        ggml_free(ctx_meta);
+    }
 };
 
-struct export_lora_params {
-    std::string fn_model_base;
-    std::string fn_model_out;
-    std::vector<struct lora_info> lora;
+struct lora_merge_ctx {
+    // input base model + adapters
+    file_input base_model;
+    std::vector<std::unique_ptr<file_input>> adapters;
+
+    // for computing merged tensor
     int n_threads;
-};
+    ggml_backend_t backend = nullptr;
+    ggml_gallocr_t allocr = nullptr;
+    std::vector<uint8_t> read_buf;
 
-struct lora_data {
-    struct lora_info     info;
-    std::vector<uint8_t> data;
-    struct ggml_context * ctx;
+    // output file
+    struct gguf_context * ctx_out;
+    struct ggml_context * ctx_out_ggml;
+    std::ofstream fout;
 
-    uint32_t lora_r;
-    uint32_t lora_alpha;
-};
+    lora_merge_ctx(
+            std::string & base_fname,
+            std::vector<std::tuple<std::string, float>> & lora_files,
+            std::string & outfile,
+            int n_threads) : base_model(base_fname, 0), n_threads(n_threads), fout(outfile, std::ios::binary) {
+        fout.exceptions(std::ofstream::failbit); // fail fast on write errors
 
-struct llama_file {
-    // use FILE * so we don't have to re-open the file to mmap
-    FILE * fp;
-    size_t size;
+        if (gguf_find_key(base_model.ctx_gguf, LLM_KV_SPLIT_COUNT) >= 0) {
+            throw std::runtime_error("split model is not yet supported");
+        }
 
-    llama_file(const char * fname, const char * mode) {
-        fp = std::fopen(fname, mode);
-        if (fp == NULL) {
-            size = 0;
+        for (auto lora_inp : lora_files) {
+            auto fname = std::get<0>(lora_inp);
+            auto scale = std::get<1>(lora_inp);
+            std::unique_ptr<file_input> adapter(new file_input(fname, scale));
+            check_metadata_lora(adapter.get());
+            adapters.push_back(std::move(adapter));
+        }
+
+        ctx_out = gguf_init_empty();
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ gguf_get_n_tensors(base_model.ctx_gguf)*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_out_ggml = ggml_init(params);
+        backend = ggml_backend_cpu_init();
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    }
+
+    void check_metadata_lora(file_input * adapter) {
+        auto general_type = get_kv_str(adapter->ctx_gguf, "general.type");
+        if (general_type != "adapter") {
+            throw std::runtime_error("expect general.type to be 'adapter', but got: " + general_type);
+        }
+
+        auto adapter_type = get_kv_str(adapter->ctx_gguf, "adapter.type");
+        if (adapter_type != "lora") {
+            throw std::runtime_error("expect adapter.type to be 'lora', but got: " + adapter_type);
+        }
+
+        auto general_arch_base = get_kv_str(base_model.ctx_gguf, "general.architecture");
+        auto general_arch_lora = get_kv_str(adapter->ctx_gguf,   "general.architecture");
+        if (general_arch_base != general_arch_lora) {
+            throw std::runtime_error("model arch and LoRA arch mismatch");
+        }
+    }
+
+    ggml_type get_out_tensor_type(struct ggml_tensor * t) {
+        if (t->type == GGML_TYPE_F32) {
+            return GGML_TYPE_F32;
         } else {
-            seek(0, SEEK_END);
-            size = tell();
-            seek(0, SEEK_SET);
+            return GGML_TYPE_F16;
         }
     }
 
-    size_t tell() const {
-#ifdef _WIN32
-        __int64 ret = _ftelli64(fp);
-#else
-        long ret = std::ftell(fp);
-#endif
-        GGML_ASSERT(ret != -1); // this really shouldn't fail
-        return (size_t) ret;
-    }
+    void run_merge() {
+        // prepare metadata
+        gguf_set_kv(ctx_out, base_model.ctx_gguf);
+        // output is forced to f16 for now
+        gguf_set_val_u32(ctx_out, "general.file_type", LLAMA_FTYPE_MOSTLY_F16);
 
-    void seek(size_t offset, int whence) {
-#ifdef _WIN32
-        int ret = _fseeki64(fp, (__int64) offset, whence);
-#else
-        int ret = std::fseek(fp, (long) offset, whence);
-#endif
-        GGML_ASSERT(ret == 0); // same
-    }
-
-    void read_raw(void * ptr, size_t size) {
-        if (size == 0) {
-            return;
+        // check if all lora adapters have the same tensors
+        // TODO: remove this when we can support merging subset of adapters. Ref: https://github.com/ggerganov/llama.cpp/pull/8607#discussion_r1686027777
+        static const char * err_no_subset_adapter = "Input adapters do not have the same list of tensors. This is not yet supported. Please merge the adapter one-by-one instead of merging all at once.";
+        if (adapters.size() > 1) {
+            for (size_t i = 1; i < adapters.size(); ++i) {
+                if (adapters[0]->tensors.size() != adapters[i]->tensors.size()) {
+                    throw std::runtime_error(err_no_subset_adapter);
+                }
+                for (auto & it : adapters[i]->tensors) {
+                    if (adapters[0]->get_tensor(it.first) == nullptr) {
+                        throw std::runtime_error(err_no_subset_adapter);
+                    }
+                }
+            }
         }
-        errno = 0;
-        std::size_t ret = std::fread(ptr, size, 1, fp);
-        if (ferror(fp)) {
-            die_fmt("read error: %s", strerror(errno));
+
+        // if true, this tensor can be lora-merged. if false, we skip merging and just copy data to outfile
+        std::vector<std::pair<struct ggml_tensor *, bool>> base_tensors;
+        for (auto & it : base_model.tensors) {
+            bool t_a = true;
+            bool t_b = true;
+            for (auto & adapter : adapters) {
+                t_a &= nullptr != adapter->get_tensor(it.first + ".lora_a");
+                t_b &= nullptr != adapter->get_tensor(it.first + ".lora_b");
+            }
+            auto base_tensor = it.second;
+            struct ggml_tensor * out_tensor;
+            if (!t_a && !t_b) {
+                // only copy
+                out_tensor = ggml_dup_tensor(ctx_out_ggml, base_tensor);
+                ggml_set_name(out_tensor, base_tensor->name);
+                base_tensors.push_back(std::make_pair(out_tensor, false));
+            } else if (t_a && t_b) {
+                // need merging
+                out_tensor = ggml_dup_tensor(ctx_out_ggml, base_tensor);
+                out_tensor->type = get_out_tensor_type(base_tensor);
+                ggml_set_name(out_tensor, base_tensor->name);
+                base_tensors.push_back(std::make_pair(out_tensor, true));
+            } else {
+                throw std::runtime_error("tensor " + it.first + " missing either lora_a or lora_b");
+            }
+            gguf_add_tensor(ctx_out, out_tensor);
         }
-        if (ret != 1) {
-            die("unexpectedly reached end of file");
+
+        // placeholder for the meta data
+        {
+            size_t meta_size = gguf_get_meta_size(ctx_out);
+            zeros(fout, meta_size);
         }
-    }
 
-    std::uint32_t read_u32() {
-        std::uint32_t ret;
-        read_raw(&ret, sizeof(ret));
-        return ret;
-    }
-
-    std::string read_string(std::uint32_t len) {
-        std::vector<char> chars(len);
-        read_raw(chars.data(), len);
-        return std::string(chars.data(), len);
-    }
-
-    void write_raw(const void * ptr, size_t size) {
-        if (size == 0) {
-            return;
+        // process base model tensors
+        size_t n_merged = 0;
+        for (auto & it : base_tensors) {
+            if (it.second) {
+                merge_tensor(it.first);
+                n_merged++;
+            } else {
+                copy_tensor(it.first);
+            }
         }
-        errno = 0;
-        size_t ret = std::fwrite(ptr, size, 1, fp);
-        if (ret != 1) {
-            die_fmt("write error: %s", strerror(errno));
+
+        // write output metadata
+        {
+            std::vector<uint8_t> data(gguf_get_meta_size(ctx_out));
+            gguf_get_meta_data(ctx_out, data.data());
+            fout.seekp(0);
+            fout.write((const char *)data.data(), data.size());
         }
+
+        printf("%s : merged %ld tensors with lora adapters\n", __func__, n_merged);
+        printf("%s : wrote %ld tensors to output file\n", __func__, base_tensors.size());
     }
 
-    void write_u32(std::uint32_t val) {
-        write_raw(&val, sizeof(val));
+    void copy_tensor(struct ggml_tensor * base) {
+        printf("%s :  %s [%s]\n", __func__, base->name, ggml_ne_string(base).c_str());
+        size_t len = ggml_nbytes(base);
+        base_model.read_tensor_data(base->name, read_buf);
+        fout.write((char* )read_buf.data(), len);
+        zeros(fout, GGML_PAD(len, GGUF_DEFAULT_ALIGNMENT) - len);
     }
 
-    bool eof() {
-        return tell() >= size;
-    }
+    void merge_tensor(struct ggml_tensor * base) {
+        std::string name_base(base->name);
+        std::string name_lora_a = name_base + ".lora_a";
+        std::string name_lora_b = name_base + ".lora_b";
 
-    ~llama_file() {
-        if (fp) {
-            std::fclose(fp);
+        printf("%s : %s [%s]\n", __func__, base->name, ggml_ne_string(base).c_str());
+
+        // context for input tensor
+        std::vector<struct ggml_tensor *> inp_a(adapters.size());
+        std::vector<struct ggml_tensor *> inp_b(adapters.size());
+        struct ggml_init_params params {
+            /*.mem_size   =*/ ggml_tensor_overhead()*(1+adapters.size()*2),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        struct ggml_context * ctx = ggml_init(params);
+
+        // alloc tensors
+        struct ggml_tensor * inp = ggml_dup_tensor(ctx, base);
+        for (size_t i = 0; i < adapters.size(); ++i) {
+            auto t_a = adapters[i]->get_tensor(name_lora_a);
+            auto t_b = adapters[i]->get_tensor(name_lora_b);
+            inp_a[i] = ggml_dup_tensor(ctx, t_a);
+            inp_b[i] = ggml_dup_tensor(ctx, t_b);
         }
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+        // load data to backend buffer
+        base_model.read_tensor_data(name_base, read_buf);
+        ggml_backend_tensor_set(inp, read_buf.data(), 0, ggml_nbytes(inp));
+        for (size_t i = 0; i < adapters.size(); ++i) {
+            adapters[i]->read_tensor_data(name_lora_a, read_buf);
+            ggml_backend_tensor_set(inp_a[i], read_buf.data(), 0, ggml_nbytes(inp_a[i]));
+            adapters[i]->read_tensor_data(name_lora_b, read_buf);
+            ggml_backend_tensor_set(inp_b[i], read_buf.data(), 0, ggml_nbytes(inp_b[i]));
+        }
+
+        // build graph
+        struct ggml_cgraph * gf;
+        {
+            static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
+            static std::vector<uint8_t> buf(buf_size);
+            struct ggml_init_params params0 = {
+                /*.mem_size   =*/ buf_size,
+                /*.mem_buffer =*/ buf.data(),
+                /*.no_alloc   =*/ true,
+            };
+            struct ggml_context * ctx0 = ggml_init(params0);
+            gf = ggml_new_graph(ctx0);
+            struct ggml_tensor * cur = inp;
+            for (size_t i = 0; i < adapters.size(); ++i) {
+                struct ggml_tensor * a_T = ggml_cont(ctx0, ggml_transpose(ctx0, inp_a[i]));
+                struct ggml_tensor * delta = ggml_mul_mat(ctx0, a_T, inp_b[i]);
+                // scale
+                const float alpha = adapters[i]->alpha;
+                const float rank  = (float) inp_b[i]->ne[0];
+                const float scale = alpha ? adapters[i]->scale * alpha / rank : adapters[i]->scale;
+                delta = ggml_scale(ctx0, delta, scale);
+                cur = ggml_add(ctx0, cur, delta);
+                printf("%s :   + merging from adapter[%ld]\n", __func__, i);
+                printf("%s :     input_scale=%f calculated_scale=%f rank=%d\n", __func__, adapters[i]->scale, scale, (int) inp_b[i]->ne[0]);
+            }
+            cur = ggml_cast(ctx0, cur, get_out_tensor_type(base));
+            ggml_build_forward_expand(gf, cur);
+            ggml_free(ctx0);
+        }
+
+        // compute
+        {
+            ggml_gallocr_alloc_graph(allocr, gf);
+            ggml_backend_cpu_set_n_threads(backend, n_threads);
+            ggml_backend_graph_compute(backend, gf);
+        }
+
+        // write data to output file
+        {
+            auto result = gf->nodes[gf->n_nodes - 1];
+            size_t len = ggml_nbytes(result);
+            if (read_buf.size() < len) {
+                read_buf.resize(len);
+            }
+            ggml_backend_tensor_get(result, read_buf.data(), 0, len);
+            fout.write((char* )read_buf.data(), len);
+            zeros(fout, GGML_PAD(len, GGUF_DEFAULT_ALIGNMENT) - len);
+        }
+
+        ggml_free(ctx);
+        ggml_backend_buffer_free(buffer);
+    }
+
+    ~lora_merge_ctx() {
+        ggml_gallocr_free(allocr);
+        ggml_backend_free(backend);
+        gguf_free(ctx_out);
+        ggml_free(ctx_out_ggml);
     }
 };
 
-static struct export_lora_params get_default_export_lora_params() {
-    struct export_lora_params result;
-    result.fn_model_base = "";
-    result.fn_model_out  = "";
-    result.n_threads = GGML_DEFAULT_N_THREADS;
-    return result;
-}
+static void print_usage(int argc, char ** argv, const gpt_params & params) {
+    gpt_params_print_usage(argc, argv, params);
 
-static void export_lora_print_usage(int /*argc*/, char ** argv, const struct export_lora_params * params) {
-    fprintf(stderr, "usage: %s [options]\n", argv[0]);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help                         show this help message and exit\n");
-    fprintf(stderr, "  -m FNAME, --model-base FNAME       model path from which to load base model (default '%s')\n", params->fn_model_base.c_str());
-    fprintf(stderr, "  -o FNAME, --model-out FNAME        path to save exported model (default '%s')\n", params->fn_model_out.c_str());
-    fprintf(stderr, "  -l FNAME, --lora FNAME             apply LoRA adapter\n");
-    fprintf(stderr, "  -s FNAME S, --lora-scaled FNAME S  apply LoRA adapter with user defined scaling S\n");
-    fprintf(stderr, "  -t N, --threads N                  number of threads to use during computation (default: %d)\n", params->n_threads);
-}
-
-static bool export_lora_params_parse(int argc, char ** argv, struct export_lora_params * params) {
-    bool invalid_param = false;
-    std::string arg;
-    struct export_lora_params default_params = get_default_export_lora_params();
-    const std::string arg_prefix = "--";
-
-    for (int i = 1; i < argc; i++) {
-        arg = argv[i];
-        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
-            std::replace(arg.begin(), arg.end(), '_', '-');
-        }
-
-        if (arg == "-m" || arg == "--model-base") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params->fn_model_base = argv[i];
-        } else if (arg == "-o" || arg == "--model-out") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params->fn_model_out = argv[i];
-        } else if (arg == "-l" || arg == "--lora") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            struct lora_info lora;
-            lora.filename = argv[i];
-            lora.scale = 1.0f;
-            params->lora.push_back(lora);
-        } else if (arg == "-s" || arg == "--lora-scaled") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            struct lora_info lora;
-            lora.filename = argv[i];
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            lora.scale = std::stof(argv[i]);
-            params->lora.push_back(lora);
-        } else if (arg == "-t" || arg == "--threads") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params->n_threads = std::stoi(argv[i]);
-            if (params->n_threads <= 0) {
-                params->n_threads = std::thread::hardware_concurrency();
-            }
-        } else if (arg == "-h" || arg == "--help") {
-            export_lora_print_usage(argc, argv, &default_params);
-            exit(0);
-        } else {
-            fprintf(stderr, "error: unknown argument: '%s'\n", arg.c_str());
-            export_lora_print_usage(argc, argv, &default_params);
-            exit(1);
-        }
-    }
-
-    if (params->fn_model_base == default_params.fn_model_base) {
-        fprintf(stderr, "error: please specify a filename for model-base.\n");
-        export_lora_print_usage(argc, argv, &default_params);
-        exit(1);
-    }
-    if (params->fn_model_out == default_params.fn_model_out) {
-        fprintf(stderr, "error: please specify a filename for model-out.\n");
-        export_lora_print_usage(argc, argv, &default_params);
-        exit(1);
-    }
-    if (invalid_param) {
-        fprintf(stderr, "error: invalid parameter for argument: '%s'\n", arg.c_str());
-        export_lora_print_usage(argc, argv, &default_params);
-        exit(1);
-    }
-    return true;
-}
-
-static void free_lora(struct lora_data * lora) {
-    if (lora->ctx != NULL) {
-        ggml_free(lora->ctx);
-    }
-    delete lora;
-}
-
-static struct lora_data * load_lora(struct lora_info * info) {
-    struct lora_data * result = new struct lora_data;
-    result->info = *info;
-    result->ctx = NULL;
-    result->lora_r     = 1;
-    result->lora_alpha = 1;
-
-    struct llama_file file(info->filename.c_str(), "rb");
-    if (file.fp == NULL) {
-        fprintf(stderr, "warning: Could not open lora adapter '%s'. Ignoring this adapter.\n",
-            info->filename.c_str());
-        free_lora(result);
-        return NULL;
-    }
-
-    struct ggml_init_params params_ggml;
-    params_ggml.mem_size   = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE;
-    params_ggml.mem_buffer = NULL;
-    params_ggml.no_alloc   = true;
-    result->ctx = ggml_init(params_ggml);
-
-    uint32_t magic   = file.read_u32();
-    if (magic != LLAMA_FILE_MAGIC_GGLA) {
-        die_fmt("unexpected lora header file magic in '%s'", info->filename.c_str());
-    }
-    uint32_t version = file.read_u32();
-    if (version != 1) {
-        die_fmt("unexpected lora file version '%u' in '%s'", (unsigned) version, info->filename.c_str());
-    }
-    result->lora_r     = file.read_u32();
-    result->lora_alpha = file.read_u32();
-    // read tensor infos from file
-    std::vector<char> name_buf;
-    std::vector<struct ggml_tensor *> tensors;
-    std::vector<size_t> tensors_offset;
-    size_t total_nbytes_pad = 0;
-    while(!file.eof()) {
-        int64_t ne[4]   = {1,1,1,1};
-        uint32_t n_dims  = file.read_u32();
-        uint32_t namelen = file.read_u32();
-        uint32_t type    = file.read_u32();
-        for (uint32_t k = 0; k < n_dims; ++k) {
-            ne[k] = (int64_t)file.read_u32();
-        }
-        name_buf.clear();
-        name_buf.resize(namelen + 1, '\0');
-        file.read_raw(name_buf.data(), namelen);
-        file.seek((0-file.tell()) & 31, SEEK_CUR);
-        size_t offset = file.tell();
-        struct ggml_tensor * tensor = ggml_new_tensor(result->ctx, (enum ggml_type) type, n_dims, ne);
-        ggml_set_name(tensor, name_buf.data());
-        size_t nbytes     = ggml_nbytes(tensor);
-        size_t nbytes_pad = ggml_nbytes_pad(tensor);
-        total_nbytes_pad += nbytes_pad;
-        tensors.push_back(tensor);
-        tensors_offset.push_back(offset);
-        file.seek(nbytes, SEEK_CUR);
-    }
-    // read tensor data
-    result->data.resize(total_nbytes_pad);
-    size_t data_offset = 0;
-    for (size_t i = 0; i < tensors.size(); ++i) {
-        struct ggml_tensor * tensor = tensors[i];
-        size_t offset     = tensors_offset[i];
-        size_t nbytes     = ggml_nbytes(tensor);
-        size_t nbytes_pad = ggml_nbytes_pad(tensor);
-        file.seek(offset, SEEK_SET);
-        tensor->data = result->data.data() + data_offset;
-        file.read_raw(tensor->data, nbytes);
-        data_offset += nbytes_pad;
-    }
-    return result;
-}
-
-
-static struct ggml_cgraph * build_graph_lora(
-    struct ggml_context * ctx,
-    struct ggml_tensor * tensor,
-    struct ggml_tensor * lora_a,
-    struct ggml_tensor * lora_b,
-    float scaling
-) {
-    struct ggml_tensor * ab = ggml_mul_mat(ctx, lora_a, lora_b);
-    if (scaling != 1.0f) {
-        ab = ggml_scale(ctx, ab, scaling);
-    }
-    struct ggml_tensor * res = ggml_add_inplace(ctx, tensor, ab);
-
-    struct ggml_cgraph * gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand (gf, res);
-    return gf;
-}
-
-static bool apply_lora(struct ggml_tensor * tensor, struct lora_data * lora, int n_threads) {
-    if (lora->ctx == NULL) {
-        return false;
-    }
-    std::string name = ggml_get_name(tensor);
-    std::string name_a = name + std::string(".loraA");
-    std::string name_b = name + std::string(".loraB");
-    struct ggml_tensor * lora_a = ggml_get_tensor(lora->ctx, name_a.c_str());
-    struct ggml_tensor * lora_b = ggml_get_tensor(lora->ctx, name_b.c_str());
-    if (lora_a == NULL || lora_b == NULL) {
-        return false;
-    }
-
-    float scaling = lora->info.scale * (float)lora->lora_alpha / (float)lora->lora_r;
-
-    struct ggml_init_params params;
-    params.mem_size   = GGML_OBJECT_SIZE + ggml_graph_overhead() + ggml_tensor_overhead()*4 + GGML_MEM_ALIGN*5;
-    params.mem_buffer = NULL;
-    params.no_alloc   = true;
-    struct ggml_context * ctx = NULL;
-    struct ggml_gallocr * alloc = NULL;
-    struct ggml_cgraph  * gf = NULL;
-
-    ctx   = ggml_init(params);
-    alloc = ggml_gallocr_new(ggml_backend_cpu_buffer_type());
-    gf    = build_graph_lora(ctx, tensor, lora_a, lora_b, scaling);
-
-    ggml_gallocr_alloc_graph(alloc, gf);
-
-    struct ggml_cplan cplan = ggml_graph_plan(gf, n_threads);
-    static std::vector<uint8_t> data_work;
-    data_work.resize(cplan.work_size);
-    cplan.work_data = data_work.data();
-
-    ggml_graph_compute(gf, &cplan);
-
-    ggml_gallocr_free(alloc);
-    ggml_free(ctx);
-    return true;
-}
-
-static void export_lora(struct export_lora_params * params) {
-    // load all loras
-    std::vector<struct lora_data *> loras;
-    for (size_t i = 0; i < params->lora.size(); ++i) {
-        struct lora_data * lora = load_lora(&params->lora[i]);
-        if (lora != NULL) {
-            loras.push_back(lora);
-        }
-    }
-    if (loras.size() == 0) {
-        fprintf(stderr, "warning: no lora adapters will be applied.\n");
-    }
-
-    // open input file
-    struct llama_file fin(params->fn_model_base.c_str(), "rb");
-    if (!fin.fp) {
-        die_fmt("Could not open file '%s'\n", params->fn_model_base.c_str());
-    }
-
-    // open base model gguf, read tensors without their data
-    struct ggml_context * ctx_in;
-    struct gguf_init_params params_gguf;
-    params_gguf.no_alloc = true;
-    params_gguf.ctx      = &ctx_in;
-    struct gguf_context * gguf_in = gguf_init_from_file(params->fn_model_base.c_str(), params_gguf);
-
-    // create new gguf
-    struct gguf_context * gguf_out = gguf_init_empty();
-
-    // copy meta data from base model: kv and tensors
-    gguf_set_kv(gguf_out, gguf_in);
-    int n_tensors = gguf_get_n_tensors(gguf_in);
-    for (int i=0; i < n_tensors; ++i) {
-        const char * name = gguf_get_tensor_name(gguf_in, i);
-        struct ggml_tensor * tensor = ggml_get_tensor(ctx_in, name);
-        gguf_add_tensor(gguf_out, tensor);
-    }
-
-    // create output file
-    struct llama_file fout(params->fn_model_out.c_str(), "wb");
-    if (!fout.fp) {
-        die_fmt("Could not create file '%s'\n", params->fn_model_out.c_str());
-    }
-
-    // write gguf meta data
-    std::vector<uint8_t> meta;
-    meta.resize(gguf_get_meta_size(gguf_out));
-    gguf_get_meta_data(gguf_out, meta.data());
-    fout.write_raw(meta.data(), meta.size());
-
-    std::vector<uint8_t> data;
-    std::vector<uint8_t> padding;
-    for (int i=0; i < n_tensors; ++i) {
-        const char * name = gguf_get_tensor_name(gguf_in, i);
-        struct ggml_tensor * tensor = ggml_get_tensor(ctx_in, name);
-
-        // read tensor data
-        data.resize(ggml_nbytes(tensor));
-        tensor->data = data.data();
-        size_t offset = gguf_get_tensor_offset(gguf_in, i);
-        fin.seek(offset + meta.size(), SEEK_SET);
-        fin.read_raw(data.data(), data.size());
-
-        // apply all loras
-        for (size_t k = 0; k < loras.size(); ++k) {
-            apply_lora(tensor, loras[k], params->n_threads);
-        }
-
-        // write tensor data + padding
-        padding.clear();
-        padding.resize(GGML_PAD(data.size(), gguf_get_alignment(gguf_out)) - data.size(), 0);
-
-        GGML_ASSERT(fout.tell() == offset + meta.size());
-        // fout.seek(offset + meta.size(), SEEK_SET);
-        fout.write_raw(data.data(), data.size());
-        fout.write_raw(padding.data(), padding.size());
-
-        if (i % 2 == 0) {
-            printf(".");
-        }
-    }
+    printf("\nexample usage:\n");
+    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model-f16.gguf\n", argv[0]);
+    printf("\nNOTE: output model is F16\n");
     printf("\n");
-
-    // close gguf
-    gguf_free(gguf_out);
-    gguf_free(gguf_in);
-
-    // free loras
-    for (size_t i = 0; i < loras.size(); ++i) {
-        free_lora(loras[i]);
-    }
 }
 
 int main(int argc, char ** argv) {
-    struct export_lora_params params = get_default_export_lora_params();
+    gpt_params params;
 
-    if (!export_lora_params_parse(argc, argv, &params)) {
+    if (!gpt_params_parse(argc, argv, params)) {
+        print_usage(argc, argv, params);
         return 1;
     }
 
-    export_lora(&params);
+    g_verbose = (params.verbosity == 1);
+    try {
+        lora_merge_ctx ctx(params.model, params.lora_adapter, params.lora_outfile, params.n_threads);
+        ctx.run_merge();
+    } catch (const std::exception & err) {
+        fprintf(stderr, "%s\n", err.what());
+        exit(EXIT_FAILURE);
+    }
+
+    printf("done, output file is %s\n", params.lora_outfile.c_str());
 
     return 0;
 }
