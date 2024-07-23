@@ -459,7 +459,7 @@ static __device__ __forceinline__ uint32_t __hgt2_mask(const half2 a, const half
 
 static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, int c) {
 #if defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)
-#if defined(__gfx906__) || defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx1030__)
+#if defined(__gfx906__) || defined(__gfx908__) || defined(__gfx90a__) || defined(RDNA2)
     c = __builtin_amdgcn_sdot4(a, b, c, false);
 #elif defined(RDNA3)
     c = __builtin_amdgcn_sudot4( true, a, true, b, c, false);
