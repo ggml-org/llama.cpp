@@ -71,7 +71,7 @@ shared FLOAT_TYPE buf_a[BM * (BK+1)];
 shared FLOAT_TYPE buf_b[BN * (BK+1)];
 
 #ifdef MUL_MAT_ID
-shared u16vec2 row_ids[2048];
+shared u16vec2 row_ids[3072];
 #endif
 
 void main() {
@@ -380,6 +380,19 @@ void main() {
 
             buf_a[buf_idx    ] = FLOAT_TYPE(dscale * float(int8_t(((data_a[ib].ql[qsi    ] >> (b * 4)) & 0xF) | (((data_a[ib].qh[qhi    ] >> qhshift) & 3) << 4)) - 32));
             buf_a[buf_idx + 1] = FLOAT_TYPE(dscale * float(int8_t(((data_a[ib].ql[qsi + 1] >> (b * 4)) & 0xF) | (((data_a[ib].qh[qhi + 1] >> qhshift) & 3) << 4)) - 32));
+#elif defined(DATA_A_IQ4_NL)
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * (BK+1) + loadr_a;
+
+            const uint ib = idx / 16;
+            const uint iqs = idx & 0xF;
+
+            const float d = float(data_a[ib].d);
+            const uint vui = uint(data_a[ib].qs[iqs]);
+            const vec2 v = vec2(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[vui >> 4]) * d;
+
+            buf_a[buf_idx     ] = FLOAT_TYPE(v.x);
+            buf_a[buf_idx + 16] = FLOAT_TYPE(v.y);
 #endif
         }
         [[unroll]] for (uint l = 0; l < BN; l += loadstride_b) {

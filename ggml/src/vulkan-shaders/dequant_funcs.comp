@@ -58,3 +58,11 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(int(data_a[a_offset + ib].qs[iqs]), int(data_a[a_offset + ib].qs[iqs + 1])) * d;
 }
 #endif
+
+#if defined(DATA_A_IQ4_NL)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const float d = float(data_a[a_offset + ib].d);
+    const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
+    return vec2(kvalues_iq4nl[vui & 0xF], kvalues_iq4nl[vui >> 4]) * d;
+}
+#endif
