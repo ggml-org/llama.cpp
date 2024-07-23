@@ -330,7 +330,7 @@ static llama_token llama_sampling_sample_impl(
         llama_token_data_array single_token_data_array = { &single_token_data, 1, false };
 
         // Apply grammar constraints to the single token
-        llama_sample_grammar(ctx_main, &single_token_data_array, ctx_sampling->grammar);
+        llama_grammar_sample(ctx_sampling->grammar, ctx_main, &single_token_data_array);
 
         // Check if the token is valid according to the grammar by seeing if its logit has been set to -INFINITY
         bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
@@ -421,7 +421,7 @@ static llama_token_data_array llama_sampling_prepare_impl(
 
     // apply grammar checks before sampling logic
     if (apply_grammar && ctx_sampling->grammar != NULL) {
-        llama_sample_grammar(ctx_main, &cur_p, ctx_sampling->grammar);
+        llama_grammar_sample(ctx_sampling->grammar, ctx_main, &cur_p);
     }
 
     return cur_p;
@@ -455,6 +455,6 @@ void llama_sampling_accept(
     ctx_sampling->prev.push_back(id);
 
     if (ctx_sampling->grammar != NULL && apply_grammar) {
-        llama_grammar_accept_token(ctx_main, ctx_sampling->grammar, id);
+        llama_grammar_accept_token(ctx_sampling->grammar, ctx_main, id);
     }
 }

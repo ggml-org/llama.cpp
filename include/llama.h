@@ -906,10 +906,10 @@ extern "C" {
     LLAMA_API llama_token llama_token_pad(const struct llama_model * model); // padding
 
     // Returns -1 if unknown, 1 for true or 0 for false.
-    LLAMA_API int32_t         llama_add_bos_token(const struct llama_model * model);
+    LLAMA_API int32_t llama_add_bos_token(const struct llama_model * model);
 
     // Returns -1 if unknown, 1 for true or 0 for false.
-    LLAMA_API int32_t         llama_add_eos_token(const struct llama_model * model);
+    LLAMA_API int32_t llama_add_eos_token(const struct llama_model * model);
 
     // Codellama infill tokens
     LLAMA_API llama_token llama_token_prefix(const struct llama_model * model); // Beginning of infill prefix
@@ -965,6 +965,10 @@ extern "C" {
                             bool   remove_special,
                             bool   unparse_special);
 
+    //
+    // Chat templates
+    //
+
     /// Apply chat template. Inspired by hf apply_chat_template() on python.
     /// Both "model" and "custom_template" are optional, but at least one is required. "custom_template" has higher precedence than "model"
     /// NOTE: This function does not use a jinja parser. It only support a pre-defined list of template. See more: https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
@@ -1002,6 +1006,23 @@ extern "C" {
     LLAMA_API void llama_grammar_free(struct llama_grammar * grammar);
 
     LLAMA_API struct llama_grammar * llama_grammar_copy(const struct llama_grammar * grammar);
+
+    /// @details Apply constraints from grammar
+    LLAMA_API void llama_grammar_sample(
+            const struct llama_grammar * grammar,
+            const struct llama_context * ctx,
+                llama_token_data_array * candidates);
+    LLAMA_API DEPRECATED(void llama_sample_grammar(
+            struct llama_context * ctx,
+          llama_token_data_array * candidates,
+      const struct llama_grammar * grammar),
+        "use llama_grammar_sample instead");
+
+    /// @details Accepts the sampled token into the grammar
+    LLAMA_API void llama_grammar_accept_token(
+            struct llama_grammar * grammar,
+            struct llama_context * ctx,
+                     llama_token   token);
 
     //
     // Sampling functions
@@ -1084,12 +1105,6 @@ extern "C" {
           llama_token_data_array * candidates,
                            float   temp);
 
-    /// @details Apply constraints from grammar
-    LLAMA_API void llama_sample_grammar(
-            struct llama_context * ctx,
-          llama_token_data_array * candidates,
-      const struct llama_grammar * grammar);
-
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.
     /// @param tau  The target cross-entropy (or surprise) value you want to achieve for the generated text. A higher value corresponds to more surprising or less predictable text, while a lower value corresponds to less surprising or more predictable text.
@@ -1126,12 +1141,6 @@ extern "C" {
     LLAMA_API llama_token llama_sample_token(
             struct llama_context * ctx,
           llama_token_data_array * candidates);
-
-    /// @details Accepts the sampled token into the grammar
-    LLAMA_API void llama_grammar_accept_token(
-            struct llama_context * ctx,
-            struct llama_grammar * grammar,
-                     llama_token   token);
 
     //
     // Model split
@@ -1175,17 +1184,13 @@ extern "C" {
 
 struct ggml_tensor;
 
+const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal_get_tensor_map(
+    struct llama_context * ctx
+);
+
 struct llama_partial_utf8 {
     uint32_t value;    // bit value so far (unshifted)
     int      n_remain; // num bytes remaining; -1 indicates invalid sequence
-};
-
-struct llama_grammar {
-    const std::vector<std::vector<llama_grammar_element>>   rules;
-    std::vector<std::vector<const llama_grammar_element *>> stacks;
-
-    // buffer for partially generated UTF-8 sequence from accepted tokens
-    llama_partial_utf8                                      partial_utf8;
 };
 
 struct llama_grammar_candidate {
@@ -1194,19 +1199,30 @@ struct llama_grammar_candidate {
     llama_partial_utf8   partial_utf8;
 };
 
-const std::vector<std::pair<std::string, struct ggml_tensor *>> & llama_internal_get_tensor_map(
-    struct llama_context * ctx
-);
+using llama_grammar_rule  = std::vector<      llama_grammar_element>;
+using llama_grammar_stack = std::vector<const llama_grammar_element *>;
+
+using llama_grammar_rules      = std::vector<llama_grammar_rule>;
+using llama_grammar_stacks     = std::vector<llama_grammar_stack>;
+using llama_grammar_candidates = std::vector<llama_grammar_candidate>;
+
+const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar * grammar);
+      llama_grammar_stacks & llama_grammar_get_stacks(      struct llama_grammar * grammar);
 
 void llama_grammar_accept(
-        const std::vector<std::vector<llama_grammar_element>>         & rules,
-        const std::vector<std::vector<const llama_grammar_element *>> & stacks,
-        const uint32_t                                                  chr,
-        std::vector<std::vector<const llama_grammar_element *>>       & new_stacks);
+        const llama_grammar_rules  & rules,
+        const llama_grammar_stacks & stacks,
+        const uint32_t chr,
+              llama_grammar_stacks & new_stacks);
+
+std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
+        const llama_grammar_rules & rules,
+        const llama_grammar_stack & stack,
+        const llama_grammar_candidates & candidates);
 
 std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
         const std::string & src,
-        llama_partial_utf8   partial_start);
+        llama_partial_utf8 partial_start);
 
 // Randomly selects a token from the candidates based on their probabilities using given std::mt19937.
 // This is a temporary workaround in order to fix race conditions when sampling with multiple sequences.

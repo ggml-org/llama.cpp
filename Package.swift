@@ -4,6 +4,9 @@ import PackageDescription
 
 var sources = [
     "src/llama.cpp",
+    "src/llama-vocab.cpp",
+    "src/llama-grammar.cpp",
+    "src/llama-sampling.cpp",
     "src/unicode.cpp",
     "src/unicode-data.cpp",
     "ggml/src/ggml.c",

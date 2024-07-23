@@ -16,20 +16,25 @@ static bool llama_sample_grammar_string(struct llama_grammar * grammar, const st
     auto decoded = decode_utf8(input_str, {});
     const auto & code_points = decoded.first;
 
+    const llama_grammar_rules  & rules      = llama_grammar_get_rules (grammar);
+          llama_grammar_stacks & cur_stacks = llama_grammar_get_stacks(grammar);
+
     size_t pos = 0;
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        auto prev_stacks = grammar->stacks;
-        llama_grammar_accept(grammar->rules, prev_stacks, *it, grammar->stacks);
-        if (grammar->stacks.empty()) {
+        const llama_grammar_stacks prev_stacks = llama_grammar_get_stacks(grammar); // copy
+
+        llama_grammar_accept(rules, prev_stacks, *it, cur_stacks);
+
+        if (cur_stacks.empty()) {
             error_pos = pos;
             error_msg = "Unexpected character '" + unicode_cpt_to_utf8(*it) + "'";
-            grammar->stacks = prev_stacks;
+            cur_stacks = prev_stacks;
             return false;
         }
         ++pos;
     }
 
-    for (const auto & stack : grammar->stacks) {
+    for (const auto & stack : cur_stacks) {
         if (stack.empty()) {
             return true;
         }
