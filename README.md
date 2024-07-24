@@ -138,6 +138,7 @@ Typically finetunes of the base models below are supported as well.
 
 Unless otherwise noted these projects are open-source with permissive licensing:
 
+- [MindWorkAI/AI-Studio](https://github.com/MindWorkAI/AI-Studio) (FSL-1.1-MIT)
 - [iohub/collama](https://github.com/iohub/coLLaMA)
 - [janhq/jan](https://github.com/janhq/jan) (AGPL)
 - [nat/openplayground](https://github.com/nat/openplayground)
