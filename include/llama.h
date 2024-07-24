@@ -529,11 +529,15 @@ extern "C" {
             struct llama_lora_adapter * adapter,
             float scale);
 
-    // Remove a LoRA adapter from given context
+    // Remove a specific LoRA adapter from given context
     // Return -1 if the adapter is not present in the context
     LLAMA_API int32_t llama_lora_adapter_remove(
             struct llama_context * ctx,
             struct llama_lora_adapter * adapter);
+
+    // Remove all LoRA adapters from given context
+    LLAMA_API void llama_lora_adapter_clear(
+            struct llama_context * ctx);
 
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted

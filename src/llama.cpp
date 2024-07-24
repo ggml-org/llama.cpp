@@ -16201,6 +16201,10 @@ int32_t llama_lora_adapter_remove(
     return -1;
 }
 
+void llama_lora_adapter_clear(struct llama_context * ctx) {
+    ctx->lora_adapters.clear();
+}
+
 void llama_lora_adapter_free(struct llama_lora_adapter * adapter) {
     delete adapter;
 }
