@@ -182,6 +182,9 @@ Unless otherwise noted these projects are open-source with permissive licensing:
 
 - [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
 
+**Games:**
+- [Lucy's Labyrinth](https://github.com/MorganRO8/Lucys_Labyrinth) - A simple maze game where agents controlled by an AI model will try to trick you.
+
 ## Demo
 
 <details>
