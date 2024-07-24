@@ -14,6 +14,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" && \
         export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
     fi && \
+    echo "Building with dynamic libs" && \
     cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_CURL=ON ${OPT_SYCL_F16} && \
     cmake --build build --config Release --target llama-server
 

@@ -14,7 +14,9 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" && \
         export OPT_SYCL_F16="-DGGML_SYCL_F16=ON"; \
     fi && \
-    cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ${OPT_SYCL_F16} && \
+    echo "Building with static libs" && \
+    cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+    ${OPT_SYCL_F16} -DBUILD_SHARED_LIBS=OFF && \
     cmake --build build --config Release --target llama-cli
 
 FROM intel/oneapi-basekit:$ONEAPI_VERSION AS runtime
