@@ -124,6 +124,7 @@ static std::string chat_add_and_format(struct llama_model * model, std::vector<l
     auto formatted = llama_chat_format_single(
         model, g_params->chat_template, chat_msgs, new_msg, role == "user");
     chat_msgs.push_back({role, content});
+    LOG("formatted: %s\n", formatted.c_str());
     return formatted;
 }
 

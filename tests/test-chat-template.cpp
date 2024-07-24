@@ -1,4 +1,3 @@
-#include <iostream>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -133,13 +132,31 @@ int main(void) {
         );
         formatted_chat.resize(res);
         std::string output(formatted_chat.data(), formatted_chat.size());
-        std::cout << output << "\n-------------------------\n";
+        printf("%s\n", output.c_str());
+        printf("-------------------------\n");
         assert(output == expected);
     }
 
-    // test llama_chat_format_single
-    std::cout << "\n\n=== llama_chat_format_single ===\n\n";
+
+    // test llama_chat_format_single for system message
+    printf("\n\n=== llama_chat_format_single (system message) ===\n\n");
     std::vector<llama_chat_msg> chat2;
+    llama_chat_msg sys_msg{"system", "You are a helpful assistant"};
+
+    auto fmt_sys = [&](std::string tmpl) {
+        auto output = llama_chat_format_single(nullptr, tmpl, chat2, sys_msg, false);
+        printf("fmt_sys(%s) : %s\n", tmpl.c_str(), output.c_str());
+        printf("-------------------------\n", output.c_str());
+        return output;
+    };
+    assert(fmt_sys("chatml") == "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n");
+    assert(fmt_sys("llama2") == "[INST] You are a helpful assistant\n");
+    assert(fmt_sys("gemma")  == ""); // for gemma, system message is merged with user message
+    assert(fmt_sys("llama3") == "<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant<|eot_id|>");
+
+
+    // test llama_chat_format_single for user message
+    printf("\n\n=== llama_chat_format_single (user message) ===\n\n");
     chat2.push_back({"system", "You are a helpful assistant"});
     chat2.push_back({"user", "Hello"});
     chat2.push_back({"assistant", "I am assistant"});
@@ -147,12 +164,13 @@ int main(void) {
 
     auto fmt_single = [&](std::string tmpl) {
         auto output = llama_chat_format_single(nullptr, tmpl, chat2, new_msg, true);
-        std::cout << "fmt_single(" << tmpl << ")\n" << output << "\n-------------------------\n";
+        printf("fmt_single(%s) : %s\n", tmpl.c_str(), output.c_str());
+        printf("-------------------------\n", output.c_str());
         return output;
     };
     assert(fmt_single("chatml") == "\n<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n");
     assert(fmt_single("llama2") == "[INST] How are you [/INST]");
-    assert(fmt_single("gemma") == "\n<start_of_turn>user\nHow are you<end_of_turn>\n<start_of_turn>model\n");
+    assert(fmt_single("gemma")  == "\n<start_of_turn>user\nHow are you<end_of_turn>\n<start_of_turn>model\n");
     assert(fmt_single("llama3") == "<|start_header_id|>user<|end_header_id|>\n\nHow are you<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
 
     return 0;
