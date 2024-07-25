@@ -16,7 +16,7 @@ In order to build llama.cpp you have four different options.
       make
       ```
 
-  - On Windows:
+  - On Windows (x86/x64 only, arm64 requires cmake):
 
     1. Download the latest fortran version of [w64devkit](https://github.com/skeeto/w64devkit/releases).
     2. Extract `w64devkit` on your pc.
@@ -60,6 +60,17 @@ In order to build llama.cpp you have four different options.
       cmake -B build -G "Xcode"
       cmake --build build --config Debug
       ```
+    - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
+      - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/de/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
+        - Tab Workload: Desktop-development with C++
+        - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
+      - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
+      - For Windows on ARM (arm64, WoA) build with:
+        ```bash
+        cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
+        cmake --build build-arm64-windows-llvm-release
+        ```
+        Note: Building for arm64 could also be done just with MSVC (with the build-arm64-windows-MSVC preset, or the standard CMake build instructions). But MSVC does not support inline ARM assembly-code, used e.g. for the accelerated Q4_0_4_8 CPU kernels.
 
 -   Using `gmake` (FreeBSD):
 
