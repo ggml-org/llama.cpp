@@ -13,8 +13,6 @@ elif [[ "$arg1" == '--quantize' || "$arg1" == '-q' ]]; then
     ./llama-quantize "$@"
 elif [[ "$arg1" == '--run' || "$arg1" == '-r' ]]; then
     ./llama-cli "$@"
-elif [[ "$arg1" == '--finetune' || "$arg1" == '-f' ]]; then
-    ./llama-finetune "$@"
 elif [[ "$arg1" == '--all-in-one' || "$arg1" == '-a' ]]; then
     echo "Converting PTH to GGML..."
     for i in `ls $1/$2/ggml-model-f16.bin*`; do
@@ -36,8 +34,6 @@ else
     echo "              ex: --outtype f16 \"/models/7B/\" "
     echo "  --quantize (-q): Optimize with quantization process ggml"
     echo "              ex: \"/models/7B/ggml-model-f16.bin\" \"/models/7B/ggml-model-q4_0.bin\" 2"
-    echo "  --finetune (-f): Run finetune command to create a lora finetune of the model"
-    echo "              See documentation for finetune for command-line parameters"
     echo "  --all-in-one (-a): Execute --convert & --quantize"
     echo "              ex: \"/models/\" 7B"
     echo "  --server (-s): Run a model on the server"

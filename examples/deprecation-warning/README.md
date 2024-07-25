@@ -13,7 +13,6 @@ Please update all scripts and workflows to use the new binary names.
 | server | llama-server |
 | llama-bench | llama-bench |
 | embedding | llama-embedding |
-| finetune | llama-finetune |
 | quantize | llama-quantize |
 | tokenize | llama-tokenize |
 | export-lora | llama-export-lora |
@@ -45,7 +44,6 @@ Please update all scripts and workflows to use the new binary names.
 | save-load-state | llama-save-load-state |
 | simple | llama-simple |
 | speculative | llama-speculative |
-| train-text-from-scratch | llama-train-text-from-scratch |
 | vdot | llama-vdot |
 | tests/test-c.o | tests/test-c.o |
 
