@@ -2084,6 +2084,7 @@ class Phi3MiniModel(Model):
         self.gguf_writer.add_rope_dimension_count(rope_dims)
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
         self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_sliding_window(self.find_hparam(["sliding_window"]))
 
         # write rope scaling for long context (128k) model
         rope_scaling = self.find_hparam(['rope_scaling'], True)
