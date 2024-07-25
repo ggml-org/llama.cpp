@@ -4190,15 +4190,18 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * restrict s, size_t bs, const void * r
     sumf = hsum_float_4x4(acc_0, acc_1, acc_2, acc_3);
 #endif
     for (; ib < nb; ++ib) {
-        int sumi = 0;
+        int sumi0 = 0;
+        int sumi1 = 0;
 
         for (int j = 0; j < qk/2; ++j) {
             const int v0 = (x[ib].qs[j] & 0x0F) - 8;
             const int v1 = (x[ib].qs[j] >>   4) - 8;
 
-            sumi += (v0 * y[ib].qs[j]) + (v1 * y[ib].qs[j + qk/2]);
+            sumi0 += (v0 * y[ib].qs[j]);
+            sumi1 += (v1 * y[ib].qs[j + qk/2]);
         }
 
+        int sumi = sumi0 + sumi1;
         sumf += sumi*GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d);
     }
 
@@ -4474,15 +4477,18 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * restrict s, size_t bs, const void * r
     sumf = hsum_float_8(acc) + summs;
 #endif
     for (; ib < nb; ++ib) {
-        int sumi = 0;
+        int sumi0 = 0
+        int sumi1 = 0;
 
         for (int j = 0; j < qk/2; ++j) {
             const int v0 = (x[ib].qs[j] & 0x0F);
             const int v1 = (x[ib].qs[j] >>   4);
 
-            sumi += (v0 * y[ib].qs[j]) + (v1 * y[ib].qs[j + qk/2]);
+            sumi0 += (v0 * y[ib].qs[j]);
+            sumi1 += (v1 * y[ib].qs[j + qk/2]);
         }
 
+        int sumi = sumi0 + sumi1;
         sumf += (GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d))*sumi + GGML_FP16_TO_FP32(x[ib].m)*GGML_FP16_TO_FP32(y[ib].s);
     }
 
@@ -4823,18 +4829,21 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * restrict s, size_t bs, const void * r
         uint32_t qh;
         memcpy(&qh, x[ib].qh, sizeof(qh));
 
-        int sumi = 0;
+        int sumi0 = 0;
+        int sumi1 = 0;
 
         for (int j = 0; j < qk/2; ++j) {
             const uint8_t xh_0 = ((qh & (1u << (j + 0 ))) >> (j + 0 )) << 4;
             const uint8_t xh_1 = ((qh & (1u << (j + 16))) >> (j + 12));
 
-            const int32_t x0 = ((x[ib].qs[j] & 0x0F) | xh_0) - 16;
-            const int32_t x1 = ((x[ib].qs[j] >>   4) | xh_1) - 16;
+            const int32_t x0 = (int8_t)(((x[ib].qs[j] & 0x0F) | xh_0) - 16);
+            const int32_t x1 = (int8_t)(((x[ib].qs[j] >>   4) | xh_1) - 16);
 
-            sumi += (x0 * y[ib].qs[j]) + (x1 * y[ib].qs[j + qk/2]);
+            sumi0 += (x0 * y[ib].qs[j]);
+            sumi1 += (x1 * y[ib].qs[j + qk/2]);
         }
 
+        int sumi = sumi0 + sumi1;
         sumf += (GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d)) * sumi;
     }
 
@@ -5194,7 +5203,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * restrict s, size_t bs, const void * r
         uint32_t qh;
         memcpy(&qh, x[ib].qh, sizeof(qh));
 
-        int sumi = 0;
+        int sumi0 = 0;
+        int sumi1 = 0;
 
         for (int j = 0; j < qk/2; ++j) {
             const uint8_t xh_0 = ((qh >> (j +  0)) << 4) & 0x10;
@@ -5203,9 +5213,11 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * restrict s, size_t bs, const void * r
             const int32_t x0 = (x[ib].qs[j] & 0xF) | xh_0;
             const int32_t x1 = (x[ib].qs[j] >>  4) | xh_1;
 
-            sumi += (x0 * y[ib].qs[j]) + (x1 * y[ib].qs[j + qk/2]);
+            sumi0 += (x0 * y[ib].qs[j]);
+            sumi1 += (x1 * y[ib].qs[j + qk/2]);
         }
 
+        int sumi = sumi0 + sumi1;
         sumf += (GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d))*sumi + GGML_FP16_TO_FP32(x[ib].m)*GGML_FP16_TO_FP32(y[ib].s);
     }
 
