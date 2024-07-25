@@ -1,5 +1,4 @@
 <html>
-
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
@@ -132,11 +131,19 @@
       align-items: stretch;
     }
 
-    .right {
+    .message-controls {
       display: flex;
-      flex-direction: row;
-      gap: 0.5em;
       justify-content: flex-end;
+    }
+    .message-controls > div:nth-child(2) {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5em;
+    }
+    .message-controls > div:nth-child(2) > div {
+      display: flex;
+      margin-left: auto;
+      gap: 0.5em;
     }
 
     fieldset {
@@ -276,6 +283,7 @@
 
     import { llama } from './completion.js';
     import { SchemaConverter } from './json-schema-to-grammar.mjs';
+
     let selected_image = false;
     var slot_id = -1;
 
@@ -447,6 +455,9 @@
 
     /* END: Support for storing prompt templates and parameters in browsers LocalStorage */
 
+    const tts = window.speechSynthesis;
+    const ttsVoice = signal(null)
+
     const llamaStats = signal(null)
     const controller = signal(null)
 
@@ -596,8 +607,51 @@
       });
     }
 
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const talkRecognition = SpeechRecognition ? new SpeechRecognition() : null;
     function MessageInput() {
-      const message = useSignal("")
+      const message = useSignal("");
+
+      const talkActive = useSignal(false);
+      const sendOnTalk = useSignal(false);
+      const talkStop = (e) => {
+        if (e) e.preventDefault();
+
+        talkActive.value = false;
+        talkRecognition?.stop();
+      }
+      const talk = (e) => {
+        e.preventDefault();
+
+        if (talkRecognition)
+          talkRecognition.start();
+        else
+          alert("Speech recognition is not supported by this browser.");
+      }
+      if(talkRecognition) {
+        talkRecognition.onstart = () => {
+          talkActive.value = true;
+        }
+        talkRecognition.onresult = (e) => {
+          if (event.results.length > 0) {
+            message.value = event.results[0][0].transcript;
+            if (sendOnTalk.value) {
+              submit(e);
+            }
+          }
+        }
+        talkRecognition.onspeechend = () => {
+          talkStop();
+        }
+      }
+
+      const ttsVoices = useSignal(tts?.getVoices() || []);
+      const ttsVoiceDefault = computed(() => ttsVoices.value.find(v => v.default));
+      if (tts) {
+        tts.onvoiceschanged = () => {
+          ttsVoices.value = tts.getVoices();
+        }
+      }
 
       const submit = (e) => {
         stop(e);
@@ -624,11 +678,45 @@
                value="${message}"
             />
           </div>
-          <div class="right">
-            <button type="submit" disabled=${generating.value}>Send</button>
-            <button onclick=${uploadImage}>Upload Image</button>
-            <button onclick=${stop} disabled=${!generating.value}>Stop</button>
-            <button onclick=${reset}>Reset</button>
+          <div class="message-controls">
+            <div> </div>
+            <div>
+              <div>
+                <button type="submit" disabled=${generating.value || talkActive.value}>Send</button>
+                <button disabled=${generating.value || talkActive.value} onclick=${uploadImage}>Upload Image</button>
+                <button onclick=${stop} disabled=${!generating.value}>Stop</button>
+                <button onclick=${reset}>Reset</button>
+              </div>
+              <div>
+                <a href="#" style="cursor: help;" title="Help" onclick=${e => {
+                  e.preventDefault();
+                  alert(`STT supported by your browser: ${SpeechRecognition ? 'Yes' : 'No'}\n` +
+                  `(TTS and speech recognition are not provided by llama.cpp)\n` +
+                  `Note: STT requires HTTPS to work.`);
+                }}>[?]</a>
+                <button disabled=${generating.value} onclick=${talkActive.value ? talkStop : talk}>${talkActive.value ? "Stop Talking" : "Talk"}</button>
+                <div>
+                  <input type="checkbox" id="send-on-talk" name="send-on-talk" checked="${sendOnTalk}" onchange=${(e) => sendOnTalk.value = e.target.checked} />
+                  <label for="send-on-talk" style="line-height: initial;">Send after talking</label>
+                </div>
+              </div>
+              <div>
+                <a href="#" style="cursor: help;" title="Help" onclick=${e => {
+                  e.preventDefault();
+                  alert(`TTS supported by your browser: ${tts ? 'Yes' : 'No'}\n(TTS and speech recognition are not provided by llama.cpp)`);
+                }}>[?]</a>
+                <label for="tts-voices" style="line-height: initial;">Bot Voice:</label>
+                <select id="tts-voices" name="tts-voices" onchange=${(e) => ttsVoice.value = e.target.value} style="max-width: 100px;">
+                  <option value="" selected="${!ttsVoice.value}">None</option>
+                  ${[
+                    ...(ttsVoiceDefault.value ? [ttsVoiceDefault.value] : []),
+                    ...ttsVoices.value.filter(v => !v.default),
+                  ].map(
+                    v => html`<option value="${v.name}" selected="${ttsVoice.value === v.name}">${v.name} (${v.lang}) ${v.default ? '(default)' : ''}</option>`
+                  )}
+                </select>
+              </div>
+            </div>
           </div>
         </form>
       `
@@ -659,26 +747,86 @@
         }
       }, [messages])
 
+      const ttsChatLineActiveIx = useSignal(undefined);
+      const ttsChatLine = (e, ix, msg) => {
+        if (e) e.preventDefault();
+
+        if (!tts || !ttsVoice.value || !('SpeechSynthesisUtterance' in window)) return;
+
+        const ttsVoices = tts.getVoices();
+        const voice = ttsVoices.find(v => v.name === ttsVoice.value);
+        if (!voice) return;
+
+        if (ttsChatLineActiveIx.value !== undefined) {
+          tts.cancel();
+          if (ttsChatLineActiveIx.value === ix) {
+            ttsChatLineActiveIx.value = undefined;
+            return;
+          }
+        }
+
+        ttsChatLineActiveIx.value = ix;
+        let ttsUtter = new SpeechSynthesisUtterance(msg);
+        ttsUtter.voice = voice;
+        ttsUtter.onend = e => {
+          ttsChatLineActiveIx.value = undefined;
+        };
+        tts.speak(ttsUtter);
+      }
+
       const isCompletionMode = session.value.type === 'completion'
+
+      // Try play the last bot message
+      const lastCharChatLinesIxs = useSignal([]);
+      const lastCharChatLinesIxsOld = useSignal([]);
+      useEffect(() => {
+        if (
+          !isCompletionMode
+          && lastCharChatLinesIxs.value.length !== lastCharChatLinesIxsOld.value.length
+          && !generating.value
+        ) {
+          const ix = lastCharChatLinesIxs.value[lastCharChatLinesIxs.value.length - 1];
+          if (ix !== undefined) {
+            const msg = messages[ix];
+            ttsChatLine(null, ix, Array.isArray(msg) ? msg[1].map(m => m.content).join('') : msg);
+          }
+
+          lastCharChatLinesIxsOld.value = structuredClone(lastCharChatLinesIxs.value);
+        }
+      }, [generating.value]);
+
       const chatLine = ([user, data], index) => {
         let message
-        const isArrayMessage = Array.isArray(data)
+        const isArrayMessage = Array.isArray(data);
+        const text = isArrayMessage ?
+            data.map(msg => msg.content).join('') :
+            data;
         if (params.value.n_probs > 0 && isArrayMessage) {
           message = html`<${Probabilities} data=${data} />`
         } else {
-          const text = isArrayMessage ?
-            data.map(msg => msg.content).join('') :
-            data;
           message = isCompletionMode ?
             text :
             html`<${Markdownish} text=${template(text)} />`
         }
+
+        const fromBot = user && user === '{{char}}';
+        if (fromBot && !lastCharChatLinesIxs.value.includes(index))
+          lastCharChatLinesIxs.value.push(index);
+
         if (user) {
-          return html`<p key=${index}><strong>${template(user)}:</strong> ${message}</p>`
+          return html`
+          <div>
+            <p key=${index}><strong>${template(user)}:</strong> ${message}</p>
+            ${
+              fromBot && ttsVoice.value
+              && html`<button disabled=${generating.value} onclick=${e => ttsChatLine(e, index, text)} aria-label=${ttsChatLineActiveIx.value === index ? 'Pause' : 'Play'}>${ ttsChatLineActiveIx.value === index ? '⏸️' : '▶️' }</div>`
+            }
+          </div>
+          `;
         } else {
           return isCompletionMode ?
             html`<span key=${index}>${message}</span>` :
-            html`<p key=${index}>${message}</p>`
+            html`<div><p key=${index}>${message}</p></div>`
         }
       };
 
