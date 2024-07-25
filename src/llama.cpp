@@ -2657,7 +2657,6 @@ struct llama_context {
     llama_context(const llama_model & model)
         : model(model)
         , sampling(llama_n_vocab(&model))
-        , grammar()
         , t_start_us(model.t_start_us)
         , t_load_us(model.t_load_us) {}
 
@@ -2675,7 +2674,6 @@ struct llama_context {
 
     struct llama_cparams        cparams;
     struct llama_sampling       sampling;
-    struct llama_grammar        grammar;
     struct llama_kv_cache       kv_self;
     struct llama_control_vector cvec;
 
@@ -14048,7 +14046,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                             f = -INFINITY;
                         } else {
                             if (hparams.use_alibi) {
-                                f = -fabs(lctx.kv_self.cells[i].pos - pos);
+                                f = -std::abs(lctx.kv_self.cells[i].pos - pos);
                             } else {
                                 f = 0.0f;
                             }
@@ -14102,7 +14100,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_batch & batch) {
                         for (int s = 0; s < batch.n_seq_id[i]; ++s) {
                             if (batch.seq_id[i][s] == seq_id) {
                                 if (hparams.use_alibi) {
-                                    f = -fabs(batch.pos[i] - batch.pos[j]);
+                                    f = -std::abs(batch.pos[i] - batch.pos[j]);
                                 } else {
                                     f = 0.0f;
                                 }
@@ -16831,10 +16829,6 @@ const struct llama_model * llama_get_model(const struct llama_context * ctx) {
 
 const struct llama_vocab * llama_get_vocab(const struct llama_context * ctx) {
     return &ctx->model.vocab;
-}
-
-struct llama_grammar * llama_get_grammar(struct llama_context * ctx) {
-    return &ctx->grammar;
 }
 
 uint32_t llama_n_ctx(const struct llama_context * ctx) {

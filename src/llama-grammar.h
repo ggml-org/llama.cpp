@@ -13,8 +13,6 @@ struct llama_grammar {
     llama_partial_utf8 partial_utf8;
 };
 
-struct llama_grammar * llama_get_grammar(struct llama_context * ctx);
-
 //
 // internal API
 //
