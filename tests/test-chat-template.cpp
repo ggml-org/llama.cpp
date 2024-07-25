@@ -146,7 +146,7 @@ int main(void) {
     auto fmt_sys = [&](std::string tmpl) {
         auto output = llama_chat_format_single(nullptr, tmpl, chat2, sys_msg, false);
         printf("fmt_sys(%s) : %s\n", tmpl.c_str(), output.c_str());
-        printf("-------------------------\n", output.c_str());
+        printf("-------------------------\n");
         return output;
     };
     assert(fmt_sys("chatml") == "<|im_start|>system\nYou are a helpful assistant<|im_end|>\n");
@@ -165,7 +165,7 @@ int main(void) {
     auto fmt_single = [&](std::string tmpl) {
         auto output = llama_chat_format_single(nullptr, tmpl, chat2, new_msg, true);
         printf("fmt_single(%s) : %s\n", tmpl.c_str(), output.c_str());
-        printf("-------------------------\n", output.c_str());
+        printf("-------------------------\n");
         return output;
     };
     assert(fmt_single("chatml") == "\n<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n");
