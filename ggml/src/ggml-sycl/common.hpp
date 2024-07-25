@@ -267,7 +267,7 @@ struct ggml_backend_sycl_context {
 
     queue_ptr stream(int device, int stream) {
         if (qptrs[device][stream] == nullptr) {
-            qptrs[device][stream] = &(dpct::get_current_device().default_queue());
+            qptrs[device][stream] = &(dpct::get_device(device).default_queue());
         }
         return qptrs[device][stream];
     }

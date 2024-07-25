@@ -16643,9 +16643,7 @@ struct llama_context * llama_new_context_with_model(
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); ++i) {
                 ggml_backend_t backend = ggml_backend_sycl_init(i);
                 if (backend == nullptr) {
-                    int id_list[GGML_SYCL_MAX_DEVICES];
-                    ggml_sycl_get_gpu_list(id_list, GGML_SYCL_MAX_DEVICES);
-                    LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d (index %d) backend\n", __func__, id_list[i], i);
+                    LLAMA_LOG_ERROR("%s: failed to initialize SYCL%d for No.%d backend\n", __func__, i, i);
                     llama_free(ctx);
                     return nullptr;
                 }

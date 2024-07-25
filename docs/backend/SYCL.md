@@ -293,31 +293,26 @@ Similar to the native `sycl-ls`, available SYCL devices can be queried as follow
 ```sh
 ./build/bin/llama-ls-sycl-device
 ```
-A example of such log in a system with 1 *intel CPU* and 1 *intel GPU* can look like the following:
+This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *intel GPU* it would look like the following:
 ```
-found 6 SYCL devices:
+found 2 SYCL devices:
+
 |  |                  |                                             |Compute   |Max compute|Max work|Max sub|               |
 |ID|       Device Type|                                         Name|capability|units      |group   |group  |Global mem size|
 |--|------------------|---------------------------------------------|----------|-----------|--------|-------|---------------|
 | 0|[level_zero:gpu:0]|               Intel(R) Arc(TM) A770 Graphics|       1.3|        512|    1024|     32|    16225243136|
 | 1|[level_zero:gpu:1]|                    Intel(R) UHD Graphics 770|       1.3|         32|     512|     32|    53651849216|
-| 2|    [opencl:gpu:0]|               Intel(R) Arc(TM) A770 Graphics|       3.0|        512|    1024|     32|    16225243136|
-| 3|    [opencl:gpu:1]|                    Intel(R) UHD Graphics 770|       3.0|         32|     512|     32|    53651849216|
-| 4|    [opencl:cpu:0]|         13th Gen Intel(R) Core(TM) i7-13700K|       3.0|         24|    8192|     64|    67064815616|
-| 5|    [opencl:acc:0]|               Intel(R) FPGA Emulation Device|       1.2|         24|67108864|     64|    67064815616|
 ```
 
-| Attribute              | Note                                                        |
-|------------------------|-------------------------------------------------------------|
-| compute capability 1.3 | Level-zero driver/runtime, recommended                      |
-| compute capability 3.0 | OpenCL driver/runtime, slower than level-zero in most cases |
 
 4. Launch inference
 
 There are two device selection modes:
 
 - Single device: Use one device target specified by the user.
-- Multiple devices: Automatically select the devices with the same largest Max compute-units.
+- Multiple devices: Automatically choose the devices with the same backend.
+
+In two device selection modes, the default SYCL backend is level_zero, you can choose other backend supported by SYCL by setting environment variable ONEAPI_DEVICE_SELECTOR.
 
 | Device selection | Parameter                              |
 |------------------|----------------------------------------|
@@ -474,33 +469,26 @@ Similar to the native `sycl-ls`, available SYCL devices can be queried as follow
 build\bin\ls-sycl-device.exe
 ```
 
-The output of this command in a system with 1 *intel CPU* and 1 *intel GPU* would look like the following:
+This command will only display the selected backend that is supported by SYCL. The default backend is level_zero. For example, in a system with 2 *intel GPU* it would look like the following:
 ```
-found 6 SYCL devices:
+found 2 SYCL devices:
 |  |                  |                                             |Compute   |Max compute|Max work|Max sub|               |
 |ID|       Device Type|                                         Name|capability|units      |group   |group  |Global mem size|
 |--|------------------|---------------------------------------------|----------|-----------|--------|-------|---------------|
 | 0|[level_zero:gpu:0]|               Intel(R) Arc(TM) A770 Graphics|       1.3|        512|    1024|     32|    16225243136|
 | 1|[level_zero:gpu:1]|                    Intel(R) UHD Graphics 770|       1.3|         32|     512|     32|    53651849216|
-| 2|    [opencl:gpu:0]|               Intel(R) Arc(TM) A770 Graphics|       3.0|        512|    1024|     32|    16225243136|
-| 3|    [opencl:gpu:1]|                    Intel(R) UHD Graphics 770|       3.0|         32|     512|     32|    53651849216|
-| 4|    [opencl:cpu:0]|         13th Gen Intel(R) Core(TM) i7-13700K|       3.0|         24|    8192|     64|    67064815616|
-| 5|    [opencl:acc:0]|               Intel(R) FPGA Emulation Device|       1.2|         24|67108864|     64|    67064815616|
 
 ```
-
-| Attribute              | Note                                                      |
-|------------------------|-----------------------------------------------------------|
-| compute capability 1.3 | Level-zero running time, recommended                      |
-| compute capability 3.0 | OpenCL running time, slower than level-zero in most cases |
 
 
 4. Launch inference
 
 There are two device selection modes:
 
-- Single device: Use one device assigned by user.
-- Multiple devices: Automatically choose the devices with the same biggest Max compute units.
+- Single device: Use one device assigned by user. Default device id is 0.
+- Multiple devices: Automatically choose the devices with the same backend.
+
+In two device selection modes, the default SYCL backend is level_zero, you can choose other backend supported by SYCL by setting environment variable ONEAPI_DEVICE_SELECTOR.
 
 | Device selection | Parameter                              |
 |------------------|----------------------------------------|
