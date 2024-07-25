@@ -21096,6 +21096,12 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
         };
 
         *params.ctx = ggml_init(pdata);
+        if (*params.ctx == NULL) {
+            fprintf(stderr, "%s: failed to initialize context\n", __func__);
+            fclose(file);
+            gguf_free(ctx);
+            return NULL;
+        }
 
         struct ggml_context * ctx_data = *params.ctx;
 
