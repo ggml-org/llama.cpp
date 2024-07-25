@@ -211,8 +211,9 @@ struct lora_merge_ctx {
             }
         }
 
-        // if true, this tensor can be lora-merged. if false, we skip merging and just copy data to outfile
-        std::vector<std::pair<struct ggml_tensor *, bool>> base_tensors;
+        // mapping base tensor to out tensor (same shape with base, but different type)
+        // if out_tensor == nullptr, we only copy it
+        std::vector<std::pair<struct ggml_tensor *, struct ggml_tensor *>> base_to_out_tensors;
         for (auto & it : base_model.tensors) {
             bool t_a = true;
             bool t_b = true;
@@ -221,22 +222,22 @@ struct lora_merge_ctx {
                 t_b &= nullptr != adapter->get_tensor(it.first + ".lora_b");
             }
             auto base_tensor = it.second;
-            struct ggml_tensor * out_tensor;
             if (!t_a && !t_b) {
                 // only copy
-                out_tensor = ggml_dup_tensor(ctx_out_ggml, base_tensor);
-                ggml_set_name(out_tensor, base_tensor->name);
-                base_tensors.push_back(std::make_pair(out_tensor, false));
+                struct ggml_tensor * cpy_tensor = ggml_dup_tensor(ctx_out_ggml, base_tensor);
+                ggml_set_name(cpy_tensor, base_tensor->name);
+                base_to_out_tensors.push_back(std::make_pair(cpy_tensor, nullptr));
+                gguf_add_tensor(ctx_out, cpy_tensor);
             } else if (t_a && t_b) {
                 // need merging
-                out_tensor = ggml_dup_tensor(ctx_out_ggml, base_tensor);
-                out_tensor->type = get_out_tensor_type(base_tensor);
+                struct ggml_tensor * out_tensor = ggml_new_tensor(
+                    ctx_out_ggml, get_out_tensor_type(base_tensor), GGML_MAX_DIMS, base_tensor->ne);
                 ggml_set_name(out_tensor, base_tensor->name);
-                base_tensors.push_back(std::make_pair(out_tensor, true));
+                base_to_out_tensors.push_back(std::make_pair(base_tensor, out_tensor));
+                gguf_add_tensor(ctx_out, out_tensor);
             } else {
                 throw std::runtime_error("tensor " + it.first + " missing either lora_a or lora_b");
             }
-            gguf_add_tensor(ctx_out, out_tensor);
         }
 
         // placeholder for the meta data
@@ -247,9 +248,9 @@ struct lora_merge_ctx {
 
         // process base model tensors
         size_t n_merged = 0;
-        for (auto & it : base_tensors) {
-            if (it.second) {
-                merge_tensor(it.first);
+        for (auto & it : base_to_out_tensors) {
+            if (it.second != nullptr) {
+                merge_tensor(it.first, it.second);
                 n_merged++;
             } else {
                 copy_tensor(it.first);
@@ -265,7 +266,7 @@ struct lora_merge_ctx {
         }
 
         printf("%s : merged %ld tensors with lora adapters\n", __func__, n_merged);
-        printf("%s : wrote %ld tensors to output file\n", __func__, base_tensors.size());
+        printf("%s : wrote %ld tensors to output file\n", __func__, base_to_out_tensors.size());
     }
 
     void copy_tensor(struct ggml_tensor * base) {
@@ -276,7 +277,7 @@ struct lora_merge_ctx {
         zeros(fout, GGML_PAD(len, GGUF_DEFAULT_ALIGNMENT) - len);
     }
 
-    void merge_tensor(struct ggml_tensor * base) {
+    void merge_tensor(struct ggml_tensor * base, struct ggml_tensor * out) {
         std::string name_base(base->name);
         std::string name_lora_a = name_base + ".lora_a";
         std::string name_lora_b = name_base + ".lora_b";
@@ -287,14 +288,14 @@ struct lora_merge_ctx {
         std::vector<struct ggml_tensor *> inp_a(adapters.size());
         std::vector<struct ggml_tensor *> inp_b(adapters.size());
         struct ggml_init_params params {
-            /*.mem_size   =*/ ggml_tensor_overhead()*(1+adapters.size()*2),
+            /*.mem_size   =*/ ggml_tensor_overhead()*(2+adapters.size()*2),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
         struct ggml_context * ctx = ggml_init(params);
 
         // alloc tensors
-        struct ggml_tensor * inp = ggml_dup_tensor(ctx, base);
+        struct ggml_tensor * inp_base = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, base->ne);
         for (size_t i = 0; i < adapters.size(); ++i) {
             auto t_a = adapters[i]->get_tensor(name_lora_a);
             auto t_b = adapters[i]->get_tensor(name_lora_b);
@@ -303,9 +304,21 @@ struct lora_merge_ctx {
         }
         ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
 
-        // load data to backend buffer
+        // load base tensor to backend buffer
         base_model.read_tensor_data(name_base, read_buf);
-        ggml_backend_tensor_set(inp, read_buf.data(), 0, ggml_nbytes(inp));
+        if (base->type != GGML_TYPE_F32) {
+            // optionally dequantize it
+            printf("%s :   + dequantize base tensor from %s to F32\n", __func__, ggml_type_name(base->type));
+            auto nels = ggml_nelements(inp_base);
+            ggml_type_traits_t qtype = ggml_internal_get_type_traits(base->type);
+            std::vector<uint8_t> dequant_buf(nels * sizeof(float));
+            qtype.to_float(read_buf.data(), (float *)dequant_buf.data(), nels);
+            ggml_backend_tensor_set(inp_base, dequant_buf.data(), 0, dequant_buf.size());
+        } else {
+            ggml_backend_tensor_set(inp_base, read_buf.data(), 0, ggml_nbytes(inp_base));
+        }
+
+        // load lora tensors to backend buffer
         for (size_t i = 0; i < adapters.size(); ++i) {
             adapters[i]->read_tensor_data(name_lora_a, read_buf);
             ggml_backend_tensor_set(inp_a[i], read_buf.data(), 0, ggml_nbytes(inp_a[i]));
@@ -325,20 +338,21 @@ struct lora_merge_ctx {
             };
             struct ggml_context * ctx0 = ggml_init(params0);
             gf = ggml_new_graph(ctx0);
-            struct ggml_tensor * cur = inp;
+            struct ggml_tensor * cur = inp_base;
             for (size_t i = 0; i < adapters.size(); ++i) {
-                struct ggml_tensor * a_T = ggml_cont(ctx0, ggml_transpose(ctx0, inp_a[i]));
-                struct ggml_tensor * delta = ggml_mul_mat(ctx0, a_T, inp_b[i]);
+                struct ggml_tensor * a_T = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32)));
+                struct ggml_tensor * delta = ggml_mul_mat(ctx0, a_T, ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32));
                 // scale
                 const float alpha = adapters[i]->alpha;
                 const float rank  = (float) inp_b[i]->ne[0];
                 const float scale = alpha ? adapters[i]->scale * alpha / rank : adapters[i]->scale;
                 delta = ggml_scale(ctx0, delta, scale);
-                cur = ggml_add(ctx0, cur, delta);
-                printf("%s :   + merging from adapter[%ld]\n", __func__, i);
+                cur = ggml_add(ctx0, delta, cur);
+                printf("%s :   + merging from adapter[%ld] type=%s\n", __func__, i, ggml_type_name(inp_a[i]->type));
                 printf("%s :     input_scale=%f calculated_scale=%f rank=%d\n", __func__, adapters[i]->scale, scale, (int) inp_b[i]->ne[0]);
             }
-            cur = ggml_cast(ctx0, cur, get_out_tensor_type(base));
+            cur = ggml_cast(ctx0, cur, out->type);
+            printf("%s :   + output type is %s\n", __func__, ggml_type_name(out->type));
             ggml_build_forward_expand(gf, cur);
             ggml_free(ctx0);
         }
