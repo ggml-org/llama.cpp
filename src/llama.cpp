@@ -2905,7 +2905,7 @@ static size_t llama_get_device_memory(const llama_model & model, int device) {
 #elif defined(GGML_USE_CANN)
     size_t total;
     size_t free;
-    ggml_backend_cann_get_device_memory(device, &total, &free);
+    ggml_backend_cann_get_device_memory(device, &free, &total);
     return free;
 #else
     return 1;
