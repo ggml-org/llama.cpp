@@ -23,6 +23,7 @@ cp -rpv ../ggml/src/ggml-rpc.cpp        ./ggml/src/ggml-rpc.cpp
 cp -rpv ../ggml/src/ggml-sycl/*         ./ggml/src/ggml-sycl/
 cp -rpv ../ggml/src/ggml-sycl.cpp       ./ggml/src/ggml-sycl.cpp
 cp -rpv ../ggml/src/ggml-vulkan.cpp     ./ggml/src/ggml-vulkan.cpp
+cp -rpv ../ggml/src/vulkan-shaders/*    ./ggml/src/vulkan-shaders/
 
 cp -rpv ../ggml/include/ggml.h         ./ggml/include/ggml.h
 cp -rpv ../ggml/include/ggml-alloc.h   ./ggml/include/ggml-alloc.h

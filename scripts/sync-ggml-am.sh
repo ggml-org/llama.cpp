@@ -119,6 +119,7 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # src/ggml-sycl/*         -> ggml/src/ggml-sycl/
     # src/ggml-sycl.cpp       -> ggml/src/ggml-sycl.cpp
     # src/ggml-vulkan.cpp     -> ggml/src/ggml-vulkan.cpp
+    # src/vulkan-shaders/*    -> ggml/src/vulkan-shaders/
     #
     # include/ggml.h         -> ggml/include/ggml.h
     # include/ggml-alloc.h   -> ggml/include/ggml-alloc.h
@@ -162,6 +163,7 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]|[ab]\/)src\/ggml-sycl\//\1ggml\/src\/ggml-sycl\//g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-sycl\.cpp/\1ggml\/src\/ggml-sycl.cpp/g' \
         -e 's/([[:space:]]|[ab]\/)src\/ggml-vulkan\.cpp/\1ggml\/src\/ggml-vulkan.cpp/g' \
+        -e 's/([[:space:]]|[ab]\/)src\/vulkan-shaders\//\1ggml\/src\/vulkan-shaders\//g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml\.h/\1ggml\/include\/ggml.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-alloc\.h/\1ggml\/include\/ggml-alloc.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-backend\.h/\1ggml\/include\/ggml-backend.h/g' \
