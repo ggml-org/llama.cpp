@@ -192,6 +192,19 @@ The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/c
 | GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                         |
 | GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Compile support for all KV cache quantization type (combinations) for the FlashAttention CUDA kernels. More fine-grained control over KV cache size but compilation takes much longer.                                                                                                  |
 
+### MUSA
+
+- Using `make`:
+  ```bash
+  make GGML_MUSA=1
+  ```
+- Using `CMake`:
+
+  ```bash
+  cmake -B build -DGGML_MUSA=ON
+  cmake --build build --config Release
+  ```
+
 ### hipBLAS
 
 This provides BLAS acceleration on HIP-supported AMD GPUs.

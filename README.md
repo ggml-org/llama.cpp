@@ -409,6 +409,7 @@ Please refer to [Build llama.cpp locally](./docs/build.md)
 | [BLAS](./docs/build.md#blas-build) | All |
 | [BLIS](./docs/backend/BLIS.md) | All |
 | [SYCL](./docs/backend/SYCL.md) | Intel and Nvidia GPU |
+| [MUSA](./docs/build.md#musa) | Moore Threads GPU |
 | [CUDA](./docs/build.md#cuda) | Nvidia GPU |
 | [hipBLAS](./docs/build.md#hipblas) | AMD GPU |
 | [Vulkan](./docs/build.md#vulkan) | GPU |

@@ -528,10 +528,21 @@ ifndef GGML_NO_ACCELERATE
 	endif
 endif # GGML_NO_ACCELERATE
 
+ifdef GGML_MUSA
+	CC := clang
+	CXX := clang++
+	GGML_CUDA := 1
+	MK_CPPFLAGS += -DGGML_USE_MUSA
+endif
+
 ifndef GGML_NO_OPENMP
 	MK_CPPFLAGS += -DGGML_USE_OPENMP
 	MK_CFLAGS   += -fopenmp
 	MK_CXXFLAGS += -fopenmp
+	ifdef GGML_MUSA
+		MK_CPPFLAGS += -I/usr/lib/llvm-10/include/openmp
+		MK_LDFLAGS  += -L/usr/lib/llvm-10/lib
+	endif # GGML_MUSA
 endif # GGML_NO_OPENMP
 
 ifdef GGML_OPENBLAS
@@ -582,15 +593,27 @@ else
 endif # GGML_CUDA_FA_ALL_QUANTS
 
 ifdef GGML_CUDA
-	ifneq ('', '$(wildcard /opt/cuda)')
-		CUDA_PATH ?= /opt/cuda
-	else
-		CUDA_PATH ?= /usr/local/cuda
-	endif
+	ifdef GGML_MUSA
+		ifneq ('', '$(wildcard /opt/musa)')
+			CUDA_PATH ?= /opt/musa
+		else
+			CUDA_PATH ?= /usr/local/musa
+		endif
 
-	MK_CPPFLAGS  += -DGGML_USE_CUDA -I$(CUDA_PATH)/include -I$(CUDA_PATH)/targets/$(UNAME_M)-linux/include -DGGML_CUDA_USE_GRAPHS
-	MK_LDFLAGS   += -lcuda -lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -L$(CUDA_PATH)/lib64 -L/usr/lib64 -L$(CUDA_PATH)/targets/$(UNAME_M)-linux/lib -L$(CUDA_PATH)/lib64/stubs -L/usr/lib/wsl/lib
-	MK_NVCCFLAGS += -use_fast_math
+		MK_CPPFLAGS  += -DGGML_USE_CUDA -I$(CUDA_PATH)/include
+		MK_LDFLAGS   += -lmusa -lmublas -lmusart -lpthread -ldl -lrt -L$(CUDA_PATH)/lib -L/usr/lib64
+		MK_NVCCFLAGS += -x musa -mtgpu --cuda-gpu-arch=mp_22
+	else
+		ifneq ('', '$(wildcard /opt/cuda)')
+			CUDA_PATH ?= /opt/cuda
+		else
+			CUDA_PATH ?= /usr/local/cuda
+		endif
+
+		MK_CPPFLAGS  += -DGGML_USE_CUDA -I$(CUDA_PATH)/include -I$(CUDA_PATH)/targets/$(UNAME_M)-linux/include -DGGML_CUDA_USE_GRAPHS
+		MK_LDFLAGS   += -lcuda -lcublas -lculibos -lcudart -lcublasLt -lpthread -ldl -lrt -L$(CUDA_PATH)/lib64 -L/usr/lib64 -L$(CUDA_PATH)/targets/$(UNAME_M)-linux/lib -L$(CUDA_PATH)/lib64/stubs -L/usr/lib/wsl/lib
+		MK_NVCCFLAGS += -use_fast_math
+	endif # GGML_MUSA
 
 	OBJ_GGML += ggml/src/ggml-cuda.o
 	OBJ_GGML += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/*.cu))
@@ -600,9 +623,11 @@ ifdef LLAMA_FATAL_WARNINGS
 	MK_NVCCFLAGS += -Werror all-warnings
 endif # LLAMA_FATAL_WARNINGS
 
+ifndef GGML_MUSA
 ifndef JETSON_EOL_MODULE_DETECT
 	MK_NVCCFLAGS += --forward-unknown-to-host-compiler
 endif # JETSON_EOL_MODULE_DETECT
+endif # GGML_MUSA
 
 ifdef LLAMA_DEBUG
 	MK_NVCCFLAGS += -lineinfo
@@ -615,8 +640,12 @@ endif # GGML_CUDA_DEBUG
 ifdef GGML_CUDA_NVCC
 	NVCC = $(CCACHE) $(GGML_CUDA_NVCC)
 else
-	NVCC = $(CCACHE) nvcc
-endif #GGML_CUDA_NVCC
+	ifdef GGML_MUSA
+		NVCC = $(CCACHE) mcc
+	else
+		NVCC = $(CCACHE) nvcc
+	endif # GGML_MUSA
+endif # GGML_CUDA_NVCC
 
 ifdef CUDA_DOCKER_ARCH
 	MK_NVCCFLAGS += -Wno-deprecated-gpu-targets -arch=$(CUDA_DOCKER_ARCH)
@@ -687,9 +716,15 @@ define NVCC_COMPILE
 	$(NVCC) -I. -Icommon -D_XOPEN_SOURCE=600 -D_GNU_SOURCE -DNDEBUG -DGGML_USE_CUDA -I/usr/local/cuda/include -I/opt/cuda/include -I/usr/local/cuda/targets/aarch64-linux/include -std=c++11 -O3 $(NVCCFLAGS) $(CPPFLAGS) -Xcompiler "$(CUDA_CXXFLAGS)" -c $< -o $@
 endef # NVCC_COMPILE
 else
+	ifdef GGML_MUSA
+define NVCC_COMPILE
+	$(NVCC) $(NVCCFLAGS) $(CPPFLAGS) -c $< -o $@
+endef # NVCC_COMPILE
+	else
 define NVCC_COMPILE
 	$(NVCC) $(NVCCFLAGS) $(CPPFLAGS) -Xcompiler "$(CUDA_CXXFLAGS)" -c $< -o $@
 endef # NVCC_COMPILE
+	endif # GGML_MUSA
 endif # JETSON_EOL_MODULE_DETECT
 
 ggml/src/ggml-cuda/%.o: \
@@ -944,6 +979,7 @@ $(info I CXX:       $(shell $(CXX)  --version | head -n 1))
 ifdef GGML_CUDA
 $(info I NVCC:      $(shell $(NVCC) --version | tail -n 1))
 CUDA_VERSION := $(shell $(NVCC) --version | grep -oP 'release (\K[0-9]+\.[0-9])')
+ifndef GGML_MUSA
 ifeq ($(shell awk -v "v=$(CUDA_VERSION)" 'BEGIN { print (v < 11.7) }'),1)
 
 ifndef CUDA_DOCKER_ARCH
@@ -953,6 +989,7 @@ endif # CUDA_POWER_ARCH
 endif # CUDA_DOCKER_ARCH
 
 endif # eq ($(shell echo "$(CUDA_VERSION) < 11.7" | bc),1)
+endif # GGML_MUSA
 endif # GGML_CUDA
 $(info )
 
