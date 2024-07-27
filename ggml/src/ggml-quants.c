@@ -4477,7 +4477,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * restrict s, size_t bs, const void * r
     sumf = hsum_float_8(acc) + summs;
 #endif
     for (; ib < nb; ++ib) {
-        int sumi0 = 0
+        int sumi0 = 0;
         int sumi1 = 0;
 
         for (int j = 0; j < qk/2; ++j) {
