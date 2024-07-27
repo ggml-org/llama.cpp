@@ -662,7 +662,7 @@ void ggml_cuda_op_dequantize_mul_mat_vec(
             convert_mul_mat_vec_f16_cuda(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 

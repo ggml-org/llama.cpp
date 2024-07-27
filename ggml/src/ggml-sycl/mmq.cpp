@@ -1799,7 +1799,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q4_0_PASCAL;
         nwarps = NWARPS_Q4_0_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -1914,7 +1914,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q4_1_PASCAL;
         nwarps = NWARPS_Q4_1_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2029,7 +2029,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q5_0_PASCAL;
         nwarps = NWARPS_Q5_0_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2144,7 +2144,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q5_1_PASCAL;
         nwarps = NWARPS_Q5_1_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2259,7 +2259,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q8_0_PASCAL;
         nwarps = NWARPS_Q8_0_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2374,7 +2374,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q2_K_PASCAL;
         nwarps = NWARPS_Q2_K_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2497,7 +2497,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q3_K_PASCAL;
         nwarps = NWARPS_Q3_K_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2625,7 +2625,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q4_K_PASCAL;
         nwarps = NWARPS_Q4_K_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2746,7 +2746,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q5_K_PASCAL;
         nwarps = NWARPS_Q5_K_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -2867,7 +2867,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
         mmq_y  =  MMQ_Y_Q6_K_PASCAL;
         nwarps = NWARPS_Q6_K_PASCAL;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const int block_num_x = (nrows_x + mmq_y - 1) / mmq_y;
@@ -3016,7 +3016,7 @@ void ggml_sycl_op_mul_mat_q(
             ggml_mul_mat_q6_K_q8_1_sycl(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_ncols, src1_padded_row_size, nrows_dst, stream);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 

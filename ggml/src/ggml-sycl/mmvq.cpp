@@ -1017,7 +1017,7 @@ void ggml_sycl_op_mul_mat_vec_q(
             mul_mat_vec_iq4_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
         }
     }

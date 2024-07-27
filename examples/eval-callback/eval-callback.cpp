@@ -62,7 +62,7 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                     } else if (type == GGML_TYPE_I8) {
                         v = (float) *(int8_t *) &data[i];
                     } else {
-                        GGML_ASSERT(false);
+                        GGML_ABORT("fatal error");
                     }
                     printf("%12.4f", v);
                     sum += v;

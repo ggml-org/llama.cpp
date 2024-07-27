@@ -844,7 +844,7 @@ void ggml_cann_pool2d(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_cann_max_pool2d(ctx, dst);
             break;
         case GGML_OP_POOL_COUNT:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }
@@ -931,9 +931,9 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                         ((ggml_tensor*)dst->extra)->nb);
                     return;
                 }
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             }
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
         if (dst->type == GGML_TYPE_F32) {
             if (ggml_are_same_shape(src, dst)) {
@@ -955,12 +955,12 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                         ((ggml_tensor*)dst->extra)->nb);
                     return;
                 }
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             }
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
         // TODO
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     } else if (src->type == GGML_TYPE_F32) {
         // TODO: if (src0->type == dst->type && ne00 == ne0 && nb00 == type_size
         //          && nb0 == type_size)
@@ -991,10 +991,10 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                         ((ggml_tensor*)dst->extra)->nb);
                     return;
                 }
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             } else {
                 // TODO: dst not contiguous
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             }
         }
         if (dst->type == GGML_TYPE_F16) {
@@ -1017,11 +1017,11 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                         ((ggml_tensor*)dst->extra)->nb);
                     return;
                 }
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             }
         }
         // TODO
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     } else {
         if (ggml_are_same_shape(src, dst)) {
             cann_copy(ctx, acl_src, acl_dst);
@@ -1029,7 +1029,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ACL_CHECK(aclDestroyTensor(acl_dst));
             return;
         }
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 
@@ -2219,7 +2219,7 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 ((ggml_tensor*)dst->extra)->nb);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }
@@ -2492,7 +2492,7 @@ void ggml_cann_mul_mat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_cann_mul_mat_q8_0(ctx, dst);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }

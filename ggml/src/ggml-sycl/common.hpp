@@ -100,7 +100,7 @@ static void crash() {
     const char* msg) {
   fprintf(stderr, "SYCL error: %s: %s\n", stmt, msg);
   fprintf(stderr, "  in function %s at %s:%d\n", func, file, line);
-  GGML_ASSERT(!"SYCL error");
+  GGML_ABORT("SYCL error");
 }
 
 #define SYCL_CHECK(err)                     \

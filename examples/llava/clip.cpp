@@ -869,7 +869,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             embeddings = peg_0;
         }
         else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 

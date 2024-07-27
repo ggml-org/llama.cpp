@@ -75,7 +75,7 @@ static mmq_q8_1_ds_layout mmq_get_q8_1_ds_layout(const ggml_type type_x) {
         case GGML_TYPE_IQ4_NL:
             return MMQ_Q8_1_DS_LAYOUT_D4;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }
@@ -2898,7 +2898,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
             break;
         default:
             fprintf(stderr, "mmq_x_best=%d\n", mmq_x_best);
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }

@@ -221,7 +221,7 @@ static void llama_grammar_advance_stack(
             // end of alternate (LLAMA_GRETYPE_END, LLAMA_GRETYPE_ALT) or middle of char range
             // (LLAMA_GRETYPE_CHAR_ALT, LLAMA_GRETYPE_CHAR_RNG_UPPER); stack should never be left on
             // those
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
     }
 }
 
@@ -517,7 +517,7 @@ void llama_grammar_accept_token_impl(struct llama_grammar * grammar, const struc
                 return;
             }
         }
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     const std::string & piece = vocab->cache_token_to_piece.at(token);

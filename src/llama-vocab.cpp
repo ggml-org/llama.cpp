@@ -152,14 +152,14 @@ static uint8_t llama_token_to_byte(const llama_vocab & vocab, llama_token id) {
             return strtol(buf.c_str(), NULL, 16);
         }
         case LLAMA_VOCAB_TYPE_BPE: {
-            GGML_ASSERT(false);
-            return unicode_utf8_to_byte(token_data.text); // TODO: why is this here after GGML_ASSERT?
+            GGML_ABORT("fatal error");
+            //return unicode_utf8_to_byte(token_data.text); // TODO: why is this here after GGML_ASSERT?
         }
         case LLAMA_VOCAB_TYPE_WPM: {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
     }
 }
 
@@ -1396,7 +1396,7 @@ std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, 
                 }
             } break;
         case LLAMA_VOCAB_TYPE_NONE:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
     }
 
     return output;
@@ -1422,7 +1422,7 @@ llama_token llama_byte_to_token_impl(const llama_vocab & vocab, uint8_t ch) {
             return vocab.token_to_id.at(unicode_byte_to_utf8(ch));
         }
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
     }
 }
 
@@ -1606,7 +1606,7 @@ int32_t llama_token_to_piece_impl(const struct llama_vocab & vocab, llama_token 
                 break;
             }
             default:
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
         }
     }
 

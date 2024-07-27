@@ -163,7 +163,7 @@ static void write_utf8_cstr_to_stdout(const char * str, bool & invalid_utf8) {
                 printf(">");
                 return;
             }
-            GGML_ASSERT(false && "MultiByteToWideChar() failed in an unexpected way.");
+            GGML_ABORT("MultiByteToWideChar() failed in an unexpected way.");
         }
 
         LPWSTR wstr = (LPWSTR) calloc(length_needed+1, sizeof(*wstr));

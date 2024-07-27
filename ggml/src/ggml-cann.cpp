@@ -120,7 +120,7 @@ static void ggml_cann_log(enum ggml_log_level level, const char* format, ...) {
             file, line);
     GGML_CANN_LOG_ERROR("  %s\n", stmt);
     // abort with GGML_ASSERT to get a stack trace
-    GGML_ASSERT(!"CANN error");
+    GGML_ABORT("CANN error");
 }
 
 /**
@@ -342,7 +342,7 @@ struct ggml_cann_pool_leg : public ggml_cann_pool {
         // memory should always buffered. these memory may still needed by
         // tasks in stream.
         // TODO, fix me.
-        GGML_ASSERT(!"Cann buffer pool full, increase MAX_CANN_BUFFERS\n");
+        GGML_ABORT("Cann buffer pool full, increase MAX_CANN_BUFFERS\n");
     }
 };
 
@@ -1874,7 +1874,7 @@ static void ggml_backend_cann_event_wait(ggml_backend_t backend,
         ACL_CHECK(aclrtStreamWaitEvent(cann_ctx->stream(),
                                        (aclrtEvent)event->context));
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 

@@ -251,7 +251,7 @@ void ggml_cuda_op_rope(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 attn_factor, corr_dims, freq_factors, stream
             );
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     } else {
         if (src0->type == GGML_TYPE_F32) {
@@ -265,7 +265,7 @@ void ggml_cuda_op_rope(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                 attn_factor, corr_dims, freq_factors, stream
             );
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 }

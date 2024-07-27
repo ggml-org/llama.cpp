@@ -163,7 +163,7 @@ void quantize_mmq_q8_1_cuda(
                 <<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx1, kx0_padded);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }

@@ -1011,7 +1011,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             break;
         default:
             printf("ggml_sycl_op_dequantize_mul_mat_vec unsupported GGML_TYPE %d\n", src0->type);
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 

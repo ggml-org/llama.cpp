@@ -1723,7 +1723,7 @@ static void argsort_f32_i32_sycl(const float *x, int *dst, const int ncols,
                 });
         });
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 
@@ -2075,8 +2075,8 @@ static dpct::err0 ggml_sycl_cpy_tensor_2d(void *dst,
         // GGML_SYCL_DEBUG("current device index %d\n", id);
         src_ptr = (char *) extra->data_device[id];
     } else {
-        // GGML_SYCL_DEBUG("GGML_ASSERT(false)\n");
-        GGML_ASSERT(false);
+        // GGML_SYCL_DEBUG("GGML_ABORT("fatal error")\n");
+        GGML_ABORT("fatal error");
     }
     char * dst_ptr = (char *) dst;
 
@@ -2163,7 +2163,7 @@ static void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, const ggml_te
         default:
             // TODO: k-quants
             fprintf(stderr, "%s: unsupported type: %s\n", __func__, ggml_type_name(src0->type));
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }
@@ -2192,7 +2192,7 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
     } else {
         fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
             ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 
@@ -2476,7 +2476,7 @@ static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYC
         case GGML_TYPE_Q6_K:
             return 64;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
     }
 
 }
@@ -3101,7 +3101,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                     SYCL_CHECK(ggml_sycl_cpy_tensor_2d(
                                    src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
                 } else {
-                    GGML_ASSERT(false);
+                    GGML_ABORT("fatal error");
                 }
 
                 if (convert_src1_to_q8_1 && !src1_is_contiguous) {
@@ -3896,7 +3896,7 @@ static void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor *sr
     } else {
         fprintf(stderr, "%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     (void) dst;

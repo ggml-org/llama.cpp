@@ -84,7 +84,7 @@ void ggml_cuda_op_mul_mat_q(
             mul_mat_q_case<GGML_TYPE_IQ4_NL>(ctx, args, stream);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 

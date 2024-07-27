@@ -1961,7 +1961,7 @@ void ggml_vk_instance_init() {
         // Make sure at least one device exists
         if (devices.empty()) {
             std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
 
         // Default to using all dedicated GPUs
@@ -2459,7 +2459,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     // Buffer is already mapped
     if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
         std::cerr << "ggml_vulkan: buffer_write_nc_async dst buffer is host_visible. Use synchronous write." << std::endl;
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
     // Check if src is pinned memory
     vk_buffer buf;
@@ -2527,7 +2527,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
             staging = ctx->device->sync_staging;
             staging_offset = 0;
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 
@@ -2563,7 +2563,7 @@ static void ggml_vk_buffer_write_2d_async(vk_context * subctx, vk_buffer& dst, s
     // Buffer is already mapped
     if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
         std::cerr << "ggml_vulkan: buffer_write_async dst buffer is host_visible. Use synchronous write." << std::endl;
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
@@ -2602,7 +2602,7 @@ static void ggml_vk_buffer_write_2d_async(vk_context * subctx, vk_buffer& dst, s
             staging_buffer = dst->device->sync_staging;
             staging_offset = 0;
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 
@@ -2704,7 +2704,7 @@ static void ggml_vk_buffer_read_2d_async(vk_context * subctx, vk_buffer& src, si
 
             staging_buffer = src->device->sync_staging;
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 
@@ -2913,7 +2913,7 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, ggml_
     }
 
     std::cerr << "Missing CPY op for types: " << ggml_type_name(from) << " " << ggml_type_name(to) << std::endl;
-    GGML_ASSERT(false);
+    GGML_ABORT("fatal error");
 }
 
 static void ggml_vk_cpy_to_contiguous(ggml_backend_vk_context * ctx, vk_context * subctx, vk_pipeline pipeline, const ggml_tensor * tensor, vk_subbuffer&& in, vk_subbuffer&& out) {
@@ -3499,7 +3499,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context *
     const bool qy_needs_dequant = (src1->type != GGML_TYPE_F16 && !y_f32_kernel) || y_non_contig;
 
     if (mmp == nullptr) {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     // Not implemented
@@ -4078,7 +4078,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context * subctx, c
                 std::cerr << " and " << ggml_type_name(src1->type);
             }
             std::cerr << " to " << ggml_type_name(dst->type) << std::endl;
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
 
         op_func(ctx, subctx, src0, src1, dst);
@@ -4521,7 +4521,7 @@ static void ggml_vk_print_matrix_area(const void * data, ggml_type type, int ne0
                 } else if (type == GGML_TYPE_F16) {
                     val = ggml_fp16_to_fp32(*((const ggml_fp16_t *) data + i2*ne1*ne0 + idx1*ne0 + idx0));
                 } else {
-                    GGML_ASSERT(false);
+                    GGML_ABORT("fatal error");
                 }
                 fprintf(stderr, "% 7.2f ", val);
             } else {
@@ -4555,7 +4555,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
             p = ctx->device->pipeline_matmul_f16->a_s;
             shname = "F16_ALIGNED_S";
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     } else if (shader_size == 1) {
         if (std::is_same<float, X_TYPE>() && std::is_same<float, Y_TYPE>()) {
@@ -4571,7 +4571,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
             p = ctx->device->pipeline_matmul_f16->a_m;
             shname = "F16_ALIGNED_M";
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     } else if (shader_size == 2) {
         if (std::is_same<float, X_TYPE>() && std::is_same<float, Y_TYPE>()) {
@@ -4587,7 +4587,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
             p = ctx->device->pipeline_matmul_f16->a_l;
             shname = "F16_ALIGNED_L";
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     } else {
         GGML_ASSERT(0);
@@ -4668,7 +4668,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
         } else if (std::is_same<ggml_fp16_t, X_TYPE>()) {
             x[i] = ggml_fp32_to_fp16((rand() / (float)RAND_MAX) * 2.0f - 1.0f);
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
     for (size_t i = 0; i < y_ne; i++) {
@@ -4679,7 +4679,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
             // y[i] = ggml_fp32_to_fp16((rand() / (float)RAND_MAX) * 2.0f - 1.0f);
             y[i] = ggml_fp32_to_fp16((i % k == i / k) ? 1.0f : 0.0f);
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     }
 
@@ -4727,14 +4727,14 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     } else if (std::is_same<ggml_fp16_t, X_TYPE>()) {
         src0_type = GGML_TYPE_F16;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
     if (std::is_same<float, Y_TYPE>()) {
         src1_type = GGML_TYPE_F32;
     } else if (std::is_same<ggml_fp16_t, Y_TYPE>()) {
         src1_type = GGML_TYPE_F16;
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     ggml_tensor * src0_ggml = ggml_new_tensor_3d(ggml_ctx, src0_type, k, m, batch);
@@ -4841,7 +4841,7 @@ static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, int i0, int i1
                 } else if (tensor->type == GGML_TYPE_F16) {
                     val = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) tensor->data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]));
                 } else {
-                    GGML_ASSERT(false);
+                    GGML_ABORT("fatal error");
                 }
                 fprintf(stderr, "% 7.2f ", val);
             } else {
@@ -5391,7 +5391,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
         std::cerr << std::endl;
     }
 
-    GGML_ASSERT(false);
+    GGML_ABORT("fatal error");
 #endif
 
     if (ctx->prealloc_x == nullptr || (ctx->prealloc_size_x > 0 && ctx->prealloc_x->size < ctx->prealloc_size_x)) {
@@ -5486,7 +5486,7 @@ static void ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         break;
     default:
         std::cerr << "ggml_vulkan: Error: Missing op: " << ggml_op_name(node->op) << std::endl;
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
         return;
     }
 
@@ -6498,7 +6498,7 @@ static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, const void * d
                 } else if (tensor->type == GGML_TYPE_I32) {
                     val = *(const int32_t *) ((const char *) data + i3*tensor->nb[3] + i2*tensor->nb[2] + idx1*tensor->nb[1] + idx0*tensor->nb[0]);
                 } else {
-                    GGML_ASSERT(false);
+                    GGML_ABORT("fatal error");
                 }
                 fprintf(stderr, "% 7.2f ", val);
             } else {
@@ -6620,7 +6620,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 memcpy(src0_clone->nb, src0->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
 
         if (vk_output_tensor > 0 && vk_output_tensor == check_counter) {
@@ -6662,7 +6662,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 memcpy(src1_clone->nb, src1->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
 
         if (vk_output_tensor > 0 && vk_output_tensor == check_counter) {
@@ -6720,7 +6720,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
                 memcpy(src2_clone->nb, src2->nb, sizeof(size_t) * GGML_MAX_DIMS);
             }
         } else {
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
 
         if (vk_output_tensor > 0 && vk_output_tensor == check_counter) {
@@ -6797,7 +6797,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
             break;
         default:
             std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
         }
     } else if (tensor->op == GGML_OP_CPY || tensor->op == GGML_OP_DUP) {
         if (src1 == nullptr) {
@@ -6825,7 +6825,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_tensor *
         tensor_clone = ggml_sum_rows(ggml_ctx, src0_clone);
     } else {
         std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 
     ggml_cgraph * cgraph = ggml_new_graph(ggml_ctx);
@@ -6912,7 +6912,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor *
                         }
                     } else {
                         std::cerr << "Missing debug code for type " << ggml_type_name(tensor->type) << std::endl;
-                        GGML_ASSERT(false);
+                        GGML_ABORT("fatal error");
                     }
 
                     if ((std::isnan(correct) != std::isnan(result)) || (std::isinf(correct) != std::isinf(result)) || !buffer_size_fit) {
@@ -6935,7 +6935,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor *
                         std::cerr << std::endl;
                         std::vector<const ggml_tensor *> done;
                         ggml_vk_print_graph_origin(tensor, done);
-                        GGML_ASSERT(false);
+                        GGML_ABORT("fatal error");
                     }
                     if (first_error[0] == -1 && std::fabs(correct - result) > 0.1f) {
                         first_error[0] = i0;
@@ -7006,7 +7006,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_tensor *
         std::cerr << std::endl;
         std::vector<const ggml_tensor *> done;
         ggml_vk_print_graph_origin(tensor, done);
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     } else {
         std::cerr << check_counter << " " << tensor->name << " op=" << ggml_op_name(tensor->op) << " avg_err=" << avg_err << std::endl;
     }

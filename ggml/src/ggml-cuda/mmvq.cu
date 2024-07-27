@@ -162,7 +162,7 @@ static void mul_mat_vec_q_cuda(
                 rows_per_cuda_block = 2;
                 break;
             default:
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
                 break;
         }
     }
@@ -196,7 +196,7 @@ static void mul_mat_vec_q_cuda(
             mul_mat_vec_q<type, 8><<<block_nums, block_dims, 0, stream>>>(vx, vy, dst, ncols_x, nrows_x, nrows_y, nrows_dst);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 }
@@ -413,7 +413,7 @@ void ggml_cuda_op_mul_mat_vec_q(
             mul_mat_vec_iq3_s_q8_1_cuda(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_padded_row_size, src1_ncols, nrows_dst, stream);
             break;
         default:
-            GGML_ASSERT(false);
+            GGML_ABORT("fatal error");
             break;
     }
 

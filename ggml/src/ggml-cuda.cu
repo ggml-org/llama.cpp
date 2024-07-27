@@ -98,7 +98,7 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     GGML_CUDA_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func, file, line);
     GGML_CUDA_LOG_ERROR("  %s\n", stmt);
     // abort with GGML_ASSERT to get a stack trace
-    GGML_ASSERT(!"CUDA error");
+    GGML_ABORT("CUDA error");
 }
 
 // this is faster on Windows
@@ -1596,7 +1596,7 @@ static void ggml_cuda_op_mul_mat(
                     CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
                                 src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
                 } else {
-                    GGML_ASSERT(false);
+                    GGML_ABORT("fatal error");
                 }
 
                 if (quantize_src1 && !src1_is_contiguous) {
@@ -2945,7 +2945,7 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
 
         CUDA_CHECK(cudaLaunchHostFunc(cuda_ctx->stream(), wait_fn, event));
 #endif
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 

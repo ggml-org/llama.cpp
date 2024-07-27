@@ -566,7 +566,7 @@ uint32_t safe_divide(uint32_t a, uint32_t b) {
     }
     if ((a % b) != 0) {
         fprintf(stderr, "((%u %% %u) == %u) != 0\n", a, b, a % b);
-        GGML_ASSERT(!"safe_divide result would've had remainder");
+        GGML_ABORT("safe_divide result would've had remainder");
     }
     return a / b;
 }
@@ -1460,7 +1460,7 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
 
             if (!ggml_vk_supports_op(dst)) {
                  fprintf(stderr, "%s: error: unsupported op '%s'\n", __func__, ggml_op_desc(dst));
-                 GGML_ASSERT(!"unsupported op");
+                 GGML_ABORT("unsupported op");
             }
 
             const int32_t ne00 = src0 ? src0->ne[0] : 0;
@@ -1562,7 +1562,7 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
                             default:
                                 {
                                     fprintf(stderr, "%s: node %3d, op = %8s not implemented\n", __func__, i, ggml_op_name(dst->op));
-                                    GGML_ASSERT(false);
+                                    GGML_ABORT("fatal error");
                                 }
                         }
                     } break;
@@ -1745,7 +1745,7 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
             continue;
             not_implemented: {}
             fprintf(stderr, "%s: node %3d, op = %8s not implemented\n", __func__, i, ggml_op_name(dst->op));
-            //GGML_ASSERT(false);
+            //GGML_ABORT("fatal error");
         }
 
         // Evaluate sequence

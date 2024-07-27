@@ -94,7 +94,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
         // This is going to create some weird integers though.
         ggml_backend_tensor_set(tensor, data.data(), 0, ggml_nbytes(tensor));
     } else {
-        GGML_ASSERT(false);
+        GGML_ABORT("fatal error");
     }
 }
 
@@ -132,7 +132,7 @@ static std::vector<float> tensor_to_float(const ggml_tensor * t) {
                         tt.to_float(&buf[i], vq.data(), bs);
                         tv.insert(tv.end(), vq.begin(), vq.end());
                     } else {
-                        GGML_ASSERT(false);
+                        GGML_ABORT("fatal error");
                     }
                 }
             }
@@ -1435,7 +1435,7 @@ struct test_argsort : public test_case {
                     ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
                 }
             } else {
-                GGML_ASSERT(false);
+                GGML_ABORT("fatal error");
             }
         }
     }
@@ -2462,7 +2462,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         return true;
     }
 
-    GGML_ASSERT(false);
+    GGML_ABORT("fatal error");
     return false;
 }
 
