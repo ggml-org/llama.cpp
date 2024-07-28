@@ -860,7 +860,8 @@ jobs:
           mkdir build
           cd build
           cmake .. -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DBUILD_SHARED_LIBS=ON
-          cmake --build . --config Release -j $((${env:NUMBER_OF_PROCESSORS} - 1))
+          cmake --build . --config Release -j $((${env:NUMBER_OF_PROCESSORS} - 1)) -t ggml
+          cmake --build . --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Determine tag name
         id: tag
