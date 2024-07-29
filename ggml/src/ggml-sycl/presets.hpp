@@ -41,6 +41,7 @@
 #define SYCL_ACC_BLOCK_SIZE 256
 #define SYCL_IM2COL_BLOCK_SIZE 256
 #define SYCL_POOL2D_BLOCK_SIZE 256
+#define SYCL_CONV_TRANPOSE_1D_BLOCK_SIZE 256
 
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
