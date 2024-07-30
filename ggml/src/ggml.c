@@ -141,7 +141,51 @@ typedef pthread_t ggml_thread_t;
 
 #include <sys/wait.h>
 
-#if defined(__linux__)
+#if defined(__ANDROID__)
+#include <unwind.h>
+#include <dlfcn.h>
+#include <stdio.h>
+
+struct backtrace_state {
+    void ** current;
+    void ** end;
+};
+
+static _Unwind_Reason_Code unwind_callback(struct _Unwind_Context* context, void* arg) {
+    struct backtrace_state * state = (struct backtrace_state *)arg;
+    uintptr_t pc = _Unwind_GetIP(context);
+    if (pc) {
+        if (state->current == state->end) {
+            return _URC_END_OF_STACK;
+        } else {
+            *state->current++ = (void*)pc;
+        }
+    }
+    return _URC_NO_REASON;
+}
+
+static void ggml_print_backtrace_symbols(void) {
+    const int max = 100;
+    void* buffer[max];
+
+    struct backtrace_state state = {buffer, buffer + max};
+    _Unwind_Backtrace(unwind_callback, &state);
+
+    int count = state.current - buffer;
+
+    for (int idx = 0; idx < count; ++idx) {
+        const void * addr = buffer[idx];
+        const char * symbol = "";
+
+        Dl_info info;
+        if (dladdr(addr, &info) && info.dli_sname) {
+            symbol = info.dli_sname;
+        }
+
+        fprintf(stderr, "%d: %p %s\n", idx, addr, symbol);
+    }
+}
+#elif defined(__linux__)
 #include <execinfo.h>
 static void ggml_print_backtrace_symbols(void) {
     void * trace[100];
