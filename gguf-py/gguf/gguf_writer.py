@@ -312,6 +312,8 @@ class GGUFWriter:
         self.add_key_value(key, val, GGUFValueType.STRING)
 
     def add_array(self, key: str, val: Sequence[Any]) -> None:
+        if len(val) == 0:
+            return
         self.add_key_value(key, val, GGUFValueType.ARRAY)
 
     @staticmethod
@@ -845,7 +847,14 @@ class GGUFWriter:
             encoded_val = val.encode("utf-8") if isinstance(val, str) else val
             kv_data += self._pack("Q", len(encoded_val))
             kv_data += encoded_val
-        elif vtype == GGUFValueType.ARRAY and isinstance(val, Sequence) and val:
+        elif vtype == GGUFValueType.ARRAY:
+
+            if not isinstance(val, Sequence):
+                raise ValueError("Invalid GGUF metadata array, expecting sequence")
+
+            if len(val) == 0:
+                raise ValueError("Invalid GGUF metadata array. Empty array")
+
             if isinstance(val, bytes):
                 ltype = GGUFValueType.UINT8
             else:
