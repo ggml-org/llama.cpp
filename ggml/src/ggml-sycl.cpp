@@ -4108,6 +4108,9 @@ bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tens
         case GGML_OP_ARGSORT:
             func = ggml_sycl_argsort;
             break;
+        case GGML_OP_TIMESTEP_EMBEDDING:
+            func = ggml_sycl_op_timestep_embedding;
+            break;
         default:
             return false;
     }
@@ -5225,6 +5228,7 @@ GGML_CALL static bool ggml_backend_sycl_supports_op(ggml_backend_t backend, cons
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD:
         case GGML_OP_LEAKY_RELU:
+        case GGML_OP_TIMESTEP_EMBEDDING:
             return true;
         default:
             return false;

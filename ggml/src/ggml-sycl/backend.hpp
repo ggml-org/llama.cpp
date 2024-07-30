@@ -24,5 +24,6 @@
 #include "rope.hpp"
 #include "norm.hpp"
 #include "softmax.hpp"
+#include "tsembd.hpp"
 
 #endif // GGML_SYCL_BACKEND_HPP
