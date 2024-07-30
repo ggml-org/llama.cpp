@@ -849,11 +849,6 @@ if (GGML_CANN)
                 ${CANN_INSTALL_DIR}/acllib/include
             )
 
-            # TODO: find libs
-            link_directories(
-                ${CANN_INSTALL_DIR}/lib64
-            )
-
             add_subdirectory(ggml-cann/kernels)
             list(APPEND CANN_LIBRARIES
                 ascendcl
@@ -872,6 +867,7 @@ if (GGML_CANN)
 
             set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     ${CANN_LIBRARIES} )
             set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CANN_INCLUDE_DIRS})
+            set(GGML_EXTRA_LIBDIRS  ${GGML_EXTRA_LIBDIRS}  ${CANN_INSTALL_DIR}/lib64)
             list(APPEND GGML_CDEF_PUBLIC GGML_USE_CANN)
         endif()
     else()
