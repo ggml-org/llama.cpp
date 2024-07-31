@@ -139,7 +139,8 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
 # determining _precisely_ which defines are necessary for the llama-config
 # package.
 #
-get_directory_property(GGML_DIR_DEFINES DIRECTORY ggml/src COMPILE_DEFINITIONS)
+get_target_property(GGML_DIRECTORY ggml SOURCE_DIR)
+get_directory_property(GGML_DIR_DEFINES DIRECTORY ${GGML_DIRECTORY} COMPILE_DEFINITIONS)
 get_target_property(GGML_TARGET_DEFINES ggml COMPILE_DEFINITIONS)
 set(GGML_TRANSIENT_DEFINES ${GGML_TARGET_DEFINES} ${GGML_DIR_DEFINES})
 get_target_property(GGML_LINK_LIBRARIES ggml LINK_LIBRARIES)
