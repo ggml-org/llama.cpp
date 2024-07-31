@@ -1605,42 +1605,41 @@ llama-q8dot: pocs/vdot/q8dot.cpp ggml/src/ggml.o \
 # Mark legacy binary targets as .PHONY so that they are always checked.
 .PHONY: main quantize perplexity embedding server
 
+# Define the object file target
+examples/deprecation-warning/deprecation-warning.o: examples/deprecation-warning/deprecation-warning.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 # NOTE: We currently will always build the deprecation-warning `main` and `server` binaries to help users migrate.
 #  Eventually we will want to remove these target from building all the time.
-main: examples/deprecation-warning/deprecation-warning.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+main: examples/deprecation-warning/deprecation-warning.o
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 	@echo "NOTICE: The 'main' binary is deprecated. Please use 'llama-cli' instead."
 
-server: examples/deprecation-warning/deprecation-warning.cpp
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+server: examples/deprecation-warning/deprecation-warning.o
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 	@echo "NOTICE: The 'server' binary is deprecated. Please use 'llama-server' instead."
 
-quantize: examples/deprecation-warning/deprecation-warning.cpp
+quantize: examples/deprecation-warning/deprecation-warning.o
 ifneq (,$(wildcard quantize))
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 	@echo "#########"
 	@echo "WARNING: The 'quantize' binary is deprecated. Please use 'llama-quantize' instead."
 	@echo "  Remove the 'quantize' binary to remove this warning."
 	@echo "#########"
 endif
 
-perplexity: examples/deprecation-warning/deprecation-warning.cpp
+perplexity: examples/deprecation-warning/deprecation-warning.o
 ifneq (,$(wildcard perplexity))
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 	@echo "#########"
 	@echo "WARNING: The 'perplexity' binary is deprecated. Please use 'llama-perplexity' instead."
 	@echo "  Remove the 'perplexity' binary to remove this warning."
 	@echo "#########"
 endif
 
-embedding: examples/deprecation-warning/deprecation-warning.cpp
+embedding: examples/deprecation-warning/deprecation-warning.o
 ifneq (,$(wildcard embedding))
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS)
 	@echo "#########"
 	@echo "WARNING: The 'embedding' binary is deprecated. Please use 'llama-embedding' instead."
 	@echo "  Remove the 'embedding' binary to remove this warning."
