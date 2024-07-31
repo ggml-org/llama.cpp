@@ -247,7 +247,7 @@ server:
          --host HOST              ip address to listen (default: 127.0.0.1)
          --port PORT              port to listen (default: 8080)
          --path PATH              path to serve static files from (default: )
-         --embedding(s)           enable embedding endpoint (default: disabled)
+         --embedding(s)           restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)
          --api-key KEY            API key to use for authentication (default: none)
          --api-key-file FNAME     path to file containing API keys (default: none)
          --ssl-key-file FNAME     path to file a PEM-encoded SSL private key
