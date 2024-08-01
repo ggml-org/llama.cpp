@@ -185,7 +185,7 @@ static void ggml_print_backtrace_symbols(void) {
         fprintf(stderr, "%d: %p %s\n", idx, addr, symbol);
     }
 }
-#elif defined(__linux__)
+#elif defined(__linux__) && defined(__GLIBC__)
 #include <execinfo.h>
 static void ggml_print_backtrace_symbols(void) {
     void * trace[100];
