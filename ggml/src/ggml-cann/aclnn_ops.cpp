@@ -2381,10 +2381,10 @@ static void ggml_cann_mul_mat_q8_0(ggml_backend_cann_context& ctx,
     size_t input_nb[] = {input_elem_size, input_elem_size * src1->ne[0]};
     size_t input_stride = input_elem_size * src1->ne[0] * src1->ne[1];
 
+    ggml_cann_pool_alloc input_alloctor(ctx.pool());
     if (src1->type != GGML_TYPE_F16) {
         aclTensor* acl_src1_tensor = ggml_cann_create_tensor(src1);
-        ggml_cann_pool_alloc input_alloctor(
-            ctx.pool(), ggml_nelements(src1) * input_elem_size);
+        input_alloctor.alloc(ggml_nelements(src1) * input_elem_size);
         input_buffer = input_alloctor.get();
 
         int64_t* input_cast_ne = src1->ne;
