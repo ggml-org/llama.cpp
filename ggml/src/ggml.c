@@ -480,9 +480,16 @@ void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
     }
 }
 
+void ggml_fp32_to_bf16_row_ref(const float * x, ggml_bf16_t * y, int64_t n) {
+    for (int i = 0; i < n; i++) {
+        y[i] = ggml_compute_fp32_to_bf16(x[i]);
+    }
+}
+
 void ggml_fp32_to_bf16_row(const float * x, ggml_bf16_t * y, int64_t n) {
   int i = 0;
 #if defined(__AVX512BF16__)
+  // subnormals are flushed to zero on this platform
   for (; i + 32 <= n; i += 32) {
         _mm512_storeu_si512(
             (__m512i *)(y + i),
@@ -962,7 +969,7 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .is_quantized             = false,
         .to_float                 = (ggml_to_float_t) ggml_bf16_to_fp32_row,
         .from_float               = (ggml_from_float_t) ggml_fp32_to_bf16_row,
-        .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row,
+        .from_float_ref           = (ggml_from_float_t) ggml_fp32_to_bf16_row_ref,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
         .vec_dot_type             = GGML_TYPE_BF16,
         .nrows                    = 1,
@@ -20650,7 +20657,7 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_BF16:
             {
                 size_t elemsize = sizeof(ggml_bf16_t);
-                ggml_fp32_to_bf16_row(src + start, (ggml_bf16_t *)dst + start, n);
+                ggml_fp32_to_bf16_row_ref(src + start, (ggml_bf16_t *)dst + start, n);
                 result = n * elemsize;
             } break;
         case GGML_TYPE_F32:

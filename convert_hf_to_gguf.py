@@ -316,7 +316,7 @@ class Model:
                 if self.ftype != gguf.LlamaFileType.ALL_F32 and extra_f16 and not extra_f32:
                     if self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
                         data = gguf.quantize_bf16(data)
-                        assert data.dtype == np.int16
+                        assert data.dtype == np.uint16
                         data_qtype = gguf.GGMLQuantizationType.BF16
 
                     elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0 and gguf.can_quantize_to_q8_0(data):
