@@ -37,6 +37,9 @@
 #include <unistd.h>
 #endif
 
+#if defined(__ARM_FEATURE_SVE)
+int ggml_sve_cnt_b = 0;
+#endif
 #if defined(__ARM_FEATURE_SVE) || defined(__ARM_FEATURE_MATMUL_INT8)
 #undef GGML_USE_LLAMAFILE
 #endif
@@ -3557,6 +3560,12 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
     GGML_ASSERT(ctx->mem_buffer != NULL);
 
     GGML_ASSERT_ALIGNED(ctx->mem_buffer);
+
+#if defined(__ARM_FEATURE_SVE)
+    if (!ggml_sve_cnt_b) {
+        ggml_sve_cnt_b = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
+    }
+#endif
 
     GGML_PRINT_DEBUG("%s: context initialized\n", __func__);
 

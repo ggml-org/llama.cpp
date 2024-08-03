@@ -127,6 +127,10 @@ void iq2xs_free_impl(enum ggml_type type);
 void iq3xs_init_impl(int grid_size);
 void iq3xs_free_impl(int grid_size);
 
+#if defined(__ARM_FEATURE_SVE)
+extern int ggml_sve_cnt_b;
+#endif
+
 #ifdef __cplusplus
 }
 #endif

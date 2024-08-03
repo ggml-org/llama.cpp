@@ -143,6 +143,7 @@ extern "C" {
 
 #if defined(__ARM_FEATURE_SVE)
 #include <arm_sve.h>
+#include <sys/prctl.h>
 #endif
 
 // 16-bit float
