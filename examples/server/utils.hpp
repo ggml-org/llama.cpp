@@ -355,24 +355,6 @@ static json oaicompat_completion_params_parse(
 
     llama_params["__oaicompat"] = true;
 
-    // Map OpenAI parameters to llama.cpp parameters
-    //
-    // For parameters that are defined by the OpenAI documentation (e.g.
-    // temperature), we explicitly specify OpenAI's intended default; we
-    // need to do that because sometimes OpenAI disagrees with llama.cpp
-    //
-    // https://platform.openai.com/docs/api-reference/chat/create
-    llama_sampling_params default_sparams;
-    llama_params["model"]             = json_value(body,   "model",             std::string("unknown"));
-    llama_params["frequency_penalty"] = json_value(body,   "frequency_penalty", 0.0);
-    llama_params["logit_bias"]        = json_value(body,   "logit_bias",        json::object());
-    llama_params["n_predict"]         = json_value(body,   "max_tokens",        -1);
-    llama_params["presence_penalty"]  = json_value(body,   "presence_penalty",  0.0);
-    llama_params["seed"]              = json_value(body,   "seed",              LLAMA_DEFAULT_SEED);
-    llama_params["stream"]            = json_value(body,   "stream",            false);
-    llama_params["temperature"]       = json_value(body,   "temperature",       1.0);
-    llama_params["top_p"]             = json_value(body,   "top_p",             1.0);
-
     // Apply chat template to the list of messages
     llama_params["prompt"] = format_chat(model, chat_template, body.at("messages"));
 
