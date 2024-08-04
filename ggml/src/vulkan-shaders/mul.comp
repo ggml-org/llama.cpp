@@ -4,9 +4,11 @@
 #include "generic_binary_head.comp"
 
 void main() {
-    if (gl_GlobalInvocationID.x >= p.ne) {
+    const uint idx = get_idx();
+
+    if (idx >= p.ne) {
         return;
     }
 
-    data_d[p.d_offset + dst_idx(gl_GlobalInvocationID.x)] = D_TYPE(FLOAT_TYPE(data_a[src0_idx(gl_GlobalInvocationID.x)]) * FLOAT_TYPE(data_b[src1_idx(gl_GlobalInvocationID.x)]));
+    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(FLOAT_TYPE(data_a[src0_idx(idx)]) * FLOAT_TYPE(data_b[src1_idx(idx)]));
 }

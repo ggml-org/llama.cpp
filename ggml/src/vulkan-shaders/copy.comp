@@ -4,13 +4,15 @@
 #include "generic_unary_head.comp"
 
 void main() {
-    if (gl_GlobalInvocationID.x >= p.ne) {
+    const uint idx = get_idx();
+
+    if (idx >= p.ne) {
         return;
     }
 
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
-    data_d[p.d_offset + dst_idx(gl_GlobalInvocationID.x)] = D_TYPE(data_a[src0_idx(gl_GlobalInvocationID.x)]);
+    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(data_a[src0_idx(idx)]);
 #else
-    data_d[p.d_offset + dst_idx(gl_GlobalInvocationID.x)] = data_a[src0_idx(gl_GlobalInvocationID.x)];
+    data_d[p.d_offset + dst_idx(idx)] = data_a[src0_idx(idx)];
 #endif
 }

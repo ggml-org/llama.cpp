@@ -14,7 +14,7 @@ layout (constant_id = 0) const uint BLOCK_SIZE = 32;
 shared FLOAT_TYPE tmp[BLOCK_SIZE];
 
 void main() {
-    const uint row = gl_WorkGroupID.x;
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint col = gl_LocalInvocationID.x;
 
     tmp[col] = FLOAT_TYPE(0.0f);

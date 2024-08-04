@@ -6,7 +6,7 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#ifndef LOAD_VEC_A
+#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
 #define A_TYPE float
 #elif LOAD_VEC_A == 4
 #define A_TYPE vec4
@@ -19,7 +19,7 @@
 #define QUANT_K 1
 #define QUANT_R 1
 
-#ifndef LOAD_VEC_A
+#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
 #define A_TYPE float16_t
 #elif LOAD_VEC_A == 4
 #define A_TYPE f16vec4

@@ -14,6 +14,10 @@ layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
 
+uint get_idx() {
+    return gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+}
+
 uint src0_idx(uint idx) {
     const uint i03 = idx / (p.ne02*p.ne01*p.ne00);
     const uint i03_offset = i03 * p.ne02*p.ne01*p.ne00;

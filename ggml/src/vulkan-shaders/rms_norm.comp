@@ -14,7 +14,7 @@ layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
 shared FLOAT_TYPE sum[BLOCK_SIZE];
 
 void main() {
-    const uint row = gl_WorkGroupID.x;
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint tid = gl_LocalInvocationID.x;
 
     sum[tid] = FLOAT_TYPE(0.0f); // partial sum for thread in warp

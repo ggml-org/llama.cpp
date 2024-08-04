@@ -30,20 +30,6 @@
 
 #define ASYNCIO_CONCURRENCY 64
 
-// define prototypes
-void execute_command(const std::string& command, std::string& stdout_str, std::string& stderr_str);
-bool directory_exists(const std::string& path);
-bool create_directory(const std::string& path);
-std::string to_uppercase(const std::string& input);
-bool string_ends_with(const std::string& str, const std::string& suffix);
-std::string join_paths(const std::string& path1, const std::string& path2);
-std::string basename(const std::string &path);
-void string_to_spv(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16);
-std::map<std::string, std::string> merge_maps(const std::map<std::string, std::string>& a, const std::map<std::string, std::string>& b);
-void matmul_shaders(std::vector<std::future<void>>& tasks, bool fp16, bool matmul_id);
-void process_shaders(std::vector<std::future<void>>& tasks);
-void write_output_files();
-
 std::mutex lock;
 std::vector<std::pair<std::string, std::string>> shader_fnames;
 
@@ -52,7 +38,7 @@ std::string input_dir = "vulkan-shaders";
 std::string output_dir = "/tmp";
 std::string target_hpp = "ggml-vulkan-shaders.hpp";
 std::string target_cpp = "ggml-vulkan-shaders.cpp";
-bool clean = true;
+bool no_clean = false;
 
 const std::vector<std::string> type_names = {
     "f32",
@@ -283,9 +269,12 @@ void matmul_shaders(std::vector<std::future<void>>& tasks, bool fp16, bool matmu
 
     for (const auto& tname : type_names) {
         std::string data_a_key = "DATA_A_" + to_uppercase(tname);
+        // For unaligned, load one at a time for f32/f16, or two at a time for quants
+        std::string load_vec_a_unaligned = (tname == "f32" || tname == "f16") ? "1" : "2";
+        // For aligned matmul loads
         std::string load_vec_a = (tname == "f32" || tname == "f16") ? load_vec : "2";
         tasks.push_back(std::async(std::launch::async, [=] {
-            string_to_spv(shader_name + "_" + tname + "_f32", "mul_mm.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"LOAD_VEC_A", load_vec_a}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}), fp16);
+            string_to_spv(shader_name + "_" + tname + "_f32", "mul_mm.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"LOAD_VEC_A", load_vec_a_unaligned}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}), fp16);
         }));
         tasks.push_back(std::async(std::launch::async, [=] {
             string_to_spv(shader_name + "_" + tname + "_f32_aligned", "mul_mm.comp", merge_maps(base_dict, {{data_a_key, "1"}, {"LOAD_VEC_A", load_vec_a}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f32}, {"D_TYPE", "float"}}), fp16);
@@ -355,6 +344,9 @@ void process_shaders(std::vector<std::future<void>>& tasks) {
         string_to_spv("norm_f32", "norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     }));
     tasks.push_back(std::async(std::launch::async, [=] {
+        string_to_spv("group_norm_f32", "group_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+    }));
+    tasks.push_back(std::async(std::launch::async, [=] {
         string_to_spv("rms_norm_f32", "rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     }));
 
@@ -370,6 +362,9 @@ void process_shaders(std::vector<std::future<void>>& tasks) {
 
     tasks.push_back(std::async(std::launch::async, [] {
         string_to_spv("add_f32", "add.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("add_f16_f32_f16", "add.comp", {{"A_TYPE", "float16_t"}, {"B_TYPE", "float"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}});
     }));
 
     tasks.push_back(std::async(std::launch::async, [] {
@@ -397,13 +392,40 @@ void process_shaders(std::vector<std::future<void>>& tasks) {
     }));
 
     tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("pad_f32", "pad.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("concat_f32", "concat.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("concat_f16", "concat.comp", {{"A_TYPE", "float16_t"}, {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}, {"OPTIMIZATION_ERROR_WORKAROUND", "1"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("concat_i32", "concat.comp", {{"A_TYPE", "int"}, {"B_TYPE", "int"}, {"D_TYPE", "int"}});
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("upscale_f32", "upscale.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [] {
         string_to_spv("gelu_f32", "gelu.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("gelu_quick_f32", "gelu_quick.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
     }));
     tasks.push_back(std::async(std::launch::async, [] {
         string_to_spv("silu_f32", "silu.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
     }));
     tasks.push_back(std::async(std::launch::async, [] {
         string_to_spv("relu_f32", "relu.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("leaky_relu_f32", "leaky_relu.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
+    }));
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("tanh_f32", "tanh.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}});
     }));
 
     tasks.push_back(std::async(std::launch::async, [] {
@@ -437,6 +459,17 @@ void process_shaders(std::vector<std::future<void>>& tasks) {
 
     tasks.push_back(std::async(std::launch::async, [=] {
         string_to_spv("sum_rows_f32", "sum_rows.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [=] {
+        string_to_spv("im2col_f32", "im2col.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
+    }));
+    tasks.push_back(std::async(std::launch::async, [=] {
+        string_to_spv("im2col_f32_f16", "im2col.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float16_t"}}));
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [=] {
+        string_to_spv("timestep_embedding_f32", "timestep_embedding.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     }));
 }
 
@@ -478,9 +511,8 @@ void write_output_files() {
         }
         fprintf(src, "\n};\n\n");
 
-        if (clean) {
+        if (!no_clean) {
             std::remove(path.c_str());
-            // fprintf(stderr, "Removed: %s\n", path.c_str());
         }
     }
 
@@ -496,18 +528,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (argc <= 1 || args.find("--help") != args.end()) {
-        std::cout << "Usage:\n"
-                     "\tvulkan-shaders-gen [options]\n\n"
-                     "Options:\n"
-                     "\t--glslc <path>        Path to glslc executable (default: /usr/bin/glslc)\n"
-                     "\t--input-dir           Directory containing shader sources (required)\n"
-                     "\t--output-dir          Output directory for generated SPIR-V files and optional C++ headers\n"
-                     "\t--target-hpp <path>   Path to generate a header file with shader declarations in C++ format\n"
-                     "\t--target-cpp <path>   Path to generate a source code file implementing the declared shaders (optional)\n"
-                     "\t--no-clean            Keep temporary SPIR-V files after build (default: remove them)\n";
-        return EXIT_SUCCESS;
-    }
     if (args.find("--glslc") != args.end()) {
         GLSLC = args["--glslc"]; // Path to glslc
     }
@@ -524,7 +544,7 @@ int main(int argc, char** argv) {
         target_cpp = args["--target-cpp"]; // Path to generated cpp file
     }
     if (args.find("--no-clean") != args.end()) {
-        clean = false; // Keep temporary SPIR-V files in output-dir after build
+        no_clean = true; // Keep temporary SPIR-V files in output-dir after build
     }
 
     if (!directory_exists(input_dir)) {

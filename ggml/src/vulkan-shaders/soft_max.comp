@@ -28,7 +28,7 @@ shared FLOAT_TYPE vals[BLOCK_SIZE];
 
 void main() {
     const uint tid = gl_LocalInvocationID.x;
-    const uint rowx = gl_WorkGroupID.x;
+    const uint rowx = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint rowy = rowx % p.KY;
 
     float slope = 1.0f;

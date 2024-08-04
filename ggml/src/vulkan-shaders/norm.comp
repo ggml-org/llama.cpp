@@ -14,7 +14,7 @@ layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
 shared vec2 sum[BLOCK_SIZE];
 
 void main() {
-    const uint row = gl_WorkGroupID.x;
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint tid = gl_LocalInvocationID.x;
 
     sum[tid] = vec2(0.0f, 0.0f);
