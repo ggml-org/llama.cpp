@@ -69,7 +69,7 @@ int main(int argc, char ** argv) {
     llama_context_params ctx_params = llama_context_params_from_gpt_params(params);
 
     // ensure enough sequences are available
-    ctx_params.n_seq_max = *std::max_element(n_pl.begin(), n_pl.end());
+    ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
 
     llama_context * ctx = llama_new_context_with_model(model, ctx_params);
 
