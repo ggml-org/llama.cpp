@@ -16,6 +16,13 @@ void main() {
     const uint row = gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z;
     const uint tid = gl_LocalInvocationID.x;
 
+    // There are not enough cols to use all threads
+    if (tid >= p.ncols) {
+        return;
+    }
+
+    const uint block_size = min(p.ncols, BLOCK_SIZE);
+
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
 
@@ -23,8 +30,8 @@ void main() {
 
     tmp[tid] = FLOAT_TYPE(0.0f);
 
-    [[unroll]] for (uint i = 0; i < p.ncols/BLOCK_SIZE; i += 2) {
-        const uint col = i*BLOCK_SIZE + 2*tid;
+    [[unroll]] for (uint i = 0; i < p.ncols/block_size; i += 2) {
+        const uint col = i*block_size + 2*tid;
         const uint ib = (row*p.ncols + col)/QUANT_K; // block index
         const uint iqs = (col%QUANT_K)/QUANT_R; // quant index
         const uint iybs = col - col%QUANT_K; // y block start index
@@ -38,7 +45,7 @@ void main() {
 
     // sum up partial sums and write back result
     barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE/2; s > 0; s >>= 1) {
+    [[unroll]] for (uint s = block_size/2; s > 0; s >>= 1) {
         if (tid < s) {
             tmp[tid] += tmp[tid + s];
         }
