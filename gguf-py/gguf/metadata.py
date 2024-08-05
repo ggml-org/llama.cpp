@@ -284,20 +284,67 @@ class Metadata:
         ########################
         if model_card is not None:
 
-            if "model_name" in model_card and metadata.name is None:
-                # Not part of huggingface model card standard but notice some model creator using it
-                # such as TheBloke in 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'
-                metadata.name = model_card.get("model_name")
+            def use_model_card_metadata(metadata_key: str, model_card_key: str):
+                if model_card_key in model_card and getattr(metadata, metadata_key, None) is None:
+                    setattr(metadata, metadata_key, model_card.get(model_card_key))
 
-            if "model_creator" in model_card and metadata.author is None:
-                # Not part of huggingface model card standard but notice some model creator using it
-                # such as TheBloke in 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'
-                metadata.author = model_card.get("model_creator")
+            def use_array_model_card_metadata(metadata_key: str, model_card_key: str):
+                # Note: Will append rather than replace if already exist
+                tags_value = model_card.get(model_card_key, None)
+                if tags_value is None:
+                    return
 
-            if "model_type" in model_card and metadata.basename is None:
-                # Not part of huggingface model card standard but notice some model creator using it
-                # such as TheBloke in 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'
-                metadata.basename = model_card.get("model_type")
+                current_value = getattr(metadata, metadata_key, None)
+                if current_value is None:
+                    current_value = []
+
+                if isinstance(tags_value, str):
+                    current_value.append(tags_value)
+                elif isinstance(tags_value, list):
+                    current_value.extend(tags_value)
+
+                setattr(metadata, metadata_key, current_value)
+
+            # LLAMA.cpp's direct internal convention
+            # (Definitely not part of hugging face formal/informal standard)
+            #########################################
+            use_model_card_metadata("name", "name")
+            use_model_card_metadata("author", "author")
+            use_model_card_metadata("version", "version")
+            use_model_card_metadata("organization", "organization")
+            use_model_card_metadata("description", "description")
+            use_model_card_metadata("finetune", "finetune")
+            use_model_card_metadata("basename", "basename")
+            use_model_card_metadata("size_label", "size_label")
+            use_model_card_metadata("source_url", "url")
+            use_model_card_metadata("source_doi", "doi")
+            use_model_card_metadata("source_uuid", "uuid")
+            use_model_card_metadata("source_repo_url", "repo_url")
+
+            # LLAMA.cpp's huggingface style convention
+            # (Definitely not part of hugging face formal/informal standard... but with model_ appended to match their style)
+            ###########################################
+            use_model_card_metadata("name", "model_name")
+            use_model_card_metadata("author", "model_author")
+            use_model_card_metadata("version", "model_version")
+            use_model_card_metadata("organization", "model_organization")
+            use_model_card_metadata("description", "model_description")
+            use_model_card_metadata("finetune", "model_finetune")
+            use_model_card_metadata("basename", "model_basename")
+            use_model_card_metadata("size_label", "model_size_label")
+            use_model_card_metadata("source_url", "model_url")
+            use_model_card_metadata("source_doi", "model_doi")
+            use_model_card_metadata("source_uuid", "model_uuid")
+            use_model_card_metadata("source_repo_url", "model_repo_url")
+
+            # Hugging Face Direct Convention
+            #################################
+
+            # Not part of huggingface model card standard but notice some model creator using it
+            # such as TheBloke in 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF'
+            use_model_card_metadata("name", "model_name")
+            use_model_card_metadata("author", "model_creator")
+            use_model_card_metadata("basename", "model_type")
 
             if "base_model" in model_card:
                 # This represents the parent models that this is based on
@@ -329,58 +376,18 @@ class Metadata:
                         base_model["repo_url"] = f"https://huggingface.co/{org_component}/{model_full_name_component}"
                     metadata.base_models.append(base_model)
 
-            if "license" in model_card and metadata.license is None:
-                metadata.license = model_card.get("license")
+            use_model_card_metadata("license", "license")
+            use_model_card_metadata("license_name", "license_name")
+            use_model_card_metadata("license_link", "license_link")
 
-            if "license_name" in model_card and metadata.license_name is None:
-                metadata.license_name = model_card.get("license_name")
+            use_array_model_card_metadata("tags", "tags")
+            use_array_model_card_metadata("tags", "pipeline_tag")
 
-            if "license_link" in model_card and metadata.license_link is None:
-                metadata.license_link = model_card.get("license_link")
+            use_array_model_card_metadata("languages", "languages")
+            use_array_model_card_metadata("languages", "language")
 
-            tags_value = model_card.get("tags", None)
-            if tags_value is not None:
-
-                if metadata.tags is None:
-                    metadata.tags = []
-
-                if isinstance(tags_value, str):
-                    metadata.tags.append(tags_value)
-                elif isinstance(tags_value, list):
-                    metadata.tags.extend(tags_value)
-
-            pipeline_tags_value = model_card.get("pipeline_tag", None)
-            if pipeline_tags_value is not None:
-
-                if metadata.tags is None:
-                    metadata.tags = []
-
-                if isinstance(pipeline_tags_value, str):
-                    metadata.tags.append(pipeline_tags_value)
-                elif isinstance(pipeline_tags_value, list):
-                    metadata.tags.extend(pipeline_tags_value)
-
-            language_value = model_card.get("languages", model_card.get("language", None))
-            if language_value is not None:
-
-                if metadata.languages is None:
-                    metadata.languages = []
-
-                if isinstance(language_value, str):
-                    metadata.languages.append(language_value)
-                elif isinstance(language_value, list):
-                    metadata.languages.extend(language_value)
-
-            dataset_value = model_card.get("datasets", model_card.get("dataset", None))
-            if dataset_value is not None:
-
-                if metadata.datasets is None:
-                    metadata.datasets = []
-
-                if isinstance(dataset_value, str):
-                    metadata.datasets.append(dataset_value)
-                elif isinstance(dataset_value, list):
-                    metadata.datasets.extend(dataset_value)
+            use_array_model_card_metadata("datasets", "datasets")
+            use_array_model_card_metadata("datasets", "dataset")
 
         # Hugging Face Parameter Heuristics
         ####################################
