@@ -153,6 +153,7 @@ Unless otherwise noted these projects are open-source with permissive licensing:
 - [Faraday](https://faraday.dev/) (proprietary)
 - [LMStudio](https://lmstudio.ai/) (proprietary)
 - [Layla](https://play.google.com/store/apps/details?id=com.laylalite) (proprietary)
+- [ramalama](https://github.com/containers/ramalama) (MIT)
 - [LocalAI](https://github.com/mudler/LocalAI) (MIT)
 - [LostRuins/koboldcpp](https://github.com/LostRuins/koboldcpp) (AGPL)
 - [Mozilla-Ocho/llamafile](https://github.com/Mozilla-Ocho/llamafile)
