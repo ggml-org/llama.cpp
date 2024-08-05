@@ -1670,10 +1670,6 @@ GGML_CALL static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
                     // TODO: fix me
                     // Current groupsize should not be greater than k-1 in
                     // aclnnWeightQuantBatchMatmulV2GetWorkspaceSize().
-                    if (op->src[0]->ne[0]-1 > QK8_0) {
-                        return true;
-                    }
-                    return false;
                 case GGML_TYPE_Q4_0:
                     return true;
                 default:

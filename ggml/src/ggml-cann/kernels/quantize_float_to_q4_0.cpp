@@ -12,6 +12,9 @@ class QUANTIZE_FLOAT_TO_Q4_0 {
     __aicore__ inline void init(GM_ADDR input, GM_ADDR output,
                                 int64_t *input_ne_ub, size_t *input_nb_ub,
                                 int64_t *output_ne_ub) {
+        // TODO: fix test_case CPY(type_src=f16,type_dst=q4_0,ne=[256,4,4,4],
+        //                         permute=[0,0,0,0]):
+        // [CPY] NMSE = 0.000008343 > 0.000001000 FAIL
         int64_t op_block_num = GetBlockNum();
         int64_t op_block_idx = GetBlockIdx();
 
@@ -61,13 +64,13 @@ class QUANTIZE_FLOAT_TO_Q4_0 {
         pipe.InitBuffer(input_queue, BUFFER_NUM, Group_Size * sizeof(SRC_T));
         pipe.InitBuffer(output_queue, BUFFER_NUM,
                             Group_Size * sizeof(int8_t) / 2);
-        pipe.InitBuffer(cast_queue , BUFFER_NUM, Group_Size * sizeof(float));
-        pipe.InitBuffer(work_queue, BUFFER_NUM, Group_Size*sizeof(float));
-        pipe.InitBuffer(max_queue, BUFFER_NUM, Group_Size*sizeof(float));
-        pipe.InitBuffer(min_queue, BUFFER_NUM, Group_Size*sizeof(float));
-        pipe.InitBuffer(scale_queue, BUFFER_NUM, 16*sizeof(half));
-        pipe.InitBuffer(int8_queue, BUFFER_NUM, Group_Size * sizeof(int8_t));
-        pipe.InitBuffer(half_queue, BUFFER_NUM, Group_Size * sizeof(half));
+        pipe.InitBuffer(cast_queue , 1, Group_Size * sizeof(float));
+        pipe.InitBuffer(work_queue, 1, Group_Size * sizeof(float));
+        pipe.InitBuffer(max_queue, 1, Group_Size * sizeof(float));
+        pipe.InitBuffer(min_queue, 1, Group_Size * sizeof(float));
+        pipe.InitBuffer(scale_queue, 1, Group_Size / 2 * sizeof(half));
+        pipe.InitBuffer(int8_queue, 1, Group_Size * sizeof(int8_t));
+        pipe.InitBuffer(half_queue, 1, Group_Size * sizeof(half));
     }
 
     __aicore__ inline void copy_in(uint32_t offset) {
@@ -178,13 +181,15 @@ class QUANTIZE_FLOAT_TO_Q4_0 {
             for (int64_t j = 0; j < group_size_in_row; j++) {
                 half scale = calculate_group(i, j);
                 scale_local.SetValue(scale_local_offset++, scale);
-                if (scale_local_offset == 16) {
+                // Copy Group_Size/2 length data each time.
+                if (scale_local_offset == Group_Size / 2) {
                     scale_local_offset = 0;
                     // TODO: OPTIMIZE ME
                     pipe_barrier(PIPE_ALL);
-                    DataCopy(scale_gm[scale_global_offset], scale_local, 16);
+                    DataCopy(scale_gm[scale_global_offset], scale_local,
+                                      Group_Size / 2);
                     pipe_barrier(PIPE_ALL);
-                    scale_global_offset += 16;
+                    scale_global_offset += Group_Size / 2;
                 }
             }
         }
