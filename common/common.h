@@ -308,8 +308,12 @@ std::string fs_get_cache_file(const std::string & filename);
 // Model utils
 //
 
-// TODO: avoid tuplue, use struct
-std::tuple<struct llama_model *, struct llama_context *> llama_init_from_gpt_params(gpt_params & params);
+struct llama_init_result {
+    struct llama_model * model = nullptr;
+    struct llama_context * context = nullptr;
+};
+
+struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
 struct llama_model_params   llama_model_params_from_gpt_params  (const gpt_params & params);
 struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params);

@@ -66,7 +66,9 @@ int main(int argc, char ** argv) {
     llama_context * ctx_dft = NULL;
 
     // load the target model
-    std::tie(model_tgt, ctx_tgt) = llama_init_from_gpt_params(params);
+    llama_init_result llama_init_tgt = llama_init_from_gpt_params(params);
+    model_tgt = llama_init_tgt.model;
+    ctx_tgt = llama_init_tgt.context;
 
     // load the draft model
     params.model = params.model_draft;
@@ -75,7 +77,9 @@ int main(int argc, char ** argv) {
         params.n_threads = params.n_threads_draft;
     }
     params.n_threads_batch = params.n_threads_batch_draft;
-    std::tie(model_dft, ctx_dft) = llama_init_from_gpt_params(params);
+    llama_init_result llama_init_dft = llama_init_from_gpt_params(params);
+    model_dft = llama_init_dft.model;
+    ctx_dft = llama_init_dft.context;
 
     const bool vocab_type_tgt = llama_vocab_type(model_tgt);
     LOG("vocab_type tgt: %d\n", vocab_type_tgt);
