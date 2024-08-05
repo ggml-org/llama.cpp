@@ -95,8 +95,16 @@ Typically finetunes of the base models below are supported as well.
 - [x] [SEA-LION](https://huggingface.co/models?search=sea-lion)
 - [x] [GritLM-7B](https://huggingface.co/GritLM/GritLM-7B) + [GritLM-8x7B](https://huggingface.co/GritLM/GritLM-8x7B)
 - [x] [OLMo](https://allenai.org/olmo)
+- [x] [Granite models](https://huggingface.co/collections/ibm-granite/granite-code-models-6624c5cec322e4c148c8b330)
 - [x] [GPT-NeoX](https://github.com/EleutherAI/gpt-neox) + [Pythia](https://github.com/EleutherAI/pythia)
+- [x] [Snowflake-Arctic MoE](https://huggingface.co/collections/Snowflake/arctic-66290090abe542894a5ac520)
+- [x] [Smaug](https://huggingface.co/models?search=Smaug)
+- [x] [Poro 34B](https://huggingface.co/LumiOpen/Poro-34B)
+- [x] [Bitnet b1.58 models](https://huggingface.co/1bitLLM)
+- [x] [Flan T5](https://huggingface.co/models?search=flan-t5)
+- [x] [Open Elm models](https://huggingface.co/collections/apple/openelm-instruct-models-6619ad295d7ae9f868b759ca)
 - [x] [ChatGLM3-6b](https://huggingface.co/THUDM/chatglm3-6b) + [ChatGLM4-9b](https://huggingface.co/THUDM/glm-4-9b)
+- [x] [SmolLM](https://huggingface.co/collections/HuggingFaceTB/smollm-6695016cad7167254ce15966)
 
 (instructions for supporting more models: [HOWTO-add-model.md](./docs/development/HOWTO-add-model.md))
 
