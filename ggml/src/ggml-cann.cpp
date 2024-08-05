@@ -627,7 +627,6 @@ GGML_CALL static void* ggml_backend_cann_buffer_get_base(
 GGML_CALL static void ggml_backend_cann_transform_q4_0(ggml_tensor* tensor,
                                                        const void* src,
                                                        void* dst) {
-    GGML_ASSERT(tensor->op == GGML_OP_NONE);
 
     int64_t n_elems = ggml_nelements(tensor);
     int64_t groups = n_elems / QK4_0;
@@ -679,7 +678,6 @@ GGML_CALL static void ggml_backend_cann_transform_q4_0(ggml_tensor* tensor,
  */
 GGML_CALL static void ggml_backend_cann_transform_back_q4_0(
     const ggml_tensor* tensor, void* src, void* dst) {
-    GGML_ASSERT(tensor->op == GGML_OP_NONE);
 
     int64_t n_elems = ggml_nelements(tensor);
     int64_t groups = n_elems / QK4_0;
@@ -1666,10 +1664,17 @@ GGML_CALL static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
             }
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
-                // case GGML_TYPE_Q4_0:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
                 case GGML_TYPE_Q8_0:
+                    // TODO: fix me
+                    // Current groupsize should not be greater than k-1 in
+                    // aclnnWeightQuantBatchMatmulV2GetWorkspaceSize().
+                    if (op->src[0]->ne[0]-1 > QK8_0) {
+                        return true;
+                    }
+                    return false;
+                case GGML_TYPE_Q4_0:
                     return true;
                 default:
                     return false;
@@ -1694,6 +1699,7 @@ GGML_CALL static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
                     return true;
                 default:
                     return false;

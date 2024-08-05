@@ -37,6 +37,10 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
             return ACL_INT16;
         case GGML_TYPE_I32:
             return ACL_INT32;
+        case GGML_TYPE_Q4_0:
+            return ACL_INT4;
+        case GGML_TYPE_Q8_0:
+            return ACL_INT8;
         default:
             return ACL_DT_UNDEFINED;
     }
@@ -87,33 +91,6 @@ bool ggml_cann_need_bcast(const ggml_tensor* t0, const ggml_tensor* t1) {
         }
     }
     return false;
-}
-
-aclTensor* ggml_cann_create_tensor(void* data_ptr, aclDataType dtype,
-                                   size_t type_size, int64_t* ne, size_t* nb,
-                                   int64_t dims, aclFormat format,
-                                   size_t offset) {
-    int64_t tmp_ne[GGML_MAX_DIMS * 2];
-    int64_t tmp_stride[GGML_MAX_DIMS * 2];
-
-    memcpy(tmp_ne, ne, dims * sizeof(int64_t));
-    for (int i = 0; i < dims; i++) {
-        tmp_stride[i] = nb[i] / type_size;
-    }
-
-    std::reverse(tmp_ne, tmp_ne + dims);
-    std::reverse(tmp_stride, tmp_stride + dims);
-
-    int64_t acl_storage_len = 0;
-    for (int i = 0; i < dims; i++) {
-        acl_storage_len += (ne[i] - 1) * nb[i];
-    }
-
-    aclTensor* acl_tensor =
-        aclCreateTensor(tmp_ne, dims, dtype, tmp_stride, offset / type_size,
-                        format, &acl_storage_len, 1, data_ptr);
-
-    return acl_tensor;
 }
 
 int64_t ggml_cann_get_bcast_shape(const ggml_tensor* src0,

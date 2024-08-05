@@ -9,6 +9,7 @@ file(GLOB SRC_FILES
     get_row_q8_0.cpp
     quantize_f32_q8_0.cpp
     quantize_f16_q8_0.cpp
+    quantize_float_to_q4_0.cpp
     dup.cpp
 )
 
@@ -29,4 +30,4 @@ ascendc_library(ascendc_kernels STATIC
     ${SRC_FILES}
 )
 
-#ascendc_compile_definitions(ascendc_kernels PRIVATE -DASCENDC_DUMP)
+# ascendc_compile_definitions(ascendc_kernels PRIVATE -DASCENDC_DUMP)

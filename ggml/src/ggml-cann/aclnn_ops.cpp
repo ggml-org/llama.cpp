@@ -910,6 +910,13 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 ((ggml_tensor*)dst->extra)->ne);
             return;
         }
+        if (dst->type == GGML_TYPE_Q4_0) {
+            aclrtlaunch_ascendc_quantize_f16_to_q4_0(
+                24, ctx.stream(), src->data, dst->data,
+                ((ggml_tensor*)src->extra)->ne, ((ggml_tensor*)src->extra)->nb,
+                ((ggml_tensor*)dst->extra)->ne);
+            return;
+        }
         if (dst->type == GGML_TYPE_F16) {
             if (ggml_are_same_shape(src, dst)) {
                 cann_copy(ctx, acl_src, acl_dst);
@@ -966,6 +973,13 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
         //          && nb0 == type_size)
         if (dst->type == GGML_TYPE_Q8_0) {
             aclrtlaunch_ascendc_quantize_f32_q8_0(
+                24, ctx.stream(), src->data, dst->data,
+                ((ggml_tensor*)src->extra)->ne, ((ggml_tensor*)src->extra)->nb,
+                ((ggml_tensor*)dst->extra)->ne);
+            return;
+        }
+        if (dst->type == GGML_TYPE_Q4_0) {
+            aclrtlaunch_ascendc_quantize_f32_to_q4_0(
                 24, ctx.stream(), src->data, dst->data,
                 ((ggml_tensor*)src->extra)->ne, ((ggml_tensor*)src->extra)->nb,
                 ((ggml_tensor*)dst->extra)->ne);
@@ -2463,21 +2477,33 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
  * @param dst The destination tensor where the result of the matrix
  * multiplication will be stored.
  */
-static void ggml_cann_mul_mat_q8_0(ggml_backend_cann_context& ctx,
-                                   ggml_tensor* dst) {
+static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
+                                   ggml_tensor* dst,
+                                   const enum ggml_type type) {
     ggml_tensor* src0 = dst->src[0];  // weight
     ggml_tensor* src1 = dst->src[1];  // input
 
     // The shape of the weight is NCHW. Matrix multiplication uses HW dims. HC
     // is regarded as batch. weight need transpose.
     int64_t weight_ne[] = {src0->ne[1], src0->ne[0]};
-    size_t weight_elem_size = sizeof(uint8_t);
-    size_t weight_nb[] = {weight_elem_size * src0->ne[0], weight_elem_size};
+    float weight_elem_size;
+    if (type == GGML_TYPE_Q4_0) {
+        weight_elem_size = float(sizeof(uint8_t)) / 2;
+    }
+    else if (type == GGML_TYPE_Q8_0) {
+        weight_elem_size = float(sizeof(uint8_t));
+    }
+    else {
+        GGML_ABORT("Only support Q4_0 and Q8_0 MUL_MAT");
+    }
+    float weight_nb[] = {weight_elem_size * src0->ne[0], weight_elem_size};
+
     // size of one matrix is element_size * height * width.
     size_t weight_stride = weight_elem_size * src0->ne[0] * src0->ne[1];
     size_t weight_size = weight_stride * src0->ne[2] * src0->ne[3];
 
     // scale stored at the end of weight. Also need transpose.
+    GGML_ASSERT(QK4_0 == QK8_0);
     int64_t scale_ne[] = {src0->ne[1], src0->ne[0] / QK8_0};
     size_t scale_elem_size = sizeof(uint16_t);
     size_t scale_nb[] = {src0->ne[0] / QK8_0 * scale_elem_size,
@@ -2541,8 +2567,9 @@ static void ggml_cann_mul_mat_q8_0(ggml_backend_cann_context& ctx,
                 (char*)input_buffer + batch1 * input_stride, ACL_FLOAT16,
                 input_elem_size, input_ne, input_nb, 2);
             aclTensor* acl_weight_tensor = ggml_cann_create_tensor(
-                (char*)src0->data + batch0 * weight_stride, ACL_INT8,
-                weight_elem_size, weight_ne, weight_nb, 2);
+                (char*)src0->data + batch0 * weight_stride,
+                ggml_cann_type_mapping(type), weight_elem_size, weight_ne,
+                weight_nb, 2);
             aclTensor* acl_scale_tensor = ggml_cann_create_tensor(
                 scale_offset + batch0 * scale_stride, ACL_FLOAT16,
                 scale_elem_size, scale_ne, scale_nb, 2);
@@ -2596,11 +2623,9 @@ void ggml_cann_mul_mat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
         case GGML_TYPE_F16:
             ggml_cann_mat_mul_fp(ctx, dst);
             break;
-        // case GGML_TYPE_Q4_0:
-        //     ggml_cann_mul_mat_q4_0(ctx, dst);
-        //     break;
+        case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
-            ggml_cann_mul_mat_q8_0(ctx, dst);
+            ggml_cann_mul_mat_quant(ctx, dst, type);
             break;
         default:
             GGML_ABORT("fatal error");

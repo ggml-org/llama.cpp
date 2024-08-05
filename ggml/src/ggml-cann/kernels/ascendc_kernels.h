@@ -8,6 +8,8 @@
 
 #include "aclrtlaunch_ascendc_quantize_f32_q8_0.h"
 #include "aclrtlaunch_ascendc_quantize_f16_q8_0.h"
+#include "aclrtlaunch_ascendc_quantize_f16_to_q4_0.h"
+#include "aclrtlaunch_ascendc_quantize_f32_to_q4_0.h"
 
 #include "aclrtlaunch_ascendc_dup_by_rows_fp16.h"
 #include "aclrtlaunch_ascendc_dup_by_rows_fp32.h"
