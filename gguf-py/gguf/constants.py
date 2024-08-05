@@ -161,6 +161,7 @@ class Keys:
         SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
         EOT_ID               = "tokenizer.ggml.eot_token_id"
+        EOM_ID               = "tokenizer.ggml.eom_token_id"
 
     class Adapter:
         TYPE       = "adapter.type"
@@ -1327,3 +1328,4 @@ KEY_TOKENIZER_PRIFIX_ID  = Keys.Tokenizer.PREFIX_ID
 KEY_TOKENIZER_SUFFIX_ID  = Keys.Tokenizer.SUFFIX_ID
 KEY_TOKENIZER_MIDDLE_ID  = Keys.Tokenizer.MIDDLE_ID
 KEY_TOKENIZER_EOT_ID     = Keys.Tokenizer.EOT_ID
+KEY_TOKENIZER_EOM_ID     = Keys.Tokenizer.EOM_ID

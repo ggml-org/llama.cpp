@@ -1444,7 +1444,8 @@ llama_token_attr llama_token_get_attr_impl(const struct llama_vocab & vocab, lla
 bool llama_token_is_eog_impl(const struct llama_vocab & vocab, llama_token token) {
     return token != -1 && (
         token == llama_token_eos_impl(vocab) ||
-        token == llama_token_eot_impl(vocab)
+        token == llama_token_eot_impl(vocab) ||
+        token == llama_token_eom_impl(vocab)
     );
 }
 
@@ -1498,6 +1499,10 @@ llama_token llama_token_suffix_impl(const struct llama_vocab & vocab) {
 
 llama_token llama_token_eot_impl(const struct llama_vocab & vocab) {
     return vocab.special_eot_id;
+}
+
+llama_token llama_token_eom_impl(const struct llama_vocab & vocab) {
+    return vocab.special_eom_id;
 }
 
 int32_t llama_tokenize_impl(

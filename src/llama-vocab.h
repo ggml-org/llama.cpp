@@ -45,6 +45,7 @@ struct llama_vocab {
     id special_suffix_id = -1;
     id special_middle_id = -1;
     id special_eot_id    = -1; // TODO: move above after "eos_id", and here add "file separator" token
+    id special_eom_id    = -1;
 
     // tokenizer flags
     bool tokenizer_add_space_prefix = false;
@@ -101,6 +102,7 @@ llama_token llama_token_prefix_impl(const struct llama_vocab & vocab);
 llama_token llama_token_middle_impl(const struct llama_vocab & vocab);
 llama_token llama_token_suffix_impl(const struct llama_vocab & vocab);
 llama_token llama_token_eot_impl   (const struct llama_vocab & vocab);
+llama_token llama_token_eom_impl   (const struct llama_vocab & vocab);
 
 int32_t llama_tokenize_impl(
         const struct llama_vocab & vocab,
