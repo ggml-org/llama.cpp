@@ -2506,6 +2506,112 @@ class NomicBertModel(BertModel):
         self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
 
 
+@Model.register("XLMRobertaModel")
+class XLMRobertaModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # we need the pad_token_id to know how to chop down position_embd matrix
+        if (pad_token_id := self.hparams.get("pad_token_id")) is not None:
+            self._position_offset = 1 + pad_token_id
+            if "max_position_embeddings" in self.hparams:
+                self.hparams["max_position_embeddings"] -= self._position_offset
+        else:
+            self._position_offset = None
+
+    def set_vocab(self):
+        # to avoid TypeError: Descriptors cannot be created directly
+        # exception when importing sentencepiece_model_pb2
+        os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+        from sentencepiece import SentencePieceProcessor
+        from sentencepiece import sentencepiece_model_pb2 as model
+
+        tokenizer_path = self.dir_model / 'sentencepiece.bpe.model'
+        if not tokenizer_path.is_file():
+            raise FileNotFoundError(f"File not found: {tokenizer_path}")
+
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+        sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
+        assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
+
+        add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
+        remove_whitespaces = sentencepiece_model.normalizer_spec.remove_extra_whitespaces
+        precompiled_charsmap = sentencepiece_model.normalizer_spec.precompiled_charsmap
+
+        tokenizer = SentencePieceProcessor()
+        tokenizer.LoadFromFile(str(tokenizer_path))
+
+        vocab_size = self.hparams.get('vocab_size', tokenizer.vocab_size())
+
+        tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
+        scores: list[float] = [-10000.0] * vocab_size
+        toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
+
+        for token_id in range(tokenizer.vocab_size()):
+            piece = tokenizer.IdToPiece(token_id)
+            text = piece.encode("utf-8")
+            score = tokenizer.GetScore(token_id)
+
+            toktype = SentencePieceTokenTypes.NORMAL
+            if tokenizer.IsUnknown(token_id):
+                toktype = SentencePieceTokenTypes.UNKNOWN
+            elif tokenizer.IsControl(token_id):
+                toktype = SentencePieceTokenTypes.CONTROL
+            elif tokenizer.IsUnused(token_id):
+                toktype = SentencePieceTokenTypes.UNUSED
+            elif tokenizer.IsByte(token_id):
+                toktype = SentencePieceTokenTypes.BYTE
+
+            tokens[token_id] = text
+            scores[token_id] = score
+            toktypes[token_id] = toktype
+
+        if vocab_size > len(tokens):
+            pad_count = vocab_size - len(tokens)
+            logger.debug(f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]")
+            for i in range(1, pad_count + 1):
+                tokens.append(bytes(f"[PAD{i}]", encoding="utf-8"))
+                scores.append(-1000.0)
+                toktypes.append(SentencePieceTokenTypes.UNUSED)
+
+        # realign tokens (see HF tokenizer code)
+        tokens = [b'<s>', b'<pad>', b'</s>', b'<unk>'] + tokens[3:-1]
+        scores = [0.0, 0.0, 0.0, 0.0] + scores[3:-1]
+        toktypes = [
+            SentencePieceTokenTypes.CONTROL,
+            SentencePieceTokenTypes.CONTROL,
+            SentencePieceTokenTypes.CONTROL,
+            SentencePieceTokenTypes.UNKNOWN,
+        ] + toktypes[3:-1]
+
+        self.gguf_writer.add_tokenizer_model("t5")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_add_space_prefix(add_prefix)
+        self.gguf_writer.add_token_type_count(1)
+        self.gguf_writer.add_remove_extra_whitespaces(remove_whitespaces)
+        if precompiled_charsmap:
+            self.gguf_writer.add_precompiled_charsmap(precompiled_charsmap)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
+        if name == "embeddings.position_embeddings.weight":
+            if self._position_offset is not None:
+                data_torch = data_torch[self._position_offset:,:]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @Model.register("GemmaForCausalLM")
 class GemmaModel(Model):
     model_arch = gguf.MODEL_ARCH.GEMMA
