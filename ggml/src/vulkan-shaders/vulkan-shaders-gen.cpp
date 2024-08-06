@@ -22,6 +22,7 @@
 #ifdef _WIN32
     #include <windows.h>
     #include <direct.h> // For _mkdir on Windows
+    #include <algorithm> // For std::replace on w64devkit
 #else
     #include <unistd.h>
     #include <sys/wait.h>
