@@ -174,7 +174,7 @@ class Metadata:
             org_component, model_full_name_component = None, model_id
 
         # Check if we erroneously matched against './' or '../' etc...
-        if org_component is not None and org_component[0] == '.':
+        if org_component is not None and len(org_component) > 0 and org_component[0] == '.':
             org_component = None
 
         name_parts: list[str] = model_full_name_component.split('-')

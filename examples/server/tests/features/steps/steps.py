@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import requests
 from collections.abc import Sequence
 from contextlib import closing
 from re import RegexFlag
@@ -70,6 +71,7 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.user_api_key = None
     context.response_format = None
     context.temperature = None
+    context.lora_file = None
 
     context.tasks_result = []
     context.concurrent_tasks = []
@@ -82,6 +84,12 @@ def step_download_hf_model(context, hf_file: str, hf_repo: str):
     context.model_hf_file = hf_file
     context.model_file = os.path.basename(hf_file)
 
+@step('a lora adapter file from {lora_file_url}')
+def step_download_lora_file(context, lora_file_url: str):
+    file_name = lora_file_url.split('/').pop()
+    context.lora_file = f'../../../{file_name}'
+    with open(context.lora_file, 'wb') as f:
+        f.write(requests.get(lora_file_url).content)
 
 @step('a model file {model_file}')
 def step_model_file(context, model_file: str):
@@ -849,6 +857,17 @@ async def step_erase_slot(context, slot_id):
             context.response = response
 
 
+@step('switch {on_or_off} lora adapter {lora_id:d}')
+@async_run_until_complete
+async def toggle_lora_adapter(context, on_or_off: str, lora_id: int):
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f'{context.base_url}/lora-adapters',
+                                json=[{'id': lora_id, 'scale': 1 if on_or_off == 'on' else 0}],
+                                headers={"Content-Type": "application/json"}) as response:
+            context.response = response
+            print([{'id': lora_id, 'scale': 1 if on_or_off == 'on' else 0}])
+
+
 @step('the server responds with status code {status_code:d}')
 def step_server_responds_with_status_code(context, status_code):
     assert context.response.status == status_code
@@ -1326,6 +1345,8 @@ def start_server_background(context):
         server_args.extend(['--grp-attn-w', context.n_ga_w])
     if context.debug:
         server_args.append('--verbose')
+    if context.lora_file:
+        server_args.extend(['--lora', context.lora_file])
     if 'SERVER_LOG_FORMAT_JSON' not in os.environ:
         server_args.extend(['--log-format', "text"])
 

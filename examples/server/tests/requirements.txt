@@ -4,3 +4,4 @@ huggingface_hub~=0.20.3
 numpy~=1.26.4
 openai~=1.30.3
 prometheus-client~=0.20.0
+requests~=2.32.3

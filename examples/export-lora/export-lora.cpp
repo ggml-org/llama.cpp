@@ -135,7 +135,7 @@ struct lora_merge_ctx {
 
     lora_merge_ctx(
             std::string & base_fname,
-            std::vector<std::tuple<std::string, float>> & lora_files,
+            std::vector<llama_lora_adapter_info> & lora_files,
             std::string & outfile,
             int n_threads) : base_model(base_fname, 0), n_threads(n_threads), fout(outfile, std::ios::binary) {
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
@@ -144,9 +144,9 @@ struct lora_merge_ctx {
             throw std::runtime_error("split model is not yet supported");
         }
 
-        for (auto lora_inp : lora_files) {
-            auto fname = std::get<0>(lora_inp);
-            auto scale = std::get<1>(lora_inp);
+        for (auto & lora_inp : lora_files) {
+            auto fname = lora_inp.path;
+            auto scale = lora_inp.scale;
             std::unique_ptr<file_input> adapter(new file_input(fname, scale));
             check_metadata_lora(adapter.get());
             adapters.push_back(std::move(adapter));
@@ -407,7 +407,7 @@ int main(int argc, char ** argv) {
 
     g_verbose = (params.verbosity == 1);
     try {
-        lora_merge_ctx ctx(params.model, params.lora_adapter, params.lora_outfile, params.n_threads);
+        lora_merge_ctx ctx(params.model, params.lora_adapters, params.lora_outfile, params.n_threads);
         ctx.run_merge();
     } catch (const std::exception & err) {
         fprintf(stderr, "%s\n", err.what());

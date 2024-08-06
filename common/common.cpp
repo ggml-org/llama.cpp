@@ -684,14 +684,24 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "--lora") {
         CHECK_ARG
-        params.lora_adapter.emplace_back(argv[i], 1.0f);
+        params.lora_adapters.push_back({
+            std::string(argv[i]),
+            1.0,
+        });
         return true;
     }
     if (arg == "--lora-scaled") {
         CHECK_ARG
-        const char* lora_adapter = argv[i];
+        std::string lora_adapter = argv[i];
         CHECK_ARG
-        params.lora_adapter.emplace_back(lora_adapter, std::stof(argv[i]));
+        params.lora_adapters.push_back({
+            lora_adapter,
+            std::stof(argv[i]),
+        });
+        return true;
+    }
+    if (arg == "--lora-init-without-apply") {
+        params.lora_init_without_apply = true;
         return true;
     }
     if (arg == "--control-vector") {
@@ -1654,6 +1664,7 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
                                                                         "https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template" });
     options.push_back({ "server",      "-sps,  --slot-prompt-similarity SIMILARITY",
                                                                         "how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity });
+    options.push_back({ "server",      "       --lora-init-without-apply",     "load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: %s)", params.lora_init_without_apply ? "enabled" : "disabled"});
 
 #ifndef LOG_DISABLE_LOGS
     options.push_back({ "logging" });
@@ -2091,17 +2102,22 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
         }
     }
 
-    for (unsigned int i = 0; i < params.lora_adapter.size(); ++i) {
-        const std::string & lora_adapter = std::get<0>(params.lora_adapter[i]);
-        float lora_scale = std::get<1>(params.lora_adapter[i]);
-        auto adapter = llama_lora_adapter_init(model, lora_adapter.c_str());
-        if (adapter == nullptr) {
-            fprintf(stderr, "%s: error: failed to apply lora adapter\n", __func__);
+    // load and optionally apply lora adapters
+    for (auto & la : params.lora_adapters) {
+        llama_lora_adapter_container loaded_la;
+        loaded_la.path = la.path;
+        loaded_la.scale = la.scale;
+        loaded_la.adapter = llama_lora_adapter_init(model, la.path.c_str());
+        if (loaded_la.adapter == nullptr) {
+            fprintf(stderr, "%s: error: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
             llama_free(lctx);
             llama_free_model(model);
             return iparams;
         }
-        llama_lora_adapter_set(lctx, adapter, lora_scale);
+        iparams.lora_adapters.push_back(loaded_la); // copy to list of loaded adapters
+    }
+    if (!params.lora_init_without_apply) {
+        llama_lora_adapters_apply(lctx, iparams.lora_adapters);
     }
 
     if (params.ignore_eos) {
@@ -2138,6 +2154,15 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
     iparams.model   = model;
     iparams.context = lctx;
     return iparams;
+}
+
+void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lora_adapter_container> & lora_adapters) {
+    llama_lora_adapter_clear(ctx);
+    for (auto & la : lora_adapters) {
+        if (la.scale != 0.0f) {
+            llama_lora_adapter_set(ctx, la.adapter, la.scale);
+        }
+    }
 }
 
 struct llama_model_params llama_model_params_from_gpt_params(const gpt_params & params) {
@@ -3162,19 +3187,18 @@ void yaml_dump_non_result_info(FILE * stream, const gpt_params & params, const l
     }
 
     fprintf(stream, "lora:\n");
-    for (std::tuple<std::string, float> la : params.lora_adapter) {
-        if (std::get<1>(la) != 1.0f) {
-            continue;
+    for (auto & la : params.lora_adapters) {
+        if (la.scale == 1.0f) {
+            fprintf(stream, "  - %s\n", la.path.c_str());
         }
-        fprintf(stream, "  - %s\n", std::get<0>(la).c_str());
     }
     fprintf(stream, "lora_scaled:\n");
-    for (std::tuple<std::string, float> la : params.lora_adapter) {
-        if (std::get<1>(la) == 1.0f) {
-            continue;
+    for (auto & la : params.lora_adapters) {
+        if (la.scale != 1.0f) {
+            fprintf(stream, "  - %s: %f\n", la.path.c_str(), la.scale);
         }
-        fprintf(stream, "  - %s: %f\n", std::get<0>(la).c_str(), std::get<1>(la));
     }
+    fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
     fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
     fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
     fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);

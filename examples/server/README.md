@@ -207,41 +207,6 @@ model:
   -hff,  --hf-file FILE           Hugging Face model file (default: unused)
   -hft,  --hf-token TOKEN         Hugging Face access token (default: value from HF_TOKEN environment variable)
 
-retrieval:
-
-         --context-file FNAME     file to load context from (repeat to specify multiple files)
-         --chunk-size N           minimum length of embedded text chunks (default: 64)
-         --chunk-separator STRING
-                                  separator between chunks (default: '
-                                  ')
-
-passkey:
-
-         --junk N                 number of times to repeat the junk text (default: 250)
-         --pos N                  position of the passkey in the junk text (default: -1)
-
-imatrix:
-
-  -o,    --output FNAME           output file (default: 'imatrix.dat')
-         --output-frequency N     output the imatrix every N iterations (default: 10)
-         --save-frequency N       save an imatrix copy every N iterations (default: 0)
-         --process-output         collect data for the output tensor (default: false)
-         --no-ppl                 do not compute perplexity (default: true)
-         --chunk N                start processing the input from chunk N (default: 0)
-
-bench:
-
-  -pps                            is the prompt shared across parallel sequences (default: false)
-  -npp n0,n1,...                  number of prompt tokens
-  -ntg n0,n1,...                  number of text generation tokens
-  -npl n0,n1,...                  number of parallel prompts
-
-embedding:
-
-         --embd-normalize         normalisation for embendings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
-         --embd-output-format     empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
-         --embd-separator         separator of embendings (default \n) for example "<#sep#>"
-
 server:
 
          --host HOST              ip address to listen (default: 127.0.0.1)
@@ -267,7 +232,8 @@ server:
                                   https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template
   -sps,  --slot-prompt-similarity SIMILARITY
                                   how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.50, 0.0 = disabled)
-
+         --lora-init-without-apply
+                                  load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled)
 
 logging:
 
@@ -279,15 +245,6 @@ logging:
          --log-file FNAME         Specify a log filename (without extension)
          --log-new                Create a separate new log file on start. Each log file will have unique name: "<name>.<ID>.log"
          --log-append             Don't truncate the old log file.
-
-cvector:
-
-  -o,    --output FNAME           output file (default: 'control_vector.gguf')
-         --positive-file FNAME    positive prompts file, one prompt per line (default: 'examples/cvector-generator/positive.txt')
-         --negative-file FNAME    negative prompts file, one prompt per line (default: 'examples/cvector-generator/negative.txt')
-         --pca-batch N            batch size used for PCA. Larger batch runs faster, but uses more memory (default: 100)
-         --pca-iter N             number of iterations used for PCA (default: 1000)
-         --method {pca,mean}      dimensionality reduction method to be used (default: pca)
 ```
 
 
@@ -411,7 +368,8 @@ node index.js
 
 ## API Endpoints
 
-- **GET** `/health`: Returns the current state of the server:
+### GET `/health`: Returns the current state of the server
+
   - 503 -> `{"status": "loading model"}` if the model is still being loaded.
   - 500 -> `{"status": "error"}` if the model failed to load.
   - 200 -> `{"status": "ok", "slots_idle": 1, "slots_processing": 2 }` if the model is successfully loaded and the server is ready for further requests mentioned below.
@@ -420,7 +378,7 @@ node index.js
 
   If the query parameter `include_slots` is passed, `slots` field will contain internal slots data except if `--slots-endpoint-disable` is set.
 
-- **POST** `/completion`: Given a `prompt`, it returns the predicted completion.
+### POST `/completion`: Given a `prompt`, it returns the predicted completion.
 
     *Options:*
 
@@ -498,7 +456,7 @@ node index.js
 
     `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["top_k", "tfs_z", "typical_p", "top_p", "min_p", "temperature"]` - these are all the available values.
 
-### Result JSON
+**Response format**
 
 - Note: When using streaming mode (`stream`), only `content` and `stop` will be returned until end of completion.
 
@@ -537,7 +495,7 @@ Notice that each `probs` is an array of length `n_probs`.
 - `tokens_evaluated`: Number of tokens evaluated in total from the prompt
 - `truncated`: Boolean indicating if the context size was exceeded during generation, i.e. the number of tokens provided in the prompt (`tokens_evaluated`) plus tokens generated (`tokens predicted`) exceeded the context size (`n_ctx`)
 
-- **POST** `/tokenize`: Tokenize a given text.
+### POST `/tokenize`: Tokenize a given text
 
     *Options:*
 
@@ -545,13 +503,15 @@ Notice that each `probs` is an array of length `n_probs`.
 
     `add_special`: Boolean indicating if special tokens, i.e. `BOS`, should be inserted.  Default: `false`
 
-- **POST** `/detokenize`: Convert tokens to text.
+### POST `/detokenize`: Convert tokens to text
 
     *Options:*
 
     `tokens`: Set the tokens to detokenize.
 
-- **POST** `/embedding`: Generate embedding of a given text just as [the embedding example](../embedding) does.
+### POST `/embedding`: Generate embedding of a given text
+
+The same as [the embedding example](../embedding) does.
 
     *Options:*
 
@@ -559,7 +519,9 @@ Notice that each `probs` is an array of length `n_probs`.
 
     `image_data`: An array of objects to hold base64-encoded image `data` and its `id`s to be reference in `content`. You can determine the place of the image in the content as in the following: `Image: [img-21].\nCaption: This is a picture of a house`. In this case, `[img-21]` will be replaced by the embeddings of the image with id `21` in the following `image_data` array: `{..., "image_data": [{"data": "<BASE64_STRING>", "id": 21}]}`. Use `image_data` only with multimodal models, e.g., LLaVA.
 
-- **POST** `/infill`: For code infilling. Takes a prefix and a suffix and returns the predicted completion as stream.
+### POST `/infill`: For code infilling.
+
+Takes a prefix and a suffix and returns the predicted completion as stream.
 
     *Options:*
 
@@ -571,7 +533,7 @@ Notice that each `probs` is an array of length `n_probs`.
 
 - **GET** `/props`: Return current server settings.
 
-### Result JSON
+**Response format**
 
 ```json
 {
@@ -589,7 +551,9 @@ Notice that each `probs` is an array of length `n_probs`.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `chat_template` - the model's original Jinja2 prompt template
 
-- **POST** `/v1/chat/completions`: OpenAI-compatible Chat Completions API. Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
+
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
     *Options:*
 
@@ -641,7 +605,7 @@ Notice that each `probs` is an array of length `n_probs`.
     }'
     ```
 
-- **POST** `/v1/embeddings`: OpenAI-compatible embeddings API.
+### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
     *Options:*
 
@@ -675,9 +639,9 @@ Notice that each `probs` is an array of length `n_probs`.
     }'
     ```
 
-- **GET** `/slots`: Returns the current slots processing state. Can be disabled with `--slots-endpoint-disable`.
+### GET `/slots`: Returns the current slots processing state. Can be disabled with `--slots-endpoint-disable`.
 
-### Result JSON
+**Response format**
 
 ```json
 [
@@ -738,7 +702,7 @@ Notice that each `probs` is an array of length `n_probs`.
 ]
 ```
 
-- **GET** `/metrics`: [Prometheus](https://prometheus.io/) compatible metrics exporter endpoint if `--metrics` is enabled:
+### GET `/metrics`: Prometheus compatible metrics exporter endpoint if `--metrics` is enabled:
 
 Available metrics:
 - `llamacpp:prompt_tokens_total`: Number of prompt tokens processed.
@@ -750,13 +714,13 @@ Available metrics:
 - `llamacpp:requests_processing`: Number of requests processing.
 - `llamacpp:requests_deferred`: Number of requests deferred.
 
-- **POST** `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
+### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
     *Options:*
 
     `filename`: Name of the file to save the slot's prompt cache. The file will be saved in the directory specified by the `--slot-save-path` server parameter.
 
-### Result JSON
+**Response format**
 
 ```json
 {
@@ -770,13 +734,13 @@ Available metrics:
 }
 ```
 
-- **POST** `/slots/{id_slot}?action=restore`: Restore the prompt cache of the specified slot from a file.
+### POST `/slots/{id_slot}?action=restore`: Restore the prompt cache of the specified slot from a file.
 
     *Options:*
 
     `filename`: Name of the file to restore the slot's prompt cache from. The file should be located in the directory specified by the `--slot-save-path` server parameter.
 
-### Result JSON
+**Response format**
 
 ```json
 {
@@ -790,15 +754,51 @@ Available metrics:
 }
 ```
 
-- **POST** `/slots/{id_slot}?action=erase`: Erase the prompt cache of the specified slot.
+### POST `/slots/{id_slot}?action=erase`: Erase the prompt cache of the specified slot.
 
-### Result JSON
+**Response format**
 
 ```json
 {
     "id_slot": 0,
     "n_erased": 1745
 }
+```
+
+### GET `/lora-adapters`: Get list of all LoRA adapters
+
+If an adapter is disabled, the scale will be set to 0.
+
+**Response format**
+
+```json
+[
+    {
+        "id": 0,
+        "path": "my_adapter_1.gguf",
+        "scale": 0.0
+    },
+    {
+        "id": 1,
+        "path": "my_adapter_2.gguf",
+        "scale": 0.0
+    }
+]
+```
+
+### POST `/lora-adapters`: Set list of LoRA adapters
+
+To disable an adapter, either remove it from the list below, or set scale to 0.
+
+**Request format**
+
+To know the `id` of the adapter, use GET `/lora-adapters`
+
+```json
+[
+  {"id": 0, "scale": 0.2},
+  {"id": 1, "scale": 0.8}
+]
 ```
 
 ## More examples
