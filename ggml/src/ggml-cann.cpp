@@ -896,11 +896,10 @@ GGML_CALL static void ggml_backend_cann_buffer_init_tensor(
  * @param size Size of the data to be copied, in bytes.
  */
 GGML_CALL static void ggml_backend_cann_buffer_set_tensor(
-    ggml_backend_buffer_t buffer, ggml_tensor* tensor, const void* data,
+    ggml_backend_buffer_t buffer, ggml_tensor *tensor, const void *data,
     size_t offset, size_t size) {
-    // GGML_ASSERT(size == ggml_nbytes(tensor));
-    ggml_backend_cann_buffer_context* ctx =
-        (ggml_backend_cann_buffer_context*)buffer->context;
+    ggml_backend_cann_buffer_context *ctx =
+        (ggml_backend_cann_buffer_context *)buffer->context;
 
     ggml_cann_set_device(ctx->device);
     // TODO: refer to cann(#6017), it use thread's default stream.
@@ -908,22 +907,21 @@ GGML_CALL static void ggml_backend_cann_buffer_set_tensor(
     // Why aclrtSynchronizeDevice?
 
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpy(tensor->data, size, (const char*)data + offset,
-                              size, ACL_MEMCPY_HOST_TO_DEVICE));
+        ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
+                              ACL_MEMCPY_HOST_TO_DEVICE));
     } else {
-        void* transform_buffer = malloc(size);
-        ggml_backend_cann_transform(tensor, (const char*)data + offset,
-                                    transform_buffer);
+        void *transform_buffer = malloc(size);
+        ggml_backend_cann_transform(tensor, data, transform_buffer);
 
 #ifndef NDEBUG
-        void* check_buffer = malloc(size);
+        void *check_buffer = malloc(size);
         ggml_backend_cann_transform_back(tensor, transform_buffer,
                                          check_buffer);
-        GGML_ASSERT(memcmp((const char*)data + offset, check_buffer, size) ==
-                    0);
+        GGML_ASSERT(memcmp(data, check_buffer, size) == 0);
         free(check_buffer);
 #endif
-        ACL_CHECK(aclrtMemcpy(tensor->data, size, transform_buffer, size,
+        ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size,
+                              transform_buffer, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
         free(transform_buffer);
     }
@@ -945,21 +943,20 @@ GGML_CALL static void ggml_backend_cann_buffer_set_tensor(
 GGML_CALL static void ggml_backend_cann_buffer_get_tensor(
     ggml_backend_buffer_t buffer, const ggml_tensor* tensor, void* data,
     size_t offset, size_t size) {
-    GGML_ASSERT(size == ggml_nbytes(tensor));
     ggml_backend_cann_buffer_context* ctx =
         (ggml_backend_cann_buffer_context*)buffer->context;
 
     ggml_cann_set_device(ctx->device);
 
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpy((char*)data + offset, size, tensor->data, size,
+        ACL_CHECK(aclrtMemcpy(data, size, (char*)tensor->data + offset, size,
                               ACL_MEMCPY_DEVICE_TO_HOST));
     } else {
         void* transform_buffer = malloc(size);
-        ACL_CHECK(aclrtMemcpy(transform_buffer, size, tensor->data, size,
+        ACL_CHECK(aclrtMemcpy(transform_buffer, size,
+                              (char*)tensor->data + offset, size,
                               ACL_MEMCPY_DEVICE_TO_HOST));
-        ggml_backend_cann_transform_back(tensor, transform_buffer,
-                                         (char*)data + offset);
+        ggml_backend_cann_transform_back(tensor, transform_buffer, data);
         free(transform_buffer);
     }
 }
@@ -1448,42 +1445,41 @@ ggml_backend_cann_get_default_buffer_type(ggml_backend_t backend) {
  * @param size Size of the data to copy in bytes.
  */
 GGML_CALL static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
-                                                         ggml_tensor* tensor,
-                                                         const void* data,
+                                                         ggml_tensor *tensor,
+                                                         const void *data,
                                                          size_t offset,
                                                          size_t size) {
-    ggml_backend_cann_context* cann_ctx =
-        (ggml_backend_cann_context*)backend->context;
+    ggml_backend_cann_context *cann_ctx =
+        (ggml_backend_cann_context *)backend->context;
 
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpyAsync(
-            tensor->data, size, (const char*)data + offset, size,
-            ACL_MEMCPY_HOST_TO_DEVICE, cann_ctx->stream()));
+        ACL_CHECK(aclrtMemcpyAsync((char *)tensor->data + offset, size, data,
+                                   size, ACL_MEMCPY_HOST_TO_DEVICE,
+                                   cann_ctx->stream()));
     } else {
-        void* transform_buffer = malloc(size);
-        ggml_backend_cann_transform(tensor, (const char*)data + offset,
-                                    transform_buffer);
+        void *transform_buffer = malloc(size);
+        ggml_backend_cann_transform(tensor, data, transform_buffer);
 
 #ifndef NDEBUG
-        void* check_buffer = malloc(size);
+        void *check_buffer = malloc(size);
         ggml_backend_cann_transform_back(tensor, transform_buffer,
                                          check_buffer);
-        GGML_ASSERT(memcmp((const char*)data + offset, check_buffer, size));
+        GGML_ASSERT(memcmp(data, check_buffer, size));
         free(check_buffer);
 #endif
-        ACL_CHECK(aclrtMemcpyAsync(tensor->data, size, transform_buffer, size,
-                                   ACL_MEMCPY_HOST_TO_DEVICE,
-                                   cann_ctx->stream()));
+        ACL_CHECK(aclrtMemcpyAsync(
+            (char *)tensor->data + offset, size, transform_buffer, size,
+            ACL_MEMCPY_HOST_TO_DEVICE, cann_ctx->stream()));
         ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
         free(transform_buffer);
     }
 }
 
 GGML_CALL static void ggml_backend_cann_get_tensor_async(
-    ggml_backend_t backend, const ggml_tensor* tensor, void* data,
+    ggml_backend_t backend, const ggml_tensor *tensor, void *data,
     size_t offset, size_t size) {
-    ggml_backend_cann_context* cann_ctx =
-        (ggml_backend_cann_context*)backend->context;
+    ggml_backend_cann_context *cann_ctx =
+        (ggml_backend_cann_context *)backend->context;
     ggml_backend_buffer_t buf =
         tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
@@ -1491,17 +1487,16 @@ GGML_CALL static void ggml_backend_cann_get_tensor_async(
                 "unsupported buffer type");
 
     if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpyAsync((char*)data + offset, size, tensor->data,
+        ACL_CHECK(aclrtMemcpyAsync(data, size, (char *)tensor->data + offset,
                                    size, ACL_MEMCPY_DEVICE_TO_HOST,
                                    cann_ctx->stream()));
     } else {
-        void* transform_buffer = malloc(size);
-        ACL_CHECK(aclrtMemcpyAsync(transform_buffer, size, tensor->data, size,
-                                   ACL_MEMCPY_DEVICE_TO_HOST,
-                                   cann_ctx->stream()));
+        void *transform_buffer = malloc(size);
+        ACL_CHECK(aclrtMemcpyAsync(
+            transform_buffer, size, (char *)tensor->data + offset, size,
+            ACL_MEMCPY_DEVICE_TO_HOST, cann_ctx->stream()));
         ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
-        ggml_backend_cann_transform_back(tensor, transform_buffer,
-                                         (char*)data + offset);
+        ggml_backend_cann_transform_back(tensor, transform_buffer, data);
         free(transform_buffer);
     }
 }
