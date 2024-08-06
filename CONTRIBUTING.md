@@ -5,6 +5,7 @@
   - Execute [the full CI locally on your machine](ci/README.md) before publishing
 - Please rate the complexity of your PR (i.e. `Review Complexity : Low`, `Review Complexity : Medium`, `Review Complexity : High`). This makes it easier for maintainers to triage the PRs.
   - The PR template has a series of review complexity checkboxes `[ ]` that [you can mark as](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/about-task-lists) `[X]` for your convenience
+- Consider allowing write access to your branch for faster review
 - If your PR becomes stale, don't hesitate to ping the maintainers in the comments
 
 # Pull requests (for collaborators)
