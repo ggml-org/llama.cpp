@@ -2229,10 +2229,8 @@ static enum ggml_status ggml_metal_graph_compute(
                         GGML_ASSERT(ne00 % 4 == 0);
                         GGML_ASSERT(ggml_is_contiguous(src0));
 
-                        //float eps;
-                        //memcpy(&eps, dst->op_params, sizeof(float));
-
-                        const float eps = 1e-6f; // TODO: temporarily hardcoded
+                        float eps;
+                        memcpy(&eps, dst->op_params + 1, sizeof(float));
 
                         const int32_t n_groups = ((int32_t *) dst->op_params)[0];
 
