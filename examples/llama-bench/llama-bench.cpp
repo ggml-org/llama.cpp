@@ -27,6 +27,14 @@
 #include "ggml-cann.h"
 #endif
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 // utils
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
@@ -96,6 +104,27 @@ static std::string get_cpu_info() {
         }
         fclose(f);
     }
+#elif defined(_WIN32)
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE,
+                     TEXT("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0"),
+                     0,
+                     KEY_READ,
+                     &hKey) != ERROR_SUCCESS) {
+        // fail to open registry key
+        return "";
+    }
+    char cpu_brand[256];
+    DWORD cpu_brand_size = sizeof(cpu_brand);
+    if (RegQueryValueExA(hKey,
+                        TEXT("ProcessorNameString"),
+                        NULL,
+                        NULL,
+                        (LPBYTE)cpu_brand,
+                        &cpu_brand_size) == ERROR_SUCCESS) {
+        id.assign(cpu_brand, cpu_brand_size);
+    }
+    RegCloseKey(hKey);
 #endif
     // TODO: other platforms
     return id;
