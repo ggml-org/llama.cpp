@@ -351,15 +351,10 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
     }
 
     // an async copy would normally happen after all the queued operations on both backends are completed
-    // sync src, set_async dst
-    if (ggml_backend_buffer_is_host(src->buffer)) {
-        ggml_backend_synchronize(backend_src);
-        ggml_backend_tensor_set_async(backend_dst, dst, src->data, 0, ggml_nbytes(src));
-    } else {
-        ggml_backend_synchronize(backend_src);
-        ggml_backend_tensor_copy(src, dst);
-        ggml_backend_synchronize(backend_dst);
-    }
+    // to simulate the same behavior, we need to synchronize both backends first, and do a blocking copy
+    ggml_backend_synchronize(backend_src);
+    ggml_backend_synchronize(backend_dst);
+    ggml_backend_tensor_copy(src, dst);
 }
 
 // events
@@ -1782,7 +1777,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                ggml_backend_tensor_copy_async(input_backend, split_backend, input, input_cpy);
+                // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
+                // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
+                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                    ggml_backend_synchronize(input_backend);
+                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                    } else {
+                        ggml_backend_synchronize(split_backend);
+                    }
+                    ggml_backend_tensor_copy(input, input_cpy);
+                }
             }
         }
 
