@@ -50,6 +50,8 @@ GGML_API GGML_CALL ggml_backend_buffer_t ggml_backend_metal_buffer_from_ptr(void
 
 GGML_API void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb);
 
+GGML_API void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_callback abort_callback, void * user_data);
+
 GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_metal_buffer_type(void);
 
 // helper to check if the device supports a specific family
