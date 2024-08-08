@@ -175,12 +175,12 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]|[ab]\/)include\/ggml-rpc\.h/\1ggml\/include\/ggml-rpc.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-sycl\.h/\1ggml\/include\/ggml-sycl.h/g' \
         -e 's/([[:space:]]|[ab]\/)include\/ggml-vulkan\.h/\1ggml\/include\/ggml-vulkan.h/g' \
-        -e 's/([[:space:]]|[ab]\/)examples\/common\.h/examples\/common.h/g' \
-        -e 's/([[:space:]]|[ab]\/)examples\/common\.cpp/examples\/common.cpp/g' \
-        -e 's/([[:space:]]|[ab]\/)examples\/common-ggml\.h/examples\/common-ggml.h/g' \
-        -e 's/([[:space:]]|[ab]\/)examples\/common-ggml\.cpp/examples\/common-ggml.cpp/g' \
-        -e 's/([[:space:]]|[ab]\/)LICENSE/LICENSE/g' \
-        -e 's/([[:space:]]|[ab]\/)scripts\/gen-authors\.sh/scripts\/gen-authors.sh/g' \
+        -e 's/([[:space:]]|[ab]\/)examples\/common\.h/\1examples\/common.h/g' \
+        -e 's/([[:space:]]|[ab]\/)examples\/common\.cpp/\1examples\/common.cpp/g' \
+        -e 's/([[:space:]]|[ab]\/)examples\/common-ggml\.h/\1examples\/common-ggml.h/g' \
+        -e 's/([[:space:]]|[ab]\/)examples\/common-ggml\.cpp/\1examples\/common-ggml.cpp/g' \
+        -e 's/([[:space:]]|[ab]\/)LICENSE/\1LICENSE/g' \
+        -e 's/([[:space:]]|[ab]\/)scripts\/gen-authors\.sh/\1scripts\/gen-authors.sh/g' \
         > ggml-src.patch.tmp
     mv ggml-src.patch.tmp ggml-src.patch
 
