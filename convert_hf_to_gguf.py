@@ -251,12 +251,7 @@ class Model:
 
         return [(self.map_tensor_name(name), data_torch)]
 
-    def extra_f32_tensors(self, name: str, new_name: str, bid: int | None, n_dims: int) -> bool:
-        del name, new_name, bid, n_dims  # unused
-
-        return False
-
-    def extra_f16_tensors(self, name: str, new_name: str, bid: int | None, n_dims: int) -> bool:
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del name, new_name, bid, n_dims  # unused
 
         return False
@@ -285,54 +280,46 @@ class Model:
             for new_name, data in ((n, d.squeeze().numpy()) for n, d in self.modify_tensors(data_torch, name, bid)):
                 data: np.ndarray  # type hint
                 n_dims = len(data.shape)
-                data_dtype = data.dtype
-                data_qtype: gguf.GGMLQuantizationType | None = None
-
-                # when both are True, f32 should win
-                extra_f32 = self.extra_f32_tensors(name, new_name, bid, n_dims)
-                extra_f16 = self.extra_f16_tensors(name, new_name, bid, n_dims)
+                data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
-                # Conditions should closely match those in llama_model_quantize_internal in llama.cpp
-                extra_f32 = any(cond for cond in (
-                    extra_f32,
-                    n_dims == 1,
-                    new_name.endswith("_norm.weight"),
-                ))
-
-                # Some tensor types are always in float32
-                extra_f32 = extra_f32 or any(self.match_model_tensor_name(new_name, key, bid) for key in (
-                    gguf.MODEL_TENSOR.FFN_GATE_INP,
-                    gguf.MODEL_TENSOR.POS_EMBD,
-                    gguf.MODEL_TENSOR.TOKEN_TYPES,
-                ))
-
-                # if f16 desired, convert any float32 2-dim weight tensors to float16
-                extra_f16 = any(cond for cond in (
-                    extra_f16,
-                    (name.endswith(".weight") and n_dims >= 2),
-                ))
-
-                if self.ftype != gguf.LlamaFileType.ALL_F32 and extra_f16 and not extra_f32:
-                    if self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
-                        data = gguf.quantize_bf16(data)
-                        assert data.dtype == np.uint16
-                        data_qtype = gguf.GGMLQuantizationType.BF16
-
-                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0 and gguf.can_quantize_to_q8_0(data):
-                        data = gguf.quantize_q8_0(data)
-                        assert data.dtype == np.uint8
-                        data_qtype = gguf.GGMLQuantizationType.Q8_0
-
-                    else:  # default to float16 for quantized tensors
-                        if data_dtype != np.float16:
-                            data = data.astype(np.float16)
-                        data_qtype = gguf.GGMLQuantizationType.F16
-
-                if data_qtype is None:  # by default, convert to float32
-                    if data_dtype != np.float32:
-                        data = data.astype(np.float32)
+                if n_dims <= 1 or new_name.endswith("_norm.weight"):
                     data_qtype = gguf.GGMLQuantizationType.F32
+
+                # Conditions should closely match those in llama_model_quantize_internal in llama.cpp
+                # Some tensor types are always in float32
+                if data_qtype is False and (
+                    any(
+                        self.match_model_tensor_name(new_name, key, bid)
+                        for key in (
+                            gguf.MODEL_TENSOR.FFN_GATE_INP,
+                            gguf.MODEL_TENSOR.POS_EMBD,
+                            gguf.MODEL_TENSOR.TOKEN_TYPES,
+                        )
+                    )
+                    or not name.endswith(".weight")
+                ):
+                    data_qtype = gguf.GGMLQuantizationType.F32
+
+                # No override (data_qtype is False), or wants to be quantized (data_qtype is True)
+                if isinstance(data_qtype, bool):
+                    if self.ftype == gguf.LlamaFileType.ALL_F32:
+                        data_qtype = gguf.GGMLQuantizationType.F32
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_F16:
+                        data_qtype = gguf.GGMLQuantizationType.F16
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
+                        data_qtype = gguf.GGMLQuantizationType.BF16
+                    elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
+                        data_qtype = gguf.GGMLQuantizationType.Q8_0
+                    else:
+                        raise ValueError(f"Unknown file type: {self.ftype.name}")
+
+                try:
+                    data = gguf.quants.quantize(data, data_qtype)
+                except gguf.QuantError as e:
+                    logger.warning("%s, %s", e, "falling back to F16")
+                    data_qtype = gguf.GGMLQuantizationType.F16
+                    data = gguf.quants.quantize(data, data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 
@@ -1765,7 +1752,7 @@ class DbrxModel(Model):
 
         return [(new_name, data_torch)]
 
-    def extra_f16_tensors(self, name: str, new_name: str, bid: int | None, n_dims: int) -> bool:
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         del name, new_name, bid  # unused
 
         return n_dims > 1
@@ -2786,18 +2773,22 @@ class MambaModel(Model):
 
         return [(new_name, data_torch)]
 
-    def extra_f32_tensors(self, name: str, new_name: str, bid: int | None, n_dims: int) -> bool:
-        del n_dims  # unused
-
-        return bid is not None and new_name in (
-            self.format_tensor_name(n, bid, ".weight" if name.endswith(".weight") else "") for n in [
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        if bid is not None and new_name in (
+            self.format_tensor_name(
+                n, bid, ".weight" if name.endswith(".weight") else ""
+            )
+            for n in [
                 gguf.MODEL_TENSOR.SSM_CONV1D,
                 gguf.MODEL_TENSOR.SSM_X,
                 gguf.MODEL_TENSOR.SSM_DT,
                 gguf.MODEL_TENSOR.SSM_A,
                 gguf.MODEL_TENSOR.SSM_D,
             ]
-        )
+        ):
+            return gguf.GGMLQuantizationType.F32
+
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 @Model.register("CohereForCausalLM")
