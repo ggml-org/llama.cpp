@@ -975,6 +975,8 @@ struct server_context {
                 (prompt->is_array() &&  prompt->size() == 1 && prompt->at(0).is_string()) ||
                 (prompt->is_array() && !prompt->empty()     && prompt->at(0).is_number_integer())) {
                 slot.prompt = *prompt;
+            } else if (prompt->is_array() && prompt->size() == 1 && prompt->at(0).is_array()) {
+                slot.prompt = prompt->at(0);
             } else {
                 send_error(task, "\"prompt\" must be a string or an array of integers", ERROR_TYPE_INVALID_REQUEST);
                 return false;
