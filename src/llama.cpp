@@ -17343,6 +17343,7 @@ bool llama_save_session_file(struct llama_context * ctx, const char * path_sessi
 // TODO: replace all non-fatal assertions with returned errors or exceptions
 struct llama_data_write {
     virtual void write(const void * src, size_t size) = 0;
+    virtual void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) = 0;
     virtual size_t get_size_written() = 0;
     virtual ~llama_data_write() = default;
 
@@ -17465,9 +17466,8 @@ struct llama_data_write {
             // Read each range of cells of k_size length each into tmp_buf and write out
             for (const auto & range : cell_ranges) {
                 const size_t range_size = range.second - range.first;
-                tmp_buf.resize(range_size * k_size_row);
-                ggml_backend_tensor_get(kv_self.k_l[il], tmp_buf.data(), range.first * k_size_row, range_size * k_size_row);
-                write(tmp_buf.data(), tmp_buf.size());
+                const size_t buf_size = range_size * k_size_row;
+                write_tensor_data(kv_self.k_l[il], range.first * k_size_row, buf_size);
             }
         }
 
@@ -17486,9 +17486,8 @@ struct llama_data_write {
                 // Read each range of cells of v_size length each into tmp_buf and write out
                 for (const auto & range : cell_ranges) {
                     const size_t range_size = range.second - range.first;
-                    tmp_buf.resize(range_size * v_size_row);
-                    ggml_backend_tensor_get(kv_self.v_l[il], tmp_buf.data(), range.first * v_size_row, range_size * v_size_row);
-                    write(tmp_buf.data(), tmp_buf.size());
+                    const size_t buf_size = range_size * v_size_row;
+                    write_tensor_data(kv_self.v_l[il], range.first * v_size_row, buf_size);
                 }
             }
         } else {
@@ -17514,9 +17513,8 @@ struct llama_data_write {
                     for (const auto & range : cell_ranges) {
                         const size_t range_size = range.second - range.first;
                         const size_t src_offset = (range.first + j * kv_size) * v_size_el;
-                        tmp_buf.resize(range_size * v_size_el);
-                        ggml_backend_tensor_get(kv_self.v_l[il], tmp_buf.data(), src_offset, tmp_buf.size());
-                        write(tmp_buf.data(), tmp_buf.size());
+                        const size_t buf_size = range_size * v_size_el;
+                        write_tensor_data(kv_self.v_l[il], src_offset, buf_size);
                     }
                 }
             }
@@ -17875,9 +17873,11 @@ struct llama_data_write_dummy : llama_data_write {
 
     llama_data_write_dummy() {}
 
-    // TODO: avoid unnecessary calls to ggml_backend_tensor_get in a dummy context
-
     void write(const void * /* src */, size_t size) override {
+        size_written += size;
+    }
+
+    void write_tensor_data(const struct ggml_tensor * /* tensor */, size_t /* offset */, size_t size) override {
         size_written += size;
     }
 
@@ -17898,6 +17898,16 @@ struct llama_data_write_buffer : llama_data_write {
             throw std::runtime_error("unexpectedly reached end of buffer");
         }
         memcpy(ptr, src, size);
+        ptr += size;
+        size_written += size;
+        buf_size -= size;
+    }
+
+    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) override {
+        if (size > buf_size) {
+            throw std::runtime_error("unexpectedly reached end of buffer");
+        }
+        ggml_backend_tensor_get(tensor, ptr, offset, size);
         ptr += size;
         size_written += size;
         buf_size -= size;
@@ -17938,12 +17948,19 @@ struct llama_data_read_buffer : llama_data_read {
 struct llama_data_write_file : llama_data_write {
     llama_file * file;
     size_t size_written = 0;
+    std::vector<uint8_t> temp_buffer;
 
     llama_data_write_file(llama_file * f) : file(f) {}
 
     void write(const void * src, size_t size) override {
         file->write_raw(src, size);
         size_written += size;
+    }
+
+    void write_tensor_data(const struct ggml_tensor * tensor, size_t offset, size_t size) override {
+        temp_buffer.resize(size);
+        ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
+        write(temp_buffer.data(), temp_buffer.size());
     }
 
     size_t get_size_written() override {
