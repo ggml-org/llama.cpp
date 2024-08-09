@@ -50,20 +50,6 @@ static struct gguf_context * load_gguf(std::string & fname, struct ggml_context 
     return ctx_gguf;
 }
 
-static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
-    std::string result;
-    for (size_t pos = 0; ; pos += search.length()) {
-        auto new_pos = s.find(search, pos);
-        if (new_pos == std::string::npos) {
-            result += s.substr(pos, s.size() - pos);
-            break;
-        }
-        result += s.substr(pos, new_pos - pos) + replace;
-        pos = new_pos;
-    }
-    s = std::move(result);
-}
-
 struct file_input {
     struct ggml_context * ctx_meta = nullptr;
     struct gguf_context * ctx_gguf = nullptr;

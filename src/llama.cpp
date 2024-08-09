@@ -121,17 +121,6 @@ static std::string trim(const std::string & str) {
     return str.substr(start, end - start);
 }
 
-static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
-    if (search.empty()) {
-        return; // Avoid infinite loop if 'search' is an empty string
-    }
-    size_t pos = 0;
-    while ((pos = s.find(search, pos)) != std::string::npos) {
-        s.replace(pos, search.length(), replace);
-        pos += replace.length();
-    }
-}
-
 static bool is_float_close(float a, float b, float abs_tol) {
     // Check for non-negative tolerance
     if (abs_tol < 0.0) {

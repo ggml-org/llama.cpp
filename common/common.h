@@ -286,6 +286,8 @@ std::vector<std::string> string_split(std::string input, char separator);
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
 
+void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+
 template<class T>
 static std::vector<T> string_split(const std::string & str, char delim) {
     std::vector<T> values;
