@@ -197,6 +197,10 @@ static std::shared_ptr<socket_t> create_server_socket(const char * host, int por
         fprintf(stderr, "Failed to set SO_REUSEADDR\n");
         return nullptr;
     }
+    if (inet_addr(host) == INADDR_NONE) {
+        fprintf(stderr, "Invalid host address: %s\n", host);
+        return nullptr;
+    }
     struct sockaddr_in serv_addr;
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = inet_addr(host);
@@ -879,6 +883,14 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
     if (result->buffer && buffers.find(result->buffer) == buffers.end()) {
         return nullptr;
     }
+
+    // require that the tensor data does not go beyond the buffer end
+    uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
+    uint64_t buffer_start = (uint64_t) ggml_backend_buffer_get_base(result->buffer);
+    uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(result->buffer);
+    GGML_ASSERT(tensor->data + tensor_size >= tensor->data); // check for overflow
+    GGML_ASSERT(tensor->data >= buffer_start && tensor->data + tensor_size <= buffer_start + buffer_size);
+
     result->op = (ggml_op) tensor->op;
     for (uint32_t i = 0; i < GGML_MAX_OP_PARAMS / sizeof(int32_t); i++) {
         result->op_params[i] = tensor->op_params[i];
@@ -898,7 +910,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
     const rpc_tensor * in_tensor = (const rpc_tensor *)input.data();
     uint64_t offset;
     memcpy(&offset, input.data() + sizeof(rpc_tensor), sizeof(offset));
-    size_t size = input.size() - sizeof(rpc_tensor) - sizeof(offset);
+    const size_t size = input.size() - sizeof(rpc_tensor) - sizeof(offset);
 
     struct ggml_init_params params {
         /*.mem_size   =*/ ggml_tensor_overhead(),
@@ -913,6 +925,17 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         return false;
     }
     GGML_PRINT_DEBUG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", size: %zu\n", __func__, (void*)tensor->buffer, tensor->data, offset, size);
+
+    // sanitize tensor->data
+    {
+        const size_t p0 = (size_t) ggml_backend_buffer_get_base(tensor->buffer);
+        const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
+
+        if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
+            GGML_ABORT("[%s] tensor->data out of bounds\n", __func__);
+        }
+    }
+
     const void * data = input.data() + sizeof(rpc_tensor) + sizeof(offset);
     ggml_backend_tensor_set(tensor, data, offset, size);
     ggml_free(ctx);
@@ -943,6 +966,17 @@ bool rpc_server::get_tensor(const std::vector<uint8_t> & input, std::vector<uint
         return false;
     }
     GGML_PRINT_DEBUG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", size: %" PRIu64 "\n", __func__, (void*)tensor->buffer, tensor->data, offset, size);
+
+    // sanitize tensor->data
+    {
+        const size_t p0 = (size_t) ggml_backend_buffer_get_base(tensor->buffer);
+        const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
+
+        if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
+            GGML_ABORT("[%s] tensor->data out of bounds\n", __func__);
+        }
+    }
+
     // output serialization format: | data (size bytes) |
     output.resize(size, 0);
     ggml_backend_tensor_get(tensor, output.data(), offset, size);

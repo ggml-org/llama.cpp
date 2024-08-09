@@ -1,5 +1,9 @@
 ## Overview
 
+> [!IMPORTANT]
+> This example and the RPC backend are currently in a proof-of-concept development stage. As such, the functionality is fragile and
+> insecure. **Never run the RPC server on an open network or in a sensitive environment!**
+
 The `rpc-server` allows  running `ggml` backend on a remote host.
 The RPC backend communicates with one or several instances of `rpc-server` and offloads computations to them.
 This can be used for distributed LLM inference with `llama.cpp` in the following way:

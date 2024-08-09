@@ -3724,7 +3724,8 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         struct ggml_tensor  * view_src,
         size_t                view_offs) {
 
-    assert(n_dims >= 1 && n_dims <= GGML_MAX_DIMS);
+    GGML_ASSERT(type >= 0 && type < GGML_TYPE_COUNT);
+    GGML_ASSERT(n_dims >= 1 && n_dims <= GGML_MAX_DIMS);
 
     // find the base tensor and absolute offset
     if (view_src != NULL && view_src->view_src != NULL) {
