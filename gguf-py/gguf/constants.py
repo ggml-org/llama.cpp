@@ -217,6 +217,7 @@ class MODEL_ARCH(IntEnum):
     CHATGLM      = auto()
     BITNET       = auto()
     T5           = auto()
+    T5ENCODER    = auto()
     JAIS         = auto()
 
 
@@ -344,6 +345,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.CHATGLM:        "chatglm",
     MODEL_ARCH.BITNET:         "bitnet",
     MODEL_ARCH.T5:             "t5",
+    MODEL_ARCH.T5ENCODER:      "t5encoder",
     MODEL_ARCH.JAIS:           "jais",
 }
 
@@ -1024,6 +1026,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DEC_FFN_DOWN,
         MODEL_TENSOR.DEC_FFN_UP,
         MODEL_TENSOR.DEC_OUTPUT_NORM,
+        MODEL_TENSOR.ENC_ATTN_NORM,
+        MODEL_TENSOR.ENC_ATTN_Q,
+        MODEL_TENSOR.ENC_ATTN_K,
+        MODEL_TENSOR.ENC_ATTN_V,
+        MODEL_TENSOR.ENC_ATTN_OUT,
+        MODEL_TENSOR.ENC_ATTN_REL_B,
+        MODEL_TENSOR.ENC_FFN_NORM,
+        MODEL_TENSOR.ENC_FFN_GATE,
+        MODEL_TENSOR.ENC_FFN_DOWN,
+        MODEL_TENSOR.ENC_FFN_UP,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+    ],
+    MODEL_ARCH.T5ENCODER: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ENC_ATTN_NORM,
         MODEL_TENSOR.ENC_ATTN_Q,
         MODEL_TENSOR.ENC_ATTN_K,

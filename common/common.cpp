@@ -2156,7 +2156,9 @@ struct llama_init_result llama_init_from_gpt_params(gpt_params & params) {
             tmp.clear();
             tmp.push_back(decoder_start_token_id);
         }
-        llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
+        if (llama_model_has_decoder(model)) {
+            llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
+        }
         llama_kv_cache_clear(lctx);
         llama_synchronize(lctx);
         llama_reset_timings(lctx);

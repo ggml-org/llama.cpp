@@ -504,6 +504,9 @@ extern "C" {
     // Returns true if the model contains an encoder that requires llama_encode() call
     LLAMA_API bool llama_model_has_encoder(const struct llama_model * model);
 
+    // Returns true if the model contains a decoder that requires llama_decode() call
+    LLAMA_API bool llama_model_has_decoder(const struct llama_model * model);
+
     // For encoder-decoder models, this function returns id of the token that must be provided
     // to the decoder to start generating output sequence. For other models, it returns -1.
     LLAMA_API llama_token llama_model_decoder_start_token(const struct llama_model * model);
