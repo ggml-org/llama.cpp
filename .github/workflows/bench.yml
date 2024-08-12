@@ -129,6 +129,8 @@ jobs:
 
       - name: Server bench
         id: server_bench
+        env:
+            HEAD_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set -eux
 
@@ -137,7 +139,7 @@ jobs:
           python bench.py \
               --runner-label ${{ env.RUNNER_LABEL }} \
               --name ${{ github.job }} \
-              --branch ${{ github.head_ref || github.ref_name }} \
+              --branch $HEAD_REF \
               --commit ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha }} \
               --scenario script.js \
               --duration ${{ github.event.inputs.duration || env.DURATION }} \
