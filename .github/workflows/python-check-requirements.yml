@@ -6,15 +6,13 @@ on:
       - '.github/workflows/python-check-requirements.yml'
       - 'scripts/check-requirements.sh'
       - 'convert*.py'
-      - 'requirements.txt'
-      - 'requirements/*.txt'
+      - '**/requirements*.txt'
   pull_request:
     paths:
       - '.github/workflows/python-check-requirements.yml'
       - 'scripts/check-requirements.sh'
       - 'convert*.py'
-      - 'requirements.txt'
-      - 'requirements/*.txt'
+      - '**/requirements*.txt'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
