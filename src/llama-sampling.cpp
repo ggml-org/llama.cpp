@@ -85,14 +85,14 @@ void llama_sample_top_k_impl(struct llama_sampling * smpl, llama_token_data_arra
             constexpr float bucket_low   = -10.0f;
             constexpr float bucket_high  =  10.0f;
             constexpr float bucket_scale = nbuckets/(bucket_high - bucket_low);
-            constexpr float bucker_inter = -bucket_low * bucket_scale;
+            constexpr float bucket_inter = -bucket_low * bucket_scale;
 
             std::vector<int> bucket_idx(candidates->size);
             std::vector<int> histo(nbuckets, 0);
 
             for (int i = 0; i < (int)candidates->size; ++i) {
                 const float val = candidates->data[i].logit;
-                int ib = int(bucket_scale * val + bucker_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
+                int ib = int(bucket_scale * val + bucket_inter); //nbuckets * (val - bucket_low) / (bucket_high - bucket_low);
                 ib = std::max(0, std::min(nbuckets-1, ib));
                 bucket_idx[i] = ib;
                 ++histo[ib];
