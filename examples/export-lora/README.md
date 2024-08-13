@@ -17,9 +17,9 @@ For example:
 
 ```bash
 ./bin/llama-export-lora \
-    -m open-llama-3b-v2-q8_0.gguf \
-    -o open-llama-3b-v2-q8_0-english2tokipona-chat.gguf \
-    --lora lora-open-llama-3b-v2-q8_0-english2tokipona-chat-LATEST.gguf
+    -m open-llama-3b-v2.gguf \
+    -o open-llama-3b-v2-english2tokipona-chat.gguf \
+    --lora lora-open-llama-3b-v2-english2tokipona-chat-LATEST.gguf
 ```
 
 Multiple LORA adapters can be applied by passing multiple `--lora FNAME` or `--lora-scaled FNAME S` command line parameters:
