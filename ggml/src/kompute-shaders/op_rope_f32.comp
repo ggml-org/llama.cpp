@@ -11,7 +11,7 @@ void main() {
     const uint i2 = gl_WorkGroupID.y;
     const uint i1 = gl_WorkGroupID.x;
 
-    const bool is_neox = (pcs.mode & 2) != 0;
+    const bool is_neox = (pcs.mode & GGML_ROPE_TYPE_NEOX) != 0;
 
     float corr_dims[2];
     rope_yarn_corr_dims(pcs.n_dims, pcs.n_ctx_orig, pcs.freq_base, pcs.beta_fast, pcs.beta_slow, corr_dims);

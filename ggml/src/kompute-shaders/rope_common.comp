@@ -1,5 +1,7 @@
 #include "common.comp"
 
+#define GGML_ROPE_TYPE_NEOX 2
+
 // TODO: use a local size of 32 or more (Metal uses 1024)
 layout(local_size_x = 1) in;
 

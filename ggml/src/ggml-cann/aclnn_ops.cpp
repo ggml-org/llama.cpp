@@ -2881,7 +2881,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast,
                              beta_slow, corr_dims);
 
-    const bool is_neox = mode & 2;
+    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
 
     // init cos/sin cache
     ggml_cann_pool_alloc sin_allocator(
