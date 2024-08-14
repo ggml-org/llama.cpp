@@ -602,6 +602,10 @@ if (GGML_VULKAN)
             add_compile_definitions(GGML_VULKAN_MEMORY_DEBUG)
         endif()
 
+        if (GGML_VULKAN_PERF)
+            add_compile_definitions(GGML_VULKAN_PERF)
+        endif()
+
         if (GGML_VULKAN_VALIDATE)
             add_compile_definitions(GGML_VULKAN_VALIDATE)
         endif()

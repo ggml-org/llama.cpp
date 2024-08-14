@@ -30,6 +30,10 @@ void main() {
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
     data_d[p.d_offset + dst_idx] = D_TYPE(is_src0 ? data_a[src0_idx] : data_b[src1_idx]);
 #else
-    data_d[p.d_offset + dst_idx] = is_src0 ? data_a[src0_idx] : data_b[src1_idx];
+    if (is_src0) {
+        data_d[p.d_offset + dst_idx] = data_a[src0_idx];
+    } else {
+        data_d[p.d_offset + dst_idx] = data_b[src1_idx];
+    }
 #endif
 }

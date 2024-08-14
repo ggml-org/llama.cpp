@@ -52,7 +52,7 @@ void main() {
         // y is not transposed but permuted
         const uint iy = channel*nrows_y + row_y;
 
-        tmp[tid] += xi * FLOAT_TYPE(data_b[iy]);
+        tmp[tid] = fma(xi, FLOAT_TYPE(data_b[iy]), tmp[tid]);
     }
 
     // dst is not transposed and not permuted

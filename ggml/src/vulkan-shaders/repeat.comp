@@ -1,0 +1,24 @@
+#version 450
+
+#include "types.comp"
+#include "generic_unary_head.comp"
+
+uint src0_idx_mod(uint idx) {
+    const uint i13 = idx / (p.ne12*p.ne11*p.ne10);
+    const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
+    const uint i12 = (idx - i13_offset) / (p.ne11*p.ne10);
+    const uint i12_offset = i12*p.ne11*p.ne10;
+    const uint i11 = (idx - i13_offset - i12_offset) / p.ne10;
+    const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
+    return (i13 % p.ne03)*p.nb03 + (i12 % p.ne02)*p.nb02 + (i11 % p.ne01)*p.nb01 + (i10 % p.ne00)*p.nb00;
+}
+
+void main() {
+    const uint idx = get_idx();
+
+    if (idx >= p.ne) {
+        return;
+    }
+
+    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(data_a[src0_idx_mod(idx)]);
+}

@@ -53,7 +53,7 @@ void main() {
 
         const FLOAT_TYPE xi = FLOAT_TYPE(data_a[ix]);
 
-        tmp[tid] += xi * FLOAT_TYPE(data_b[iy]);
+        tmp[tid] = fma(xi, FLOAT_TYPE(data_b[iy]), tmp[tid]);
     }
 
     // sum up partial sums and write back result
