@@ -1,3 +1,6 @@
+# TODO: there have been some issues with the workflow, so disabling for now
+#       https://github.com/ggerganov/llama.cpp/issues/7893
+#
 # Benchmark
 name: Benchmark
 
