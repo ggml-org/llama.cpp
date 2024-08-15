@@ -1852,6 +1852,8 @@ struct server_context {
                     llama_lora_adapters_apply(ctx, lora_adapters);
                     server_task_result result;
                     result.id = task.id;
+                    result.stop = true;
+                    result.error = false;
                     result.data = json{{ "success", true }};
                     queue_results.send(result);
                 } break;
