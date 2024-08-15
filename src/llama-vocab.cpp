@@ -1468,11 +1468,11 @@ llama_token llama_token_pad_impl(const struct llama_vocab & vocab) {
     return vocab.special_pad_id;
 }
 
-int32_t llama_add_bos_token_impl(const struct llama_vocab & vocab) {
+bool llama_add_bos_token_impl(const struct llama_vocab & vocab) {
     return vocab.tokenizer_add_bos;
 }
 
-int32_t llama_add_eos_token_impl(const struct llama_vocab & vocab) {
+bool llama_add_eos_token_impl(const struct llama_vocab & vocab) {
     return vocab.tokenizer_add_eos;
 }
 

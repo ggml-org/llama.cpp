@@ -18705,11 +18705,11 @@ llama_token llama_token_pad(const struct llama_model * model) {
     return llama_token_pad_impl(model->vocab);
 }
 
-int32_t llama_add_bos_token(const struct llama_model * model) {
+bool llama_add_bos_token(const struct llama_model * model) {
     return llama_add_bos_token_impl(model->vocab);
 }
 
-int32_t llama_add_eos_token(const struct llama_model * model) {
+bool llama_add_eos_token(const struct llama_model * model) {
     return llama_add_eos_token_impl(model->vocab);
 }
 

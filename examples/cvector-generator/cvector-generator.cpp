@@ -271,7 +271,7 @@ struct tokenized_prompt {
     size_t max_seq_len;
 
     tokenized_prompt(llama_context * ctx, std::string pos, std::string neg) {
-        const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
+        const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
         tokens_pos = ::llama_tokenize(ctx, pos, add_bos, true);
         tokens_neg = ::llama_tokenize(ctx, neg, add_bos, true);
         max_seq_len = std::max(tokens_pos.size(), tokens_neg.size());

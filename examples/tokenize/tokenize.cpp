@@ -362,7 +362,7 @@ int main(int raw_argc, char ** raw_argv) {
         prompt = stdin_buffer.str();
     }
 
-    const bool model_wants_add_bos = llama_should_add_bos_token(model);
+    const bool model_wants_add_bos = llama_add_bos_token(model);
     const bool add_bos = model_wants_add_bos && !no_bos;
     const bool parse_special = !no_parse_special;
 

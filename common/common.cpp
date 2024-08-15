@@ -2702,12 +2702,6 @@ std::string llama_detokenize(llama_context * ctx, const std::vector<llama_token>
     return text;
 }
 
-bool llama_should_add_bos_token(const llama_model * model) {
-    const int add_bos = llama_add_bos_token(model);
-
-    return add_bos != -1 ? bool(add_bos) : (llama_vocab_type(model) == LLAMA_VOCAB_TYPE_SPM);
-}
-
 //
 // Chat template utils
 //

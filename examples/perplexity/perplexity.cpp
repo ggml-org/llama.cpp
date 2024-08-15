@@ -340,8 +340,8 @@ static results_perplexity perplexity_v2(llama_context * ctx, const gpt_params & 
     // Output: `perplexity: 13.5106 [114/114]`
     // BOS tokens will be added for each chunk before eval
 
-    const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(llama_add_eos_token(llama_get_model(ctx)) != 1);
+    const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
+    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
 
     fprintf(stderr, "%s: tokenizing the input ..\n", __func__);
 
@@ -480,8 +480,8 @@ static results_perplexity perplexity(llama_context * ctx, const gpt_params & par
     // Output: `perplexity: 13.5106 [114/114]`
     // BOS tokens will be added for each chunk before eval
 
-    const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(llama_add_eos_token(llama_get_model(ctx)) != 1);
+    const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
+    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
 
     std::ofstream logits_stream;
     if (!params.logits_file.empty()) {
@@ -1733,8 +1733,8 @@ static void kl_divergence(llama_context * ctx, const gpt_params & params) {
     const int n_batch = params.n_batch;
     const int num_batches = (n_ctx + n_batch - 1)/n_batch;
     const int nv = 2*((n_vocab + 1)/2) + 4;
-    const bool add_bos = llama_should_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(llama_add_eos_token(llama_get_model(ctx)) != 1);
+    const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
+    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
 
     std::vector<uint16_t> log_probs_uint16(size_t(n_ctx - 1 - n_ctx/2) * nv);
     std::vector<float>    kld_values(size_t(n_ctx - 1 - n_ctx/2)*n_chunk);

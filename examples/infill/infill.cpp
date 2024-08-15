@@ -203,8 +203,8 @@ int main(int argc, char ** argv) {
         LOG_TEE("\n");
         LOG_TEE("%s\n", gpt_params_get_system_info(params).c_str());
     }
-    const bool add_bos = llama_should_add_bos_token(model);
-    GGML_ASSERT(llama_add_eos_token(model) != 1);
+    const bool add_bos = llama_add_bos_token(model);
+    GGML_ASSERT(!llama_add_eos_token(model));
     LOG("add_bos: %d\n", add_bos);
 
     std::vector<llama_token> embd_inp;

@@ -914,11 +914,8 @@ extern "C" {
     LLAMA_API llama_token llama_token_nl (const struct llama_model * model); // next-line
     LLAMA_API llama_token llama_token_pad(const struct llama_model * model); // padding
 
-    // Returns -1 if unknown, 1 for true or 0 for false.
-    LLAMA_API int32_t llama_add_bos_token(const struct llama_model * model);
-
-    // Returns -1 if unknown, 1 for true or 0 for false.
-    LLAMA_API int32_t llama_add_eos_token(const struct llama_model * model);
+    LLAMA_API bool llama_add_bos_token(const struct llama_model * model);
+    LLAMA_API bool llama_add_eos_token(const struct llama_model * model);
 
     // Codellama infill tokens
     LLAMA_API llama_token llama_token_prefix(const struct llama_model * model); // Beginning of infill prefix

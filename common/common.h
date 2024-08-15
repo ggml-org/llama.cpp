@@ -380,10 +380,6 @@ std::string llama_detokenize(
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
 
-// Uses the value from the model metadata if possible, otherwise
-// defaults to true when model type is SPM, otherwise false.
-bool llama_should_add_bos_token(const llama_model * model);
-
 //
 // Chat template utils
 //

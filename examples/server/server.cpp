@@ -693,9 +693,8 @@ struct server_context {
 
         n_ctx = llama_n_ctx(ctx);
 
-        add_bos_token = llama_should_add_bos_token(model);
-        has_eos_token = llama_add_eos_token(model) != 1;
-
+        add_bos_token = llama_add_bos_token(model);
+        has_eos_token = !llama_add_eos_token(model);
         return true;
     }
 
@@ -2038,7 +2037,7 @@ struct server_context {
                         slot.t_start_generation = 0;
 
                         if (slot.infill) {
-                            const bool add_bos = llama_should_add_bos_token(model);
+                            const bool add_bos = llama_add_bos_token(model);
                             bool suff_rm_leading_spc = true;
                             if (params.input_suffix.find_first_of(' ') == 0 && params.input_suffix.size() > 1) {
                                 params.input_suffix.erase(0, 1);
