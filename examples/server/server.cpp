@@ -1321,7 +1321,7 @@ struct server_context {
 
         return json {
             {"n_ctx",                     slot.n_ctx},
-            {"n_predict",                 slot.n_predict},
+            {"n_predict",                 slot.n_predict},     // Server configured n_predict
             {"model",                     params.model_alias},
             {"seed",                      slot.sparams.seed},
             {"temperature",               slot.sparams.temp},
@@ -1343,7 +1343,7 @@ struct server_context {
             {"mirostat_eta",              slot.sparams.mirostat_eta},
             {"penalize_nl",               slot.sparams.penalize_nl},
             {"stop",                      slot.params.antiprompt},
-            {"n_predict",                 slot.params.n_predict}, // TODO: fix duplicate key n_predict
+            {"max_tokens",                slot.params.n_predict}, // User configured n_predict
             {"n_keep",                    slot.params.n_keep},
             {"n_discard",                 slot.params.n_discard},
             {"ignore_eos",                ignore_eos},
