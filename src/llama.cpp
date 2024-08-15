@@ -5467,6 +5467,12 @@ static void llm_load_vocab(
             } else if (
                 tokenizer_pre == "codeshell") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_CODESHELL;
+            } else if (
+                tokenizer_pre == "bloom") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_BLOOM;
+            } else if (
+                tokenizer_pre == "gpt3-finnish") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }

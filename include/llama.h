@@ -93,6 +93,8 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_TEKKEN         = 20,
         LLAMA_VOCAB_PRE_TYPE_SMOLLM         = 21,
         LLAMA_VOCAB_PRE_TYPE_CODESHELL      = 22,
+        LLAMA_VOCAB_PRE_TYPE_BLOOM          = 23,
+        LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH   = 24,
     };
 
     enum llama_rope_type {

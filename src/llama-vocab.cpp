@@ -410,6 +410,8 @@ struct llm_tokenizer_bpe {
                 };
                 break;
             case LLAMA_VOCAB_PRE_TYPE_PORO:
+            case LLAMA_VOCAB_PRE_TYPE_BLOOM:
+            case LLAMA_VOCAB_PRE_TYPE_GPT3_FINNISH:
                 regex_exprs = {
                     " ?[^(\\s|.,!?…。，、।۔،)]+",
                 };
