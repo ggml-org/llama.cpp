@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gguf"
-version = "0.9.1"
+version = "0.10.0"
 description = "Read and write ML models in GGUF for GGML"
 authors = ["GGML <ggml@ggml.ai>"]
 packages = [
