@@ -116,7 +116,7 @@ class Tensor:
         assert quant is not None, 'Unknown tensor type'
         (blksize, tysize) = quant
         offset += 12
-        self.dtype= dtype
+        self.dtype= gguf.GGMLQuantizationType(dtype)
         self.dims = struct.unpack(f'<{n_dims}I', data[offset:offset + (4 * n_dims)])
         offset += 4 * n_dims
         self.name = bytes(data[offset:offset + name_len])
