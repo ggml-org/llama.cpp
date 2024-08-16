@@ -388,6 +388,7 @@ struct llm_tokenizer_bpe {
             case LLAMA_VOCAB_PRE_TYPE_COMMAND_R:
             case LLAMA_VOCAB_PRE_TYPE_SMOLLM:
             case LLAMA_VOCAB_PRE_TYPE_CODESHELL:
+            case LLAMA_VOCAB_PRE_TYPE_EXAONE:
                 regex_exprs = {
                     "\\p{N}",
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",

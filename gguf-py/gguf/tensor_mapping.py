@@ -10,7 +10,7 @@ class TensorNameMap:
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",                         # gptneox
-            "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais
+            "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
             "model.embed_tokens",                        # llama-hf nemotron
@@ -52,7 +52,7 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
-            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone
             "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
@@ -62,7 +62,7 @@ class TensorNameMap:
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
-            "transformer.ln_f",                        # gpt2 gpt-j falcon jais
+            "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
             "model.norm",                              # llama-hf baichuan internlm2
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
@@ -89,7 +89,7 @@ class TensorNameMap:
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
-            "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais
+            "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
             "transformer.blocks.{bid}.norm_1",                      # mpt
             "transformer.h.{bid}.input_layernorm",                  # falcon7b
             "h.{bid}.input_layernorm",                              # bloom
@@ -143,6 +143,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
             "model.layers.{bid}.attention.wq",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
+            "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
         ),
 
         # Attention key
@@ -155,6 +156,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
             "model.layers.{bid}.attention.wk",                         # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
+            "transformer.h.{bid}.attn.attention.k_proj",               # exaone
         ),
 
         # Attention value
@@ -166,7 +168,8 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.v",                                # refact
             "model.layers.layers.{bid}.self_attn.v_proj",                # plamo
             "model.layers.{bid}.attention.wv",                           # internlm2
-            "transformer.decoder_layer.{bid}.multi_head_attention.value" # Grok
+            "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
+            "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
         ),
 
         # Attention output
@@ -191,6 +194,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",        # dbrx
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
+            "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
         ),
 
         # Attention output norm
@@ -216,7 +220,7 @@ class TensorNameMap:
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
-            "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais
+            "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
             "h.{bid}.post_attention_layernorm",                              # bloom
             "transformer.blocks.{bid}.norm_2",                               # mpt
             "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron
@@ -278,6 +282,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
+            "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -309,6 +314,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
+            "transformer.h.{bid}.mlp.c_fc_0",             # exaone
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -348,6 +354,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w2",                     # arctic
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
+            "model.layers.h.{bid}.mlp.c_proj",                        # exaone
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
