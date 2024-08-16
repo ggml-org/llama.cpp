@@ -134,7 +134,13 @@ static void process_image(struct llava_context * ctx_llava, struct llava_image_e
     std::string system_prompt;
     int idx = 0;
     int num_image_embeds = embeds->n_image_pos / clip_n_patches(ctx_llava->ctx_clip);
-    system_prompt = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n";
+    int has_minicpmv_projector = clip_is_minicpmv(ctx_llava->ctx_clip);
+    if (has_minicpmv_projector == 2) {
+        system_prompt = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n";
+    }
+    else if (has_minicpmv_projector == 3) {
+        system_prompt = "<|im_start|>user\n";
+    }
     LOG_TEE("%s: image token past: %d\n", __func__, n_past);
     eval_string(ctx_llava->ctx_llama, (system_prompt+"<image>").c_str(), params->n_batch, &n_past, false);
     process_eval_image_embed(ctx_llava, embeds, params->n_batch, &n_past, idx++);
@@ -210,10 +216,24 @@ static struct llava_context * minicpmv_init(gpt_params * params, const std::stri
 
 static struct llama_sampling_context * llama_init(struct llava_context * ctx_llava, gpt_params * params, std::string prompt, int &n_past, bool is_first = false){
     std::string user_prompt = prompt;
-    if (!is_first) user_prompt = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n" + prompt;
+    int has_minicpmv_projector = clip_is_minicpmv(ctx_llava->ctx_clip);
+    if (!is_first) {
+        if (has_minicpmv_projector == 2) {
+            user_prompt = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n" + prompt;
+        }
+        else if (has_minicpmv_projector == 3) {
+            user_prompt = "<|im_start|>user\n" + prompt;
+        }
+    }
 
     eval_string(ctx_llava->ctx_llama, user_prompt.c_str(), params->n_batch, &n_past, false);
-    eval_string(ctx_llava->ctx_llama, "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", params->n_batch, &n_past, false);
+    if (has_minicpmv_projector == 2) {
+        eval_string(ctx_llava->ctx_llama, "<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", params->n_batch, &n_past, false);
+    }
+    else if (has_minicpmv_projector == 3) {
+        eval_string(ctx_llava->ctx_llama, "<|im_end|><|im_start|>assistant\n", params->n_batch, &n_past, false);
+    }
+
     // generate the response
 
     LOG_TEE("\n");

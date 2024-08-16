@@ -4,7 +4,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 ap = argparse.ArgumentParser()
-ap.add_argument("-m", "--model", help="Path to MiniCPM-V-2.5 model")
+ap.add_argument("-m", "--model", help="Path to MiniCPM-V model")
 args = ap.parse_args()
 
 # find the model part that includes the the multimodal projector weights
@@ -29,7 +29,6 @@ if len(clip_tensors) > 0:
             f.write("{}\n")
 
 config = model.llm.config
-config._name_or_path = "openbmb/MiniCPM-Llama3-V-2.5"
 config.auto_map = {
     "AutoConfig": "configuration_minicpm.MiniCPMConfig",
     "AutoModel": "modeling_minicpm.MiniCPMModel",
@@ -40,7 +39,6 @@ config.auto_map = {
 model.llm.save_pretrained(f"{args.model}/model")
 tok = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 tok.save_pretrained(f"{args.model}/model")
-# os.system(f"cp {args.model}/modeling_minicpm.py {args.model}/MiniCPM_l3/modeling_minicpm.py")
 
 print("Done!")
 print(f"Now you can convert {args.model} to a regular LLaMA GGUF file.")

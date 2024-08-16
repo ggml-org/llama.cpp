@@ -81,6 +81,7 @@ static std::string format(const char * fmt, ...) {
 #define KEY_HAS_VIS_ENC         "clip.has_vision_encoder"
 #define KEY_HAS_LLAVA_PROJ      "clip.has_llava_projector"
 #define KEY_HAS_MINICPMV_PROJ   "clip.has_minicpmv_projector"
+#define KEY_MINICPMV_VERSION    "clip.minicpmv_version"
 #define KEY_USE_GELU            "clip.use_gelu"
 #define KEY_N_EMBD              "clip.%s.embedding_length"
 #define KEY_N_FF                "clip.%s.feed_forward_length"
@@ -526,6 +527,7 @@ struct clip_ctx {
     bool has_vision_encoder  = false;
     bool has_llava_projector = false;
     bool has_minicpmv_projector = false;
+    int minicpmv_version = 2;
 
     struct clip_vision_model vision_model;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -641,7 +643,12 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     if (ctx->has_minicpmv_projector) {
         int pos_w = image_size_width/patch_size;
         int pos_h = image_size_height/patch_size;
-        pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 4096, pos_w * pos_h, 1);
+        if (ctx->minicpmv_version == 2) {
+            pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 4096, pos_w * pos_h, 1);
+        }
+        else if (ctx->minicpmv_version == 3) {
+            pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 3584, pos_w * pos_h, 1);
+        }
         ggml_set_name(pos_embed, "pos_embed");
         ggml_set_input(pos_embed);
     }
@@ -768,8 +775,8 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             embeddings = ggml_gelu(ctx0, embeddings);
             embeddings = ggml_mul_mat(ctx0, model.mm_2_w, embeddings);
             embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
-
-        } else if (ctx->proj_type == PROJECTOR_TYPE_MLP_NORM) {
+        }
+        else if (ctx->proj_type == PROJECTOR_TYPE_MLP_NORM) {
             embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
             embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
             // ggml_tensor_printf(embeddings, "mm_0_w",0,true,false);
@@ -949,10 +956,20 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             }
 
             { // attention
-                const int hidden_size = 4096;
+                int hidden_size = 4096;
                 const int d_head = 128;
-                const int n_head = hidden_size/d_head;
-                const int num_query = 96;
+                int n_head = hidden_size/d_head;
+                int num_query = 96;
+                if (ctx->minicpmv_version == 2) {
+                    hidden_size = 4096;
+                    n_head = hidden_size/d_head;
+                    num_query = 96;
+                }
+                else if (ctx->minicpmv_version == 3) {
+                    hidden_size = 3584;
+                    n_head = hidden_size/d_head;
+                    num_query = 64;
+                }
 
                 struct ggml_tensor * Q = ggml_add(ctx0, ggml_mul_mat(ctx0, model.mm_model_attn_q_w, q), model.mm_model_attn_q_b);
                 Q = ggml_scale_inplace(ctx0, Q, 1.0f / sqrt((float)d_head));
@@ -1147,6 +1164,11 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
         idx = gguf_find_key(ctx, KEY_HAS_MINICPMV_PROJ);
         if (idx != -1) {
             new_clip->has_minicpmv_projector = gguf_get_val_bool(ctx, idx);
+        }
+
+        idx = gguf_find_key(ctx, KEY_MINICPMV_VERSION);
+        if (idx != -1) {
+            new_clip->minicpmv_version = gguf_get_val_i32(ctx, idx);
         }
 
         // GGML_ASSERT(new_clip->has_llava_projector); // see monatis/clip.cpp for image and/or text encoding for semantic search
@@ -1910,10 +1932,12 @@ int clip_uhd_num_image_embeds_col(struct clip_ctx * ctx_clip) {
 // returns the normalized float tensor for llava-1.5, for spatial_unpad with anyres processing for llava-1.6 it returns the normalized image patch tensors as a vector
 // res_imgs memory is being allocated here, previous allocations will be freed if found
 bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, clip_image_f32_batch * res_imgs) {
-    if (clip_is_minicpmv(ctx)) {
-        std::vector<std::vector<clip_image_u8 *>> imgs = uhd_slice_image(img);
+
+    if(clip_is_minicpmv(ctx)){
+        int max_slice_nums = 9;
+        std::vector<std::vector<clip_image_u8 *>> imgs = uhd_slice_image(img, max_slice_nums);
         res_imgs->size = 0;
-        for (size_t i = 0; i < imgs.size(); ++i) {
+        for (size_t i = 0; i < imgs.size(); ++i){
             res_imgs->size += imgs[i].size();
         }
         res_imgs->data = new clip_image_f32[res_imgs->size];
@@ -2146,7 +2170,12 @@ int clip_n_patches(const struct clip_ctx * ctx) {
     if (ctx->proj_type == PROJECTOR_TYPE_LDP || ctx->proj_type == PROJECTOR_TYPE_LDPV2) {
         n_patches /= 4;
     } else if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
-        n_patches = 96;
+        if (ctx->minicpmv_version == 2) {
+            n_patches = 96;
+        }
+        else if (ctx->minicpmv_version == 3) {
+            n_patches = 64;
+        }
     }
 
     return n_patches;
@@ -2282,6 +2311,11 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     const int patch_size    = hparams.patch_size;
     const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
     const int num_positions = num_patches + (ctx->has_class_embedding ? 1 : 0);
+    if(ctx->load_image_size==nullptr){
+        ctx->load_image_size= clip_image_size_init();
+    }
+    const int pos_w = ctx->load_image_size->width/patch_size;
+    const int pos_h = ctx->load_image_size->height/patch_size;
 
     {
         struct ggml_tensor * inp_raw = ggml_graph_get_tensor(gf, "inp_raw");
@@ -2316,8 +2350,18 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
             struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
             int* positions_data = (int*)malloc(ggml_nbytes(positions));
-            for (int i = 0; i < num_positions; i++) {
-                positions_data[i] = std::floor(70.0*i/num_positions);
+            int bucket_coords_h[70];
+            int bucket_coords_w[70];
+            for (int i = 0; i < pos_h; i++){
+                bucket_coords_h[i] = std::floor(70.0*i/pos_h);
+            }
+            for (int i = 0; i < pos_w; i++){
+                bucket_coords_w[i] = std::floor(70.0*i/pos_w);
+            }
+            for (int i = 0, id = 0; i < pos_h; i++){
+                for (int j = 0; j < pos_w; j++){
+                    positions_data[id++] = bucket_coords_h[i]*70 + bucket_coords_w[j];
+                }
             }
             ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
             free(positions_data);
@@ -2328,12 +2372,13 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             //    -> https://huggingface.co/Qwen/Qwen-VL/tree/main
             //    -> https://huggingface.co/Qwen/Qwen-VL/blob/0547ed36a86561e2e42fecec8fd0c4f6953e33c4/visual.py#L23
             struct ggml_tensor * pos_embed = ggml_graph_get_tensor(gf, "pos_embed");
-            if(ctx->load_image_size==nullptr){
-                ctx->load_image_size= clip_image_size_init();
-            }
-            int pos_w = ctx->load_image_size->width/patch_size;
-            int pos_h = ctx->load_image_size->height/patch_size;
             int embed_dim = 4096;
+            if (ctx->minicpmv_version == 2) {
+                embed_dim = 4096;
+            }
+            else if (ctx->minicpmv_version == 3) {
+                embed_dim = 3584;
+            }
             auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
 
             float * pos_embed_data = (float *)malloc(ggml_nbytes(pos_embed));
@@ -2346,7 +2391,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             ggml_backend_tensor_set(pos_embed, pos_embed_data, 0, ggml_nbytes(pos_embed));
             free(pos_embed_data);
         }
-    } else {
+    }
+    else{
         {
             if (ctx->has_class_embedding) {
                 struct ggml_tensor * embeddings = ggml_graph_get_tensor(gf, "embeddings");
@@ -2548,13 +2594,21 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         return ctx->vision_model.mm_3_b->ne[0];
     }
     if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
-        return 4096;
+        if (ctx->minicpmv_version == 2) {
+            return 4096;
+        }
+        else if (ctx->minicpmv_version == 3) {
+            return 3584;
+        }
     }
 
     std::string proj_type = PROJECTOR_TYPE_NAMES[ctx->proj_type];
     throw std::runtime_error(format("%s: don't support projector with: %s currently\n", __func__, proj_type.c_str()));
 }
 
-bool clip_is_minicpmv(const struct clip_ctx * ctx) {
-    return ctx->has_minicpmv_projector;
+int clip_is_minicpmv(const struct clip_ctx * ctx) {
+    if (ctx->has_minicpmv_projector) {
+        return ctx->minicpmv_version;
+    }
+    return 0;
 }
