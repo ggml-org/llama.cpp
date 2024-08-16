@@ -34,7 +34,7 @@ Run the quantized model:
 
 ```bash
 # start inference on a gguf model
-./llama-cli -m ./models/mymodel/ggml-model-Q4_K_M.gguf -n 128
+./llama-cli -m ./models/mymodel/ggml-model-Q4_K_M.gguf -cnv -p "You are a helpful assistant"
 ```
 
 When running the larger models, make sure you have enough disk space to store all the intermediate files.
