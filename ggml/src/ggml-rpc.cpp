@@ -637,7 +637,7 @@ GGML_CALL static bool ggml_backend_rpc_supports_op(ggml_backend_t backend, const
 }
 
 GGML_CALL static bool ggml_backend_rpc_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
-    if (buft->iface.get_name != ggml_backend_rpc_buffer_type_name) {
+    if (!buft || buft->iface.get_name != ggml_backend_rpc_buffer_type_name) {
         return false;
     }
     ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
@@ -679,6 +679,7 @@ GGML_API GGML_CALL ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const
     }
     auto sock = get_socket(endpoint);
     if (sock == nullptr) {
+        fprintf(stderr, "Failed to connect to %s\n", endpoint);
         return nullptr;
     }
     size_t alignment = get_alignment(sock);
