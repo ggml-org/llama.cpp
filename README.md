@@ -425,6 +425,7 @@ Please refer to [Build llama.cpp locally](./docs/build.md)
 | [CUDA](./docs/build.md#cuda) | Nvidia GPU |
 | [hipBLAS](./docs/build.md#hipblas) | AMD GPU |
 | [Vulkan](./docs/build.md#vulkan) | GPU |
+| [CANN](./docs/build.md#cann) | Ascend NPU |
 
 ## Tools
 

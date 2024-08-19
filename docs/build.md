@@ -352,6 +352,31 @@ cmake --build build --config Release
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
 ```
 
+### CANN
+This provides NPU acceleration using the AI cores of your Ascend NPU. And [CANN](https://www.hiascend.com/en/software/cann) is a hierarchical APIs to help you to quickly build AI applications and service based on Ascend NPU.
+
+For more information about Ascend NPU in [Ascend Community](https://www.hiascend.com/en/).
+
+Make sure to have the CANN toolkit installed. You can download it from here: [CANN Toolkit](https://www.hiascend.com/developer/download/community/result?module=cann)
+
+Go to `llama.cpp` directory and build using CMake.
+```bash
+cmake -B build -DGGML_CANN=on -DCMAKE_BUILD_TYPE=release
+cmake --build build --config release
+```
+
+You can test with:
+
+`./build/llama-cli -m PATH_TO_MODEL -p "Building a website can be done in 10 steps:" -ngl 32`
+
+If the fllowing info is output on screen, you are using `llama.cpp by CANN backend`:
+```bash
+llm_load_tensors:       CANN buffer size = 13313.00 MiB
+llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
+```
+
+For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
+
 ### Android
 
 To read documentation for how to build on Android, [click here](./android.md)
