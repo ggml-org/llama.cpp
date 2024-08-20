@@ -17,7 +17,7 @@
 
 template <typename T>
 using to_t_sycl_t = void (*)(const void *__restrict__ x, T *__restrict__ y,
-                             int k, dpct::queue_ptr stream);
+                             int64_t k, dpct::queue_ptr stream);
 typedef to_t_sycl_t<float> to_fp32_sycl_t;
 typedef to_t_sycl_t<sycl::half> to_fp16_sycl_t;
 

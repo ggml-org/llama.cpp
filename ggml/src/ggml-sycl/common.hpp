@@ -352,4 +352,6 @@ static __dpct_inline__ Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
     return acc.template get_multi_ptr<sycl::access::decorated::no>().get();
 }
 
+int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size);
+
 #endif // GGML_SYCL_COMMON_HPP

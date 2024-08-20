@@ -51,3 +51,14 @@ void ggml_sycl_host_free(void* ptr) try {
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
 }
+
+int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size) {
+  const int64_t max_range = std::numeric_limits<int>::max();
+  int64_t sycl_down_blk_size = block_size;
+  int64_t global_range = accumulate_block_num * sycl_down_blk_size;
+  while(global_range > max_range) {
+      sycl_down_blk_size /= 2;
+      global_range = accumulate_block_num * sycl_down_blk_size;
+  }
+  return sycl_down_blk_size;
+}
