@@ -20,6 +20,10 @@
 #include "ggml-cann.h"
 #endif
 
+#ifdef GGML_USE_VULKAN
+#include "ggml-vulkan.h"
+#endif
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -1142,6 +1146,10 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
     LOG_TEE("%s: CLIP using CANN backend\n", __func__);
 #endif
 
+#ifdef GGML_USE_VULKAN
+    new_clip->backend = ggml_backend_vk_init(0);
+    LOG_TEE("%s: CLIP using Vulkan backend\n", __func__);
+#endif
 
     if (!new_clip->backend) {
         new_clip->backend = ggml_backend_cpu_init();
