@@ -503,7 +503,7 @@ static void test_special_chars() {
             "aaaaabcccc",
             "aaaabccc",
             "aaaabccccc",
-            "🔵🟠✅❌abc❌✅🟠🔵"
+            "🔵🟠✅❌abc❌✅🟠🔵",
             "🔵🟠abc🟠🔵"
         }
     );
