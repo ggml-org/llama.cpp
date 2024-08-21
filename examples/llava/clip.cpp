@@ -1112,7 +1112,7 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
         }
     }
 
-    clip_ctx * new_clip = new clip_ctx;
+    clip_ctx * new_clip = new clip_ctx{};
 
     // update projector type
     {
