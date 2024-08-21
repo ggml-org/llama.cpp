@@ -321,6 +321,21 @@ private:
 
 // TODO: there are a lot of common parts between spm and bpe tokenizers, should be refactored and reused
 
+template<typename T, typename Container = std::vector<T>, typename Compare = std::less<typename Container::value_type>>
+class llama_priority_queue : public std::priority_queue<T, Container, Compare> {
+public:
+    using std::priority_queue<T, Container, Compare>::priority_queue;
+
+    T pop_move() {
+        T item = std::move(this->c.front());
+        std::pop_heap(this->c.begin(), this->c.end(), this->comp);
+        this->c.pop_back();
+        return item;
+    }
+
+    void pop() =  delete;
+};
+
 struct llm_bigram_bpe {
     struct comparator {
         bool operator()(const llm_bigram_bpe & l, const llm_bigram_bpe & r) const {
@@ -329,7 +344,7 @@ struct llm_bigram_bpe {
     };
 
     using queue_storage = std::vector<llm_bigram_bpe>;
-    using queue = std::priority_queue<llm_bigram_bpe, queue_storage, comparator>;
+    using queue = llama_priority_queue<llm_bigram_bpe, queue_storage, comparator>;
     llm_symbol::index left;
     llm_symbol::index right;
     std::string text;
@@ -520,8 +535,7 @@ struct llm_tokenizer_bpe {
 
             // build token(s)
             while (!work_queue.empty()) {
-                auto bigram = work_queue.top();
-                work_queue.pop();
+                auto bigram = work_queue.pop_move();
 
                 auto & left_symbol = symbols[bigram.left];
                 auto & right_symbol = symbols[bigram.right];
