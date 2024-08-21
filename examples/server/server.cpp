@@ -2507,6 +2507,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // parse arguments from environment variables
+    gpt_params_parse_from_env(params);
+
     // TODO: not great to use extern vars
     server_log_json = params.log_json;
     server_verbose = params.verbosity > 0;
