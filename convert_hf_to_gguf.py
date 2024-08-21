@@ -295,6 +295,7 @@ class Model:
                             gguf.MODEL_TENSOR.FFN_GATE_INP,
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
+                            gguf.MODEL_TENSOR.SSM_CONV1D,
                         )
                     )
                     or not name.endswith(".weight")
@@ -2711,7 +2712,7 @@ class StarCoder2Model(Model):
     model_arch = gguf.MODEL_ARCH.STARCODER2
 
 
-@Model.register("MambaForCausalLM", "MambaLMHeadModel")
+@Model.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
 class MambaModel(Model):
     model_arch = gguf.MODEL_ARCH.MAMBA
 
@@ -2742,7 +2743,10 @@ class MambaModel(Model):
         # ref: https://github.com/state-spaces/mamba/blob/ce59daea3a090d011d6476c6e5b97f6d58ddad8b/mamba_ssm/modules/mamba_simple.py#L58
         dt_rank      = self.find_hparam(["time_step_rank",     "dt_rank"],      optional=True) or -(d_model // -16)
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
-
+        use_dt_b_c_norm = False
+        # For falconmamba we do apply RMS norm on B / DT and C layers
+        if self.find_hparam(["model_type"], optional=True) in ("falcon_mamba",):
+            use_dt_b_c_norm = True
         # Fail early for models which don't have a block expansion factor of 2
         assert d_inner == 2 * d_model
 
@@ -2750,12 +2754,13 @@ class MambaModel(Model):
         self.gguf_writer.add_embedding_length(d_model)
         self.gguf_writer.add_feed_forward_length(0) # unused, but seemingly required when loading
         self.gguf_writer.add_head_count(0) # unused, but seemingly required when loading
-        self.gguf_writer.add_block_count(self.hparams["n_layer"])
+        self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_ssm_conv_kernel(d_conv)
         self.gguf_writer.add_ssm_inner_size(d_inner)
         self.gguf_writer.add_ssm_state_size(d_state)
         self.gguf_writer.add_ssm_time_step_rank(dt_rank)
         self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
+        self.gguf_writer.add_ssm_dt_b_c_rms(use_dt_b_c_norm) # For classic Mamba we don't apply rms norm on B / DT layers
         self.gguf_writer.add_file_type(self.ftype)
 
     _tok_embd = None
@@ -2781,23 +2786,6 @@ class MambaModel(Model):
             self._tok_embd = data_torch
 
         return [(new_name, data_torch)]
-
-    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        if bid is not None and new_name in (
-            self.format_tensor_name(
-                n, bid, ".weight" if name.endswith(".weight") else ""
-            )
-            for n in [
-                gguf.MODEL_TENSOR.SSM_CONV1D,
-                gguf.MODEL_TENSOR.SSM_X,
-                gguf.MODEL_TENSOR.SSM_DT,
-                gguf.MODEL_TENSOR.SSM_A,
-                gguf.MODEL_TENSOR.SSM_D,
-            ]
-        ):
-            return gguf.GGMLQuantizationType.F32
-
-        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 
 @Model.register("CohereForCausalLM")
@@ -3792,7 +3780,7 @@ class ExaoneModel(Model):
     def set_gguf_parameters(self):
         hparams = self.hparams
 
-        assert(hparams["activation_function"] == "silu")
+        assert (hparams["activation_function"] == "silu")
 
         max_position_embeddings = hparams["max_position_embeddings"]
         embed_dim = hparams["hidden_size"]
@@ -3855,8 +3843,8 @@ class ExaoneModel(Model):
 
         super().prepare_tensors()
 
-###### CONVERSION LOGIC ######
 
+###### CONVERSION LOGIC ######
 
 # tree of lazy tensors
 class LazyTorchTensor(gguf.LazyBase):
