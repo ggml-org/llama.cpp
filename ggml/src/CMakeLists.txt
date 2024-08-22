@@ -550,7 +550,7 @@ if (GGML_SYCL)
     list(APPEND GGML_SOURCES_SYCL "ggml-sycl.cpp")
 
     find_package(DNNL)
-    message("-- DNNL found:"${DNNL_FOUND})
+    message("-- DNNL found:" ${DNNL_FOUND})
     if (GGML_SYCL_TARGET STREQUAL "INTEL")
         add_compile_definitions(GGML_SYCL_DNNL=${DNNL_FOUND})
     else()
