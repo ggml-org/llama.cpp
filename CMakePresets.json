@@ -28,6 +28,7 @@
     { "name": "release", "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
     { "name": "reldbg",  "hidden": true, "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" } },
     { "name": "static",  "hidden": true, "cacheVariables": { "GGML_STATIC": "ON" } },
+    { "name": "sycl_f16",  "hidden": true, "cacheVariables": { "GGML_SYCL_F16": "ON" } },
 
     {
         "name": "arm64-windows-msvc", "hidden": true,
@@ -60,6 +61,8 @@
     { "name": "x64-windows-msvc+static-release", "inherits": [ "base", "reldbg", "static" ] },
 
     { "name": "x64-windows-sycl-debug"  , "inherits": [ "sycl-base", "debug"   ] },
-    { "name": "x64-windows-sycl-release", "inherits": [ "sycl-base", "release" ] }
+    { "name": "x64-windows-sycl-debug-f16", "inherits": [ "sycl-base", "debug", "sycl_f16" ] },
+    { "name": "x64-windows-sycl-release", "inherits": [ "sycl-base", "release" ] },
+    { "name": "x64-windows-sycl-release-f16", "inherits": [ "sycl-base", "release", "sycl_f16" ] }
   ]
 }
