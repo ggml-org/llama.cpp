@@ -13,6 +13,7 @@
   mpi,
   blas,
   cudaPackages,
+  autoAddDriverRunpath,
   darwin,
   rocmPackages,
   vulkan-headers,
@@ -192,10 +193,7 @@ effectiveStdenv.mkDerivation (
       ]
       ++ optionals useCuda [
         cudaPackages.cuda_nvcc
-
-        # TODO: Replace with autoAddDriverRunpath
-        # once https://github.com/NixOS/nixpkgs/pull/275241 has been merged
-        cudaPackages.autoAddOpenGLRunpathHook
+        autoAddDriverRunpath
       ]
       ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [
         glibc.static
