@@ -386,6 +386,7 @@ if __name__ == '__main__':
             dry_run=args.dry_run,
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
+            is_lora=True,
         )
 
         logger.info("Exporting model...")

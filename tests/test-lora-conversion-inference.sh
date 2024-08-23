@@ -14,7 +14,7 @@ MODELS_REPO_URL=https://huggingface.co/ggml-org/$MODELS_REPO
 # Clone the Hugging Face repository if the directory does not exist
 if [ ! -d "$MODELS_REPO" ]; then
     echo "Cloning the Hugging Face repository..."
-    git clone $MODELS_REPO_URL
+    git clone $MODELS_REPO_URL --depth 1
 else
     echo "Repository already exists. Skipping clone."
 fi
