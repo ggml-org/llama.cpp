@@ -166,12 +166,12 @@ static void test_sampler_queue(
     for (auto s : samplers_sequence) {
         switch (s){
             case 'k': llama_sample_top_k    (nullptr, &candidates_p, top_k, 1); break;
-            case 'f': GGML_ABORT("tail_free test not implemented");   break;
-            case 'y': GGML_ABORT("typical test not implemented");     break;
+            case 'f': GGML_ABORT("tail_free test not implemented");
+            case 'y': GGML_ABORT("typical test not implemented");
             case 'p': llama_sample_top_p    (nullptr, &candidates_p, top_p, 1); break;
             case 'm': llama_sample_min_p    (nullptr, &candidates_p, min_p, 1); break;
-            case 't': GGML_ABORT("temperature test not implemented"); break;
-            default : GGML_ABORT("Unknown sampler");                  break;
+            case 't': GGML_ABORT("temperature test not implemented");
+            default : GGML_ABORT("Unknown sampler");
         }
 
         llama_sample_softmax(nullptr, &candidates_p); // make sure tokens are sorted for tests
