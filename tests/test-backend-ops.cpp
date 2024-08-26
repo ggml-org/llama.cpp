@@ -2487,7 +2487,6 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     }
 
     GGML_ABORT("fatal error");
-    return false;
 }
 
 static void usage(char ** argv) {
