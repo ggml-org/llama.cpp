@@ -40,7 +40,7 @@ if [ ! -z ${GG_BUILD_METAL} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_CUDA} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=1"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native"
 fi
 
 if [ ! -z ${GG_BUILD_SYCL} ]; then
@@ -107,7 +107,7 @@ function gg_run_ctest_debug {
     gg_check_build_requirements
 
     (time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                          ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     (time ctest --output-on-failure -L main -E test-opt ) 2>&1 | tee -a $OUT/${ci}-ctest.log
 
@@ -138,7 +138,7 @@ function gg_run_ctest_release {
     gg_check_build_requirements
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     if [ -z ${GG_BUILD_LOW_PERF} ]; then
         (time ctest --output-on-failure -L main ) 2>&1 | tee -a $OUT/${ci}-ctest.log
@@ -291,7 +291,7 @@ function gg_run_open_llama_7b_v2 {
     set -e
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../examples/convert_legacy_llama.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -425,7 +425,7 @@ function gg_run_pythia_1_4b {
     set -e
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -557,7 +557,7 @@ function gg_run_pythia_2_8b {
     set -e
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                                           ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -692,7 +692,7 @@ function gg_run_embd_bge_small {
     set -e
 
     (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j                                            ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
