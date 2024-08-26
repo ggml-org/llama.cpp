@@ -13,6 +13,9 @@
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with VULKAN support
+# GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -51,6 +54,10 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
     fi
 
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
+fi
+
+if [ ! -z ${GG_BUILD_VULKAN} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
 fi
 ## helpers
 
@@ -266,7 +273,6 @@ function gg_sum_ctest_with_model_release {
 }
 
 # open_llama_7b_v2
-# requires: GG_BUILD_CUDA
 
 function gg_run_open_llama_7b_v2 {
     cd ${SRC}
@@ -290,8 +296,8 @@ function gg_run_open_llama_7b_v2 {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../examples/convert_legacy_llama.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -535,7 +541,6 @@ function gg_sum_pythia_1_4b {
 }
 
 # pythia_2_8b
-# requires: GG_BUILD_CUDA
 
 function gg_run_pythia_2_8b {
     cd ${SRC}
@@ -556,8 +561,8 @@ function gg_run_pythia_2_8b {
 
     set -e
 
-    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} -DGGML_CUDA=1 .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
-    (time make -j$(nproc)                                                  ) 2>&1 | tee -a $OUT/${ci}-make.log
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
 
     python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
 
@@ -761,7 +766,7 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     fi
 
     if [ -z ${GG_BUILD_VRAM_GB} ] || [ ${GG_BUILD_VRAM_GB} -ge 8 ]; then
-        if [ -z ${GG_BUILD_CUDA} ]; then
+        if [ -z ${GG_BUILD_CUDA} ] && [ -z ${GG_BUILD_VULKAN} ]; then
             test $ret -eq 0 && gg_run pythia_1_4b
         else
             test $ret -eq 0 && gg_run pythia_2_8b
