@@ -216,13 +216,19 @@ static std::string gguf_data_to_str(enum gguf_type type, const void * data, int 
 
 static void replace_all(std::string & s, const std::string & search, const std::string & replace) {
     if (search.empty()) {
-        return; // Avoid infinite loop if 'search' is an empty string
+        return;
     }
+    std::string builder;
+    builder.reserve(s.length());
     size_t pos = 0;
-    while ((pos = s.find(search, pos)) != std::string::npos) {
-        s.replace(pos, search.length(), replace);
-        pos += replace.length();
+    size_t last_pos = 0;
+    while ((pos = s.find(search, last_pos)) != std::string::npos) {
+        builder.append(s, last_pos, pos - last_pos);
+        builder.append(replace);
+        last_pos = pos + search.length();
     }
+    builder.append(s, last_pos, std::string::npos);
+    s = std::move(builder);
 }
 
 static std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
