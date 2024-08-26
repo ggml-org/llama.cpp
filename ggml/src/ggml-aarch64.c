@@ -337,33 +337,18 @@ static size_t quantize_q4_0_nr_bl(const float * restrict src, void * restrict ds
 }
 
 size_t quantize_q4_0_4x4(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    if (!quant_weights) {
-        return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 4, 4);
-    }
-    else {
-        assert(false);
-        return 0;
-    }
+    UNUSED(quant_weights);
+    return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 4, 4);
 }
 
 size_t quantize_q4_0_4x8(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    if (!quant_weights) {
-        return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 4, 8);
-    }
-    else {
-        assert(false);
-        return 0;
-    }
+    UNUSED(quant_weights);
+    return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 4, 8);
 }
 
 size_t quantize_q4_0_8x8(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
-    if (!quant_weights) {
-        return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 8, 8);
-    }
-    else {
-        assert(false);
-        return 0;
-    }
+    UNUSED(quant_weights);
+    return quantize_q4_0_nr_bl(src, dst, nrow, n_per_row, 8, 8);
 }
 
 void ggml_gemv_q4_0_4x4_q8_0(int n, float * restrict s, size_t bs, const void * restrict vx, const void * restrict vy, int nr, int nc) {
