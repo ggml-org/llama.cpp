@@ -24,6 +24,8 @@ ENV CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
 ENV GGML_CUDA=1
 # Enable cURL
 ENV LLAMA_CURL=1
+# Must be set to 0.0.0.0 so it can listen to requests from host machine
+ENV LLAMA_ARG_HOST=0.0.0.0
 
 RUN make -j$(nproc) llama-server
 

@@ -249,23 +249,49 @@ logging:
 
 Available environment variables (if specified, these variables will override parameters specified in arguments):
 
-- `LLAMA_CACHE` (cache directory, used by `--hf-repo`)
-- `HF_TOKEN` (Hugging Face access token, used when accessing a gated model with `--hf-repo`)
-- `LLAMA_ARG_MODEL`
-- `LLAMA_ARG_THREADS`
-- `LLAMA_ARG_CTX_SIZE`
-- `LLAMA_ARG_N_PARALLEL`
-- `LLAMA_ARG_BATCH`
-- `LLAMA_ARG_UBATCH`
-- `LLAMA_ARG_N_GPU_LAYERS`
-- `LLAMA_ARG_THREADS_HTTP`
-- `LLAMA_ARG_CHAT_TEMPLATE`
-- `LLAMA_ARG_N_PREDICT`
-- `LLAMA_ARG_ENDPOINT_METRICS`
-- `LLAMA_ARG_ENDPOINT_SLOTS`
-- `LLAMA_ARG_EMBEDDINGS`
-- `LLAMA_ARG_FLASH_ATTN`
-- `LLAMA_ARG_DEFRAG_THOLD`
+- `LLAMA_CACHE`: cache directory, used by `--hf-repo`
+- `HF_TOKEN`: Hugging Face access token, used when accessing a gated model with `--hf-repo`
+- `LLAMA_ARG_MODEL`: equivalent to `-m`
+- `LLAMA_ARG_MODEL_URL`: equivalent to `-mu`
+- `LLAMA_ARG_MODEL_ALIAS`: equivalent to `-a`
+- `LLAMA_ARG_HF_REPO`: equivalent to `--hf-repo`
+- `LLAMA_ARG_HF_FILE`: equivalent to `--hf-file`
+- `LLAMA_ARG_THREADS`: equivalent to `-t`
+- `LLAMA_ARG_CTX_SIZE`: equivalent to `-c`
+- `LLAMA_ARG_N_PARALLEL`: equivalent to `-np`
+- `LLAMA_ARG_BATCH`: equivalent to `-b`
+- `LLAMA_ARG_UBATCH`: equivalent to `-ub`
+- `LLAMA_ARG_N_GPU_LAYERS`: equivalent to `-ngl`
+- `LLAMA_ARG_THREADS_HTTP`: equivalent to `--threads-http`
+- `LLAMA_ARG_CHAT_TEMPLATE`: equivalent to `--chat-template`
+- `LLAMA_ARG_N_PREDICT`: equivalent to `-n`
+- `LLAMA_ARG_ENDPOINT_METRICS`: if set to `1`, it will enable metrics endpoint (equivalent to `--metrics`)
+- `LLAMA_ARG_ENDPOINT_SLOTS`: if set to `0`, it will **disable** slots endpoint (equivalent to `--no-slots`). This feature is enabled by default.
+- `LLAMA_ARG_EMBEDDINGS`: if set to `1`, it will enable embeddings endpoint (equivalent to `--embeddings`)
+- `LLAMA_ARG_FLASH_ATTN`: if set to `1`, it will enable flash attention (equivalent to `-fa`)
+- `LLAMA_ARG_CONT_BATCHING`: if set to `0`, it will **disable** continuous batching (equivalent to `--no-cont-batching`). This feature is enabled by default.
+- `LLAMA_ARG_DEFRAG_THOLD`: equivalent to `-dt`
+- `LLAMA_ARG_HOST`: equivalent to `--host`
+- `LLAMA_ARG_PORT`: equivalent to `--port`
+
+Example usage of docker compose with environment variables:
+
+```yml
+services:
+  llamacpp-server:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    ports:
+      - 8080:8080
+    volumes:
+      - ./models:/models
+    environment:
+      # alternatively, you can use "LLAMA_ARG_MODEL_URL" to download the model
+      LLAMA_ARG_MODEL: /models/my_model.gguf
+      LLAMA_ARG_CTX_SIZE: 4096
+      LLAMA_ARG_N_PARALLEL: 2
+      LLAMA_ARG_ENDPOINT_METRICS: 1  # to disable, either remove or set to 0
+      LLAMA_ARG_PORT: 8080
+```
 
 ## Build
 

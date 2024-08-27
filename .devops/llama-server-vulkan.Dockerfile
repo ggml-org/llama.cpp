@@ -23,6 +23,8 @@ RUN cp /app/build/bin/llama-server /llama-server && \
     rm -rf /app
 
 ENV LC_ALL=C.utf8
+# Must be set to 0.0.0.0 so it can listen to requests from host machine
+ENV LLAMA_ARG_HOST=0.0.0.0
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 

@@ -39,6 +39,8 @@ ENV GPU_TARGETS=${ROCM_DOCKER_ARCH}
 ENV GGML_HIPBLAS=1
 ENV CC=/opt/rocm/llvm/bin/clang
 ENV CXX=/opt/rocm/llvm/bin/clang++
+# Must be set to 0.0.0.0 so it can listen to requests from host machine
+ENV LLAMA_ARG_HOST=0.0.0.0
 
 # Enable cURL
 ENV LLAMA_CURL=1
