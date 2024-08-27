@@ -2572,7 +2572,7 @@ int main(int argc, char ** argv) {
 
     auto res_error = [](httplib::Response & res, json error_data) {
         json final_response {{"error", error_data}};
-        res.set_content(final_response.dump(), MIMETYPE_JSON);
+        res.set_content(final_response.dump(-1, ' ', false, json::error_handler_t::replace), MIMETYPE_JSON);
         res.status = json_value(error_data, "code", 500);
     };
 
