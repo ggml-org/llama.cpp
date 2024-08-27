@@ -397,6 +397,14 @@ void process_shaders(std::vector<std::future<void>>& tasks) {
     }));
 
     tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("sin_f32", "sin.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [] {
+        string_to_spv("cos_f32", "cos.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
+    }));
+
+    tasks.push_back(std::async(std::launch::async, [] {
         string_to_spv("clamp_f32", "clamp.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }));
 
