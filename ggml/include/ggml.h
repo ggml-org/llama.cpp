@@ -220,7 +220,7 @@
 #include <stdio.h>
 
 #define GGML_FILE_MAGIC   0x67676d6c // "ggml"
-#define GGML_FILE_VERSION 1
+#define GGML_FILE_VERSION 2
 
 #define GGML_QNT_VERSION        2    // bump this on quantization format changes
 #define GGML_QNT_VERSION_FACTOR 1000 // do not change this
@@ -453,6 +453,8 @@ extern "C" {
         GGML_OP_SQR,
         GGML_OP_SQRT,
         GGML_OP_LOG,
+        GGML_OP_SIN,
+        GGML_OP_COS,
         GGML_OP_SUM,
         GGML_OP_SUM_ROWS,
         GGML_OP_MEAN,
@@ -490,9 +492,11 @@ extern "C" {
         GGML_OP_CLAMP,
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
+        GGML_OP_IM2COL_BACK,
         GGML_OP_CONV_TRANSPOSE_2D,
         GGML_OP_POOL_1D,
         GGML_OP_POOL_2D,
+        GGML_OP_POOL_2D_BACK,
         GGML_OP_UPSCALE, // nearest interpolate
         GGML_OP_PAD,
         GGML_OP_ARANGE,
@@ -966,6 +970,22 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_log_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sin(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sin_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_cos(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_cos_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -1566,34 +1586,49 @@ extern "C" {
             float                 min,
             float                 max);
 
+    // im2col
+    // converts data into a format that effectively results in a convolution when combined with matrix multiplication
     GGML_API struct ggml_tensor * ggml_im2col(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                  s0,
-            int                  s1,
-            int                  p0,
-            int                  p1,
-            int                  d0,
-            int                  d1,
-            bool                 is_2D,
-            enum ggml_type       dst_type);
+            struct ggml_tensor  * a,  // convolution kernel
+            struct ggml_tensor  * b,  // data
+            int                   s0, // stride dimension 0
+            int                   s1, // stride dimension 1
+            int                   p0, // padding dimension 0
+            int                   p1, // padding dimension 1
+            int                   d0, // dilation dimension 0
+            int                   d1, // dilation dimension 1
+            bool                  is_2D,
+            enum ggml_type        dst_type);
+
+    GGML_API struct ggml_tensor * ggml_im2col_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,  // convolution kernel
+        struct ggml_tensor  * b,  // gradient of im2col output
+        int64_t             * ne, // shape of im2col input
+        int                   s0, // stride dimension 0
+        int                   s1, // stride dimension 1
+        int                   p0, // padding dimension 0
+        int                   p1, // padding dimension 1
+        int                   d0, // dilation dimension 0
+        int                   d1, // dilation dimension 1
+        bool                  is_2D);
 
     GGML_API struct ggml_tensor * ggml_conv_depthwise_2d(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                  s0,
-            int                  s1,
-            int                  p0,
-            int                  p1,
-            int                  d0,
-            int                  d1);
+            struct ggml_tensor  * a,  // convolution kernel
+            struct ggml_tensor  * b,  // data
+            int                  s0,  // stride dimension 0
+            int                  s1,  // stride dimension 1
+            int                  p0,  // padding dimension 0
+            int                  p1,  // padding dimension 1
+            int                  d0,  // dilation dimension 0
+            int                  d1); // dilation dimension 1
 
     GGML_API struct ggml_tensor * ggml_conv_1d(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
+            struct ggml_tensor  * a,   // convolution kernel
+            struct ggml_tensor  * b,   // data
             int                   s0,  // stride
             int                   p0,  // padding
             int                   d0); // dilation
@@ -1602,29 +1637,29 @@ extern "C" {
     // alias for ggml_conv_1d(a, b, s, a->ne[0]/2, d)
     GGML_API struct ggml_tensor* ggml_conv_1d_ph(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   s,
-            int                   d);
+            struct ggml_tensor  * a,  // convolution kernel
+            struct ggml_tensor  * b,  // data
+            int                   s,  // stride
+            int                   d); // dilation
 
     GGML_API struct ggml_tensor * ggml_conv_transpose_1d(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   s0,
-            int                   p0,
-            int                   d0);
+            struct ggml_tensor  * a,   // convolution kernel
+            struct ggml_tensor  * b,   // data
+            int                   s0,  // stride
+            int                   p0,  // padding
+            int                   d0); // dilation
 
     GGML_API struct ggml_tensor * ggml_conv_2d(
             struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   s0,
-            int                   s1,
-            int                   p0,
-            int                   p1,
-            int                   d0,
-            int                   d1);
+            struct ggml_tensor  * a,   // convolution kernel
+            struct ggml_tensor  * b,   // data
+            int                   s0,  // stride dimension 0
+            int                   s1,  // stride dimension 1
+            int                   p0,  // padding dimension 0
+            int                   p1,  // padding dimension 1
+            int                   d0,  // dilation dimension 0
+            int                   d1); // dilation dimension 1
 
 
     // kernel size is a->ne[0] x a->ne[1]
@@ -1678,6 +1713,18 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_pool_2d(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
+            enum ggml_op_pool     op,
+            int                   k0,
+            int                   k1,
+            int                   s0,
+            int                   s1,
+            float                 p0,
+            float                 p1);
+
+    GGML_API struct ggml_tensor * ggml_pool_2d_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * af, // "a"/input used in forward pass
             enum ggml_op_pool     op,
             int                   k0,
             int                   k1,

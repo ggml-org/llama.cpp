@@ -9,6 +9,10 @@ static __device__ __forceinline__ float op_add(const float a, const float b) {
     return a + b;
 }
 
+static __device__ __forceinline__ float op_sub(const float a, const float b) {
+    return a - b;
+}
+
 static __device__ __forceinline__ float op_mul(const float a, const float b) {
     return a * b;
 }
@@ -269,6 +273,10 @@ void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+}
+
+void ggml_cuda_op_sub(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_sub>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
 }
 
 void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

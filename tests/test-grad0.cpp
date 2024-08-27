@@ -1,10 +1,14 @@
 #define _CRT_SECURE_NO_DEPRECATE // Disables ridiculous "unsafe" warnings on Windows
 #include "ggml.h"
 
+#include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
+#include <initializer_list>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -217,7 +221,8 @@ static bool check_gradient(
         int nargs,
         float eps,
         float max_error_abs,
-        float max_error_rel) {
+        float max_error_rel,
+        std::vector<double> expected_vals) {
 
     static int n_threads = -1;
     if (n_threads < 0) {
@@ -248,9 +253,10 @@ static bool check_gradient(
     // ggml_graph_dump_dot(gb, gf,  "test-grad0-backward.dot");
 
     for (int i = 0; i < nargs; ++i) {
+        bool all_g0_bad = true;
         const int nelements = ggml_nelements(x[i]);
         for (int k = 0; k < nelements; ++k) {
-            // compute gradient using finite differences
+            // Calculate gradient numerically:
             const float x0 = ggml_get_f32_1d(x[i], k);
             const float xm = x0 - eps;
             const float xp = x0 + eps;
@@ -267,6 +273,28 @@ static bool check_gradient(
             const double f1 = ggml_get_f32_1d(f, 0);
             const double g0 = (f0 - f1)/(2.0*(double) eps);
 
+            // The numerical calculation of the gradient fails around noncontinuities (e.g. 0 for ReLU).
+            // In such cases, provide a vector of expected values and skip the comparison for failed calculations.
+            if (!expected_vals.empty()) {
+                bool matches_any = false;
+                for (const double & ev : expected_vals) {
+                    const double error_abs = std::fabs(g0 - ev);
+                    if (error_abs > max_error_abs) {
+                        continue;
+                    }
+                    const double error_rel = g0 != 0.0 ? fabs(g0 - ev)/fabs(g0) : 0.0;
+                    if (error_rel > max_error_rel) {
+                        continue;
+                    }
+                    matches_any = true;
+                    break;
+                }
+                if (!matches_any) {
+                    continue;
+                }
+            }
+            all_g0_bad = false;
+
             ggml_set_f32_1d(x[i], k, x0);
 
             // compute gradient using backward graph
@@ -278,7 +306,7 @@ static bool check_gradient(
             const double g1 = ggml_get_f32_1d(x[i]->grad, k);
 
             const double error_abs = fabs(g0 - g1);
-            const double error_rel = g0 != 0 ? fabs(g0 - g1)/fabs(g0) : 0;
+            const double error_rel = g0 != 0.0 ? fabs(g0 - g1)/fabs(g0) : 0.0;
 
             if (error_abs > max_error_abs || error_rel > max_error_rel) {
                 printf("%s: ndims=%d, i=%d, k=%d, x0=%f, xm=%f, xp=%f, f0=%f, f1=%f, g0=%f, g1=%f, eps=%f, error_abs=%f, error_rel=%f\n",
@@ -286,6 +314,10 @@ static bool check_gradient(
                 //assert(false);
                 return false;
             }
+        }
+        if (all_g0_bad) {
+            printf("%s: numerical calculation of the gradient failed for all values\n", op_name);
+            return false;
         }
     }
 
@@ -404,7 +436,7 @@ int main(int argc, const char ** argv) {
         seed_iter = rand();
         unsigned seed = rand();
 
-        printf("test-grad0: iter:%d/%d\n", iter, niter);
+        printf("test-grad0: iter:%d/%d\n", (iter+1), niter);
         struct ggml_context * ctx0 = ggml_init(params);
 
         get_random_dims(ne, 4);
@@ -424,7 +456,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_add(ctx0, x[0], x[1]));
 
-                check_gradient("add f32", ctx0, x, f, ndims, nargs, 1e-3f, 2e-3f, 2e-3f);
+                check_gradient("add f32", ctx0, x, f, ndims, nargs, 1e-3f, 2e-3f, 2e-3f, {});
             }
         }
 
@@ -441,7 +473,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_add(ctx0, x[0], x[1]));
 
-                check_gradient("add f16", ctx0, x, f, ndims, nargs, 1e-1f, 2e-1f, 2e-1f);
+                check_gradient("add f16", ctx0, x, f, ndims, nargs, 1e-1f, 2e-1f, 2e-1f, {});
             }
         }
 
@@ -458,7 +490,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sub(ctx0, x[0], x[1]));
 
-                check_gradient("sub", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("sub", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -475,7 +507,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_mul(ctx0, x[0], x[1]));
 
-                check_gradient("mul", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("mul", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -492,7 +524,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_div(ctx0, x[0], x[1]));
 
-                check_gradient("div", ctx0, x, f, ndims, nargs, 1e-3f, 1e-1f, 1e-1f);
+                check_gradient("div", ctx0, x, f, ndims, nargs, 1e-3f, 1e-1f, 1e-1f, {});
             }
         }
 
@@ -509,7 +541,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, x[0]));
 
-                check_gradient("sqr", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("sqr", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -526,7 +558,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqrt(ctx0, x[0]));
 
-                check_gradient("sqrt", ctx0, x, f, ndims, nargs, 1e-3f, 2e-2f, 1e-1f);
+                check_gradient("sqrt", ctx0, x, f, ndims, nargs, 1e-3f, 2e-2f, 1e-1f, {});
             }
         }
 
@@ -543,7 +575,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_log(ctx0, x[0]));
 
-                check_gradient("log", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f);
+                check_gradient("log", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f, {});
             }
         }
 
@@ -560,7 +592,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, x[0]);
 
-                check_gradient("sum", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("sum", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -578,7 +610,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, ggml_sum_rows(ctx0, x[0])));
 
-                check_gradient("sum_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY);
+                check_gradient("sum_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY, {});
             }
         }
 
@@ -596,7 +628,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_mean(ctx0, x[0]));
 
-                check_gradient("mean", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("mean", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -614,7 +646,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_argmax(ctx0, x[0]));
 
-                check_gradient("argmax", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("argmax", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -637,7 +669,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, ggml_sub(ctx0, x[1], ggml_repeat(ctx0, x[0], x[1]))));
 
-                check_gradient("repeat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY);
+                check_gradient("repeat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY, {});
             }
         }
 
@@ -660,25 +692,25 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, ggml_sub(ctx0, x[0], ggml_repeat_back(ctx0, x[1], x[0]))));
 
-                check_gradient("repeat back", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY);
+                check_gradient("repeat back", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY, {});
             }
         }
 
-        // abs (finite differences do not work)
-        //{
-        //    const int nargs = 1;
+        // abs
+        {
+           const int nargs = 1;
 
-        //    for (int ndims = 1; ndims <= 2; ++ndims) {
-        //        for (int i = 0; i < nargs; ++i) {
-        //            x[i] = get_random_tensor_f32(ctx0, ndims, ne, -1.0f, 1.0f);
-        //            ggml_set_param(ctx0, x[i]);
-        //        }
+           for (int ndims = 1; ndims <= 4; ++ndims) {
+               for (int i = 0; i < nargs; ++i) {
+                   x[i] = get_random_tensor_f32(ctx0, ndims, ne, -1.0f, 1.0f);
+                   ggml_set_param(ctx0, x[i]);
+               }
 
-        //        struct ggml_tensor * f = ggml_sum(ctx0, ggml_abs(ctx0, x[0]));
+               struct ggml_tensor * f = ggml_sum(ctx0, ggml_abs(ctx0, x[0]));
 
-        //        check_gradient("abs", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-3f);
-        //    }
-        //}
+               check_gradient("abs", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-3f, {-1.0, 1.0});
+           }
+        }
 
         // sgn
         {
@@ -693,7 +725,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_sgn(ctx0, x[0]));
 
-                check_gradient("sgn", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("sgn", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {0.0});
             }
         }
 
@@ -710,7 +742,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_neg(ctx0, x[0]));
 
-                check_gradient("neg", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("neg", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -727,7 +759,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_step(ctx0, x[0]));
 
-                check_gradient("step", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("step", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {0.0});
             }
         }
 
@@ -745,7 +777,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_tanh(ctx0, x[0]));
 
-                check_gradient("tanh", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("tanh", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -776,7 +808,7 @@ int main(int argc, const char ** argv) {
 
                         GGML_PRINT_DEBUG("testing: mul_mat, [%lld, %lld] (%d) * [%lld, %lld] (%d)\n", x[1]->ne[0], x[1]->ne[1], x[1]->n_dims, x[0]->ne[0], x[0]->ne[1], x[0]->n_dims);
 
-                        check_gradient("mul_mat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                        check_gradient("mul_mat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
                         if (ndims == 2) {
                             // check_mat_mul does not support ndims > 2
                             check_mat_mul(m, x[1], x[0]);
@@ -800,7 +832,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_elu(ctx0, x[0]));
 
-                check_gradient("elu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("elu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -817,7 +849,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_relu(ctx0, x[0]));
 
-                check_gradient("relu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("relu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {0.0, 1.0});
             }
         }
 
@@ -835,7 +867,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor* f = ggml_sum(ctx0, ggml_gelu(ctx0, x[0]));
 
-                check_gradient("gelu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("gelu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, {});
             }
         }
 
@@ -854,9 +886,9 @@ int main(int argc, const char ** argv) {
 
 #ifdef GGML_SILU_FP16
                 // due to GGML_SILU_FP16 the finite difference method will be slightly wrong -> increase error bounds.
-                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 0.5, INFINITY);
+                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 0.5, INFINITY, {});
 #else
-                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
 #endif
             }
         }
@@ -874,7 +906,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_rms_norm(ctx0, x[0], 1e-6f));
 
-                check_gradient("rms_norm", ctx0, x, f, ndims, nargs, 1e-4f, 1.0f, INFINITY);
+                check_gradient("rms_norm", ctx0, x, f, ndims, nargs, 1e-4f, 1.0f, INFINITY, {});
             }
         }
 
@@ -892,7 +924,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_scale(ctx0, x[0], s));
 
-                check_gradient("scale", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("scale", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -910,7 +942,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cpy(ctx0, x[0], x[1]));
 
-                check_gradient("cpy f32", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("cpy f32", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -928,7 +960,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cpy(ctx0, x[0], x[1]));
 
-                check_gradient("cpy f16", ctx0, x, f, ndims, nargs, 1e-1f, 1e-1f, INFINITY);
+                check_gradient("cpy f16", ctx0, x, f, ndims, nargs, 1e-1f, 1e-1f, INFINITY, {});
             }
         }
 
@@ -952,7 +984,7 @@ int main(int argc, const char ** argv) {
 
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_reshape(ctx0, x[0], x[1]));
-                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -976,7 +1008,7 @@ int main(int argc, const char ** argv) {
 
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_reshape(ctx0, x[0], x[1]));
-                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1004,7 +1036,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1037,7 +1069,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1072,7 +1104,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1109,7 +1141,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 4d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 4d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1137,7 +1169,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_set_1d(ctx0, x[0], x[1], offset));
 
-                check_gradient("set_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("set_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1170,7 +1202,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_set_2d(ctx0, x[0], x[1], x[1]->nb[1], offset));
 
-                check_gradient("set_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("set_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1194,7 +1226,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_1d(ctx0, x[0], nelem, offset));
 
-                check_gradient("view_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1225,7 +1257,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_2d(ctx0, x[0], ne2[0], ne2[1], nb2[1], offset));
 
-                check_gradient("view_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1257,7 +1289,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_3d(ctx0, x[0], ne2[0], ne2[1], ne2[2], nb2[1], nb2[2], offset));
 
-                check_gradient("view_3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1291,7 +1323,7 @@ int main(int argc, const char ** argv) {
                 // sum requires contiguous tensor rows
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, x[0], ax0, ax1, ax2, ax3)));
 
-                check_gradient("permute", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("permute", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1319,7 +1351,7 @@ int main(int argc, const char ** argv) {
                 // sum requires contiguous tensor rows
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, x[0])));
 
-                check_gradient("transpose", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("transpose", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1337,7 +1369,7 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_get_rows(ctx0, x[0], x[1]));
 
-            check_gradient("get_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("get_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
         }
 
         // diag_mask_inf
@@ -1353,7 +1385,7 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_diag_mask_inf(ctx0, x[0], n_past));
 
-            check_gradient("diag_mask_inf", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("diag_mask_inf", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
         }
 
         // diag_mask_zero
@@ -1369,7 +1401,7 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_diag_mask_zero(ctx0, x[0], n_past));
 
-            check_gradient("diag_mask_zero", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("diag_mask_zero", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
         }
 
         // softmax
@@ -1395,7 +1427,7 @@ int main(int argc, const char ** argv) {
                                                         1.0f - eps),
                                                     ggml_new_f32(ctx0, eps))));
 
-                check_gradient("softmax", ctx0, x, f, ndims, nargs, 1e-3f, 2e-1f, INFINITY);
+                check_gradient("softmax", ctx0, x, f, ndims, nargs, 1e-3f, 2e-1f, INFINITY, {});
                 // NOTE: softmax forward is computed using f16 table lookup instead of using actual expf, but backward assumes actual expf.
                 // this may result in different gradients too finite differences.
                 // when this test reports errors, first try to replace the table lookup with actual expf and test again to see if just that was the cause.
@@ -1412,7 +1444,7 @@ int main(int argc, const char ** argv) {
             get_random_dims(ne2, 4);
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
-                x[0] = get_random_tensor_f32(ctx0, ndims, ne2, -0.1f, 0.1f);
+                x[0] = get_random_tensor_f32(ctx0, ndims, ne2, -1.0f, 1.0f);
                 x[1] = get_random_tensor_f32(ctx0, ndims, ne2, 0.0f, 1.0f);
                 // the second argument to cross_entropy_loss must sum up to 1 for each row
                 int nr = ggml_nrows(x[1]);
@@ -1430,7 +1462,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_cross_entropy_loss(ctx0, x[0], x[1]);
 
-                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-4f, 1e-3f, INFINITY);
+                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, {});
             }
         }
 
@@ -1468,7 +1500,7 @@ int main(int argc, const char ** argv) {
                         struct ggml_tensor * f = ggml_sum(ctx0, ggml_rope(ctx0, x[0], p, n_rot, mode));
 
                         GGML_PRINT_DEBUG("rope f32: n_past: %d n_rot: %d mode: %d\n", n_past, n_rot, mode);
-                        check_gradient("rope f32", ctx0, x, f, ndims, nargs, 1e-2f, 1e-3f, INFINITY);
+                        check_gradient("rope f32", ctx0, x, f, ndims, nargs, 1e-2f, 1e-3f, INFINITY, {});
                     }
                 }
             }
@@ -1508,9 +1540,90 @@ int main(int argc, const char ** argv) {
                         struct ggml_tensor * f = ggml_sum(ctx0, ggml_rope(ctx0, x[0], p, n_rot, mode));
 
                         GGML_PRINT_DEBUG("rope f16: n_past: %d n_rot: %d mode: %d\n", n_past, n_rot, mode);
-                        check_gradient("rope f16", ctx0, x, f, ndims, nargs, 1e-1f, 1e-1f, INFINITY);
+                        check_gradient("rope f16", ctx0, x, f, ndims, nargs, 1e-1f, 1e-1f, INFINITY, {});
                     }
                 }
+            }
+        }
+
+        // im2col f32
+        {
+            srand(seed);
+            const int nargs = 1;
+            const int ndims = 4;
+
+            for (const bool is_2D : {false, true}) {
+                int64_t ne0[ndims];
+                int64_t ne1[ndims];
+                get_random_dims(ne0, ndims);
+                get_random_dims(ne1, ndims);
+
+                // // Ensure that the output is not zero-sized:
+                ne1[0] += 8;
+                ne1[1] += 8;
+
+                if (is_2D) {
+                    ne1[2] = ne0[2];
+                } else {
+                    ne1[1] = ne0[1];
+                    ne0[3] = 1;
+                    ne1[3] = 1;
+                }
+
+                // The order of arguments is swapped because the first tensor is only used for its shape.
+                x[1] = get_random_tensor_f16(ctx0, ndims, ne0, -1.0f, 1.0f);
+                x[0] = get_random_tensor_f32(ctx0, ndims, ne1, -1.0f, 1.0f);
+
+                ggml_set_param(ctx0, x[0]);
+
+                const int s0 =         1 + irand(2);
+                const int s1 = is_2D ? 1 + irand(2) : 0;
+                const int p0 =         0 + irand(2);
+                const int p1 = is_2D ? 0 + irand(2) : 0;
+                const int d0 =         1 + irand(2);
+                const int d1 = is_2D ? 1 + irand(2) : 0;
+
+                struct ggml_tensor * f = ggml_sum(ctx0, ggml_im2col(ctx0, x[1], x[0], s0, s1, p0, p1, d0, d1, is_2D, GGML_TYPE_F32));
+
+                GGML_PRINT_DEBUG("im2col f32: is_2D=%s, s0=%d, s1=%d, p0=%d, p1=%d, d0=%d, d1=%d\n", is_2D ? "yes" : "no", s0, s1, p0, p1, d0, d1);
+                check_gradient("im2col f32", ctx0, x, f, ndims, nargs, 1e-2f, 1e-3f, INFINITY, {});
+            }
+        }
+
+        // pool_2d f32
+        {
+            srand(seed);
+            const int nargs = 1;
+            const int ndims = 4;
+
+            for (const enum ggml_op_pool op : {GGML_OP_POOL_AVG, GGML_OP_POOL_MAX}) {
+                int64_t ne0[ndims];
+                get_random_dims(ne0, ndims);
+
+                ne0[0] += 8;
+                ne0[1] += 8;
+
+                x[0] = get_random_tensor_f32(ctx0, ndims, ne0, -1.0f, 1.0f);
+
+                ggml_set_param(ctx0, x[0]);
+
+                const int k0 = 2 + irand(2);
+                const int k1 = 2 + irand(2);
+                const int s0 = 2 + irand(2);
+                const int s1 = 2 + irand(2);
+                const int p0 = 0 + irand(2);
+                const int p1 = 0 + irand(2);
+
+                struct ggml_tensor * f = ggml_sum(ctx0, ggml_pool_2d(ctx0, x[0], op, k0, k1, s0, s1, p0, p1));
+
+                GGML_PRINT_DEBUG("ggml_pool_2d f32: op=%s k0=%d, k1=%d, s0=%d, s1=%d, p0=%d, p1=%d\n",
+                                 op == GGML_OP_POOL_MAX ? "max" : "avg", k0, k1, s0, s1, p0, p1);
+                std::vector<double> expected_vals;
+                if (op == GGML_OP_POOL_MAX) {
+                    expected_vals.push_back(0.0);
+                    expected_vals.push_back(1.0);
+                }
+                check_gradient("ggml_pool_2d f32", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, expected_vals);
             }
         }
 
@@ -1553,7 +1666,7 @@ int main(int argc, const char ** argv) {
 
         //                struct ggml_tensor * f = ggml_sum(ctx0, ggml_flash_attn(ctx0, x[0], x[1], x[2], (masked == 0)));
 
-        //                check_gradient("flash_attn f32", ctx0, x, f, ndims, nargs, 1.5e-4f, 1e-3f, INFINITY);
+        //                check_gradient("flash_attn f32", ctx0, x, f, ndims, nargs, 1.5e-4f, 1e-3f, INFINITY, {});
         //            }
         //        }
         //    }
