@@ -12532,6 +12532,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const float * scale      = (float * )((uint8_t*) (src0->data) + (ne00 * ne01 / 4));
     const float * act_scales = (const float*) ((const char *) wdata + (ne11 * ne10));
+    const int32_t * act_sums   = (const int32_t*) ((const char *) act_scales + (ne11) * sizeof(float));
 
     for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
@@ -12566,8 +12567,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
                     if (src0->type == GGML_TYPE_I2_S) {
-                        vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01 / 4, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
-                        tmp[ir0 - iir0] = tmp[ir0 - iir0] / (act_scales[i11]) * (*scale);
+                       vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01 / 4, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
+                        tmp[ir0 - iir0] = tmp[ir0 - iir0] / (act_scales[i11]) * (*scale) - act_sums[i11];
                     } else {
                         vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                     }
@@ -12673,7 +12674,9 @@ UseGgmlGemm1:;
                 for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
                     if (src0->type == GGML_TYPE_I2_S) {
                         float* act_scales = (float*) ((char *) wdata + (ne11 * ne10));
-                        quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + ((i11*nbw1 + i12*nbw2 + i13*nbw3) / 4)), ne10, act_scales + i11);
+                        int32_t* act_sums = (int32_t*) ((char *) act_scales + (ne11) * sizeof(float));
+                        quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + ((i11*nbw1 + i12*nbw2 + i13*nbw3) / 4)), ne10, act_scales + i11, act_sums + i11);
+                        // quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + ((i11*nbw1 + i12*nbw2 + i13*nbw3) / 4)), ne10, act_scales + i11);
                     } else {
                         from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                         (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
@@ -19270,7 +19273,11 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                     const enum ggml_type vec_dot_type = type_traits[node->src[0]->type].vec_dot_type;
 
                     if (node->src[1]->type != vec_dot_type) {
-                        cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                        if (vec_dot_type == GGML_TYPE_I8_S) {
+                            cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1])) + node->src[1]->ne[1] * sizeof(float) + node->src[1]->ne[1] * sizeof(int32_t);
+                        } else {
+                            cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
+                        }
                     }
                 } break;
             case GGML_OP_MUL_MAT_ID:
