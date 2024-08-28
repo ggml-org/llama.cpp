@@ -96,21 +96,12 @@ jobs:
         env:
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
-      - name: Build and push Docker image (versioned)
+      - name: Build and push Docker image (tagged + versioned)
         if: github.event_name == 'push'
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: ${{ matrix.config.platforms }}
-          tags: "ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }}"
-          file: ${{ matrix.config.dockerfile }}
-
-      - name: Build and push Docker image (tagged)
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: ${{ github.event_name == 'push' }}
-          platforms: ${{ matrix.config.platforms }}
-          tags: "ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }},ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ steps.tag.outputs.name }}"
+          tags: "ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }},ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }},ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ steps.tag.outputs.name }}"
           file: ${{ matrix.config.dockerfile }}
