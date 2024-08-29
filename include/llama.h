@@ -309,8 +309,8 @@ extern "C" {
         uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
         uint32_t n_ubatch;          // physical maximum batch size
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
-        uint32_t n_threads;         // number of threads to use for generation
-        uint32_t n_threads_batch;   // number of threads to use for batch processing
+        int32_t  n_threads;         // number of threads to use for generation
+        int32_t  n_threads_batch;   // number of threads to use for batch processing
 
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
@@ -432,6 +432,13 @@ extern "C" {
 
     //optional:
     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
+
+    // Optional: an auto threadpool gets created in ggml if not passed explicitly
+    LLAMA_API void llama_attach_threadpool(
+               struct   llama_context * ctx,
+            ggml_threadpool_t   threadpool,
+            ggml_threadpool_t   threadpool_batch);
+    LLAMA_API void llama_detach_threadpool(struct llama_context * ctx);
 
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
@@ -842,13 +849,13 @@ extern "C" {
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
-    LLAMA_API void llama_set_n_threads(struct llama_context * ctx, uint32_t n_threads, uint32_t n_threads_batch);
+    LLAMA_API void llama_set_n_threads(struct llama_context * ctx, int32_t n_threads, int32_t n_threads_batch);
 
     // Get the number of threads used for generation of a single token.
-    LLAMA_API uint32_t llama_n_threads(struct llama_context * ctx);
+    LLAMA_API int32_t llama_n_threads(struct llama_context * ctx);
 
     // Get the number of threads used for prompt and batch processing (multiple token).
-    LLAMA_API uint32_t llama_n_threads_batch(struct llama_context * ctx);
+    LLAMA_API int32_t llama_n_threads_batch(struct llama_context * ctx);
 
     // Set whether the model is in embeddings mode or not
     // If true, embeddings will be returned but logits will not

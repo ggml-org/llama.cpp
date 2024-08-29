@@ -67,13 +67,18 @@ enum dimre_method {
     DIMRE_METHOD_MEAN,
 };
 
+struct cpu_params {
+    int      n_threads                   = -1;
+    bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
+    bool     mask_valid                  = false;   // Default: any CPU
+    enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
+    bool     strict_cpu                  = false;   // Use strict CPU placement
+    uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
+};
+
 struct gpt_params {
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
-    int32_t n_threads             = cpu_get_num_math();
-    int32_t n_threads_draft       =    -1;
-    int32_t n_threads_batch       =    -1; // number of threads to use for batch processing (-1 = use n_threads)
-    int32_t n_threads_batch_draft =    -1;
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =     0; // context size
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -99,6 +104,11 @@ struct gpt_params {
     float   yarn_beta_slow        =  1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
     float   defrag_thold          = -1.0f; // KV cache defragmentation threshold
+
+    struct cpu_params cpuparams;
+    struct cpu_params cpuparams_batch;
+    struct cpu_params draft_cpuparams;
+    struct cpu_params draft_cpuparams_batch;
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
@@ -204,7 +214,7 @@ struct gpt_params {
     int32_t port           = 8080;         // server listens on this network port
     int32_t timeout_read   = 600;          // http read timeout in seconds
     int32_t timeout_write  = timeout_read; // http write timeout in seconds
-    int32_t n_threads_http = -1;           // number of threads to process HTTP requests
+    int     n_threads_http = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";
@@ -277,6 +287,11 @@ void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
 
 std::string gpt_params_get_system_info(const gpt_params & params);
 
+bool parse_cpu_range(const std::string& range, bool(&boolmask)[GGML_MAX_N_THREADS]);
+bool parse_cpu_mask(const std::string& mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
+void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model = nullptr);
+bool set_process_priority(enum ggml_sched_priority prio);
+
 //
 // String utils
 //
@@ -327,8 +342,9 @@ struct llama_init_result {
 
 struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
-struct llama_model_params   llama_model_params_from_gpt_params  (const gpt_params & params);
-struct llama_context_params llama_context_params_from_gpt_params(const gpt_params & params);
+struct llama_model_params     llama_model_params_from_gpt_params    (const gpt_params & params);
+struct llama_context_params   llama_context_params_from_gpt_params  (const gpt_params & params);
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
 
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);

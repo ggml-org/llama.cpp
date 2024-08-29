@@ -1247,7 +1247,7 @@ endif()
 
 # Data types, macros and functions related to controlling CPU affinity and
 # some memory allocation are available on Linux through GNU extensions in libc
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
     add_compile_definitions(_GNU_SOURCE)
 endif()
 

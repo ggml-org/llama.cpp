@@ -73,10 +73,11 @@ int main(int argc, char ** argv) {
     // load the draft model
     params.model = params.model_draft;
     params.n_gpu_layers = params.n_gpu_layers_draft;
-    if (params.n_threads_draft > 0) {
-        params.n_threads = params.n_threads_draft;
+    if (params.draft_cpuparams.n_threads > 0) {
+        params.cpuparams.n_threads = params.draft_cpuparams.n_threads;
     }
-    params.n_threads_batch = params.n_threads_batch_draft;
+
+    params.cpuparams_batch.n_threads = params.draft_cpuparams_batch.n_threads;
     llama_init_result llama_init_dft = llama_init_from_gpt_params(params);
     model_dft = llama_init_dft.model;
     ctx_dft = llama_init_dft.context;

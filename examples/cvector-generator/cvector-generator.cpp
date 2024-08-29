@@ -486,8 +486,8 @@ int main(int argc, char ** argv) {
     if (use_pca) {
         // run PCA
         PCA::pca_params pca_params;
-        pca_params.n_threads = params.n_threads;
-        pca_params.n_batch = params.n_pca_batch;
+        pca_params.n_threads    = params.cpuparams.n_threads;
+        pca_params.n_batch      = params.n_pca_batch;
         pca_params.n_iterations = params.n_pca_iterations;
         PCA::run_pca(pca_params, ctx_train.v_diff, ctx_train.v_final);
     } else {

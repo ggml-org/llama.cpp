@@ -231,6 +231,8 @@
 #define GGML_MAX_SRC            10
 #ifndef GGML_MAX_NAME
 #define GGML_MAX_NAME           64
+#define GGML_MAX_N_THREADS      512
+
 #endif
 #define GGML_MAX_OP_PARAMS      64
 #define GGML_DEFAULT_N_THREADS  4
@@ -634,6 +636,29 @@ extern "C" {
     // If it returns true, the computation is aborted
     typedef bool (*ggml_abort_callback)(void * data);
 
+    // Scheduling priorities
+    enum ggml_sched_priority {
+        GGML_SCHED_PRIO_NORMAL,
+        GGML_SCHED_PRIO_MEDIUM,
+        GGML_SCHED_PRIO_HIGH,
+        GGML_SCHED_PRIO_REALTIME
+    };
+
+    // Threadpool params
+    // Use ggml_threadpool_params_default() or ggml_threadpool_params_init() to populate the defaults
+    struct ggml_threadpool_params {
+        bool                cpumask[GGML_MAX_N_THREADS]; // mask of cpu cores (all-zeros means use default affinity settings)
+        int                 n_threads;                   // number of threads
+        enum ggml_sched_priority prio;                   // thread priority
+        uint32_t            poll;                        // polling level (0 - no polling, 100 - aggressive polling)
+        bool                strict_cpu;                  // strict cpu placement
+        bool                paused;                      // start in paused state
+    };
+
+    struct ggml_threadpool;     // forward declaration, see ggml.c
+
+    typedef struct  ggml_threadpool * ggml_threadpool_t;
+
     // the compute plan that needs to be prepared for ggml_graph_compute()
     // since https://github.com/ggerganov/ggml/issues/287
     struct ggml_cplan {
@@ -641,6 +666,7 @@ extern "C" {
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
 
         int n_threads;
+        struct ggml_threadpool * threadpool;
 
         // abort ggml_graph_compute when true
         ggml_abort_callback abort_callback;
@@ -2063,10 +2089,23 @@ extern "C" {
     GGML_API size_t ggml_graph_overhead(void);
     GGML_API size_t ggml_graph_overhead_custom(size_t size, bool grads);
 
+    GGML_API struct ggml_threadpool_params   ggml_threadpool_params_default(int n_threads);
+    GGML_API void                            ggml_threadpool_params_init  (struct ggml_threadpool_params *p, int n_threads);
+    GGML_API bool                            ggml_threadpool_params_match (const struct ggml_threadpool_params *p0, const struct ggml_threadpool_params *p1);
+    GGML_API struct ggml_threadpool*         ggml_threadpool_new          (struct ggml_threadpool_params  * params);
+    GGML_API void                            ggml_threadpool_free         (struct ggml_threadpool * threadpool);
+    GGML_API int                             ggml_threadpool_get_n_threads(struct ggml_threadpool * threadpool);
+    GGML_API void                            ggml_threadpool_pause        (struct ggml_threadpool * threadpool);
+    GGML_API void                            ggml_threadpool_resume       (struct ggml_threadpool * threadpool);
+
     // ggml_graph_plan() has to be called before ggml_graph_compute()
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
-    GGML_API struct ggml_cplan ggml_graph_plan   (const struct ggml_cgraph * cgraph, int n_threads /*= GGML_DEFAULT_N_THREADS*/);
-    GGML_API enum ggml_status  ggml_graph_compute(      struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
+    GGML_API struct ggml_cplan ggml_graph_plan(
+                  const struct ggml_cgraph * cgraph,
+                                       int   n_threads, /* = GGML_DEFAULT_N_THREADS */
+                    struct ggml_threadpool * threadpool /* = NULL */ );
+    GGML_API enum ggml_status  ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan);
+
     // same as ggml_graph_compute() but the work data is allocated as a part of the context
     // note: the drawback of this API is that you must have ensured that the context has enough memory for the work data
     GGML_API enum ggml_status  ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads);

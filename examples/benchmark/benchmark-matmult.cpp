@@ -21,7 +21,7 @@
 #endif
 
 static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * graph, int n_threads) {
-    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads);
+    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads, nullptr);
 
     if (plan.work_size > 0) {
         buf.resize(plan.work_size);
@@ -54,7 +54,7 @@ static void tensor_dump(const ggml_tensor * tensor, const char * name) {
 #define TENSOR_DUMP(tensor) tensor_dump(tensor, #tensor)
 
 struct benchmark_params_struct {
-    int32_t n_threads     = 1;
+    int     n_threads     = 1;
     int32_t n_iterations  = 10;
 };
 

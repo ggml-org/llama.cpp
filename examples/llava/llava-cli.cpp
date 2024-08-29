@@ -129,14 +129,14 @@ static struct llava_image_embed * load_image(llava_context * ctx_llava, gpt_para
         if (!params->image.empty()) {
             LOG_TEE("using base64 encoded image instead of command line image path\n");
         }
-        embed = llava_image_embed_make_with_prompt_base64(ctx_llava->ctx_clip, params->n_threads, prompt);
+        embed = llava_image_embed_make_with_prompt_base64(ctx_llava->ctx_clip, params->cpuparams.n_threads, prompt);
         if (!embed) {
             LOG_TEE("%s: can't load image from prompt\n", __func__);
             return NULL;
         }
         params->prompt = remove_image_from_prompt(prompt);
     } else {
-        embed = llava_image_embed_make_with_filename(ctx_llava->ctx_clip, params->n_threads, fname.c_str());
+        embed = llava_image_embed_make_with_filename(ctx_llava->ctx_clip, params->cpuparams.n_threads, fname.c_str());
         if (!embed) {
             fprintf(stderr, "%s: is %s really an image file?\n", __func__, fname.c_str());
             return NULL;

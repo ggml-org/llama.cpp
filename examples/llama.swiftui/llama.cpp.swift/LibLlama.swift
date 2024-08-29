@@ -71,8 +71,8 @@ actor LlamaContext {
         var ctx_params = llama_context_default_params()
         ctx_params.seed  = 1234
         ctx_params.n_ctx = 2048
-        ctx_params.n_threads       = UInt32(n_threads)
-        ctx_params.n_threads_batch = UInt32(n_threads)
+        ctx_params.n_threads       = Int32(n_threads)
+        ctx_params.n_threads_batch = Int32(n_threads)
 
         let context = llama_new_context_with_model(model, ctx_params)
         guard let context else {
