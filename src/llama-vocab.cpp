@@ -963,7 +963,7 @@ private:
     /*
      * This structure is a view wrapper for XOR-compressed double array (XCDA)
      * See Shunsuke Kanda (2018). Space- and Time-Efficient String Dictionaries.
-     * Eeach bit-packed entry contains:
+     * Each bit-packed entry contains:
      * - BASE array value in bits 10-30
      * - LCHECK array value in bits 0-7
      * - LEAF array value in bit 9
