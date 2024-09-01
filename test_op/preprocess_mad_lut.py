@@ -124,8 +124,8 @@ def preprocess_three_weights(M, K, weight_num, BM, BY, bm, by, weight, final_wei
     final_weight.extend(sign_weight_list)
     final_weight.extend(sign_weight_list)
 
-M = 128
-K = 128
+M = 1536
+K = 4096
 
 w_scale = 0.22
 w = np.array(np.random.randint(-1, 2, M * K)).astype(np.float32) * w_scale
