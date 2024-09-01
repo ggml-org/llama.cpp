@@ -3539,7 +3539,7 @@ size_t quantize_i2_s(const float * restrict src, void * restrict dst, int64_t nr
         q8[i] = (double)src[i] * i2_scale > 0 ? 2 : 0;
     }
 
-    memset(dst, 0, n * sizeof(uint8_t));
+    memset(dst, 0, n * sizeof(uint8_t) / 4);
 
     // q8 -> 0, 1, 2
     //       |  |  |
