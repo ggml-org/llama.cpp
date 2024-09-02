@@ -26,8 +26,8 @@ typedef float float_type;
 #define extract_high_epi16_epi32(v) _mm256_cvtepi16_epi32(_mm256_extracti128_si256(v, 1))
 #endif
 
-#define M 1536
-#define K 4096
+#define M 4096
+#define K 8192
 #define N 1
 #define BM 128
 #define BK3 96
@@ -914,28 +914,138 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * s, const uint8_t * x, float* dx, con
     }
 
     *s = hsum_float_8(sumf);
+#endif
+}
 
-#else
-    float sumf = 0.0f;
+void float_compute(float* A, float* B, float* C) {
+    for (int i = 0; i < M * 1; i++) {
+        C[i] = 0;
+    }
+    float* float_B = (float*)malloc(1 * K * sizeof(float));
+    float_act_quant(B, float_B);
+    matrixMultiply(A, float_B, C);
+}
 
-    for (int i = 0; i < nb; ++i) {
-        int32_t sumi = 0;
+void i2_s_compute(float* A, float* B, float* C) {
+    for (int i = 0; i < M * 1; i++) {
+        C[i] = 0;
+    }
+    int32_t* act_sums = (int32_t*)malloc(sizeof(int32_t) * N);
+    float* act_scales = (float*)malloc(sizeof(float) * N);
 
-        for (size_t j = 0; j < sizeof(x->qs); j += 32) {
-            for (size_t l = 0; l < 4; ++l) {
-                for (size_t k = 0; k < 32; ++k) {
-                    sumi += y[i].qs[j*4 + l*32 + k] * (((x[i].qs[j + k] >> (l*2)) & 3) - 1);
-                }
-            }
-        }
+    int8_t* qy = (int8_t*)malloc(sizeof(int8_t) * N * K);
 
-        const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
-
-        sumf += (float) sumi * d;
+    for (int i=0; i<N; i++) {
+        quantize_row_i8_s(B, qy, K, act_scales, act_sums);
     }
 
-    *s = sumf;
-#endif
+    uint8_t* qx = (uint8_t*)malloc(sizeof(uint8_t) * M * K / 4 + sizeof(float));
+    for (int i=0; i<M; i++) {
+        quantize_i2_s(A + i * K, qx + i * K / 4);
+    }
+
+    for (int i=0; i<M; i++) {
+        ggml_vec_dot_i2_i8_s(K, C + i, 0, qx + i * K / 4, 0, qy, 0, 0);
+    }
+
+    for (int i=0; i<M; i++) {
+        C[i] = (C[i] - act_sums[0]) / act_scales[0] * ((float*)(qx + M * K / 4))[0];
+    }
+}
+
+void tq20_compute(float* A, float* B, float* C) {
+    for (int i = 0; i < M * 1; i++) {
+        C[i] = 0;
+    }
+    int16_t* bsums = (int16_t*)malloc(sizeof(int16_t) * K / 16);
+    float* dy = (float*)malloc(sizeof(float) * K / 256);
+    int8_t* tq20_qy = (int8_t*)malloc(sizeof(int8_t) * K);
+    float* dx = (float*)malloc(sizeof(float) * M * K / 256);
+    uint8_t* tq20_qx = (uint8_t*)malloc(sizeof(uint8_t) * M * K / 4);
+
+    for (int i=0; i<N; i++) {
+        quantize_row_q8_K_ref(B, tq20_qy, dy, bsums);
+    }
+
+    for (int i=0; i<M; i++) {
+        quantize_row_tq2_0_ref(A + i * K, tq20_qx + i * K / 4, dx + i * K / 256);
+    }
+
+    for (int i=0; i<M; i++) {
+        ggml_vec_dot_tq2_0_q8_K(K, C + i, tq20_qx + i * K / 4, dx + i * K / 256, tq20_qy, dy, bsums);
+    }
+}
+
+void tl_compute(uint8_t* A, float* B, float* C) {
+    for (int i = 0; i < M * 1; i++) {
+        C[i] = 0;
+    }
+    const int three_k = (int)(K / BK3) * BK3;
+    const int two_k = K - three_k;
+
+    uint8_t* sign = ((uint8_t *)(A)) + M * three_k / 3 / 2;
+    uint8_t* two_A = ((uint8_t *)(A)) + M * three_k / 4;
+
+    float Scales[1] = {0.22f};
+    float LUT_Scales[1];
+    float LUT_Biases[1];
+
+    int8_t* three_QLUT = (int8_t *)malloc(1 * 16 * (three_k / 3) * sizeof(int8_t) * 2);
+    int8_t* two_QLUT = (int8_t *)malloc(1 * 16 * (two_k / 2) * sizeof(int8_t) * 2);
+
+    partial_max_reset((&(((float*)LUT_Scales)[0])));
+  // 8640 / 24 == 200
+    partial_max(K, (&(((float*)LUT_Scales)[0])), (&(((float*)B)[0])));
+    three_lut_preprocess(three_k, (&(((int8_t*)three_QLUT)[0])), (&(((float*)B)[0])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
+    two_lut_preprocess(two_k, (&(((int8_t*)two_QLUT)[0])), (&(((float*)B)[three_k])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
+
+    const int n_tile_num = M / BM;
+    const int nth = 1;
+    const int ith = 0;
+    const int w_size           = M * three_k / (2 * 3); // int8 
+    const int sign_size        = M * three_k / 24; //int8
+    const int lut_size         = 1 * 16 * (three_k / 3) * 2; // int8
+    const int c_size           = 1 * M; // float
+    const int w_tile_size      = w_size / n_tile_num;
+    const int lut_tile_size    = lut_size / n_tile_num;
+    const int sign_tile_size   = sign_size / n_tile_num;
+    const int c_tile_size      = c_size / n_tile_num;
+
+    const int th_tile_num = (n_tile_num + nth - 1) / nth;
+    const int th_tile_beg = ith * th_tile_num;
+    const int th_tile_end = n_tile_num;
+
+    // auto gemm_start = std::chrono::high_resolution_clock::now();
+    for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+        const int w_offset          = i_tile * w_tile_size;
+        const int sign_offset       = i_tile * sign_tile_size;
+        const int scales_offset     = 0;
+
+        const int qlut_offset       = i_tile * lut_tile_size;
+        const int lut_scales_offset = 0;
+        const int dst_offset        = i_tile * c_tile_size;
+
+        three_qgemm_lut(three_k, A + w_offset, sign + sign_offset, three_QLUT, Scales, LUT_Scales, LUT_Biases, C + dst_offset);
+    }
+
+    const int two_w_size           = M * two_k / (2 * 2); // int8 
+    const int two_lut_size         = 1 * 16 * (two_k / 2) * 2; // int8
+    const int two_w_tile_size      = two_w_size / n_tile_num;
+    const int two_lut_tile_size    = two_lut_size / n_tile_num;
+
+    // auto gemm_start = std::chrono::high_resolution_clock::now();
+    for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+        const int two_w_offset          = i_tile * two_w_tile_size;
+
+        const int two_qlut_offset       = i_tile * two_lut_tile_size;
+        const int two_dst_offset        = i_tile * c_tile_size;
+
+        two_qgemm_lut(two_k, two_A + two_w_offset, two_QLUT, Scales, LUT_Scales, LUT_Biases, C + two_dst_offset);
+    }
+
+    for (int i=0; i<M; i++) {
+        C[i] = C[i] * LUT_Scales[0] * Scales[0];
+    }
 }
 
 int main() {
@@ -953,14 +1063,8 @@ int main() {
     ori_in.read(reinterpret_cast<char*>(oA), ori_fileSize);
     ori_in.close();
 
-    // 5bit -> 3value
-    // one index -> 3num
-    // one index -> 5bit
-    // 3^2 possibilities stored in 8 index, 0 for 0
-    // 2^4 store 3^2 possibitiles, kind of waste space but helpful for speed
     uint8_t* A = (uint8_t *)malloc(M * K / 4 * sizeof(uint8_t));
 
-    // uint8_t* sign = (uint8_t *)malloc(M * K / 12 * sizeof(uint8_t));
     std::ifstream tra_in("trans_3200_3200_lut3.weight", std::ios::binary);
     tra_in.seekg(0, std::ios::end);
     std::streampos tra_fileSize = tra_in.tellg();
@@ -968,190 +1072,25 @@ int main() {
     tra_in.read(reinterpret_cast<char*>(A), tra_fileSize);
     tra_in.close();
 
-    const int three_k = (int)(K / BK3) * BK3;
-    const int two_k = K - three_k;
-
-    uint8_t* sign = ((uint8_t *)(A)) + M * three_k / 3 / 2;
-    uint8_t* two_A = ((uint8_t *)(A)) + M * three_k / 4;
-
     float* ori_C = (float *)malloc(1 * M * sizeof(float));
-    for (int i = 0; i < M * 1; i++) {
-        ori_C[i] = 0;
-    }
+    float_compute(oA, B, ori_C);
 
-    // float* lut_C = (float *)malloc(1 * M * sizeof(float));
-    // for (int i = 0; i < M * 1; i++) {
-    //     lut_C[i] = 0;
-    // }
+    float* lut_C = (float *)malloc(1 * M * sizeof(float));
+    tl_compute(A, B, lut_C);
 
-    float* mad_C = (float *)malloc(1 * M * sizeof(float));
-    for (int i = 0; i < M * 1; i++) {
-        mad_C[i] = 0;
-    }
+    float* i2_s_C = (float *)malloc(1 * M * sizeof(float));
+    i2_s_compute(oA, B, i2_s_C);
 
     float* tq20_C = (float *)malloc(1 * M * sizeof(float));
-    for (int i = 0; i < M * 1; i++) {
-        tq20_C[i] = 0;
-    }
-
-    float* float_B = (float*)malloc(1 * K * sizeof(float));
-    float_act_quant(B, float_B);
-
-    // for (int i=0; i<20; i++) {
-    //     printf("%f ", float_B[i]);
-    // }
-    // printf("\n");
-
-    matrixMultiply(oA, float_B, ori_C);
-
-    // for (int i=0; i<512; i++) {
-    //     printf("%f ", ori_C[i]);
-    // }
-    // printf("\n");
-
-    int32_t* act_sums = (int32_t*)malloc(sizeof(int32_t) * N);
-    float* act_scales = (float*)malloc(sizeof(float) * N);
-
-    int8_t* qy = (int8_t*)malloc(sizeof(int8_t) * N * K);
-
-    for (int i=0; i<N; i++) {
-        quantize_row_i8_s(B, qy, K, act_scales, act_sums);
-    }
-
-    uint8_t* qx = (uint8_t*)malloc(sizeof(uint8_t) * M * K / 4 + sizeof(float));
-    for (int i=0; i<M; i++) {
-        quantize_i2_s(oA + i * K, qx + i * K / 4);
-    }
+    tq20_compute(oA, B, tq20_C);
 
     for (int i=0; i<M; i++) {
-        ggml_vec_dot_i2_i8_s(K, mad_C + i, 0, qx + i * K / 4, 0, qy, 0, 0);
-    }
-
-    for (int i=0; i<M; i++) {
-        mad_C[i] = (mad_C[i] - act_sums[0]) / act_scales[0] * ((float*)(qx + M * K / 4))[0];
-    }
-
-    int16_t* bsums = (int16_t*)malloc(sizeof(int16_t) * K / 16);
-    float* dy = (float*)malloc(sizeof(float) * K / 256);
-    int8_t* tq20_qy = (int8_t*)malloc(sizeof(int8_t) * K);
-    float* dx = (float*)malloc(sizeof(float) * M * K / 256);
-    uint8_t* tq20_qx = (uint8_t*)malloc(sizeof(uint8_t) * M * K / 4);
-
-    for (int i=0; i<N; i++) {
-        quantize_row_q8_K_ref(B, tq20_qy, dy, bsums);
-    }
-
-    // for (int i=0; i<K; i++) {
-    //     printf("%d ", tq20_qy[i]);
-    // }
-    // printf("\n");
-
-    // for (int i=0; i<K / 16; i++) {
-    //     printf("%d ", bsums[i]);
-    // }
-    // printf("\n");
-
-    // for (int i=0; i<K / 256; i++) {
-    //     printf("%f ", dy[i]);
-    // }
-    // printf("\n");
-
-    for (int i=0; i<M; i++) {
-        quantize_row_tq2_0_ref(oA + i * K, tq20_qx + i * K / 4, dx + i * K / 256);
-    }
-    // for (int i=0; i<M * K / 4; i++) {
-    //     printf("%d ", tq20_qx[i]);
-    // }
-    // printf("\n");
-    // for (int i=0; i<M * K / 256; i++) {
-    //     printf("%f ", dx[i]);
-    // }
-    // printf("\n");
-
-    for (int i=0; i<M; i++) {
-        ggml_vec_dot_tq2_0_q8_K(K, tq20_C + i, tq20_qx + i * K / 4, dx + i * K / 256, tq20_qy, dy, bsums);
-    }
-
-//     float Scales[1] = {0.22f};
-//     float LUT_Scales[1];
-//     float LUT_Biases[1];
-
-//     int8_t* three_QLUT = (int8_t *)malloc(1 * 16 * (three_k / 3) * sizeof(int8_t) * 2);
-//     int8_t* two_QLUT = (int8_t *)malloc(1 * 16 * (two_k / 2) * sizeof(int8_t) * 2);
-
-//     // double preprocess_time = 0;
-//     // double gemm_time = 0;
-//     // printf("done\n");
-//     // for (int i = 0; i < 1000; i++) {
-//     // auto pre_start = std::chrono::high_resolution_clock::now();
-//     partial_max_reset((&(((float*)LUT_Scales)[0])));
-//   // 8640 / 24 == 200
-//     partial_max(K, (&(((float*)LUT_Scales)[0])), (&(((float*)B)[0])));
-//     three_lut_preprocess(three_k, (&(((int8_t*)three_QLUT)[0])), (&(((float*)B)[0])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
-//     two_lut_preprocess(two_k, (&(((int8_t*)two_QLUT)[0])), (&(((float*)B)[three_k])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
-
-//     const int n_tile_num = M / BM;
-//     const int nth = 1;
-//     const int ith = 0;
-//     const int w_size           = M * three_k / (2 * 3); // int8 
-//     const int sign_size        = M * three_k / 24; //int8
-//     const int lut_size         = 1 * 16 * (three_k / 3) * 2; // int8
-//     const int c_size           = 1 * M; // float
-//     const int w_tile_size      = w_size / n_tile_num;
-//     const int lut_tile_size    = lut_size / n_tile_num;
-//     const int sign_tile_size   = sign_size / n_tile_num;
-//     const int c_tile_size      = c_size / n_tile_num;
-
-//     const int th_tile_num = (n_tile_num + nth - 1) / nth;
-//     const int th_tile_beg = ith * th_tile_num;
-//     const int th_tile_end = n_tile_num;
-
-//     // auto gemm_start = std::chrono::high_resolution_clock::now();
-//     for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
-//         const int w_offset          = i_tile * w_tile_size;
-//         const int sign_offset       = i_tile * sign_tile_size;
-//         const int scales_offset     = 0;
-
-//         const int qlut_offset       = i_tile * lut_tile_size;
-//         const int lut_scales_offset = 0;
-//         const int dst_offset        = i_tile * c_tile_size;
-
-//         three_qgemm_lut(three_k, A + w_offset, sign + sign_offset, three_QLUT, Scales, LUT_Scales, LUT_Biases, lut_C + dst_offset);
-//     }
-
-//     const int two_w_size           = M * two_k / (2 * 2); // int8 
-//     const int two_lut_size         = 1 * 16 * (two_k / 2) * 2; // int8
-//     const int two_w_tile_size      = two_w_size / n_tile_num;
-//     const int two_lut_tile_size    = two_lut_size / n_tile_num;
-
-//     // auto gemm_start = std::chrono::high_resolution_clock::now();
-//     for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
-//         const int two_w_offset          = i_tile * two_w_tile_size;
-
-//         const int two_qlut_offset       = i_tile * two_lut_tile_size;
-//         const int two_dst_offset        = i_tile * c_tile_size;
-
-//         two_qgemm_lut(two_k, two_A + two_w_offset, two_QLUT, Scales, LUT_Scales, LUT_Biases, lut_C + two_dst_offset);
-//     }
-
-//     for (int i=0; i<M; i++) {
-//         lut_C[i] = lut_C[i] * LUT_Scales[0] * Scales[0];
-//     }
-
-    // auto gemm_end   = std::chrono::high_resolution_clock::now();
-    // std::chrono::duration<double, std::milli> gemm_elapsed = gemm_end - gemm_start;       
-    // gemm_time += double(gemm_elapsed.count());
-    // // }
-    // std::cout << "preprocess:" << preprocess_time << "ms" << std::endl;
-    // std::cout << "gemm:" << gemm_time << "ms" << std::endl; 
-
-    for (int i=0; i<512; i++) {
         // printf("%f ", C[i]);
         // if (fabs(ori_C[i] - lut_C[i]) > 0.5){
             printf("index:%d\n", i);
-            printf("ori:%f\n", ori_C[i]);
-            // printf("lut:%f\n", lut_C[i]);
-            printf("mad:%f\n", mad_C[i]);
+            printf("float:%f\n", ori_C[i]);
+            printf("tl2:%f\n", lut_C[i]);
+            printf("i2_s:%f\n", i2_s_C[i]);
             printf("tq20:%f\n", tq20_C[i]);
         // }
     }
