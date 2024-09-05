@@ -16400,7 +16400,11 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
             new_type = qs.params->output_tensor_type;
         } else {
             int nx = tensor->ne[0];
-            if (arch == LLM_ARCH_FALCON || nx % QK_K != 0) {
+            // for accurate debug / delete when inference
+            if (ftype == LLAMA_FTYPE_MOSTLY_I2_S || LLAMA_FTYPE_MOSTLY_TQ1_0 || LLAMA_FTYPE_MOSTLY_TQ2_0) {
+                new_type = GGML_TYPE_F32;
+            }
+            else if (arch == LLM_ARCH_FALCON || nx % QK_K != 0) {
                 new_type = GGML_TYPE_Q8_0;
             }
             else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS ||
