@@ -539,7 +539,7 @@ inline int32_t three_gemm_impl(int32_t m, int32_t* c, int8_t* lut, uint8_t* a, u
 
 #pragma unroll
   for (int i = 0; i < BM; i++) {
-    ((float*)C)[i] = (float)(((int32_t*)CBits)[i]);
+    ((float*)C)[i] = (float)(((int32_t*)CBits)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
   }
 
   if (0 != 0) {
@@ -564,7 +564,7 @@ inline int32_t three_gemm_impl(int32_t m, int32_t* c, int8_t* lut, uint8_t* a, u
 
 #pragma unroll
   for (int i = 0; i < BM; i++) {
-    ((float*)C)[i] += (float)(((int32_t*)CBits)[i]);
+    ((float*)C)[i] += (float)(((int32_t*)CBits)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];;
   }
 
   if (0 != 0) {
@@ -759,17 +759,6 @@ void quantize_i2_s(const float * src, void * dst) {
     // 32B for alignment
 }
 
-void matrixMultiply(const float* A, const float* B, float* C) {
-    for (int i = 0; i < M; ++i) {
-        for (int j = 0; j < N; ++j) {
-            C[j * M + i] = 0.0;
-            for (int k = 0; k < K; ++k) {
-                C[j * M + i] += A[i * K + k] * B[j * K + k];
-            }
-        }
-    }
-}
-
 void float_act_quant(float* B, float* dst) {
     double min = 0.00001;
     double max = min;
@@ -917,14 +906,75 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * s, const uint8_t * x, float* dx, con
 #endif
 }
 
-void float_compute(float* A, float* B, float* C) {
+void matrixMultiply(const float* A, const float* B, float* C) {
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            C[j * M + i] = 0.0;
+            for (int k = 0; k < K; ++k) {
+                C[j * M + i] += A[i * K + k] * B[j * K + k];
+            }
+        }
+    }
+}
+
+void float_act_quant(float* B, int32_t* dst, float* act_scale) {
+    double min = 0.00001;
+    double max = min;
+    for (int i = 0; i < K; ++i) {
+        max = MAX(max, (double)fabs((double)B[i]));
+    }
+    float s = 127 / max;
+    act_scale[0] = s;
+    float temp;
+    for (int i = 0; i < K; ++i) {
+        temp = round((double)(B[i] * s));
+        if (temp >  127) temp = 127;
+        if (temp < -128) temp = -128;
+        dst[i] = (int32_t)temp;
+    }
+}
+
+void weight_quant(float* A, int32_t* dst, float i2_scale) {
+    for (int i = 0; i < M * K; ++i) {
+        if (fabs((double)(A[i])) < 1e-6) {
+            dst[i] = 0;
+            continue;
+        } else {
+            dst[i] = (double)A[i] * i2_scale > 0 ? 1 : -1;
+        }
+    }
+}
+
+void matrixMultiply_int(const int32_t* A, const int32_t* B, int32_t* C) {
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            C[j * M + i] = 0.0;
+            for (int k = 0; k < K; ++k) {
+                C[j * M + i] += A[i * K + k] * B[j * K + k];
+            }
+        }
+    }
+}
+
+void float_compute(float* A, float* B, float* C, float i2_scale) {
     for (int i = 0; i < M * 1; i++) {
         C[i] = 0;
     }
-    float* float_B = (float*)malloc(1 * K * sizeof(float));
-    float_act_quant(B, float_B);
-    matrixMultiply(A, float_B, C);
+    int32_t* int_C = (int32_t*)malloc(1 * M * sizeof(int32_t));
+    for (int i = 0; i < M * 1; i++) {
+        int_C[i] = 0;
+    }
+    int32_t* int_B = (int32_t*)malloc(1 * K * sizeof(int32_t));
+    int32_t* int_A = (int32_t*)malloc(M * K * sizeof(int32_t));
+    float* act_scale = (float*)malloc(sizeof(float));
+    float_act_quant(B, int_B, act_scale);
+    weight_quant(A, int_A, i2_scale);
+    matrixMultiply_int(int_A, int_B, int_C);
+    for (int i=0; i < M * 1; i++) {
+        C[i] = int_C[i] / act_scale[0] * i2_scale;
+    }
 }
+
 
 void i2_s_compute(float* A, float* B, float* C) {
     for (int i = 0; i < M * 1; i++) {
@@ -1043,9 +1093,9 @@ void tl_compute(uint8_t* A, float* B, float* C) {
         two_qgemm_lut(two_k, two_A + two_w_offset, two_QLUT, Scales, LUT_Scales, LUT_Biases, C + two_dst_offset);
     }
 
-    for (int i=0; i<M; i++) {
-        C[i] = C[i] * LUT_Scales[0] * Scales[0];
-    }
+    // for (int i=0; i<M; i++) {
+    //     C[i] = C[i] * LUT_Scales[0] * Scales[0];
+    // }
 }
 
 int main() {
@@ -1073,7 +1123,7 @@ int main() {
     tra_in.close();
 
     float* ori_C = (float *)malloc(1 * M * sizeof(float));
-    float_compute(oA, B, ori_C);
+    float_compute(oA, B, ori_C, 0.22f);
 
     float* lut_C = (float *)malloc(1 * M * sizeof(float));
     tl_compute(A, B, lut_C);
@@ -1088,10 +1138,10 @@ int main() {
         // printf("%f ", C[i]);
         // if (fabs(ori_C[i] - lut_C[i]) > 0.5){
             printf("index:%d\n", i);
-            printf("float:%f\n", ori_C[i]);
-            printf("tl2:%f\n", lut_C[i]);
-            printf("i2_s:%f\n", i2_s_C[i]);
-            printf("tq20:%f\n", tq20_C[i]);
+            printf("float:%.10f\n", ori_C[i]);
+            printf("tl2:%.10f\n", lut_C[i]);
+            printf("i2_s:%.10f\n", i2_s_C[i]);
+            printf("tq20:%.10f\n", tq20_C[i]);
         // }
     }
     printf("\n");

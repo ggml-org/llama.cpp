@@ -12582,6 +12582,54 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+void float_act_quant(const int K, float* B, int32_t* dst, float* act_scale) {
+    double min = 0.00001;
+    double max = min;
+    for (int i = 0; i < K; ++i) {
+        max = MAX(max, (double)fabs((double)B[i]));
+    }
+    float s = 127 / max;
+    act_scale[0] = s;
+    float temp;
+    for (int i = 0; i < K; ++i) {
+        temp = round((double)(B[i] * s));
+        if (temp >  127) temp = 127;
+        if (temp < -128) temp = -128;
+        dst[i] = (int32_t)temp;
+    }
+}
+
+void weight_quant(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
+    double max = 0.00001;
+
+    for (int i = 0; i < M * K; i++) {
+        if (fabs(A[i]) > max){
+            i2_scale[0] = fabs(A[i]);
+            break;
+        }
+    }
+    
+    for (int i = 0; i < M * K; ++i) {
+        if (fabs((double)(A[i])) < 1e-6) {
+            dst[i] = 0;
+            continue;
+        } else {
+            dst[i] = (double)A[i] * i2_scale[0] > 0 ? 1 : -1;
+        }
+    }
+}
+
+void matrixMultiply_int(const int M, const int N, const int K, const int32_t* A, const int32_t* B, int32_t* C) {
+    for (int i = 0; i < M; ++i) {
+        for (int j = 0; j < N; ++j) {
+            C[j * M + i] = 0.0;
+            for (int k = 0; k < K; ++k) {
+                C[j * M + i] += A[i * K + k] * B[j * K + k];
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -12619,6 +12667,29 @@ static void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb0 <= nb1);
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
+
+    if (src1->ne[1] <= 1 && src0->type != GGML_TYPE_I2_S && src0->type != GGML_TYPE_TQ1_0 && src0->type != GGML_TYPE_TQ2_0 && src0->ne[1] != 32002 && src0->ne[1] != 96 && src0->ne[0] != 96) {
+        int32_t* int_C = (int32_t*)malloc(1 * src0->ne[1] * sizeof(int32_t));
+        for (int i = 0; i < src0->ne[1] * 1; i++) {
+            int_C[i] = 0;
+        }
+        float* act_scale = (float*)malloc(sizeof(float));
+        float* i2_scale = (float*)malloc(sizeof(float));
+        int32_t* int_B = (int32_t*)malloc(1 * src0->ne[0] * sizeof(int32_t));
+        int32_t* int_A = (int32_t*)malloc(src0->ne[0] * src0->ne[1] * sizeof(int32_t));
+        float_act_quant(src1->ne[0], (float*)src1->data, int_B, act_scale);
+        weight_quant(src0->ne[1], src0->ne[0], (float*)src0->data, int_A, i2_scale);        
+        matrixMultiply_int(src0->ne[1], src1->ne[1], src0->ne[0], int_A, int_B, int_C);
+        for (int i=0; i < src0->ne[1] * 1; i++) {
+            ((float*)(dst->data))[i] = int_C[i] / act_scale[0] * i2_scale[0];
+        }
+        free(int_A);
+        free(int_B);
+        free(int_C);
+        free(act_scale);
+        free(i2_scale);
+        return;
+    }
 
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
