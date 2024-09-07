@@ -12582,6 +12582,13 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+static inline int nearest_int(float fval) {
+    assert(fabsf(fval) <= 4194303.f);
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
 void float_act_quant(const int K, float* B, int32_t* dst, float* act_scale) {
     double min = 0.00001;
     double max = min;
@@ -12590,12 +12597,11 @@ void float_act_quant(const int K, float* B, int32_t* dst, float* act_scale) {
     }
     float s = 127 / max;
     act_scale[0] = s;
-    float temp;
     for (int i = 0; i < K; ++i) {
-        temp = round((double)(B[i] * s));
-        if (temp >  127) temp = 127;
-        if (temp < -128) temp = -128;
-        dst[i] = (int32_t)temp;
+        int v = nearest_int(B[i] * s);
+        if (v >  127) v = 127;
+        if (v < -128) v = -128;
+        dst[i] = (int32_t)v;
     }
 }
 

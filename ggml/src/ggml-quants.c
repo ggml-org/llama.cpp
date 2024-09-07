@@ -3501,14 +3501,13 @@ void quantize_row_i8_s(const float * x, void * y, int64_t n, float* act_scales, 
     }
     float s = 127 / max;
     act_scales[0] = s;
-    float temp;
     int32_t sum = 0;
     for (int i = 0; i < n; ++i) {
-        temp = round((double)(x[i] * s));
-        if (temp >  127) temp = 127;
-        if (temp < -128) temp = -128;
-        sum += temp;
-        dst[i] = (int8_t)(temp);
+        int v = nearest_int(x[i] * s);
+        if (v >  127) v = 127;
+        if (v < -128) v = -128;
+        sum += v;
+        dst[i] = (int8_t)(v);
     }
     act_sums[0] = sum;
 }
