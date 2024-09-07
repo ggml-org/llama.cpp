@@ -33,6 +33,12 @@ typedef float float_type;
 #define BK3 96
 #define BK2 32
 
+static inline int nearest_int(float fval) {
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
+
 #if __AVX__ || __AVX2__ || __AVX512F__
 static inline float hsum_float_8(const __m256 x) {
     __m128 res = _mm256_extractf128_ps(x, 1);
@@ -539,7 +545,9 @@ inline int32_t three_gemm_impl(int32_t m, int32_t* c, int8_t* lut, uint8_t* a, u
 
 #pragma unroll
   for (int i = 0; i < BM; i++) {
-    ((float*)C)[i] = (float)(((int32_t*)CBits)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
+    ((int32_t*)C)[i] = (int32_t)(((int32_t*)CBits)[i]);
+    // ((int32_t*)C)[i] += (int32_t)(((int32_t*)CBits)[i]);
+    // ((float*)C)[i] = (float)(((int32_t*)C)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
   }
 
   if (0 != 0) {
@@ -564,7 +572,9 @@ inline int32_t three_gemm_impl(int32_t m, int32_t* c, int8_t* lut, uint8_t* a, u
 
 #pragma unroll
   for (int i = 0; i < BM; i++) {
-    ((float*)C)[i] += (float)(((int32_t*)CBits)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];;
+    // ((int32_t*)C)[i] = (int32_t)(((int32_t*)CBits)[i]);
+    ((int32_t*)C)[i] += (int32_t)(((int32_t*)CBits)[i]);
+    ((float*)C)[i] = (float)(((int32_t*)C)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
   }
 
   if (0 != 0) {
@@ -589,11 +599,11 @@ void quantize_row_i8_s(const float * x, void * y, int64_t n, float* act_scales, 
     float temp;
     int32_t sum = 0;
     for (int i = 0; i < n; ++i) {
-        temp = round((double)(x[i] * s));
-        if (temp >  127) temp = 127;
-        if (temp < -128) temp = -128;
-        sum += temp;
-        dst[i] = (int8_t)(temp);
+        int v = nearest_int(x[i] * s);
+        if (v >  127) v = 127;
+        if (v < -128) v = -128;
+        sum += v;
+        dst[i] = (int8_t)(v);
     }
     act_sums[0] = sum;
 }
@@ -775,12 +785,6 @@ void float_act_quant(float* B, float* dst) {
     }
 }
 
-static inline int nearest_int(float fval) {
-    float val = fval + 12582912.f;
-    int i; memcpy(&i, &val, sizeof(int));
-    return (i & 0x007fffff) - 0x00400000;
-}
-
 #define QK_K 256
 void quantize_row_q8_K_ref(const float *x, int8_t * qy, float* d, int16_t* bsums) {
     const int64_t nb = K / QK_K;
@@ -925,12 +929,11 @@ void float_act_quant(float* B, int32_t* dst, float* act_scale) {
     }
     float s = 127 / max;
     act_scale[0] = s;
-    float temp;
     for (int i = 0; i < K; ++i) {
-        temp = round((double)(B[i] * s));
-        if (temp >  127) temp = 127;
-        if (temp < -128) temp = -128;
-        dst[i] = (int32_t)temp;
+        int v = nearest_int(B[i] * s);
+        if (v >  127) v = 127;
+        if (v < -128) v = -128;
+        dst[i] = (int32_t)v;
     }
 }
 
