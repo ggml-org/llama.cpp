@@ -12559,6 +12559,9 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     (src1_cont || src1->type != vec_dot_type
                         ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
                         : (i11 * nb11 + i12 * nb12 + i13 * nb13));
+                // hack
+                const char * src1_col_de = (const char*)wdata + (i11 * nb11 / 4);
+
                 float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
                 //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
@@ -12567,8 +12570,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
                     if (src0->type == GGML_TYPE_I2_S) {
-                       vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01 / 4, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
-                        tmp[ir0 - iir0] = (tmp[ir0 - iir0]  - act_sums[i11]) / (act_scales[i11]) * (*scale);
+                        vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01 / 4, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col_de, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
+                        tmp[ir0 - iir0] = (tmp[ir0 - iir0]  - act_sums[i1]) / (act_scales[i1]) * (*scale);
                     } else {
                         vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                     }
@@ -12737,6 +12740,9 @@ UseGgmlGemm1:;
         assert(params->wsize >= ne13*nbw3);
         GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
+        float* act_scales = (float*) ((char *) wdata + (ne11 * ne10));
+        int32_t* act_sums = (int32_t*) ((char *) act_scales + (ne11) * sizeof(float));
+
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 int64_t i11_processed = 0;
@@ -12750,10 +12756,7 @@ UseGgmlGemm1:;
                 }
                 for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
                     if (src0->type == GGML_TYPE_I2_S) {
-                        float* act_scales = (float*) ((char *) wdata + (ne11 * ne10));
-                        int32_t* act_sums = (int32_t*) ((char *) act_scales + (ne11) * sizeof(float));
-                        quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + ((i11*nbw1 + i12*nbw2 + i13*nbw3) / 4)), ne10, act_scales + i11, act_sums + i11);
-                        // quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + ((i11*nbw1 + i12*nbw2 + i13*nbw3) / 4)), ne10, act_scales + i11);
+                        quantize_row_i8_s((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11), (void *) (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1), ne10, act_scales + i11, act_sums + i11);
                     } else {
                         from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                         (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
