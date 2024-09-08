@@ -124,8 +124,8 @@ int32_t partial_max(int k, void* lut_scales_, void* b_) {
     __m128 max1 = _mm_max_ps(_mm256_extractf128_ps(max_vec, 1), _mm256_castps256_ps128(max_vec));
     max1 = _mm_max_ps(max1, _mm_movehl_ps(max1, max1));
     max1 = _mm_max_ss(max1, _mm_movehdup_ps(max1));
-    float scales = _mm_cvtss_f32(max1) / 127;
-    *lut_scales = std::max(*lut_scales, scales);
+    float scales = 127 / _mm_cvtss_f32(max1);
+    *lut_scales = scales;
 #endif
 
     return 0;
@@ -143,7 +143,6 @@ inline int32_t three_lut_preprocess(int32_t act_k, int8_t* qlut, float_type* b, 
     float biases = 0.0;
     const __m256i vec_bi = _mm256_set_epi32(84, 72, 60, 48, 36, 24, 12, 0);
     float scales = *lut_scales;
-    float t_scales = scales ? 1.0f / scales : 0.0f;
     __m256i shuffle_mask = _mm256_set_epi8(
                                             0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
                                             0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00,
@@ -156,9 +155,9 @@ inline int32_t three_lut_preprocess(int32_t act_k, int8_t* qlut, float_type* b, 
         __m256 vec_b1 = _mm256_i32gather_ps(b + k * 24 + 1, vec_bi, 1);
         __m256 vec_b2 = _mm256_i32gather_ps(b + k * 24 + 2, vec_bi, 1);
 
-        __m256i vec_b0i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0, _mm256_set1_ps(t_scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
-        __m256i vec_b1i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1, _mm256_set1_ps(t_scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
-        __m256i vec_b2i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b2, _mm256_set1_ps(t_scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b0i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b1i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b2i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b2, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
 
         vec_lut[15] = _mm256_setzero_si256();
 
@@ -268,7 +267,6 @@ inline int32_t two_lut_preprocess(int32_t act_k, int8_t* qlut, float_type* b, fl
     float biases = 0.0;
     const __m256i vec_bi = _mm256_set_epi32(56, 48, 40, 32, 24, 16, 8, 0);
     float scales = *lut_scales;
-    float t_scales = scales ? 1.0f / scales : 0.0f;
     __m256i shuffle_mask = _mm256_set_epi8(
                                             0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
                                             0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00,
@@ -280,8 +278,8 @@ inline int32_t two_lut_preprocess(int32_t act_k, int8_t* qlut, float_type* b, fl
         __m256 vec_b0f = _mm256_i32gather_ps(b + k * 16 + 0, vec_bi, 1);
         __m256 vec_b1f = _mm256_i32gather_ps(b + k * 16 + 1, vec_bi, 1);
 
-        __m256i vec_b0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0f, _mm256_set1_ps(t_scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
-        __m256i vec_b1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1f, _mm256_set1_ps(t_scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0f, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1f, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
 
         vec_lut[15] = _mm256_setzero_si256();
 
@@ -574,7 +572,7 @@ inline int32_t three_gemm_impl(int32_t m, int32_t* c, int8_t* lut, uint8_t* a, u
   for (int i = 0; i < BM; i++) {
     // ((int32_t*)C)[i] = (int32_t)(((int32_t*)CBits)[i]);
     ((int32_t*)C)[i] += (int32_t)(((int32_t*)CBits)[i]);
-    ((float*)C)[i] = (float)(((int32_t*)C)[i]) * ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
+    ((float*)C)[i] = (float)(((int32_t*)C)[i]) / ((float*)(LUT_Scales))[0] * ((float*)(Scales))[0];
   }
 
   if (0 != 0) {
@@ -1139,13 +1137,13 @@ int main() {
 
     for (int i=0; i<M; i++) {
         // printf("%f ", C[i]);
-        // if (fabs(ori_C[i] - lut_C[i]) > 0.5){
+        if (fabs(ori_C[i] - lut_C[i]) > 1e-20){
             printf("index:%d\n", i);
             printf("float:%.10f\n", ori_C[i]);
             printf("tl2:%.10f\n", lut_C[i]);
             printf("i2_s:%.10f\n", i2_s_C[i]);
             printf("tq20:%.10f\n", tq20_C[i]);
-        // }
+        }
     }
     printf("\n");
     printf("done\n");
