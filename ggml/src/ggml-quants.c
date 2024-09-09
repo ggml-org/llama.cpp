@@ -3580,12 +3580,12 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
     UNUSED(by);
     UNUSED(nrc);
 
-#if defined(__AVX2__)
-
     const int nb = n / QK_I2_S;
     const int group32_num = nb / 32;
     const int la_num = nb % 32;
     const int groupla_num = nb % 32 != 0 ? 1 : 0;
+
+#if defined(__AVX2__)
 
     __m256i mask = _mm256_set1_epi8(0x03);
     __m256i accu = _mm256_setzero_si256();
@@ -3669,18 +3669,176 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
     }
     int sumi = hsum_i32_8(accu);
     *s = (float)sumi;
+
+#elif defined(__ARM_NEON)
+
+    int32x4_t accu = vdupq_n_s32(0);
+    const uint8x16_t mask = vdupq_n_u8(3);
+
+    for (int i=0; i < group32_num; i++) {
+
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        int16x8_t accu32_0 = vdupq_n_s16(0);
+        int16x8_t accu32_1 = vdupq_n_s16(0);
+#endif
+
+        for (int j=0; j < 32; j++) {
+            uint8x16_t xq8_6 = vld1q_u8(x + i * 32 * 32 + j * 32);
+            uint8x16_t xq8_7 = vld1q_u8(x + i * 32 * 32 + j * 32 + 16);
+            uint8x16_t xq8_4 = vshrq_n_u8(xq8_6, 2);
+            uint8x16_t xq8_5 = vshrq_n_u8(xq8_7, 2);
+            uint8x16_t xq8_2 = vshrq_n_u8(xq8_6, 4);
+            uint8x16_t xq8_3 = vshrq_n_u8(xq8_7, 4);
+            uint8x16_t xq8_0 = vshrq_n_u8(xq8_6, 6);
+            uint8x16_t xq8_1 = vshrq_n_u8(xq8_7, 6);
+
+            int8x16_t q8_0 = vreinterpretq_s8_u8(vandq_u8(xq8_0, mask));
+            int8x16_t q8_1 = vreinterpretq_s8_u8(vandq_u8(xq8_1, mask));
+            int8x16_t q8_2 = vreinterpretq_s8_u8(vandq_u8(xq8_2, mask));
+            int8x16_t q8_3 = vreinterpretq_s8_u8(vandq_u8(xq8_3, mask));
+            int8x16_t q8_4 = vreinterpretq_s8_u8(vandq_u8(xq8_4, mask));
+            int8x16_t q8_5 = vreinterpretq_s8_u8(vandq_u8(xq8_5, mask));
+            int8x16_t q8_6 = vreinterpretq_s8_u8(vandq_u8(xq8_6, mask));
+            int8x16_t q8_7 = vreinterpretq_s8_u8(vandq_u8(xq8_7, mask));
+
+            const int8x16_t yq8_0 = vld1q_s8(y + i * 128 * 32 + j * 128 + 0);
+            const int8x16_t yq8_1 = vld1q_s8(y + i * 128 * 32 + j * 128 + 16);
+            const int8x16_t yq8_2 = vld1q_s8(y + i * 128 * 32 + j * 128 + 32);
+            const int8x16_t yq8_3 = vld1q_s8(y + i * 128 * 32 + j * 128 + 48);
+            const int8x16_t yq8_4 = vld1q_s8(y + i * 128 * 32 + j * 128 + 64);
+            const int8x16_t yq8_5 = vld1q_s8(y + i * 128 * 32 + j * 128 + 80);
+            const int8x16_t yq8_6 = vld1q_s8(y + i * 128 * 32 + j * 128 + 96);
+            const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            accu = vdotq_s32(accu, q8_0, yq8_0);
+            accu = vdotq_s32(accu, q8_1, yq8_1);
+            accu = vdotq_s32(accu, q8_2, yq8_2);
+            accu = vdotq_s32(accu, q8_3, yq8_3);
+            accu = vdotq_s32(accu, q8_4, yq8_4);
+            accu = vdotq_s32(accu, q8_5, yq8_5);
+            accu = vdotq_s32(accu, q8_6, yq8_6);
+            accu = vdotq_s32(accu, q8_7, yq8_7);
+#else
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+#endif
+        }
+
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_0)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accu32_0));
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_1)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accu32_1));
+#endif
+    }
+
+    for (int i = 0; i < groupla_num; i++){
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        int16x8_t accu32_0 = vdupq_n_s16(0);
+        int16x8_t accu32_1 = vdupq_n_s16(0);
+#endif
+        for (int j = 0; j < la_num; j++) {
+            uint8x16_t xq8_6 = vld1q_u8(x + i * 32 * 32 + j * 32);
+            uint8x16_t xq8_7 = vld1q_u8(x + i * 32 * 32 + j * 32 + 16);
+            uint8x16_t xq8_4 = vshrq_n_u8(xq8_6, 2);
+            uint8x16_t xq8_5 = vshrq_n_u8(xq8_7, 2);
+            uint8x16_t xq8_2 = vshrq_n_u8(xq8_6, 4);
+            uint8x16_t xq8_3 = vshrq_n_u8(xq8_7, 4);
+            uint8x16_t xq8_0 = vshrq_n_u8(xq8_6, 6);
+            uint8x16_t xq8_1 = vshrq_n_u8(xq8_7, 6);
+
+            int8x16_t q8_0 = vreinterpretq_s8_u8(vandq_u8(xq8_0, mask));
+            int8x16_t q8_1 = vreinterpretq_s8_u8(vandq_u8(xq8_1, mask));
+            int8x16_t q8_2 = vreinterpretq_s8_u8(vandq_u8(xq8_2, mask));
+            int8x16_t q8_3 = vreinterpretq_s8_u8(vandq_u8(xq8_3, mask));
+            int8x16_t q8_4 = vreinterpretq_s8_u8(vandq_u8(xq8_4, mask));
+            int8x16_t q8_5 = vreinterpretq_s8_u8(vandq_u8(xq8_5, mask));
+            int8x16_t q8_6 = vreinterpretq_s8_u8(vandq_u8(xq8_6, mask));
+            int8x16_t q8_7 = vreinterpretq_s8_u8(vandq_u8(xq8_7, mask));
+
+            const int8x16_t yq8_0 = vld1q_s8(y + i * 128 * 32 + j * 128 + 0);
+            const int8x16_t yq8_1 = vld1q_s8(y + i * 128 * 32 + j * 128 + 16);
+            const int8x16_t yq8_2 = vld1q_s8(y + i * 128 * 32 + j * 128 + 32);
+            const int8x16_t yq8_3 = vld1q_s8(y + i * 128 * 32 + j * 128 + 48);
+            const int8x16_t yq8_4 = vld1q_s8(y + i * 128 * 32 + j * 128 + 64);
+            const int8x16_t yq8_5 = vld1q_s8(y + i * 128 * 32 + j * 128 + 80);
+            const int8x16_t yq8_6 = vld1q_s8(y + i * 128 * 32 + j * 128 + 96);
+            const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            accu = vdotq_s32(accu, q8_0, yq8_0);
+            accu = vdotq_s32(accu, q8_1, yq8_1);
+            accu = vdotq_s32(accu, q8_2, yq8_2);
+            accu = vdotq_s32(accu, q8_3, yq8_3);
+            accu = vdotq_s32(accu, q8_4, yq8_4);
+            accu = vdotq_s32(accu, q8_5, yq8_5);
+            accu = vdotq_s32(accu, q8_6, yq8_6);
+            accu = vdotq_s32(accu, q8_7, yq8_7);
+#else
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+#endif
+        }
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_0)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accula_0));
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_1)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accula_1));
+#endif
+    }
+
+    int sumi = vaddlvq_s32(accu);
+    *s = (float)sumi;
+
 #else
 
-    int sumi = 0;
+    // int sumi = 0;
 
-    for (int i = 0; i < n / 4; i++) {
-        const int8_t* weight = (const int8_t *)(i2s_i8s + x[i]);
-        sumi += (int)y[i*4+0] * weight[0];
-        sumi += (int)y[i*4+1] * weight[1];
-        sumi += (int)y[i*4+2] * weight[2];
-        sumi += (int)y[i*4+3] * weight[3];
-    }
-    *s = (float)sumi;
+    // for (int i = 0; i < n / 4; i++) {
+    //     const int8_t* weight = (const int8_t *)(i2s_i8s + x[i]);
+    //     sumi += (int)y[i*4+0] * weight[0];
+    //     sumi += (int)y[i*4+1] * weight[1];
+    //     sumi += (int)y[i*4+2] * weight[2];
+    //     sumi += (int)y[i*4+3] * weight[3];
+    // }
+    // *s = (float)sumi;
 #endif
 }
 
@@ -5860,7 +6018,164 @@ void ggml_vec_dot_tq1_0_q8_K(int n, float * restrict s, size_t bs, const void * 
 
     const int nb = n / QK_K;
 
-#if defined(__AVX2__)
+#if defined(__ARM_NEON)
+    float sumf = 0.0f;
+
+    uint8_t k_shift[16] = {1, 1, 1, 1, 3, 3, 3, 3, 9, 9, 9, 9, 27, 27, 27, 27};
+
+    const uint8x16_t shift = vld1q_u8(k_shift);
+
+    for (int i = 0; i < nb; ++i) {
+#if defined(__ARM_FEATURE_DOTPROD)
+        int32x4_t sumi0 = vdupq_n_s32(0);
+        int32x4_t sumi1 = vdupq_n_s32(0);
+#else
+        int16x8_t sumi0 = vdupq_n_s16(0);
+        int16x8_t sumi1 = vdupq_n_s16(0);
+#endif
+
+        // first 32 bytes of 5 elements
+        {
+            uint8x16_t qx0 = vld1q_u8(x[i].qs + 0);
+            uint8x16_t qx1 = vld1q_u8(x[i].qs + 16);
+            uint8x16_t qx2 = vmulq_u8(qx0, vdupq_n_u8(3));
+            uint8x16_t qx3 = vmulq_u8(qx1, vdupq_n_u8(3));
+            uint8x16_t qx4 = vmulq_u8(qx0, vdupq_n_u8(9));
+            uint8x16_t qx5 = vmulq_u8(qx1, vdupq_n_u8(9));
+            uint8x16_t qx6 = vmulq_u8(qx0, vdupq_n_u8(27));
+            uint8x16_t qx7 = vmulq_u8(qx1, vdupq_n_u8(27));
+            uint8x16_t qx8 = vmulq_u8(qx0, vdupq_n_u8(81));
+            uint8x16_t qx9 = vmulq_u8(qx1, vdupq_n_u8(81));
+
+            // multiply by 3 and keep the 2 bits above 8 bits
+            int8x16_t sqx0 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx0, vshrq_n_u8(qx0, 1)), 6));
+            int8x16_t sqx1 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx1, vshrq_n_u8(qx1, 1)), 6));
+            int8x16_t sqx2 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx2, vshrq_n_u8(qx2, 1)), 6));
+            int8x16_t sqx3 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx3, vshrq_n_u8(qx3, 1)), 6));
+            int8x16_t sqx4 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx4, vshrq_n_u8(qx4, 1)), 6));
+            int8x16_t sqx5 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx5, vshrq_n_u8(qx5, 1)), 6));
+            int8x16_t sqx6 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx6, vshrq_n_u8(qx6, 1)), 6));
+            int8x16_t sqx7 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx7, vshrq_n_u8(qx7, 1)), 6));
+            int8x16_t sqx8 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx8, vshrq_n_u8(qx8, 1)), 6));
+            int8x16_t sqx9 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx9, vshrq_n_u8(qx9, 1)), 6));
+
+            const int8x16_t qy0 = vld1q_s8(y[i].qs +   0);
+            const int8x16_t qy1 = vld1q_s8(y[i].qs +  16);
+            const int8x16_t qy2 = vld1q_s8(y[i].qs +  32);
+            const int8x16_t qy3 = vld1q_s8(y[i].qs +  48);
+            const int8x16_t qy4 = vld1q_s8(y[i].qs +  64);
+            const int8x16_t qy5 = vld1q_s8(y[i].qs +  80);
+            const int8x16_t qy6 = vld1q_s8(y[i].qs +  96);
+            const int8x16_t qy7 = vld1q_s8(y[i].qs + 112);
+            const int8x16_t qy8 = vld1q_s8(y[i].qs + 128);
+            const int8x16_t qy9 = vld1q_s8(y[i].qs + 144);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            sumi0 = vdotq_s32(sumi0, sqx0, qy0);
+            sumi1 = vdotq_s32(sumi1, sqx1, qy1);
+            sumi0 = vdotq_s32(sumi0, sqx2, qy2);
+            sumi1 = vdotq_s32(sumi1, sqx3, qy3);
+            sumi0 = vdotq_s32(sumi0, sqx4, qy4);
+            sumi1 = vdotq_s32(sumi1, sqx5, qy5);
+            sumi0 = vdotq_s32(sumi0, sqx6, qy6);
+            sumi1 = vdotq_s32(sumi1, sqx7, qy7);
+            sumi0 = vdotq_s32(sumi0, sqx8, qy8);
+            sumi1 = vdotq_s32(sumi1, sqx9, qy9);
+#else
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx0), vget_low_s8(qy0));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx0), vget_high_s8(qy0));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx1), vget_low_s8(qy1));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx1), vget_high_s8(qy1));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx2), vget_low_s8(qy2));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx2), vget_high_s8(qy2));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx3), vget_low_s8(qy3));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx3), vget_high_s8(qy3));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx4), vget_low_s8(qy4));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx4), vget_high_s8(qy4));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx5), vget_low_s8(qy5));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx5), vget_high_s8(qy5));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx6), vget_low_s8(qy6));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx6), vget_high_s8(qy6));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx7), vget_low_s8(qy7));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx7), vget_high_s8(qy7));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx8), vget_low_s8(qy8));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx8), vget_high_s8(qy8));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx9), vget_low_s8(qy9));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx9), vget_high_s8(qy9));
+#endif
+        }
+
+        // last 16 bytes of 5-element, along with the 4 bytes of 4 elements
+        {
+            uint8x16_t qx0 = vld1q_u8(x[i].qs + 32);
+            uint8x16_t qx1 = vmulq_u8(qx0, vdupq_n_u8(3));
+            uint8x16_t qx2 = vmulq_u8(qx0, vdupq_n_u8(9));
+            uint8x16_t qx3 = vmulq_u8(qx0, vdupq_n_u8(27));
+            uint8x16_t qx4 = vmulq_u8(qx0, vdupq_n_u8(81));
+            uint32_t qh;
+            memcpy(&qh, x[i].qh, sizeof(qh)); // potentially unaligned
+            uint8x16_t qx5 = vreinterpretq_u8_u32(vdupq_n_u32(qh));
+            qx5 = vmulq_u8(qx5, shift);
+
+            // multiply by 3 and keep the 2 bits above 8 bits
+            int8x16_t sqx0 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx0, vshrq_n_u8(qx0, 1)), 6));
+            int8x16_t sqx1 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx1, vshrq_n_u8(qx1, 1)), 6));
+            int8x16_t sqx2 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx2, vshrq_n_u8(qx2, 1)), 6));
+            int8x16_t sqx3 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx3, vshrq_n_u8(qx3, 1)), 6));
+            int8x16_t sqx4 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx4, vshrq_n_u8(qx4, 1)), 6));
+            int8x16_t sqx5 = vreinterpretq_s8_u8(vshrq_n_u8(vhaddq_u8(qx5, vshrq_n_u8(qx5, 1)), 6));
+
+            const int8x16_t qy0 = vld1q_s8(y[i].qs + 160);
+            const int8x16_t qy1 = vld1q_s8(y[i].qs + 176);
+            const int8x16_t qy2 = vld1q_s8(y[i].qs + 192);
+            const int8x16_t qy3 = vld1q_s8(y[i].qs + 208);
+            const int8x16_t qy4 = vld1q_s8(y[i].qs + 224);
+            const int8x16_t qy5 = vld1q_s8(y[i].qs + 240);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            sumi0 = vdotq_s32(sumi0, sqx0, qy0);
+            sumi1 = vdotq_s32(sumi1, sqx1, qy1);
+            sumi0 = vdotq_s32(sumi0, sqx2, qy2);
+            sumi1 = vdotq_s32(sumi1, sqx3, qy3);
+            sumi0 = vdotq_s32(sumi0, sqx4, qy4);
+            sumi1 = vdotq_s32(sumi1, sqx5, qy5);
+#else
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx0), vget_low_s8(qy0));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx0), vget_high_s8(qy0));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx1), vget_low_s8(qy1));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx1), vget_high_s8(qy1));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx2), vget_low_s8(qy2));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx2), vget_high_s8(qy2));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx3), vget_low_s8(qy3));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx3), vget_high_s8(qy3));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx4), vget_low_s8(qy4));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx4), vget_high_s8(qy4));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx5), vget_low_s8(qy5));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx5), vget_high_s8(qy5));
+#endif
+        }
+
+        const int16x8_t ysum0 = vld1q_s16(y[i].bsums);
+        const int16x8_t ysum1 = vld1q_s16(y[i].bsums + 8);
+
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+
+#if defined(__ARM_FEATURE_DOTPROD)
+        sumi0 = vaddq_s32(sumi0, sumi1);
+        sumi0 = vsubq_s32(sumi0, vpaddlq_s16(vaddq_s16(ysum0, ysum1)));
+
+        sumf += d * (float) vaddvq_s32(sumi0);
+#else
+        sumi0 = vaddq_s16(sumi0, sumi1);
+        sumi0 = vsubq_s16(sumi0, vaddq_s16(ysum0, ysum1));
+
+        sumf += d * (float) vaddlvq_s16(sumi0);
+#endif
+    }
+
+    *s = sumf;
+
+#elif defined(__AVX2__)
     __m256 sumf = _mm256_setzero_ps();
 
     for (int i = 0; i < nb; ++i) {
@@ -6026,7 +6341,98 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * restrict s, size_t bs, const void * 
 
     const int nb = n / QK_K;
 
-#if defined(__AVX2__)
+#if defined(__ARM_NEON)
+    float sumf = 0.0f;
+
+    const uint8x16_t m3 = vdupq_n_u8(3);
+
+    for (int i = 0; i < nb; ++i) {
+#if defined(__ARM_FEATURE_DOTPROD)
+        int32x4_t sumi0 = vdupq_n_s32(0);
+        int32x4_t sumi1 = vdupq_n_s32(0);
+#else
+        int16x8_t sumi0 = vdupq_n_s16(0);
+        int16x8_t sumi1 = vdupq_n_s16(0);
+#endif
+
+        for (size_t j = 0; j < sizeof(x->qs); j += 32) {
+            uint8x16_t qx0 = vld1q_u8(x[i].qs + j);
+            uint8x16_t qx1 = vld1q_u8(x[i].qs + j + 16);
+            uint8x16_t qx2 = vshrq_n_u8(qx0, 2);
+            uint8x16_t qx3 = vshrq_n_u8(qx1, 2);
+            uint8x16_t qx4 = vshrq_n_u8(qx0, 4);
+            uint8x16_t qx5 = vshrq_n_u8(qx1, 4);
+            uint8x16_t qx6 = vshrq_n_u8(qx0, 6);
+            uint8x16_t qx7 = vshrq_n_u8(qx1, 6);
+
+            int8x16_t sqx0 = vreinterpretq_s8_u8(vandq_u8(qx0, m3));
+            int8x16_t sqx1 = vreinterpretq_s8_u8(vandq_u8(qx1, m3));
+            int8x16_t sqx2 = vreinterpretq_s8_u8(vandq_u8(qx2, m3));
+            int8x16_t sqx3 = vreinterpretq_s8_u8(vandq_u8(qx3, m3));
+            int8x16_t sqx4 = vreinterpretq_s8_u8(vandq_u8(qx4, m3));
+            int8x16_t sqx5 = vreinterpretq_s8_u8(vandq_u8(qx5, m3));
+            int8x16_t sqx6 = vreinterpretq_s8_u8(vandq_u8(qx6, m3));
+            int8x16_t sqx7 = vreinterpretq_s8_u8(vandq_u8(qx7, m3));
+
+            const int8x16_t qy0 = vld1q_s8(y[i].qs + j*4 +   0);
+            const int8x16_t qy1 = vld1q_s8(y[i].qs + j*4 +  16);
+            const int8x16_t qy2 = vld1q_s8(y[i].qs + j*4 +  32);
+            const int8x16_t qy3 = vld1q_s8(y[i].qs + j*4 +  48);
+            const int8x16_t qy4 = vld1q_s8(y[i].qs + j*4 +  64);
+            const int8x16_t qy5 = vld1q_s8(y[i].qs + j*4 +  80);
+            const int8x16_t qy6 = vld1q_s8(y[i].qs + j*4 +  96);
+            const int8x16_t qy7 = vld1q_s8(y[i].qs + j*4 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            sumi0 = vdotq_s32(sumi0, sqx0, qy0);
+            sumi1 = vdotq_s32(sumi1, sqx1, qy1);
+            sumi0 = vdotq_s32(sumi0, sqx2, qy2);
+            sumi1 = vdotq_s32(sumi1, sqx3, qy3);
+            sumi0 = vdotq_s32(sumi0, sqx4, qy4);
+            sumi1 = vdotq_s32(sumi1, sqx5, qy5);
+            sumi0 = vdotq_s32(sumi0, sqx6, qy6);
+            sumi1 = vdotq_s32(sumi1, sqx7, qy7);
+#else
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx0), vget_low_s8(qy0));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx0), vget_high_s8(qy0));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx1), vget_low_s8(qy1));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx1), vget_high_s8(qy1));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx2), vget_low_s8(qy2));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx2), vget_high_s8(qy2));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx3), vget_low_s8(qy3));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx3), vget_high_s8(qy3));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx4), vget_low_s8(qy4));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx4), vget_high_s8(qy4));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx5), vget_low_s8(qy5));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx5), vget_high_s8(qy5));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx6), vget_low_s8(qy6));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx6), vget_high_s8(qy6));
+            sumi0 = vmlal_s8(sumi0, vget_low_s8(sqx7), vget_low_s8(qy7));
+            sumi1 = vmlal_s8(sumi1, vget_high_s8(sqx7), vget_high_s8(qy7));
+#endif
+        }
+
+        const int16x8_t ysum0 = vld1q_s16(y[i].bsums);
+        const int16x8_t ysum1 = vld1q_s16(y[i].bsums + 8);
+
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+
+#if defined(__ARM_FEATURE_DOTPROD)
+        sumi0 = vaddq_s32(sumi0, sumi1);
+        sumi0 = vsubq_s32(sumi0, vpaddlq_s16(vaddq_s16(ysum0, ysum1)));
+
+        sumf += d * (float) vaddvq_s32(sumi0);
+#else
+        sumi0 = vaddq_s16(sumi0, sumi1);
+        sumi0 = vsubq_s16(sumi0, vaddq_s16(ysum0, ysum1));
+
+        sumf += d * (float) vaddlvq_s16(sumi0);
+#endif
+    }
+
+    *s = sumf;
+
+#elif defined(__AVX2__)
     __m256 sumf = _mm256_setzero_ps();
 
     for (int i = 0; i < nb; ++i) {

@@ -623,12 +623,12 @@ void ggml_vec_dot_i2_i8_s(int n, float * s, size_t bs, const void * vx, size_t b
     const uint8_t *    x = (uint8_t*)vx;
     const int8_t  *    y = (int8_t*)vy;
 
-#if defined(__AVX2__)
-
     const int nb = n / QK_I2_S;
     const int group32_num = nb / 32;
     const int la_num = nb % 32;
     const int groupla_num = nb % 32 != 0 ? 1 : 0;
+
+#if defined(__AVX2__)
 
     __m256i mask = _mm256_set1_epi8(0x03);
     __m256i accu = _mm256_setzero_si256();
@@ -712,8 +712,165 @@ void ggml_vec_dot_i2_i8_s(int n, float * s, size_t bs, const void * vx, size_t b
     }
     int sumi = hsum_i32_8(accu);
     *s = (float)sumi;
-#else
 
+#elif defined(__ARM_NEON)
+
+    int32x4_t accu = vdupq_n_s32(0);
+    const uint8x16_t mask = vdupq_n_u8(3);
+
+    for (int i=0; i < group32_num; i++) {
+
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        int16x8_t accu32_0 = vdupq_n_s16(0);
+        int16x8_t accu32_1 = vdupq_n_s16(0);
+#endif
+
+        for (int j=0; j < 32; j++) {
+            uint8x16_t xq8_6 = vld1q_u8(x + i * 32 * 32 + j * 32);
+            uint8x16_t xq8_7 = vld1q_u8(x + i * 32 * 32 + j * 32 + 16);
+            uint8x16_t xq8_4 = vshrq_n_u8(xq8_6, 2);
+            uint8x16_t xq8_5 = vshrq_n_u8(xq8_7, 2);
+            uint8x16_t xq8_2 = vshrq_n_u8(xq8_6, 4);
+            uint8x16_t xq8_3 = vshrq_n_u8(xq8_7, 4);
+            uint8x16_t xq8_0 = vshrq_n_u8(xq8_6, 6);
+            uint8x16_t xq8_1 = vshrq_n_u8(xq8_7, 6);
+
+            int8x16_t q8_0 = vreinterpretq_s8_u8(vandq_u8(xq8_0, mask));
+            int8x16_t q8_1 = vreinterpretq_s8_u8(vandq_u8(xq8_1, mask));
+            int8x16_t q8_2 = vreinterpretq_s8_u8(vandq_u8(xq8_2, mask));
+            int8x16_t q8_3 = vreinterpretq_s8_u8(vandq_u8(xq8_3, mask));
+            int8x16_t q8_4 = vreinterpretq_s8_u8(vandq_u8(xq8_4, mask));
+            int8x16_t q8_5 = vreinterpretq_s8_u8(vandq_u8(xq8_5, mask));
+            int8x16_t q8_6 = vreinterpretq_s8_u8(vandq_u8(xq8_6, mask));
+            int8x16_t q8_7 = vreinterpretq_s8_u8(vandq_u8(xq8_7, mask));
+
+            const int8x16_t yq8_0 = vld1q_s8(y + i * 128 * 32 + j * 128 + 0);
+            const int8x16_t yq8_1 = vld1q_s8(y + i * 128 * 32 + j * 128 + 16);
+            const int8x16_t yq8_2 = vld1q_s8(y + i * 128 * 32 + j * 128 + 32);
+            const int8x16_t yq8_3 = vld1q_s8(y + i * 128 * 32 + j * 128 + 48);
+            const int8x16_t yq8_4 = vld1q_s8(y + i * 128 * 32 + j * 128 + 64);
+            const int8x16_t yq8_5 = vld1q_s8(y + i * 128 * 32 + j * 128 + 80);
+            const int8x16_t yq8_6 = vld1q_s8(y + i * 128 * 32 + j * 128 + 96);
+            const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            accu = vdotq_s32(accu, q8_0, yq8_0);
+            accu = vdotq_s32(accu, q8_1, yq8_1);
+            accu = vdotq_s32(accu, q8_2, yq8_2);
+            accu = vdotq_s32(accu, q8_3, yq8_3);
+            accu = vdotq_s32(accu, q8_4, yq8_4);
+            accu = vdotq_s32(accu, q8_5, yq8_5);
+            accu = vdotq_s32(accu, q8_6, yq8_6);
+            accu = vdotq_s32(accu, q8_7, yq8_7);
+#else
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
+            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+#endif
+        }
+
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_0)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accu32_0));
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_1)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accu32_1));
+#endif
+    }
+
+    for (int i = 0; i < groupla_num; i++){
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        int16x8_t accu32_0 = vdupq_n_s16(0);
+        int16x8_t accu32_1 = vdupq_n_s16(0);
+#endif
+        for (int j = 0; j < la_num; j++) {
+            uint8x16_t xq8_6 = vld1q_u8(x + i * 32 * 32 + j * 32);
+            uint8x16_t xq8_7 = vld1q_u8(x + i * 32 * 32 + j * 32 + 16);
+            uint8x16_t xq8_4 = vshrq_n_u8(xq8_6, 2);
+            uint8x16_t xq8_5 = vshrq_n_u8(xq8_7, 2);
+            uint8x16_t xq8_2 = vshrq_n_u8(xq8_6, 4);
+            uint8x16_t xq8_3 = vshrq_n_u8(xq8_7, 4);
+            uint8x16_t xq8_0 = vshrq_n_u8(xq8_6, 6);
+            uint8x16_t xq8_1 = vshrq_n_u8(xq8_7, 6);
+
+            int8x16_t q8_0 = vreinterpretq_s8_u8(vandq_u8(xq8_0, mask));
+            int8x16_t q8_1 = vreinterpretq_s8_u8(vandq_u8(xq8_1, mask));
+            int8x16_t q8_2 = vreinterpretq_s8_u8(vandq_u8(xq8_2, mask));
+            int8x16_t q8_3 = vreinterpretq_s8_u8(vandq_u8(xq8_3, mask));
+            int8x16_t q8_4 = vreinterpretq_s8_u8(vandq_u8(xq8_4, mask));
+            int8x16_t q8_5 = vreinterpretq_s8_u8(vandq_u8(xq8_5, mask));
+            int8x16_t q8_6 = vreinterpretq_s8_u8(vandq_u8(xq8_6, mask));
+            int8x16_t q8_7 = vreinterpretq_s8_u8(vandq_u8(xq8_7, mask));
+
+            const int8x16_t yq8_0 = vld1q_s8(y + i * 128 * 32 + j * 128 + 0);
+            const int8x16_t yq8_1 = vld1q_s8(y + i * 128 * 32 + j * 128 + 16);
+            const int8x16_t yq8_2 = vld1q_s8(y + i * 128 * 32 + j * 128 + 32);
+            const int8x16_t yq8_3 = vld1q_s8(y + i * 128 * 32 + j * 128 + 48);
+            const int8x16_t yq8_4 = vld1q_s8(y + i * 128 * 32 + j * 128 + 64);
+            const int8x16_t yq8_5 = vld1q_s8(y + i * 128 * 32 + j * 128 + 80);
+            const int8x16_t yq8_6 = vld1q_s8(y + i * 128 * 32 + j * 128 + 96);
+            const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
+
+#if defined(__ARM_FEATURE_DOTPROD)
+            accu = vdotq_s32(accu, q8_0, yq8_0);
+            accu = vdotq_s32(accu, q8_1, yq8_1);
+            accu = vdotq_s32(accu, q8_2, yq8_2);
+            accu = vdotq_s32(accu, q8_3, yq8_3);
+            accu = vdotq_s32(accu, q8_4, yq8_4);
+            accu = vdotq_s32(accu, q8_5, yq8_5);
+            accu = vdotq_s32(accu, q8_6, yq8_6);
+            accu = vdotq_s32(accu, q8_7, yq8_7);
+#else
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
+            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+#endif
+        }
+#if defined(__ARM_FEATURE_DOTPROD)
+
+#else
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_0)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accula_0));
+        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_1)));
+        accu = vaddq_s32(accu, vmovl_high_s16(accula_1));
+#endif
+    }
+
+    int sumi = vaddlvq_s32(accu);
+    *s = (float)sumi;
+
+#else
     int sumi = 0;
 
     for (int i = 0; i < n / 4; i++) {
@@ -1027,77 +1184,77 @@ void tq20_compute(float* A, float* B, float* C) {
     }
 }
 
-void tl_compute(uint8_t* A, float* B, float* C) {
-    for (int i = 0; i < M * 1; i++) {
-        C[i] = 0;
-    }
-    const int three_k = (int)(K / BK3) * BK3;
-    const int two_k = K - three_k;
+// void tl_compute(uint8_t* A, float* B, float* C) {
+//     for (int i = 0; i < M * 1; i++) {
+//         C[i] = 0;
+//     }
+//     const int three_k = (int)(K / BK3) * BK3;
+//     const int two_k = K - three_k;
 
-    uint8_t* sign = ((uint8_t *)(A)) + M * three_k / 3 / 2;
-    uint8_t* two_A = ((uint8_t *)(A)) + M * three_k / 4;
+//     uint8_t* sign = ((uint8_t *)(A)) + M * three_k / 3 / 2;
+//     uint8_t* two_A = ((uint8_t *)(A)) + M * three_k / 4;
 
-    float Scales[1] = {0.22f};
-    float LUT_Scales[1];
-    float LUT_Biases[1];
+//     float Scales[1] = {0.22f};
+//     float LUT_Scales[1];
+//     float LUT_Biases[1];
 
-    int8_t* three_QLUT = (int8_t *)malloc(1 * 16 * (three_k / 3) * sizeof(int8_t) * 2);
-    int8_t* two_QLUT = (int8_t *)malloc(1 * 16 * (two_k / 2) * sizeof(int8_t) * 2);
+//     int8_t* three_QLUT = (int8_t *)malloc(1 * 16 * (three_k / 3) * sizeof(int8_t) * 2);
+//     int8_t* two_QLUT = (int8_t *)malloc(1 * 16 * (two_k / 2) * sizeof(int8_t) * 2);
 
-    partial_max_reset((&(((float*)LUT_Scales)[0])));
-  // 8640 / 24 == 200
-    partial_max(K, (&(((float*)LUT_Scales)[0])), (&(((float*)B)[0])));
-    three_lut_preprocess(three_k, (&(((int8_t*)three_QLUT)[0])), (&(((float*)B)[0])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
-    two_lut_preprocess(two_k, (&(((int8_t*)two_QLUT)[0])), (&(((float*)B)[three_k])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
+//     partial_max_reset((&(((float*)LUT_Scales)[0])));
+//   // 8640 / 24 == 200
+//     partial_max(K, (&(((float*)LUT_Scales)[0])), (&(((float*)B)[0])));
+//     three_lut_preprocess(three_k, (&(((int8_t*)three_QLUT)[0])), (&(((float*)B)[0])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
+//     two_lut_preprocess(two_k, (&(((int8_t*)two_QLUT)[0])), (&(((float*)B)[three_k])), (&(((float*)LUT_Scales)[0])), (&(((float*)LUT_Biases)[0])));
 
-    const int n_tile_num = M / BM;
-    const int nth = 1;
-    const int ith = 0;
-    const int w_size           = M * three_k / (2 * 3); // int8 
-    const int sign_size        = M * three_k / 24; //int8
-    const int lut_size         = 1 * 16 * (three_k / 3) * 2; // int8
-    const int c_size           = 1 * M; // float
-    const int w_tile_size      = w_size / n_tile_num;
-    const int lut_tile_size    = lut_size / n_tile_num;
-    const int sign_tile_size   = sign_size / n_tile_num;
-    const int c_tile_size      = c_size / n_tile_num;
+//     const int n_tile_num = M / BM;
+//     const int nth = 1;
+//     const int ith = 0;
+//     const int w_size           = M * three_k / (2 * 3); // int8 
+//     const int sign_size        = M * three_k / 24; //int8
+//     const int lut_size         = 1 * 16 * (three_k / 3) * 2; // int8
+//     const int c_size           = 1 * M; // float
+//     const int w_tile_size      = w_size / n_tile_num;
+//     const int lut_tile_size    = lut_size / n_tile_num;
+//     const int sign_tile_size   = sign_size / n_tile_num;
+//     const int c_tile_size      = c_size / n_tile_num;
 
-    const int th_tile_num = (n_tile_num + nth - 1) / nth;
-    const int th_tile_beg = ith * th_tile_num;
-    const int th_tile_end = n_tile_num;
+//     const int th_tile_num = (n_tile_num + nth - 1) / nth;
+//     const int th_tile_beg = ith * th_tile_num;
+//     const int th_tile_end = n_tile_num;
 
-    // auto gemm_start = std::chrono::high_resolution_clock::now();
-    for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
-        const int w_offset          = i_tile * w_tile_size;
-        const int sign_offset       = i_tile * sign_tile_size;
-        const int scales_offset     = 0;
+//     // auto gemm_start = std::chrono::high_resolution_clock::now();
+//     for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+//         const int w_offset          = i_tile * w_tile_size;
+//         const int sign_offset       = i_tile * sign_tile_size;
+//         const int scales_offset     = 0;
 
-        const int qlut_offset       = i_tile * lut_tile_size;
-        const int lut_scales_offset = 0;
-        const int dst_offset        = i_tile * c_tile_size;
+//         const int qlut_offset       = i_tile * lut_tile_size;
+//         const int lut_scales_offset = 0;
+//         const int dst_offset        = i_tile * c_tile_size;
 
-        three_qgemm_lut(three_k, A + w_offset, sign + sign_offset, three_QLUT, Scales, LUT_Scales, LUT_Biases, C + dst_offset);
-    }
+//         three_qgemm_lut(three_k, A + w_offset, sign + sign_offset, three_QLUT, Scales, LUT_Scales, LUT_Biases, C + dst_offset);
+//     }
 
-    const int two_w_size           = M * two_k / (2 * 2); // int8 
-    const int two_lut_size         = 1 * 16 * (two_k / 2) * 2; // int8
-    const int two_w_tile_size      = two_w_size / n_tile_num;
-    const int two_lut_tile_size    = two_lut_size / n_tile_num;
+//     const int two_w_size           = M * two_k / (2 * 2); // int8 
+//     const int two_lut_size         = 1 * 16 * (two_k / 2) * 2; // int8
+//     const int two_w_tile_size      = two_w_size / n_tile_num;
+//     const int two_lut_tile_size    = two_lut_size / n_tile_num;
 
-    // auto gemm_start = std::chrono::high_resolution_clock::now();
-    for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
-        const int two_w_offset          = i_tile * two_w_tile_size;
+//     // auto gemm_start = std::chrono::high_resolution_clock::now();
+//     for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+//         const int two_w_offset          = i_tile * two_w_tile_size;
 
-        const int two_qlut_offset       = i_tile * two_lut_tile_size;
-        const int two_dst_offset        = i_tile * c_tile_size;
+//         const int two_qlut_offset       = i_tile * two_lut_tile_size;
+//         const int two_dst_offset        = i_tile * c_tile_size;
 
-        two_qgemm_lut(two_k, two_A + two_w_offset, two_QLUT, Scales, LUT_Scales, LUT_Biases, C + two_dst_offset);
-    }
+//         two_qgemm_lut(two_k, two_A + two_w_offset, two_QLUT, Scales, LUT_Scales, LUT_Biases, C + two_dst_offset);
+//     }
 
-    // for (int i=0; i<M; i++) {
-    //     C[i] = C[i] * LUT_Scales[0] * Scales[0];
-    // }
-}
+//     // for (int i=0; i<M; i++) {
+//     //     C[i] = C[i] * LUT_Scales[0] * Scales[0];
+//     // }
+// }
 
 int main() {
     float* B = (float *)malloc(K * sizeof(float));
@@ -1126,24 +1283,24 @@ int main() {
     float* ori_C = (float *)malloc(1 * M * sizeof(float));
     float_compute(oA, B, ori_C, 0.22f);
 
-    float* lut_C = (float *)malloc(1 * M * sizeof(float));
-    tl_compute(A, B, lut_C);
+    // float* lut_C = (float *)malloc(1 * M * sizeof(float));
+    // tl_compute(A, B, lut_C);
 
     float* i2_s_C = (float *)malloc(1 * M * sizeof(float));
     i2_s_compute(oA, B, i2_s_C);
 
-    float* tq20_C = (float *)malloc(1 * M * sizeof(float));
-    tq20_compute(oA, B, tq20_C);
+    // float* tq20_C = (float *)malloc(1 * M * sizeof(float));
+    // tq20_compute(oA, B, tq20_C);
 
     for (int i=0; i<M; i++) {
         // printf("%f ", C[i]);
-        if (fabs(ori_C[i] - lut_C[i]) > 1e-20){
+        // if (fabs(ori_C[i] - lut_C[i]) > 1e-20){
             printf("index:%d\n", i);
             printf("float:%.10f\n", ori_C[i]);
-            printf("tl2:%.10f\n", lut_C[i]);
+            // printf("tl2:%.10f\n", lut_C[i]);
             printf("i2_s:%.10f\n", i2_s_C[i]);
-            printf("tq20:%.10f\n", tq20_C[i]);
-        }
+            // printf("tq20:%.10f\n", tq20_C[i]);
+        // }
     }
     printf("\n");
     printf("done\n");
