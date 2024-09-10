@@ -3672,7 +3672,10 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
 
 #elif defined(__ARM_NEON)
 
-    int32x4_t accu = vdupq_n_s32(0);
+    int32x4_t accu_0 = vdupq_n_s32(0);
+    int32x4_t accu_1 = vdupq_n_s32(0);
+    int32x4_t accu_2 = vdupq_n_s32(0);
+    int32x4_t accu_3 = vdupq_n_s32(0);
     const uint8x16_t mask = vdupq_n_u8(3);
 
     for (int i=0; i < group32_num; i++) {
@@ -3682,6 +3685,8 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
 #else
         int16x8_t accu32_0 = vdupq_n_s16(0);
         int16x8_t accu32_1 = vdupq_n_s16(0);
+        int16x8_t accu32_2 = vdupq_n_s16(0);
+        int16x8_t accu32_3 = vdupq_n_s16(0);
 #endif
 
         for (int j=0; j < 32; j++) {
@@ -3713,41 +3718,45 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
             const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
 
 #if defined(__ARM_FEATURE_DOTPROD)
-            accu = vdotq_s32(accu, q8_0, yq8_0);
-            accu = vdotq_s32(accu, q8_1, yq8_1);
-            accu = vdotq_s32(accu, q8_2, yq8_2);
-            accu = vdotq_s32(accu, q8_3, yq8_3);
-            accu = vdotq_s32(accu, q8_4, yq8_4);
-            accu = vdotq_s32(accu, q8_5, yq8_5);
-            accu = vdotq_s32(accu, q8_6, yq8_6);
-            accu = vdotq_s32(accu, q8_7, yq8_7);
+            accu_0 = vdotq_s32(accu_0, q8_0, yq8_0);
+            accu_1 = vdotq_s32(accu_1, q8_1, yq8_1);
+            accu_2 = vdotq_s32(accu_2, q8_2, yq8_2);
+            accu_3 = vdotq_s32(accu_3, q8_3, yq8_3);
+            accu_0 = vdotq_s32(accu_0, q8_4, yq8_4);
+            accu_1 = vdotq_s32(accu_1, q8_5, yq8_5);
+            accu_2 = vdotq_s32(accu_2, q8_6, yq8_6);
+            accu_3 = vdotq_s32(accu_3, q8_7, yq8_7);
 #else
             accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
             accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
-            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
-            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accu32_2 = vmlal_s8(accu32_2, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accu32_3 = vmlal_s8(accu32_3, vget_high_s8(q8_1), vget_high_s8(yq8_1));
             accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
             accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
-            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
-            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accu32_2 = vmlal_s8(accu32_2, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accu32_3 = vmlal_s8(accu32_3, vget_high_s8(q8_3), vget_high_s8(yq8_3));
             accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
             accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
-            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
-            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accu32_2 = vmlal_s8(accu32_2, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accu32_3 = vmlal_s8(accu32_3, vget_high_s8(q8_5), vget_high_s8(yq8_5));
             accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
             accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
-            accu32_0 = vmlal_s8(accu32_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
-            accu32_1 = vmlal_s8(accu32_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+            accu32_2 = vmlal_s8(accu32_2, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accu32_3 = vmlal_s8(accu32_3, vget_high_s8(q8_7), vget_high_s8(yq8_7));
 #endif
         }
 
 #if defined(__ARM_FEATURE_DOTPROD)
 
 #else
-        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_0)));
-        accu = vaddq_s32(accu, vmovl_high_s16(accu32_0));
-        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accu32_1)));
-        accu = vaddq_s32(accu, vmovl_high_s16(accu32_1));
+        accu_0 = vaddq_s32(accu_0, vmovl_s16(vget_low_s16(accu32_0)));
+        accu_0 = vaddq_s32(accu_0, vmovl_high_s16(accu32_0));
+        accu_1 = vaddq_s32(accu_1, vmovl_s16(vget_low_s16(accu32_1)));
+        accu_1 = vaddq_s32(accu_1, vmovl_high_s16(accu32_1));
+        accu_2 = vaddq_s32(accu_2, vmovl_s16(vget_low_s16(accu32_2)));
+        accu_2 = vaddq_s32(accu_2, vmovl_high_s16(accu32_2));
+        accu_3 = vaddq_s32(accu_3, vmovl_s16(vget_low_s16(accu32_3)));
+        accu_3 = vaddq_s32(accu_3, vmovl_high_s16(accu32_3));
 #endif
     }
 
@@ -3755,12 +3764,14 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
 #if defined(__ARM_FEATURE_DOTPROD)
 
 #else
-        int16x8_t accu32_0 = vdupq_n_s16(0);
-        int16x8_t accu32_1 = vdupq_n_s16(0);
+        int16x8_t accula_0 = vdupq_n_s16(0);
+        int16x8_t accula_1 = vdupq_n_s16(0);
+        int16x8_t accula_2 = vdupq_n_s16(0);
+        int16x8_t accula_3 = vdupq_n_s16(0);
 #endif
         for (int j = 0; j < la_num; j++) {
-            uint8x16_t xq8_6 = vld1q_u8(x + i * 32 * 32 + j * 32);
-            uint8x16_t xq8_7 = vld1q_u8(x + i * 32 * 32 + j * 32 + 16);
+            uint8x16_t xq8_6 = vld1q_u8(x + group32_num * 32 * 32 + j * 32);
+            uint8x16_t xq8_7 = vld1q_u8(x + group32_num * 32 * 32 + j * 32 + 16);
             uint8x16_t xq8_4 = vshrq_n_u8(xq8_6, 2);
             uint8x16_t xq8_5 = vshrq_n_u8(xq8_7, 2);
             uint8x16_t xq8_2 = vshrq_n_u8(xq8_6, 4);
@@ -3777,54 +3788,60 @@ void ggml_vec_dot_i2_i8_s(int n, float * restrict s, size_t bs, const void * res
             int8x16_t q8_6 = vreinterpretq_s8_u8(vandq_u8(xq8_6, mask));
             int8x16_t q8_7 = vreinterpretq_s8_u8(vandq_u8(xq8_7, mask));
 
-            const int8x16_t yq8_0 = vld1q_s8(y + i * 128 * 32 + j * 128 + 0);
-            const int8x16_t yq8_1 = vld1q_s8(y + i * 128 * 32 + j * 128 + 16);
-            const int8x16_t yq8_2 = vld1q_s8(y + i * 128 * 32 + j * 128 + 32);
-            const int8x16_t yq8_3 = vld1q_s8(y + i * 128 * 32 + j * 128 + 48);
-            const int8x16_t yq8_4 = vld1q_s8(y + i * 128 * 32 + j * 128 + 64);
-            const int8x16_t yq8_5 = vld1q_s8(y + i * 128 * 32 + j * 128 + 80);
-            const int8x16_t yq8_6 = vld1q_s8(y + i * 128 * 32 + j * 128 + 96);
-            const int8x16_t yq8_7 = vld1q_s8(y + i * 128 * 32 + j * 128 + 112);
+            const int8x16_t yq8_0 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 0);
+            const int8x16_t yq8_1 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 16);
+            const int8x16_t yq8_2 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 32);
+            const int8x16_t yq8_3 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 48);
+            const int8x16_t yq8_4 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 64);
+            const int8x16_t yq8_5 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 80);
+            const int8x16_t yq8_6 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 96);
+            const int8x16_t yq8_7 = vld1q_s8(y + group32_num * 128 * 32 + j * 128 + 112);
 
 #if defined(__ARM_FEATURE_DOTPROD)
-            accu = vdotq_s32(accu, q8_0, yq8_0);
-            accu = vdotq_s32(accu, q8_1, yq8_1);
-            accu = vdotq_s32(accu, q8_2, yq8_2);
-            accu = vdotq_s32(accu, q8_3, yq8_3);
-            accu = vdotq_s32(accu, q8_4, yq8_4);
-            accu = vdotq_s32(accu, q8_5, yq8_5);
-            accu = vdotq_s32(accu, q8_6, yq8_6);
-            accu = vdotq_s32(accu, q8_7, yq8_7);
+            accu_0 = vdotq_s32(accu_0, q8_0, yq8_0);
+            accu_1 = vdotq_s32(accu_1, q8_1, yq8_1);
+            accu_2 = vdotq_s32(accu_2, q8_2, yq8_2);
+            accu_3 = vdotq_s32(accu_3, q8_3, yq8_3);
+            accu_0 = vdotq_s32(accu_0, q8_4, yq8_4);
+            accu_1 = vdotq_s32(accu_1, q8_5, yq8_5);
+            accu_2 = vdotq_s32(accu_2, q8_6, yq8_6);
+            accu_3 = vdotq_s32(accu_3, q8_7, yq8_7);
 #else
             accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_0), vget_low_s8(yq8_0));
             accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_0), vget_high_s8(yq8_0));
-            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_1), vget_low_s8(yq8_1));
-            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_1), vget_high_s8(yq8_1));
+            accula_2 = vmlal_s8(accula_2, vget_low_s8(q8_1), vget_low_s8(yq8_1));
+            accula_3 = vmlal_s8(accula_3, vget_high_s8(q8_1), vget_high_s8(yq8_1));
             accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_2), vget_low_s8(yq8_2));
             accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_2), vget_high_s8(yq8_2));
-            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_3), vget_low_s8(yq8_3));
-            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_3), vget_high_s8(yq8_3));
+            accula_2 = vmlal_s8(accula_2, vget_low_s8(q8_3), vget_low_s8(yq8_3));
+            accula_3 = vmlal_s8(accula_3, vget_high_s8(q8_3), vget_high_s8(yq8_3));
             accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_4), vget_low_s8(yq8_4));
             accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_4), vget_high_s8(yq8_4));
-            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_5), vget_low_s8(yq8_5));
-            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_5), vget_high_s8(yq8_5));
+            accula_2 = vmlal_s8(accula_2, vget_low_s8(q8_5), vget_low_s8(yq8_5));
+            accula_3 = vmlal_s8(accula_3, vget_high_s8(q8_5), vget_high_s8(yq8_5));
             accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_6), vget_low_s8(yq8_6));
             accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_6), vget_high_s8(yq8_6));
-            accula_0 = vmlal_s8(accula_0, vget_low_s8(q8_7), vget_low_s8(yq8_7));
-            accula_1 = vmlal_s8(accula_1, vget_high_s8(q8_7), vget_high_s8(yq8_7));
+            accula_2 = vmlal_s8(accula_2, vget_low_s8(q8_7), vget_low_s8(yq8_7));
+            accula_3 = vmlal_s8(accula_3, vget_high_s8(q8_7), vget_high_s8(yq8_7));
 #endif
         }
 #if defined(__ARM_FEATURE_DOTPROD)
 
 #else
-        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_0)));
-        accu = vaddq_s32(accu, vmovl_high_s16(accula_0));
-        accu = vaddq_s32(accu, vmovl_s16(vget_low_s16(accula_1)));
-        accu = vaddq_s32(accu, vmovl_high_s16(accula_1));
+        accu_0 = vaddq_s32(accu_0, vmovl_s16(vget_low_s16(accula_0)));
+        accu_0 = vaddq_s32(accu_0, vmovl_high_s16(accula_0));
+        accu_1 = vaddq_s32(accu_1, vmovl_s16(vget_low_s16(accula_1)));
+        accu_1 = vaddq_s32(accu_1, vmovl_high_s16(accula_1));
+        accu_2 = vaddq_s32(accu_2, vmovl_s16(vget_low_s16(accula_2)));
+        accu_2 = vaddq_s32(accu_2, vmovl_high_s16(accula_2));
+        accu_3 = vaddq_s32(accu_3, vmovl_s16(vget_low_s16(accula_3)));
+        accu_3 = vaddq_s32(accu_3, vmovl_high_s16(accula_3));
 #endif
     }
-
-    int sumi = vaddlvq_s32(accu);
+    accu_0 = vaddq_s32(accu_0, accu_1);
+    accu_2 = vaddq_s32(accu_2, accu_3);
+    accu_0 = vaddq_s32(accu_0, accu_2);
+    int sumi = vaddlvq_s32(accu_0);
     *s = (float)sumi;
 
 #else
