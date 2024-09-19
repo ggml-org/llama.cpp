@@ -1295,11 +1295,14 @@ add_library(ggml
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
+            ../include/inline_func.h
+            ../include/ggml-tmac.h
             ggml.c
             ggml-alloc.c
             ggml-backend.c
             ggml-quants.c
             ggml-quants.h
+            ggml-tmac.cpp
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
