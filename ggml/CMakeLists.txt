@@ -157,9 +157,17 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
 option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
 option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
 
+# bitnet methods
+option(GGML_BITNET_ARM_TL1                  "ggml: use Bitnet tl1"                            ON)
+
+
 #
 # dependencies
 #
+
+if (GGML_BITNET_ARM_TL1)
+    add_compile_definitions(GGML_BITNET_ARM_TL1)
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED true)
@@ -214,7 +222,8 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-metal.h
     include/ggml-rpc.h
     include/ggml-sycl.h
-    include/ggml-vulkan.h)
+    include/ggml-vulkan.h
+    include/ggml-tmac.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
