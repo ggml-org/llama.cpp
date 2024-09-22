@@ -827,11 +827,11 @@ class BitnetModel(Model):
 
                 i2_scale = None
                 if self.ftype != gguf.GGMLQuantizationType.F32 and extra_f16 and not extra_f32:
-                    if self.ftype == gguf.GGMLQuantizationType.I2 and suit_i2:
+                    if self.ftype == gguf.GGMLQuantizationType.TL1 and suit_i2:
                         data, i2_scale = self.transform_to_i2(data)
                         assert data.dtype == np.uint8
                         assert i2_scale.dtype == np.float32
-                        data_qtype = gguf.GGMLQuantizationType.I2
+                        data_qtype = gguf.GGMLQuantizationType.TL1
 
                     else:  # default to float16 for quantized tensors
                         if data_dtype != np.float16:
@@ -859,6 +859,13 @@ class BitnetModel(Model):
 ###### CONVERSION LOGIC ######
 
 
+ftype_map = {
+    "f32": gguf.GGMLQuantizationType.F32,
+    "f16": gguf.GGMLQuantizationType.F16,
+    "tl1" : gguf.GGMLQuantizationType.TL1,
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert a huggingface model to a GGML compatible file")
@@ -874,7 +881,7 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "i2"], default="f16",
+        "--outtype", type=str, choices=ftype_map.keys(), default="f32",
         help="output format - use f32 for float32, f16 for float16",
     )
     parser.add_argument("--bigendian", action="store_true", help="model is executed on big endian machine")
@@ -885,7 +892,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--use-temp-file", action="store_true", help="use the tempfile library while processing (helpful when running out of memory, process killed)")
     parser.add_argument("--model-name", type=str, default=None, help="name of the model")
     parser.add_argument("--verbose", action="store_true", help="increase output verbosity")
-    parser.add_argument("--kcfg", type=str, default="", help="Path to T-MAC kcfg.ini")
 
     return parser.parse_args()
 
@@ -895,28 +901,9 @@ def main() -> None:
 
     dir_model = args.model
 
-    if args.awq_path:
-        sys.path.insert(1, str(Path(__file__).parent / 'awq-py'))
-        from awq.apply_awq import add_scale_weights  # type: ignore[import-not-found]
-        tmp_model_path = args.model / "weighted_model"
-        dir_model = tmp_model_path
-        if tmp_model_path.is_dir():
-            logger.info(f"{tmp_model_path} exists as a weighted model.")
-        else:
-            tmp_model_path.mkdir(parents=True, exist_ok=True)
-            logger.info("Saving new weighted model ...")
-            add_scale_weights(str(args.model), str(args.awq_path), str(tmp_model_path))
-            logger.info(f"Saved weighted model at {tmp_model_path}.")
-
     if not dir_model.is_dir():
         logger.error(f'Error: {args.model} is not a directory')
         sys.exit(1)
-
-    ftype_map = {
-        "f32": gguf.GGMLQuantizationType.F32,
-        "f16": gguf.GGMLQuantizationType.F16,
-        "i2" : gguf.GGMLQuantizationType.I2,
-    }
 
     if args.outfile is not None:
         fname_out = args.outfile

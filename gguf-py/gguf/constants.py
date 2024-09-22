@@ -841,8 +841,8 @@ class GGMLQuantizationType(IntEnum):
     I64     = 27
     F64     = 28
     IQ1_M   = 29
-    I2      = 38
-    # TL1     = 38
+    # I2      = 38
+    TL1     = 38
     # TL2     = 39
 
 
@@ -915,8 +915,8 @@ GGML_QUANT_SIZES = {
     GGMLQuantizationType.I64:     (1, 8),
     GGMLQuantizationType.F64:     (1, 8),
     GGMLQuantizationType.IQ1_M:   (256, QK_K // 8 + QK_K // 16  + QK_K // 32),
-    GGMLQuantizationType.I2:      (4, 1),
-    # GGMLQuantizationType.TL1:      (4, 1),
+    # GGMLQuantizationType.I2:      (4, 1),
+    GGMLQuantizationType.TL1:      (4, 1),
     # GGMLQuantizationType.TL2:      (4, 1),
 }
 
