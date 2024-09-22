@@ -12737,21 +12737,25 @@ static void ggml_compute_forward_mul_mat(
         tmac_float_type * lut_biases = (tmac_float_type *) (lut_scales + wt->lut_scales_size * ne11);
 
         // g = 4
-        // Transform tensor if not already transformed
-        // Although we have done this in file `llama.cpp`,
-        // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
-        // It's better to do this in ggml-backend.c,
-        // but llama.cpp directly manipulates tensor.data for cbe in a lot of space.
-        ggml_tmac_transform_tensor(src0);
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
-        tmac_float_type * act_input;
-        if (sizeof(tmac_float_type) == 2) {
-            ggml_fp32_to_fp16_row(src1->data, tmac_f_ptr, ne10 * ne11);
-            act_input = tmac_f_ptr;
-        } else {
-            act_input = src1->data;
+        if (ith == 0) {
+            // Transform tensor if not already transformed
+            // Although we have done this in file `llama.cpp`,
+            // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
+            // It's better to do this in ggml-backend.c,
+            // but llama.cpp directly manipulates tensor.data for cbe in a lot of space.
+            ggml_tmac_transform_tensor(src0);
+            GGML_ASSERT(src1->type == GGML_TYPE_F32);
+            tmac_float_type * act_input;
+            if (sizeof(tmac_float_type) == 2) {
+                ggml_fp32_to_fp16_row(src1->data, tmac_f_ptr, ne10 * ne11);
+                act_input = tmac_f_ptr;
+            } else {
+                act_input = src1->data;
+            }
+            ggml_preprocessor(ne10, act_input, lut_scales, qlut);
         }
-        ggml_preprocessor(ne10, act_input, lut_scales, qlut);
+
+        ggml_barrier(params->shared);
 
         tmac_float_type * act_output;
         if (sizeof(tmac_float_type) == 2) {
