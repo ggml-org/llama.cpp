@@ -228,14 +228,14 @@ class GGUFWriter:
             elif tensor_dtype == np.int64:
                 dtype = GGMLQuantizationType.I64
             elif tensor_dtype == np.uint8:
-                dtype = GGMLQuantizationType.I2
+                dtype = GGMLQuantizationType.TL1
             else:
                 raise ValueError("Only F16, F32, F64, I8, I16, I32, I64, I2 tensors are supported for now")
         else:
             dtype = raw_dtype
         self.ti_data += self._pack("I", dtype)
         self.ti_data += self._pack("Q", self.offset_tensor)
-        if dtype == GGMLQuantizationType.I2:
+        if dtype == GGMLQuantizationType.TL1:
             self.offset_tensor += GGUFWriter.ggml_pad(tensor_nbytes, self.data_alignment) + self.data_alignment
         else:
             self.offset_tensor += GGUFWriter.ggml_pad(tensor_nbytes, self.data_alignment)

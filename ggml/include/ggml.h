@@ -397,7 +397,7 @@ extern "C" {
         GGML_TYPE_TQ2_0   = 35,
         GGML_TYPE_I2_S    = 36,
         GGML_TYPE_I8_S    = 37,
-        GGML_TYPE_I2      = 38,
+        GGML_TYPE_TL1      = 38,
         GGML_TYPE_COUNT,
     };
 

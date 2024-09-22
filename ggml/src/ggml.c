@@ -636,8 +636,8 @@ static void ggml_vec_dot_f16(int n, float * restrict s, size_t bs, ggml_fp16_t *
 static void ggml_vec_dot_bf16(int n, float * restrict s, size_t bs, ggml_bf16_t * restrict x, size_t bx, ggml_bf16_t * restrict y, size_t by, int nrc);
 
 static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
-    [GGML_TYPE_I2] = {
-        .type_name                = "i2",
+    [GGML_TYPE_TL1] = {
+        .type_name                = "tl1",
         .blck_size                = 1,
         .type_size                = sizeof(int8_t),
         .is_quantized             = false,
@@ -3262,7 +3262,7 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
-        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_I2) {
+        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1) {
             nbytes = nbytes / 4 + 32;
         }
     }
@@ -12690,7 +12690,7 @@ static void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    if (src1->ne[1] <= 1 && src0->type != GGML_TYPE_I2 && src0->type != GGML_TYPE_I2_S && src0->type != GGML_TYPE_TQ1_0 && src0->type != GGML_TYPE_TQ2_0 && src0->ne[1] != 32002 && src0->ne[1] != 96 && src0->ne[0] != 96) {
+    if (src1->ne[1] <= 1 && src0->type != GGML_TYPE_TL1 && src0->type != GGML_TYPE_I2_S && src0->type != GGML_TYPE_TQ1_0 && src0->type != GGML_TYPE_TQ2_0 && src0->ne[1] != 32002 && src0->ne[1] != 96 && src0->ne[0] != 96) {
         int32_t* int_C = (int32_t*)malloc(1 * src0->ne[1] * sizeof(int32_t));
         for (int i = 0; i < src0->ne[1] * 1; i++) {
             int_C[i] = 0;
@@ -14451,7 +14451,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_TQ1_0:
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_I2_S:
-        case GGML_TYPE_I2:
+        case GGML_TYPE_TL1:
         case GGML_TYPE_I8_S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
