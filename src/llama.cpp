@@ -15043,7 +15043,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_ubatch & batch) {
 
         ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
     }
-
+#if defined(GGML_BITNET_X86_TL2)
     if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
         GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         const int64_t n_tokens = batch.n_tokens;
@@ -15071,7 +15071,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_ubatch & batch) {
             GGML_ASSERT(lctx.n_outputs == 0);
         }
     }
-
+#endif
     GGML_ASSERT(
         // (!a || b) is a logical implication (a -> b)
         // !hparams.causal_attn -> !cparams.causal_attn

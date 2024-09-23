@@ -35,6 +35,8 @@ static void aligned_free(void * ptr) {
 #endif
 }
 
+#if defined(GGML_BITNET_ARM_TL1)
+
 void per_tensor_quant(int k, void* lut_scales_, void* b_) {
     tmac_float_type* lut_scales = (tmac_float_type*)lut_scales_;
     tmac_float_type* b = (tmac_float_type*)b_;
@@ -595,6 +597,680 @@ int ggml_tmac_get_type_bits(enum ggml_type type) {
     }
 }
 
-// void ggml_tmac_set_n_threads(int n_threads) {
-//     wrapper->set_num_threads(n_threads);
-// }
+#endif
+#if defined(GGML_BITNET_X86_TL2)
+// BMGQA BM3 should be same due to hack
+#define BK2 32
+#if defined __AVX2__
+
+inline void _mm256_merge_epi32(const __m256i v0, const __m256i v1, __m256i *vl, __m256i *vh)
+{
+    __m256i va = _mm256_permute4x64_epi64(v0, _MM_SHUFFLE(3, 1, 2, 0));
+    __m256i vb = _mm256_permute4x64_epi64(v1, _MM_SHUFFLE(3, 1, 2, 0));
+    *vl = _mm256_unpacklo_epi32(va, vb);
+    *vh = _mm256_unpackhi_epi32(va, vb);
+}
+
+inline void _mm256_merge_epi64(const __m256i v0, const __m256i v1, __m256i *vl, __m256i *vh)
+{
+    __m256i va = _mm256_permute4x64_epi64(v0, _MM_SHUFFLE(3, 1, 2, 0));
+    __m256i vb = _mm256_permute4x64_epi64(v1, _MM_SHUFFLE(3, 1, 2, 0));
+    *vl = _mm256_unpacklo_epi64(va, vb);
+    *vh = _mm256_unpackhi_epi64(va, vb);
+}
+
+inline void _mm256_merge_si128(const __m256i v0, const __m256i v1, __m256i *vl, __m256i *vh)
+{
+    *vl = _mm256_permute2x128_si256(v0, v1, _MM_SHUFFLE(0, 2, 0, 0));
+    *vh = _mm256_permute2x128_si256(v0, v1, _MM_SHUFFLE(0, 3, 0, 1));
+}
+
+
+inline void Transpose_8_8(
+    __m256i *v0,
+    __m256i *v1,
+    __m256i *v2,
+    __m256i *v3,
+    __m256i *v4,
+    __m256i *v5,
+    __m256i *v6,
+    __m256i *v7)
+{
+    __m256i w0, w1, w2, w3, w4, w5, w6, w7;
+    __m256i x0, x1, x2, x3, x4, x5, x6, x7;
+
+    _mm256_merge_epi32(*v0, *v1, &w0, &w1);
+    _mm256_merge_epi32(*v2, *v3, &w2, &w3);
+    _mm256_merge_epi32(*v4, *v5, &w4, &w5);
+    _mm256_merge_epi32(*v6, *v7, &w6, &w7);
+
+    _mm256_merge_epi64(w0, w2, &x0, &x1);
+    _mm256_merge_epi64(w1, w3, &x2, &x3);
+    _mm256_merge_epi64(w4, w6, &x4, &x5);
+    _mm256_merge_epi64(w5, w7, &x6, &x7);
+
+    _mm256_merge_si128(x0, x4, v0, v1);
+    _mm256_merge_si128(x1, x5, v2, v3);
+    _mm256_merge_si128(x2, x6, v4, v5);
+    _mm256_merge_si128(x3, x7, v6, v7);
+}
+
+#endif
+
+inline int32_t per_tensor_quant(int k, void* lut_scales_, void* b_) {
+    tmac_float_type* lut_scales = (tmac_float_type*)lut_scales_;
+    tmac_float_type* b = (tmac_float_type*)b_;
+#if defined __AVX2__
+    __m256 max_vec = _mm256_set1_ps(0.f);
+    const __m256 vec_sign = _mm256_set1_ps(-0.0f);
+    // #pragma unroll
+    for (int i = 0; i < k / 8; i++) {
+        __m256 vec_b = _mm256_loadu_ps(b + i * 8);
+        __m256 vec_babs = _mm256_andnot_ps(vec_sign, vec_b);
+        max_vec = _mm256_max_ps(vec_babs, max_vec);
+    }
+    __m128 max1 = _mm_max_ps(_mm256_extractf128_ps(max_vec, 1), _mm256_castps256_ps128(max_vec));
+    max1 = _mm_max_ps(max1, _mm_movehl_ps(max1, max1));
+    max1 = _mm_max_ss(max1, _mm_movehdup_ps(max1));
+    float scales = 127 / _mm_cvtss_f32(max1);
+    *lut_scales = scales;
+#endif
+
+    return 0;
+}
+
+inline int32_t partial_max_reset(int32_t bs, void* lut_scales_) {
+    tmac_float_type* lut_scales = (tmac_float_type*)lut_scales_;
+    #pragma unroll
+    for (int i=0; i< bs; i++) {
+        lut_scales[i] = 0.0;
+    }
+    return 0;
+}
+
+template<int act_k>
+inline int32_t three_lut_ctor(int8_t* qlut, tmac_float_type* b, tmac_float_type* lut_scales) {
+#if defined __AVX2__
+    __m256 vec_lut[16];
+    const __m256i vec_bi = _mm256_set_epi32(84, 72, 60, 48, 36, 24, 12, 0);
+    float scales = *lut_scales;
+    __m256i shuffle_mask = _mm256_set_epi8(
+                                            0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
+                                            0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00,
+                                            0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
+                                            0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00
+                                            );
+#pragma unroll
+    for (int k = 0; k < act_k / 24; ++k) {
+        __m256 vec_b0 = _mm256_i32gather_ps(b + k * 24 + 0, vec_bi, 1);
+        __m256 vec_b1 = _mm256_i32gather_ps(b + k * 24 + 1, vec_bi, 1);
+        __m256 vec_b2 = _mm256_i32gather_ps(b + k * 24 + 2, vec_bi, 1);
+
+        __m256i vec_b0i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b1i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b2i = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b2, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+
+        vec_lut[15] = _mm256_setzero_si256();
+
+        vec_lut[14] = _mm256_setzero_si256();
+
+        // 1 1 1
+        vec_lut[13] = vec_b0i;
+        vec_lut[13] = _mm256_add_epi32(vec_lut[13], vec_b1i);
+        vec_lut[13] = _mm256_add_epi32(vec_lut[13], vec_b2i);
+
+        // 1 1 0
+        vec_lut[12] = vec_b0i;
+        vec_lut[12] = _mm256_add_epi32(vec_lut[12], vec_b1i);
+
+        // 1 1 -1
+        vec_lut[11] = vec_b0i;
+        vec_lut[11] = _mm256_add_epi32(vec_lut[11], vec_b1i);
+        vec_lut[11] = _mm256_sub_epi32(vec_lut[11], vec_b2i);
+
+        // 1 0 1
+        vec_lut[10] = vec_b0i;
+        vec_lut[10] = _mm256_add_epi32(vec_lut[10], vec_b2i);
+
+        // 1 0 0
+        vec_lut[9] = vec_b0i;
+
+        // 1 0 -1
+        vec_lut[8] = vec_b0i;
+        vec_lut[8] = _mm256_sub_epi32(vec_lut[8], vec_b2i);
+
+        // 1 -1 1
+        vec_lut[7] = vec_b0i;
+        vec_lut[7] = _mm256_sub_epi32(vec_lut[7], vec_b1i);
+        vec_lut[7] = _mm256_add_epi32(vec_lut[7], vec_b2i);
+
+        // 1 -1 0
+        vec_lut[6] = vec_b0i;
+        vec_lut[6] = _mm256_sub_epi32(vec_lut[6], vec_b1i);
+
+        // 1 -1 -1
+        vec_lut[5] = vec_b0i;
+        vec_lut[5] = _mm256_sub_epi32(vec_lut[5], vec_b1i);
+        vec_lut[5] = _mm256_sub_epi32(vec_lut[5], vec_b2i);
+
+        // 0 1 1
+        vec_lut[4] = vec_b1i;
+        vec_lut[4] = _mm256_add_epi32(vec_lut[4], vec_b2i);
+
+        // 0 1 0
+        vec_lut[3] = vec_b1i;
+
+        // 0 1 -1
+        vec_lut[2] = vec_b1i;
+        vec_lut[2] = _mm256_sub_epi32(vec_lut[2], vec_b2i);
+
+        // 0 0 1
+        vec_lut[1] = vec_b2i;
+
+        // 0 0 0
+        vec_lut[0] = _mm256_setzero_si256();
+
+        __m256i ix[16];
+
+#pragma unroll
+        for (int g = 0; g < 16; ++g) {
+            ix[g] = vec_lut[g];
+        }
+
+        Transpose_8_8(&(ix[0]), &(ix[1]), &(ix[2]), &(ix[3]), &(ix[4]), &(ix[5]),&(ix[6]), &(ix[7]));
+        Transpose_8_8(&(ix[8]), &(ix[9]), &(ix[10]), &(ix[11]), &(ix[12]), &(ix[13]),&(ix[14]), &(ix[15]));
+
+#pragma unroll
+        for (int g = 0; g < 8; ++g) {
+            ix[g] = _mm256_packs_epi32(ix[g], ix[g + 8]);
+            ix[g] = _mm256_permute4x64_epi64(ix[g], _MM_SHUFFLE(3, 1, 2, 0));
+            ix[g] = _mm256_shuffle_epi8(ix[g], shuffle_mask);
+            ix[g] = _mm256_permute4x64_epi64(ix[g], _MM_SHUFFLE(3, 1, 2, 0));
+        }
+
+        int8_t* qlut_i8 = reinterpret_cast<int8_t*>(qlut);
+
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 0 * 32 + 0), ix[0]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 1 * 32 + 0), ix[1]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 2 * 32 + 0), ix[2]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 3 * 32 + 0), ix[3]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 4 * 32 + 0), ix[4]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 5 * 32 + 0), ix[5]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 6 * 32 + 0), ix[6]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 7 * 32 + 0), ix[7]);
+
+    }
+
+    *lut_scales = scales;
+#endif
+    return 0;
+}
+
+template<int act_k>
+inline int32_t two_lut_ctor(int8_t* qlut, tmac_float_type* b, tmac_float_type* lut_scales) {
+#if defined __AVX2__
+    __m256 vec_lut[16];
+    const __m256i vec_bi = _mm256_set_epi32(56, 48, 40, 32, 24, 16, 8, 0);
+    float scales = *lut_scales;
+    __m256i shuffle_mask = _mm256_set_epi8(
+                                            0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
+                                            0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00,
+                                            0x0f, 0x0d, 0x0b, 0x09, 0x07, 0x05, 0x03, 0x01,
+                                            0x0e, 0x0c, 0x0a, 0x08, 0x06, 0x04, 0x02, 0x00
+                                            );
+#pragma unroll
+    for (int k = 0; k < act_k / 16; ++k) {
+        __m256 vec_b0f = _mm256_i32gather_ps(b + k * 16 + 0, vec_bi, 1);
+        __m256 vec_b1f = _mm256_i32gather_ps(b + k * 16 + 1, vec_bi, 1);
+
+        __m256i vec_b0 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b0f, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+        __m256i vec_b1 = _mm256_cvtps_epi32(_mm256_round_ps(_mm256_mul_ps(vec_b1f, _mm256_set1_ps(scales)), _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC));
+
+        vec_lut[15] = _mm256_setzero_si256();
+
+        vec_lut[14] = _mm256_setzero_si256();
+
+        vec_lut[13] = _mm256_setzero_si256();
+
+        vec_lut[12] = _mm256_setzero_si256();
+
+        vec_lut[11] = _mm256_setzero_si256();
+
+        vec_lut[10] = _mm256_setzero_si256();
+
+        vec_lut[9] = _mm256_setzero_si256();
+
+        // 1 1
+        vec_lut[8] = vec_b0;
+        vec_lut[8] = _mm256_add_epi32(vec_lut[8], vec_b1);
+
+        // 1 0
+        vec_lut[7] = vec_b0;
+
+        // 1 -1
+        vec_lut[6] = vec_b0;
+        vec_lut[6] = _mm256_sub_epi32(vec_lut[6], vec_b1);
+
+        // 0 1
+        vec_lut[5] = vec_b1;
+
+        // 0 0
+        vec_lut[4] = _mm256_setzero_si256();
+
+        // 0 -1
+        vec_lut[3] = _mm256_setzero_si256();
+        vec_lut[3] = _mm256_sub_epi32(vec_lut[3], vec_b1);
+
+        // -1 1
+        vec_lut[2] = _mm256_setzero_si256();
+        vec_lut[2] = _mm256_sub_epi32(vec_lut[2], vec_b0);
+        vec_lut[2] = _mm256_add_epi32(vec_lut[2], vec_b1);
+
+        // -1 0
+        vec_lut[1] = _mm256_setzero_si256();
+        vec_lut[1] = _mm256_sub_epi32(vec_lut[1], vec_b0);
+
+        // -1 -1
+        vec_lut[0] = _mm256_setzero_si256();
+        vec_lut[0] = _mm256_sub_epi32(vec_lut[0], vec_b0);
+        vec_lut[0] = _mm256_sub_epi32(vec_lut[0], vec_b1);
+
+        __m256i ix[16];
+#pragma unroll
+        for (int g = 0; g < 16; ++g) {
+            ix[g] = vec_lut[g];
+        }
+
+        Transpose_8_8(&(ix[0]), &(ix[1]), &(ix[2]), &(ix[3]), &(ix[4]), &(ix[5]),&(ix[6]), &(ix[7]));
+        Transpose_8_8(&(ix[8]), &(ix[9]), &(ix[10]), &(ix[11]), &(ix[12]), &(ix[13]),&(ix[14]), &(ix[15]));
+
+#pragma unroll
+        for (int g = 0; g < 8; ++g) {
+            ix[g] = _mm256_packs_epi32(ix[g], ix[g + 8]);
+            ix[g] = _mm256_permute4x64_epi64(ix[g], _MM_SHUFFLE(3, 1, 2, 0));
+            ix[g] = _mm256_shuffle_epi8(ix[g], shuffle_mask);
+            ix[g] = _mm256_permute4x64_epi64(ix[g], _MM_SHUFFLE(3, 1, 2, 0));
+        }
+
+        int8_t* qlut_i8 = reinterpret_cast<int8_t*>(qlut);
+
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 0 * 32 + 0), ix[0]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 1 * 32 + 0), ix[1]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 2 * 32 + 0), ix[2]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 3 * 32 + 0), ix[3]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 4 * 32 + 0), ix[4]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 5 * 32 + 0), ix[5]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 6 * 32 + 0), ix[6]);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(qlut_i8 + k * 256 + 7 * 32 + 0), ix[7]);
+
+    }
+    *lut_scales = scales;
+#endif
+    return 0;
+}
+
+template<int batch_size, int K2>
+inline int32_t two_tbl_impl(int32_t* c, int8_t* lut, uint8_t* a) {
+#ifdef __AVX2__
+    const __m256i vec_mask = _mm256_set1_epi8(0x0f);
+
+    const int KK = BK2 / 2;
+
+#pragma unroll
+    for (int i = 0; i < BMGQA; i += 32) {
+        // each 4 num / 4 * 8 = 32 num
+        __m256i vec_as[KK / 2];
+        #pragma unroll
+        for (int ai = 0; ai < KK / 2; ai++) {
+            vec_as[ai] = _mm256_loadu_si256(reinterpret_cast<__m256i*>(a + i * KK / 2 + ai * 32));
+        }
+#pragma unroll
+    for (int bs = 0; bs < batch_size; bs++) {
+        __m256i vec_c0 = _mm256_setzero_si256();
+        __m256i vec_c1 = _mm256_setzero_si256();
+#pragma unroll
+        // KK / 4 for 32 row each row 8index
+        for (int k = 0; k < KK / 8; k++) {
+            #pragma unroll
+            for (int j = 0; j < 4; j++) {
+                __m256i vec_a = vec_as[k * 4 + j];
+
+                __m128i vec_k1 = _mm_loadu_si128(reinterpret_cast<__m128i*>(lut + k * 32 * 8 + j * 64 + 0  + K2 / 2 * 32 * bs));
+                __m128i vec_k2 = _mm_loadu_si128(reinterpret_cast<__m128i*>(lut + k * 32 * 8 + j * 64 + 16 + K2 / 2 * 32 * bs));
+                __m128i vec_k3 = _mm_loadu_si128(reinterpret_cast<__m128i*>(lut + k * 32 * 8 + j * 64 + 32 + K2 / 2 * 32 * bs));
+                __m128i vec_k4 = _mm_loadu_si128(reinterpret_cast<__m128i*>(lut + k * 32 * 8 + j * 64 + 48 + K2 / 2 * 32 * bs));
+
+                __m256i vec_v_top = _mm256_and_si256(_mm256_srli_epi16(vec_a, 4), vec_mask);
+                __m256i vec_v_top_fir = _mm256_shuffle_epi8(_mm256_set_m128i(vec_k1, vec_k1), vec_v_top);
+                __m256i vec_v_top_sec = _mm256_shuffle_epi8(_mm256_set_m128i(vec_k2, vec_k2), vec_v_top);
+
+                __m256i vec_v_bot = _mm256_and_si256(vec_a, vec_mask);
+                __m256i vec_v_bot_fir = _mm256_shuffle_epi8(_mm256_set_m128i(vec_k3, vec_k3), vec_v_bot);
+                __m256i vec_v_bot_sec = _mm256_shuffle_epi8(_mm256_set_m128i(vec_k4, vec_k4), vec_v_bot);
+
+                __m256i vec_v_top_lo = _mm256_unpackhi_epi8(vec_v_top_fir, vec_v_top_sec);
+                __m256i vec_v_top_hi = _mm256_unpacklo_epi8(vec_v_top_fir, vec_v_top_sec);
+                __m256i vec_v_bot_lo = _mm256_unpackhi_epi8(vec_v_bot_fir, vec_v_bot_sec);
+                __m256i vec_v_bot_hi = _mm256_unpacklo_epi8(vec_v_bot_fir, vec_v_bot_sec);
+                vec_c0 = _mm256_add_epi16(vec_c0, vec_v_top_hi);
+                vec_c0 = _mm256_add_epi16(vec_c0, vec_v_bot_hi);
+                vec_c1 = _mm256_add_epi16(vec_c1, vec_v_top_lo);
+                vec_c1 = _mm256_add_epi16(vec_c1, vec_v_bot_lo); 
+            }
+        }
+
+        __m256i vec_gc0 = _mm256_loadu_si256(reinterpret_cast<__m256i*>(c + i      + BMGQA * bs));
+        __m256i vec_gc1 = _mm256_loadu_si256(reinterpret_cast<__m256i*>(c + i + 8  + BMGQA * bs));
+        __m256i vec_gc2 = _mm256_loadu_si256(reinterpret_cast<__m256i*>(c + i + 16 + BMGQA * bs));
+        __m256i vec_gc3 = _mm256_loadu_si256(reinterpret_cast<__m256i*>(c + i + 24 + BMGQA * bs));
+
+        // 8 * int32
+        vec_gc0 = _mm256_add_epi32(vec_gc0, _mm256_cvtepi16_epi32(_mm256_castsi256_si128(vec_c0)));
+        vec_gc1 = _mm256_add_epi32(vec_gc1, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vec_c0, 1)));
+        vec_gc2 = _mm256_add_epi32(vec_gc2, _mm256_cvtepi16_epi32(_mm256_castsi256_si128(vec_c1)));
+        vec_gc3 = _mm256_add_epi32(vec_gc3, _mm256_cvtepi16_epi32(_mm256_extracti128_si256(vec_c1, 1)));
+
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(c + i      + BMGQA * bs), vec_gc0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(c + i + 8  + BMGQA * bs), vec_gc1);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(c + i + 16 + BMGQA * bs), vec_gc2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(c + i + 24 + BMGQA * bs), vec_gc3);
+    }
+    }
+#endif
+    return 0;
+}
+
+template<int BATCH_SIZE>
+ int32_t three_qgemm_lut_k1536(void* A, void* sign, void* LUT, void* Scales, void* LUT_Scales, void* C) {
+  alignas(32) uint32_t CBits[BATCH_SIZE * BMEMD];
+  memset(&(CBits[0]), 0, BATCH_SIZE * BMEMD * sizeof(int32_t));
+#pragma unroll
+  // compute 96 nums in one loop
+  // 96 = 8640 / 96
+  // 16 * BM = 96 * BM / 3 / 2
+  // 512 = 96 / 3 * 16
+  // 8 * BM = 96 / 3 * BM / 4
+  for (int32_t k_outer = 0; k_outer < 1536 / BBKEMD; ++k_outer) {
+    tbl_impl_EMD<BATCH_SIZE, 1536>((&(((int32_t*)CBits)[0])), (&(((int8_t*)LUT)[(k_outer * BBKEMD / 3 * 32)])), (&(((uint8_t*)A)[(k_outer * BBKEMD / 3 / 2 * BMEMD)])), (&(((uint8_t*)sign)[(k_outer * BBKEMD / 3 / 8 * BMEMD)])));
+  }
+#pragma unroll
+  for (int bs = 0; bs < BATCH_SIZE; bs++) {
+#pragma unroll
+  for (int i = 0; i < BMEMD; i++) {
+    ((int32_t*)C)[i] = (int32_t)(((int32_t*)CBits)[i + bs * BMEMD]);
+  }
+  }
+  if (0 != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+template<int BATCH_SIZE>
+ int32_t three_qgemm_lut_k4032(void* A, void* sign, void* LUT, void* Scales, void* LUT_Scales, void* C) {
+  alignas(32) uint32_t CBits[BATCH_SIZE * BMGQA];
+  memset(&(CBits[0]), 0, BATCH_SIZE * BMGQA * sizeof(int32_t));
+#pragma unroll
+  // compute 96 nums in one loop
+  // 96 = 8640 / 96
+  // 16 * BM = 96 * BM / 3 / 2
+  // 512 = 96 / 3 * 16
+  // 8 * BM = 96 / 3 * BM / 4
+  for (int32_t k_outer = 0; k_outer < 4032 / BBKGQA; ++k_outer) {
+    tbl_impl_GQA<BATCH_SIZE, 4032>((&(((int32_t*)CBits)[0])), (&(((int8_t*)LUT)[(k_outer * BBKGQA / 3 * 32)])), (&(((uint8_t*)A)[(k_outer * BBKGQA / 3 / 2 * BMGQA)])), (&(((uint8_t*)sign)[(k_outer * BBKGQA / 3 / 8 * BMGQA)])));
+  }
+#pragma unroll
+  for (int bs = 0; bs < BATCH_SIZE; bs++) {
+#pragma unroll
+  for (int i = 0; i < BMGQA; i++) {
+    ((int32_t*)C)[i] = (int32_t)(((int32_t*)CBits)[i + bs * BMGQA]);
+  }
+  }
+  if (0 != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+template<int BATCH_SIZE>
+ int32_t two_qgemm_lut_k64(void* A, void* LUT, void* Scales, void* LUT_Scales, void* C) {
+  alignas(32) uint32_t CBits[BATCH_SIZE * BMGQA];
+  memset(&(CBits[0]), 0, BATCH_SIZE * BMGQA * sizeof(int32_t));
+#pragma unroll
+  // compute 32 nums in one loop
+  // 270 = 8640 / 32
+  // 1280 = 32 * BM / 2 / 2
+  // 128 = 32 / 2 * 8
+  for (int32_t k_outer = 0; k_outer < 64 / 32; ++k_outer) {
+    two_tbl_impl<BATCH_SIZE, 64>((&(((int32_t*)CBits)[0])), (&(((int8_t*)LUT)[(k_outer * BK2 / 2 * 32)])), (&(((uint8_t*)A)[(k_outer * BK2 / 2 / 2 * BMGQA)])));
+  }
+  // ???
+#pragma unroll
+  for (int bs = 0; bs < BATCH_SIZE; bs++) {
+#pragma unroll
+  for (int i = 0; i < BMGQA; i++) {
+    ((int32_t*)C)[i] += (int32_t)(((int32_t*)CBits)[i + bs * BMGQA]);
+    ((float*)C)[i] = (float)(((int32_t*)C)[i]) / ((float*)LUT_Scales)[bs] * ((float*)Scales)[0];
+  }
+  }
+  if (0 != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+template<int BATCH_SIZE>
+ int32_t two_qgemm_lut_k0(void* A, void* LUT, void* Scales, void* LUT_Scales, void* C) {
+#pragma unroll
+  for (int bs = 0; bs < BATCH_SIZE; bs++) {
+#pragma unroll
+  for (int i = 0; i < BMEMD; i++) {
+    ((float*)C)[i] = (float)(((int32_t*)C)[i]) / ((float*)LUT_Scales)[bs] * ((float*)Scales)[0];
+  }
+  }
+  if (0 != 0) {
+    return -1;
+  }
+  return 0;
+}
+
+void ggml_preprocessor(int bs, int three_k, int two_k, void* B, void* LUT_Scales, void* Three_QLUT, void* Two_QLUT) {
+    partial_max_reset(bs, (&(((float*)LUT_Scales)[0])));
+  // 8640 / 24 == 200
+    for (int32_t b = 0; b < bs; b++) {
+        per_tensor_quant(two_k + three_k, (&(((float*)LUT_Scales)[b])), (&(((float*)B)[b * (two_k + three_k)])));
+        if (three_k == 1536) {
+            three_lut_ctor<1536>((&(((int8_t*)Three_QLUT)[b * three_k / 3 * 32])), (&(((float*)B)[b * (three_k + two_k)])), (&(((float*)LUT_Scales)[b])));
+        }
+        else if (three_k == 4032) {
+            three_lut_ctor<4032>((&(((int8_t*)Three_QLUT)[b * three_k / 3 * 32])), (&(((float*)B)[b * (three_k + two_k)])), (&(((float*)LUT_Scales)[b])));
+            two_lut_ctor<64>((&(((int8_t*)Two_QLUT)[b * two_k / 2 * 32])), (&(((float*)B)[b * (three_k + two_k) + 4032])), (&(((float*)LUT_Scales)[b])));
+        }
+    }
+}
+
+void ggml_qgemm_lut(int bs, int k, void* A, void* sign, void* LUT, void* Scales, void* LUT_Scales, void* C) {
+    if (k == 1536) {
+        if (bs == 1) {
+            three_qgemm_lut_k1536<1>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 8) {
+            three_qgemm_lut_k1536<8>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 32) {
+            three_qgemm_lut_k1536<32>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 128) {
+            three_qgemm_lut_k1536<128>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 256) {
+            three_qgemm_lut_k1536<256>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 512) {
+            three_qgemm_lut_k1536<512>(A, sign, LUT, Scales, LUT_Scales, C);
+        }
+    }
+    else if (k == 4032) {
+        if (bs == 1) {
+            three_qgemm_lut_k4032<1>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 8) {
+            three_qgemm_lut_k4032<8>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 32) {
+            three_qgemm_lut_k4032<32>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 128) {
+            three_qgemm_lut_k4032<128>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 256) {
+            three_qgemm_lut_k4032<256>(A, sign, LUT, Scales, LUT_Scales, C);
+        }else if (bs == 512) {
+            three_qgemm_lut_k4032<512>(A, sign, LUT, Scales, LUT_Scales, C);
+        }
+    }
+    else if (k == 64) {
+        if (bs == 1) {
+            two_qgemm_lut_k64<1>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 8) {
+            two_qgemm_lut_k64<8>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 32) {
+            two_qgemm_lut_k64<32>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 128) {
+            two_qgemm_lut_k64<128>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 256) {
+            two_qgemm_lut_k64<256>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 512) {
+            two_qgemm_lut_k64<512>(A, LUT, Scales, LUT_Scales, C);
+        }
+    }
+    else if (k == 0) {
+        if (bs == 1) {
+            two_qgemm_lut_k0<1>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 8) {
+            two_qgemm_lut_k0<8>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 32) {
+            two_qgemm_lut_k0<32>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 128) {
+            two_qgemm_lut_k0<128>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 256) {
+            two_qgemm_lut_k0<256>(A, LUT, Scales, LUT_Scales, C);
+        } else if (bs == 512) {
+            two_qgemm_lut_k0<512>(A, LUT, Scales, LUT_Scales, C);
+        }
+    }
+}
+
+void ggml_tmac_init(void) {
+    // LOG(INFO) << "ggml_tmac_init";
+
+    if (initialized) {
+        return;
+    }
+    initialized = true;
+
+    // if (wrapper == nullptr) {
+    //     wrapper = new TMAC::TMACGeMMWrapper<tmac_tmac_float_type>();
+    // }
+    if (tmac_tensor_extras == nullptr) {
+        tmac_tensor_extras = new tmac_tensor_extra[GGML_TMAC_MAX_NODES];
+    }
+    tmac_tensor_extras_index = 0;
+}
+
+void ggml_tmac_free(void) {
+    // LOG(INFO) << "ggml_tmac_free";
+
+    if (!initialized) {
+        return;
+    }
+    initialized = false;
+
+    // delete wrapper;
+    // wrapper = nullptr;
+    for (size_t i = 0; i < tmac_tensor_extras_index; i++) {
+        // aligned_free(tmac_tensor_extras[i].qweights);
+        // aligned_free(tmac_tensor_extras[i].scales);
+    }
+    delete[] tmac_tensor_extras;
+    tmac_tensor_extras = nullptr;
+}
+
+static bool is_type_supported(enum ggml_type type) {
+    if (type == GGML_TYPE_Q4_0 ||
+        type == GGML_TYPE_I2) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+bool ggml_tmac_can_mul_mat(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst) {
+    if ((is_type_supported(src0->type)) &&
+        src1->type == GGML_TYPE_F32 &&
+        dst->type == GGML_TYPE_F32 &&
+        src0->backend == GGML_BACKEND_TYPE_CPU) {
+        return true;
+    }
+    return false;
+}
+
+size_t ggml_tmac_mul_mat_get_wsize(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst) {
+    const size_t ne01 = src0->ne[1];
+    const size_t ne10 = src1->ne[0];
+    const size_t ne11 = src1->ne[1];
+    
+    size_t wsize = ne10 * ne11 * 11 * sizeof(int8_t) + 2 * ne11 * 2 * sizeof(tmac_float_type);
+    if (sizeof(tmac_float_type) == 2) {
+        // Need fp32 to fp16 conversion
+        wsize += std::max(ne10, ne01) * ne11 * sizeof(tmac_float_type);
+    }
+    wsize = ((wsize - 1) / 64 + 1) * 64;
+    return wsize;
+}
+
+void ggml_tmac_transform_tensor(struct ggml_tensor * tensor) {
+    if (!(is_type_supported(tensor->type) && tensor->backend == GGML_BACKEND_TYPE_CPU && tensor->extra == nullptr)) {
+        return;
+    }
+
+    int k = tensor->ne[0];
+    int m = tensor->ne[1];  // `n` in llama.cpp
+
+    const int lut_scales_size = 1;
+    const int scales_size = 1;
+    int n_tile_num = 1;
+    if (k == 8192) {
+      n_tile_num = m / BMEMD;
+    } else if(k == 45568) {
+      n_tile_num = m / BMGQA;
+    } else if (k == 3200) {
+      n_tile_num = m / BMEMD;
+    } else if(k == 8640) {
+      n_tile_num = m / BMGQA;
+    } else if(k == 1536) {
+      n_tile_num = m / BMEMD;
+    } else if(k == 4096) {
+      n_tile_num = m / BMGQA;
+    }
+
+    uint8_t * qweights;
+    tmac_float_type * scales;
+
+    scales = (tmac_float_type *) aligned_malloc(scales_size * sizeof(tmac_float_type));
+    qweights = (uint8_t *) tensor->data;
+    float * i2_scales = (float * )(qweights + k * m / 4);
+    scales[0] = (tmac_float_type) i2_scales[0];
+
+    tensor->extra = tmac_tensor_extras + tmac_tensor_extras_index;
+    tmac_tensor_extras[tmac_tensor_extras_index++] = {
+        /* .lut_scales_size = */ lut_scales_size,
+        /* .scales_size     = */ scales_size,
+        /* .n_tile_num      = */ n_tile_num,
+        /* .qweights        = */ qweights,
+        /* .scales          = */ scales
+    };
+}
+
+int ggml_tmac_get_type_bits(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_I2:
+            return 2;
+        case GGML_TYPE_Q4_0:
+            return 4;
+        default:
+            return 0;
+    }
+}
+#endif
