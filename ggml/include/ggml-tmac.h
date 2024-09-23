@@ -35,8 +35,14 @@ GGML_API void ggml_tmac_mul_mat_task_compute(void * src0, void * scales, void * 
 GGML_API void ggml_tmac_transform_tensor(struct ggml_tensor * tensor);
 GGML_API int ggml_tmac_get_type_bits(enum ggml_type type);
 GGML_API void ggml_tmac_set_n_threads(int n_threads);
+#if defined(GGML_BITNET_ARM_TL1)
 GGML_API void ggml_qgemm_lut(int k, void* A, void* LUT, void* Scales, void* LUT_Scales, void* C);
 GGML_API void ggml_preprocessor(int k, void* B, void* LUT_Scales, void* QLUT);
+#endif
+#if defined(GGML_BITNET_X86_TL2)
+GGML_API void ggml_qgemm_lut(int bs, int k, void* A, void* sign, void* LUT, void* Scales, void* LUT_Scales, void* C);
+GGML_API void ggml_preprocessor(int bs, int three_k, int two_k, void* B, void* LUT_Scales, void* Three_QLUT, void* Two_QLUT);
+#endif
 
 #ifdef  __cplusplus
 }
