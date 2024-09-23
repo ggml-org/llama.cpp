@@ -645,6 +645,15 @@ static const ggml_type_traits_t type_traits[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
+    [GGML_TYPE_TL2] = {
+        .type_name                = "tl2",
+        .blck_size                = 1,
+        .type_size                = sizeof(int8_t),
+        .is_quantized             = false,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_I8] = {
         .type_name                = "i8",
         .blck_size                = 1,
@@ -3262,7 +3271,7 @@ GGML_CALL size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
-        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1) {
+        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1 || tensor->type == GGML_TYPE_TL2) {
             nbytes = nbytes / 4 + 32;
         }
     }
@@ -12795,11 +12804,8 @@ static void ggml_compute_forward_mul_mat(
     }
 #endif
 #if defined(GGML_BITNET_X86_TL2)
-    if (ggml_tmac_can_mul_mat(src0, src1, dst)) {\
-        if (params->type == GGML_TASK_TYPE_FINALIZE) {
-            return;
-        }
-
+#define BK3 96
+    if (ggml_tmac_can_mul_mat(src0, src1, dst)) {
         // src0: weight,     ne00 = k, ne01 = n
         // src1: activation, ne10 = k, ne11 = m
         char * wdata = params->wdata;
@@ -12821,10 +12827,7 @@ static void ggml_compute_forward_mul_mat(
         two_qlut = (int8_t *) (lut_scales + ne11);
 
         // g = 4
-        if (params->type == GGML_TASK_TYPE_INIT) {
-            if (ith != 0) {
-                return;
-            }
+        if (ith == 0) {
             // Transform tensor if not already transformed
             // Although we have done this in file `llama.cpp`,
             // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
@@ -12840,8 +12843,9 @@ static void ggml_compute_forward_mul_mat(
                 act_input = src1->data;
             }
             ggml_preprocessor(ne11, three_k, two_k, act_input, lut_scales, three_qlut, two_qlut);
-            return;
         }
+
+        ggml_barrier(params->shared);
 
         tmac_float_type * act_output;
         if (sizeof(tmac_float_type) == 2) {
@@ -14811,6 +14815,7 @@ static void ggml_compute_forward_clamp(
         case GGML_TYPE_TQ2_0:
         case GGML_TYPE_I2_S:
         case GGML_TYPE_TL1:
+        case GGML_TYPE_TL2:
         case GGML_TYPE_I8_S:
         case GGML_TYPE_IQ2_XXS:
         case GGML_TYPE_IQ2_XS:
