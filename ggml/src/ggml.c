@@ -47,8 +47,9 @@ int ggml_sve_cnt_b = 0;
 #ifdef GGML_USE_LLAMAFILE
 #include <llamafile/sgemm.h>
 #endif
-
+#if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
 #include "ggml-tmac.h"
+#endif
 
 #if defined(_MSC_VER)
 // disable "possible loss of data" to avoid hundreds of casts
@@ -3600,9 +3601,9 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
 
             GGML_PRINT_DEBUG("%s: g_state initialized in %f ms\n", __func__, (t_end - t_start)/1000.0f);
         }
-
+#if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
         ggml_tmac_init();
-
+#endif
         is_first_call = false;
     }
 
@@ -19811,7 +19812,7 @@ struct ggml_cplan ggml_graph_plan(const struct ggml_cgraph * cgraph, int n_threa
                 {
                     const enum ggml_type vec_dot_type = type_traits[node->src[0]->type].vec_dot_type;
 
-#if defined(GGML_BITNET_ARM_TL1)
+#if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
                     if (ggml_tmac_can_mul_mat(node->src[0], node->src[1], node)) {
                         cur = ggml_tmac_mul_mat_get_wsize(node->src[0], node->src[1], node);
                     } else

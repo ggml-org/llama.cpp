@@ -4912,7 +4912,7 @@ struct llama_model_loader {
             }
 
             size_done += n_size;
-#if defined(GGML_BITNET_ARM_TL1)
+#if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
             ggml_tmac_transform_tensor(cur);
 #endif
         }
@@ -7972,7 +7972,7 @@ static bool llm_load_tensors(
                         layer.ffn_gate       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff});
                         layer.ffn_down       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
                         layer.ffn_up         = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff});
-#ifndef GGML_BITNET_ARM_TL1
+#if !defined(GGML_BITNET_ARM_TL1) && !defined(GGML_BITNET_X86_TL2)
                         layer.wq_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "scale",  i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.wk_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "scale",  i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.wv_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "scale",  i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -15045,7 +15045,7 @@ static void llama_set_inputs(llama_context & lctx, const llama_ubatch & batch) {
 
         ggml_backend_tensor_set(lctx.inp_pos, batch.pos, 0, n_tokens*ggml_element_size(lctx.inp_pos));
     }
-#if defined(GGML_BITNET_X86_TL2)
+#ifndef GGML_BITNET_ARM_TL1
     if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
         GGML_ASSERT(lctx.inp_out_ids && "every model that can must skip unused outputs");
         const int64_t n_tokens = batch.n_tokens;
