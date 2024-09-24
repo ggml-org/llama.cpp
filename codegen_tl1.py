@@ -96,6 +96,6 @@ if __name__ == "__main__":
     k1_code = gen_tbl_impl("EMD", args.BMEMD, args.BKEMD, args.bmEMD, args.byEMD)
     k2_code = gen_tbl_impl("GQA", args.BMGQA, args.BKGQA, args.bmGQA, args.byGQA)
 
-    with open("inline_func.h", 'w') as f:     # 写文件，开始的时候会先清空原文件，参考w的用法。如果不用with open，只是open，要注意最后将文件关闭。
+    with open("ggml/include/inline_func.h", 'w') as f:     # 写文件，开始的时候会先清空原文件，参考w的用法。如果不用with open，只是open，要注意最后将文件关闭。
         f.write(''.join(k1_code))
         f.write(''.join(k2_code))
