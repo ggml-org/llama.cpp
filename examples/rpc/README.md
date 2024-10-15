@@ -10,20 +10,21 @@ This can be used for distributed LLM inference with `llama.cpp` in the following
 
 ```mermaid
 flowchart TD
-    rpcb---|TCP|srva
-    rpcb---|TCP|srvb
-    rpcb-.-|TCP|srvn
+    rpcb<-->|TCP|srva
+    rpcb<-->|TCP|srvb
+    rpcb<-.->|TCP|srvn
     subgraph hostn[Host N]
-    srvn[rpc-server]-.-backend3["Backend (CUDA,Metal,etc.)"]
+    srvn[rpc-server]<-.->backend3["Backend (CUDA,Metal,etc.)"]
     end
     subgraph hostb[Host B]
-    srvb[rpc-server]---backend2["Backend (CUDA,Metal,etc.)"]
+    srvb[rpc-server]<-->backend2["Backend (CUDA,Metal,etc.)"]
     end
     subgraph hosta[Host A]
-    srva[rpc-server]---backend["Backend (CUDA,Metal,etc.)"]
+    srva[rpc-server]<-->backend["Backend (CUDA,Metal,etc.)"]
     end
     subgraph host[Main Host]
-    ggml[llama.cpp]---rpcb[RPC backend]
+    local["Backend (CUDA,Metal,etc.)"]<-->ggml[llama-cli]
+    ggml[llama-cli]<-->rpcb[RPC backend]
     end
     style hostn stroke:#66,stroke-width:2px,stroke-dasharray: 5 5
 ```
@@ -62,17 +63,12 @@ $ CUDA_VISIBLE_DEVICES=0 bin/rpc-server -p 50052
 This way you can run multiple `rpc-server` instances on the same host, each with a different CUDA device.
 
 
-On the main host build `llama.cpp` only with `-DGGML_RPC=ON`:
-
-```bash
-mkdir build-rpc
-cd build-rpc
-cmake .. -DGGML_RPC=ON
-cmake --build . --config Release
-```
-
-Finally, use the `--rpc` option to specify the host and port of each `rpc-server`:
+On the main host build `llama.cpp` for the local backend and add `-DGGML_RPC=ON` to the build options.
+Finally, when running `llama-cli`, use the `--rpc` option to specify the host and port of each `rpc-server`:
 
 ```bash
 $ bin/llama-cli -m ../models/tinyllama-1b/ggml-model-f16.gguf -p "Hello, my name is" --repeat-penalty 1.0 -n 64 --rpc 192.168.88.10:50052,192.168.88.11:50052 -ngl 99
 ```
+
+This way you can offload model layers to both local and remote devices.
+

@@ -246,7 +246,6 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
-
 //
 // Super-block quantization structures
 //
@@ -381,6 +380,7 @@ typedef struct {
 } block_iq3_s;
 static_assert(sizeof(block_iq3_s) == sizeof(ggml_half) + 13*(QK_K/32) + IQ3S_N_SCALE, "wrong iq3_s block size/padding");
 
+// 1.5625 bpw
 typedef struct {
     ggml_half d;
     uint8_t  qs[QK_K/8];

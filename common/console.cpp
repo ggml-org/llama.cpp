@@ -94,6 +94,9 @@ namespace console {
                 simple_io = true;
             }
         }
+        if (simple_io) {
+            _setmode(_fileno(stdin), _O_U8TEXT);
+        }
 #else
         // POSIX-specific console initialization
         if (!simple_io) {

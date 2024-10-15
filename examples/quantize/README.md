@@ -54,6 +54,8 @@ As the models are currently fully loaded into memory, you will need adequate dis
 
 Several quantization methods are supported. They differ in the resulting model disk size and inference speed.
 
+The quantization formats `Q4_0_4_4`, `Q4_0_4_8` and `Q4_0_8_8` are block interleaved variants of the `Q4_0` format, providing a data layout that is better suited for specific implementations of optimized mulmat kernels. Since these formats differ only in data layout, they have the same quantized size as the `Q4_0` format.
+
 *(outdated)*
 
 | Model | Measure      |    F16 |   Q4_0 |   Q4_1 |   Q5_0 |   Q5_1 |   Q8_0 |

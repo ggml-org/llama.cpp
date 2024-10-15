@@ -30,6 +30,7 @@
 #include <cstring>
 #include <mutex>
 
+#include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cann/aclnn_ops.h"
 #include "ggml-cann/common.h"
@@ -37,69 +38,6 @@
 #define GGML_COMMON_DECL_C
 
 #include "ggml-common.h"
-
-/**
- * @brief Default logging callback for GGML.
- *
- * This function is the default logging callback that logs messages to stderr.
- *
- * @param level The log level.
- * @param msg The log message.
- * @param user_data User data passed to the callback.
- */
-static void ggml_cann_default_log_callback(enum ggml_log_level level,
-                                           const char* msg, void* user_data) {
-    GGML_UNUSED(level);
-    GGML_UNUSED(user_data);
-    fprintf(stderr, "%s", msg);
-}
-
-ggml_log_callback ggml_cann_log_callback = ggml_cann_default_log_callback;
-void* ggml_cann_log_user_data = NULL;
-
-GGML_API void ggml_backend_cann_log_set_callback(ggml_log_callback log_callback,
-                                                 void* user_data) {
-    ggml_cann_log_callback = log_callback;
-    ggml_cann_log_user_data = user_data;
-}
-
-#define GGML_CANN_LOG_INFO(...) ggml_cann_log(GGML_LOG_LEVEL_INFO, __VA_ARGS__)
-#define GGML_CANN_LOG_WARN(...) ggml_cann_log(GGML_LOG_LEVEL_WARN, __VA_ARGS__)
-#define GGML_CANN_LOG_ERROR(...) \
-    ggml_cann_log(GGML_LOG_LEVEL_ERROR, __VA_ARGS__)
-
-GGML_ATTRIBUTE_FORMAT(2, 3)
-
-/**
- * @brief Log a message using the current logging callback.
- *
- * This function formats a log message and passes it to the current logging
- * callback.
- *
- * @param level The log level.
- * @param format The format string for the log message.
- * @param ... The arguments for the format string.
- */
-static void ggml_cann_log(enum ggml_log_level level, const char* format, ...) {
-    if (ggml_cann_log_callback != NULL) {
-        va_list args;
-        va_start(args, format);
-        char buffer[128];
-        int len = vsnprintf(buffer, 128, format, args);
-        if (len < 128) {
-            ggml_cann_log_callback(level, buffer, ggml_cann_log_user_data);
-        } else {
-             // vsnprintf adds a null terminator
-            std::vector<char> buffer2(len + 1);
-            va_end(args);
-            va_start(args, format);
-            vsnprintf(&buffer2[0], buffer2.size(), format, args);
-            ggml_cann_log_callback(level, buffer2.data(),
-                                   ggml_cann_log_user_data);
-        }
-        va_end(args);
-    }
-}
 
 /**
  * @brief Handles CANN errors by printing an error message and aborting.
@@ -115,10 +53,10 @@ static void ggml_cann_log(enum ggml_log_level level, const char* format, ...) {
     int32_t id = -1;
     aclrtGetDevice(&id);
 
-    GGML_CANN_LOG_ERROR("CANN error: %s\n", msg);
-    GGML_CANN_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func,
+    GGML_LOG_ERROR("CANN error: %s\n", msg);
+    GGML_LOG_ERROR("  current device: %d, in function %s at %s:%d\n", id, func,
             file, line);
-    GGML_CANN_LOG_ERROR("  %s\n", stmt);
+    GGML_LOG_ERROR("  %s\n", stmt);
     // abort with GGML_ASSERT to get a stack trace
     GGML_ABORT("CANN error");
 }
@@ -164,7 +102,7 @@ static ggml_cann_device_info ggml_cann_init() {
     aclError err = aclrtGetDeviceCount((uint32_t*)&info.device_count);
 
     if (err != ACL_SUCCESS) {
-        GGML_CANN_LOG_ERROR("%s: failed to initialize CANN: %s\n",
+        GGML_LOG_ERROR("%s: failed to initialize CANN: %s\n",
                 __func__, aclGetRecentErrMsg());
         return info;
     }
@@ -314,7 +252,7 @@ struct ggml_cann_pool_leg : public ggml_cann_pool {
         *actual_size = look_ahead_size;
         pool_size += look_ahead_size;
 #ifdef DEBUG_CANN_MALLOC
-        GGML_CANN_LOG_INFO(
+        GGML_LOG_INFO(
             "%s[%d]: %d buffers, max_size = %u MB, pool_size = %u MB, "
             "requested %u MB\n",
             __func__, device, nnz, (uint32_t)(max_size / 1024 / 1024),
@@ -469,7 +407,7 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
             // add to the pool
             pool_size += reserve_size;
 
-            // GGML_CANN_LOG_INFO("cann pool[%d]: size increased to %llu MB (
+            // GGML_LOG_INFO("cann pool[%d]: size increased to %llu MB (
             // reserved %llu MB)\n",
             //       device, (unsigned long long) (pool_size/1024/1024),
             //       (unsigned long long) (reserve_size/1024/1024));
@@ -482,7 +420,7 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
         pool_used += size;
 
 #ifdef DEBUG_CANN_MALLOC
-        GGML_CANN_LOG_INFO("cann pool[%d]: allocated %llu bytes at %llx\n", device,
+        GGML_LOG_INFO("cann pool[%d]: allocated %llu bytes at %llx\n", device,
                (unsigned long long)size, (unsigned long long)ptr);
 #endif
         return ptr;
@@ -496,7 +434,7 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
      */
     void free(void* ptr, size_t size) override {
 #ifdef DEBUG_CANN_MALLOC
-        GGML_CANN_LOG_INFO("cann pool[%d]: freed %llu bytes at %llx\n", device,
+        GGML_LOG_INFO("cann pool[%d]: freed %llu bytes at %llx\n", device,
                (unsigned long long)size, (unsigned long long)ptr);
 #endif
 
@@ -559,7 +497,7 @@ struct ggml_backend_cann_buffer_context {
  * @return A pointer to a C-string containing the name of the buffer.
  */
 
-GGML_CALL static const char* ggml_backend_cann_buffer_get_name(
+static const char* ggml_backend_cann_buffer_get_name(
     ggml_backend_buffer_t buffer) {
     return "CANN";
 
@@ -575,7 +513,7 @@ GGML_CALL static const char* ggml_backend_cann_buffer_get_name(
  * @param buffer The buffer to check.
  * @return true if the buffer is a CANN buffer, false otherwise.
  */
-GGML_CALL static bool ggml_backend_buffer_is_cann(
+static bool ggml_backend_buffer_is_cann(
     ggml_backend_buffer_t buffer) {
     return buffer->iface.get_name == ggml_backend_cann_buffer_get_name;
 }
@@ -588,7 +526,7 @@ GGML_CALL static bool ggml_backend_buffer_is_cann(
  *
  * @param buffer The CANN buffer to free.
  */
-GGML_CALL static void ggml_backend_cann_buffer_free_buffer(
+static void ggml_backend_cann_buffer_free_buffer(
     ggml_backend_buffer_t buffer) {
     ggml_backend_cann_buffer_context* ctx =
         (ggml_backend_cann_buffer_context*)buffer->context;
@@ -604,7 +542,7 @@ GGML_CALL static void ggml_backend_cann_buffer_free_buffer(
  * @param buffer The CANN buffer whose base pointer is to be retrieved.
  * @return A pointer to the base of the device memory allocated for the buffer.
  */
-GGML_CALL static void* ggml_backend_cann_buffer_get_base(
+static void* ggml_backend_cann_buffer_get_base(
     ggml_backend_buffer_t buffer) {
     ggml_backend_cann_buffer_context* ctx =
         (ggml_backend_cann_buffer_context*)buffer->context;
@@ -624,9 +562,9 @@ GGML_CALL static void* ggml_backend_cann_buffer_get_base(
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-GGML_CALL static void ggml_backend_cann_transform_q4_0(ggml_tensor* tensor,
-                                                       const void* src,
-                                                       void* dst) {
+static void ggml_backend_cann_transform_q4_0(ggml_tensor* tensor,
+                                             const void* src,
+                                             void* dst) {
 
     int64_t n_elems = ggml_nelements(tensor);
     int64_t groups = n_elems / QK4_0;
@@ -676,7 +614,7 @@ GGML_CALL static void ggml_backend_cann_transform_q4_0(ggml_tensor* tensor,
  * @param dst Pointer to the destination buffer where the Q4.0 formatted data
  * will be stored.
  */
-GGML_CALL static void ggml_backend_cann_transform_back_q4_0(
+static void ggml_backend_cann_transform_back_q4_0(
     const ggml_tensor* tensor, void* src, void* dst) {
 
     int64_t n_elems = ggml_nelements(tensor);
@@ -725,9 +663,9 @@ GGML_CALL static void ggml_backend_cann_transform_back_q4_0(
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-GGML_CALL static void ggml_backend_cann_transform_q8_0(ggml_tensor* tensor,
-                                                       const void* src,
-                                                       void* dst) {
+static void ggml_backend_cann_transform_q8_0(ggml_tensor* tensor,
+                                             const void* src,
+                                             void* dst) {
     int64_t n_elems = ggml_nelements(tensor);
     int64_t groups = n_elems / QK8_0;
     size_t quant_bytes = n_elems * sizeof(uint8_t);
@@ -759,7 +697,7 @@ GGML_CALL static void ggml_backend_cann_transform_q8_0(ggml_tensor* tensor,
  * @param dst Pointer to the destination buffer where the Q8.0 formatted data
  * will be stored.
  */
-GGML_CALL static void ggml_backend_cann_transform_back_q8_0(
+static void ggml_backend_cann_transform_back_q8_0(
     const ggml_tensor* tensor, const void* src, void* dst) {
     int64_t n_elems = ggml_nelements(tensor);
     int64_t groups = n_elems / QK8_0;
@@ -791,8 +729,8 @@ GGML_CALL static void ggml_backend_cann_transform_back_q8_0(
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-GGML_CALL static void ggml_backend_cann_transform(ggml_tensor* tensor,
-                                                  const void* src, void* dst) {
+static void ggml_backend_cann_transform(ggml_tensor* tensor,
+                                        const void* src, void* dst) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_q4_0(tensor, src, dst);
@@ -817,7 +755,7 @@ GGML_CALL static void ggml_backend_cann_transform(ggml_tensor* tensor,
  * @param dst Pointer to the destination buffer where transformed tensor data
  * will be stored.
  */
-GGML_CALL static void ggml_backend_cann_transform_back(
+static void ggml_backend_cann_transform_back(
     const ggml_tensor* tensor, void* src, void* dst) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
@@ -840,7 +778,7 @@ GGML_CALL static void ggml_backend_cann_transform_back(
  * @param type The tensor type to check.
  * @return true if transformation is needed, false otherwise.
  */
-GGML_CALL static bool need_transform(ggml_type type) {
+static bool need_transform(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
@@ -859,7 +797,7 @@ GGML_CALL static bool need_transform(ggml_type type) {
  * @param buffer The CANN buffer from which to initialize the tensor.
  * @param tensor Pointer to the tensor to be initialized.
  */
-GGML_CALL static void ggml_backend_cann_buffer_init_tensor(
+static void ggml_backend_cann_buffer_init_tensor(
     ggml_backend_buffer_t buffer, ggml_tensor* tensor) {
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
@@ -895,7 +833,7 @@ GGML_CALL static void ggml_backend_cann_buffer_init_tensor(
  * @param offset Offset in the source data from where to start copying.
  * @param size Size of the data to be copied, in bytes.
  */
-GGML_CALL static void ggml_backend_cann_buffer_set_tensor(
+static void ggml_backend_cann_buffer_set_tensor(
     ggml_backend_buffer_t buffer, ggml_tensor *tensor, const void *data,
     size_t offset, size_t size) {
     ggml_backend_cann_buffer_context *ctx =
@@ -940,7 +878,7 @@ GGML_CALL static void ggml_backend_cann_buffer_set_tensor(
  * @param offset Offset in the destination buffer where to start copying.
  * @param size Size of the data to be copied, in bytes.
  */
-GGML_CALL static void ggml_backend_cann_buffer_get_tensor(
+static void ggml_backend_cann_buffer_get_tensor(
     ggml_backend_buffer_t buffer, const ggml_tensor* tensor, void* data,
     size_t offset, size_t size) {
     ggml_backend_cann_buffer_context* ctx =
@@ -974,7 +912,7 @@ GGML_CALL static void ggml_backend_cann_buffer_get_tensor(
  * @param dst Pointer to the destination tensor where the data will be copied.
  * @return true if the copy operation succeeded, false otherwise.
  */
-GGML_CALL static bool ggml_backend_cann_buffer_cpy_tensor(
+static bool ggml_backend_cann_buffer_cpy_tensor(
     ggml_backend_buffer_t buffer, const ggml_tensor* src, ggml_tensor* dst) {
     if (ggml_backend_buffer_is_cann(src->buffer)) {
         ggml_backend_cann_buffer_context* src_ctx =
@@ -1016,7 +954,7 @@ GGML_CALL static bool ggml_backend_cann_buffer_cpy_tensor(
  * @param buffer The CANN buffer to be cleared.
  * @param value The value to which each byte in the buffer will be set.
  */
-GGML_CALL static void ggml_backend_cann_buffer_clear(
+static void ggml_backend_cann_buffer_clear(
     ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_cann_buffer_context* ctx =
         (ggml_backend_cann_buffer_context*)buffer->context;
@@ -1036,6 +974,7 @@ static ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_cann_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_cann_buffer_get_base,
     /* .init_tensor     = */ ggml_backend_cann_buffer_init_tensor,
+    /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_cann_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_cann_buffer_get_tensor,
     /* .cpy_tensor      = */ ggml_backend_cann_buffer_cpy_tensor,
@@ -1063,7 +1002,7 @@ struct ggml_backend_cann_buffer_type_context {
  * @param buft Pointer to the buffer type context.
  * @return Const pointer to the C-style string containing the name.
  */
-GGML_CALL static const char* ggml_backend_cann_buffer_type_name(
+static const char* ggml_backend_cann_buffer_type_name(
     ggml_backend_buffer_type_t buft) {
     return "CANN";
 
@@ -1080,7 +1019,7 @@ GGML_CALL static const char* ggml_backend_cann_buffer_type_name(
  * @param size Size in bytes of the buffer to allocate.
  * @return Pointer to the allocated buffer, or nullptr if allocation fails.
  */
-GGML_CALL static ggml_backend_buffer_t
+static ggml_backend_buffer_t
 ggml_backend_cann_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                            size_t size) {
     ggml_backend_cann_buffer_type_context* buft_ctx =
@@ -1093,7 +1032,7 @@ ggml_backend_cann_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
     void* dev_ptr;
     aclError err = aclrtMalloc(&dev_ptr, size, ACL_MEM_MALLOC_HUGE_FIRST);
     if (err != ACL_SUCCESS) {
-        GGML_CANN_LOG_ERROR(
+        GGML_LOG_ERROR(
             "%s: allocating %.2f MiB on device %d: aclrtMalloc failed: %s\n",
             __func__, size / 1024.0 / 1024.0, buft_ctx->device,
             aclGetRecentErrMsg());
@@ -1119,7 +1058,7 @@ ggml_backend_cann_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
  * @return The alignment requirement in bytes (fixed at 128 bytes for CANN
  * buffers).
  */
-GGML_CALL static size_t ggml_backend_cann_buffer_type_get_alignment(
+static size_t ggml_backend_cann_buffer_type_get_alignment(
     ggml_backend_buffer_type_t buft) {
     return 128;
 
@@ -1140,7 +1079,7 @@ GGML_CALL static size_t ggml_backend_cann_buffer_type_get_alignment(
  * @return The total allocation size in bytes required for the tensor in the
  * CANN buffer.
  */
-GGML_CALL static size_t ggml_backend_cann_buffer_type_get_alloc_size(
+static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     ggml_backend_buffer_type_t buft, const ggml_tensor* tensor) {
     size_t size = ggml_nbytes(tensor);
     int64_t ne0 = tensor->ne[0];
@@ -1191,7 +1130,7 @@ static ggml_backend_buffer_type_i ggml_backend_cann_buffer_type_interface = {
  * @return A pointer to the buffer type interface for the specified device, or
  * nullptr if the device index is out of range.
  */
-GGML_CALL ggml_backend_buffer_type_t
+ggml_backend_buffer_type_t
 ggml_backend_cann_buffer_type(int32_t device) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
@@ -1218,6 +1157,117 @@ ggml_backend_cann_buffer_type(int32_t device) {
     }
 
     return &ggml_backend_cann_buffer_types[device];
+}
+
+/**
+ * @brief Retrieves the name associated with a CANN host buffer type.
+ *
+ * This function returns the descriptive name associated with the specified
+ * CANN host buffer type context.
+ *
+ * @param buft Pointer to the host buffer type context.
+ * @return Const pointer to the C-style string containing the name.
+ */
+static const char * ggml_backend_cann_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    return "CANN_Host";
+
+    GGML_UNUSED(buft);
+}
+
+/**
+ * @brief Retrieves the name associated with a CANN host buffer.
+ *
+ * This function returns the descriptive name associated with the specified
+ * CANN host buffer context.
+ *
+ * @param buft Pointer to the host buffer context.
+ * @return Const pointer to the C-style string containing the name.
+ */
+static const char * ggml_backend_cann_host_buffer_name(ggml_backend_buffer_t buffer) {
+    return "CANN_Host";
+
+    GGML_UNUSED(buffer);
+}
+
+/**
+ * @brief Free resources associated with a CANN host buffer.
+ *
+ * This function frees the resources associated with a CANN host buffer, including
+ * its context.
+ *
+ * @param buffer The CANN host buffer to free.
+ */
+static void ggml_backend_cann_host_buffer_free(ggml_backend_buffer_t buffer) {
+    ACL_CHECK(aclrtFreeHost(buffer->context));
+}
+
+/**
+ * @brief Allocates a new CANN host buffer of the specified size.
+ *
+ * This function allocates a new CANN host buffer with the given size.
+ * @param size Size in bytes of the host buffer to allocate.
+ * @return Pointer to the allocated host buffer, or nullptr if allocation fails.
+ */
+static void * ggml_cann_host_malloc(size_t size) {
+    if (getenv("GGML_CANN_NO_PINNED") != nullptr) {
+        return nullptr;
+    }
+
+    void * hostPtr = nullptr;
+    aclError err = aclrtMallocHost((void **) &hostPtr, size);
+    if (err != ACL_SUCCESS) {
+
+        GGML_LOG_WARN("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
+                           size / 1024.0 / 1024.0, aclGetRecentErrMsg());
+        return nullptr;
+    }
+    return hostPtr;
+}
+
+/**
+ * @brief Allocates a new CANN host buffer of the specified type and size.
+ *
+ * @param buft Pointer to the host buffer type context.
+ * @param size Size in bytes of the host buffer to allocate.
+ * @return Pointer to the allocated host buffer, or CPU buffer pointer if allocation fails.
+ */
+static ggml_backend_buffer_t ggml_backend_cann_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    void * hostPtr = ggml_cann_host_malloc(size);
+
+    if (hostPtr == nullptr) {
+        // fallback to cpu buffer
+        return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(hostPtr, size);
+    buffer->buft = buft;
+    buffer->iface.get_name = ggml_backend_cann_host_buffer_name;
+    buffer->iface.free_buffer = ggml_backend_cann_host_buffer_free;
+
+    return buffer;
+}
+
+/**
+ * @brief Interface for managing CANN host buffer types in the GGML backend.
+ *
+ * Provides function pointers for allocating, querying properties, and managing
+ * memory for CANN buffer types in the GGML backend.
+ */
+ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type() {
+    static struct ggml_backend_buffer_type ggml_backend_cann_buffer_type_host = {
+        /* .iface    = */ {
+            /* .get_name         = */ ggml_backend_cann_host_buffer_type_name,
+            /* .alloc_buffer     = */ ggml_backend_cann_host_buffer_type_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+        },
+        /* .device   = */ nullptr,
+        /* .context  = */ nullptr,
+    };
+
+    return &ggml_backend_cann_buffer_type_host;
 }
 
 /**
@@ -1383,7 +1433,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
  * @param backend Pointer to the CANN backend structure.
  * @return A pointer to a constant string representing the backend name.
  */
-GGML_CALL static const char* ggml_backend_cann_name(ggml_backend_t backend) {
+static const char* ggml_backend_cann_name(ggml_backend_t backend) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
 
@@ -1398,7 +1448,7 @@ GGML_CALL static const char* ggml_backend_cann_name(ggml_backend_t backend) {
  *
  * @param backend Pointer to the CANN backend structure to be freed.
  */
-GGML_CALL static void ggml_backend_cann_free(ggml_backend_t backend) {
+static void ggml_backend_cann_free(ggml_backend_t backend) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ACL_CHECK(aclrtSynchronizeDevice());
@@ -1423,7 +1473,7 @@ GGML_CALL static void ggml_backend_cann_free(ggml_backend_t backend) {
  * @param backend Pointer to the CANN backend structure.
  * @return Pointer to the buffer type structure for the CANN backend.
  */
-GGML_CALL static ggml_backend_buffer_type_t
+static ggml_backend_buffer_type_t
 ggml_backend_cann_get_default_buffer_type(ggml_backend_t backend) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
@@ -1444,11 +1494,11 @@ ggml_backend_cann_get_default_buffer_type(ggml_backend_t backend) {
  * @param offset Offset in bytes within the host data.
  * @param size Size of the data to copy in bytes.
  */
-GGML_CALL static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
-                                                         ggml_tensor *tensor,
-                                                         const void *data,
-                                                         size_t offset,
-                                                         size_t size) {
+static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
+                                               ggml_tensor *tensor,
+                                               const void *data,
+                                               size_t offset,
+                                               size_t size) {
     ggml_backend_cann_context *cann_ctx =
         (ggml_backend_cann_context *)backend->context;
 
@@ -1475,7 +1525,7 @@ GGML_CALL static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
     }
 }
 
-GGML_CALL static void ggml_backend_cann_get_tensor_async(
+static void ggml_backend_cann_get_tensor_async(
     ggml_backend_t backend, const ggml_tensor *tensor, void *data,
     size_t offset, size_t size) {
     ggml_backend_cann_context *cann_ctx =
@@ -1514,7 +1564,7 @@ GGML_CALL static void ggml_backend_cann_get_tensor_async(
  * @param dst Pointer to the destination tensor to copy data to.
  * @return true if the copy operation succeeds, false otherwise.
  */
-GGML_CALL static bool ggml_backend_cann_cpy_tensor_async(
+static bool ggml_backend_cann_cpy_tensor_async(
     ggml_backend_t backend_src, ggml_backend_t backend_dst,
     const ggml_tensor* src, ggml_tensor* dst) {
     GGML_ASSERT(ggml_backend_is_cann(backend_src) ||
@@ -1582,7 +1632,7 @@ GGML_CALL static bool ggml_backend_cann_cpy_tensor_async(
  *
  * @param backend Pointer to the CANN backend structure to synchronize.
  */
-GGML_CALL static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
+static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
 
@@ -1603,7 +1653,7 @@ GGML_CALL static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
  * @return enum ggml_status Returns GGML_STATUS_SUCCESS if computation
  *         completes successfully, otherwise an appropriate error status.
  */
-GGML_CALL static enum ggml_status ggml_backend_cann_graph_compute(
+static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_t backend, ggml_cgraph* cgraph) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
@@ -1620,7 +1670,7 @@ GGML_CALL static enum ggml_status ggml_backend_cann_graph_compute(
         bool ok = ggml_cann_compute_forward(*cann_ctx, node);
 
         if (!ok) {
-            GGML_CANN_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__,
+            GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__,
                     node->name, ggml_op_name(node->op));
         }
         GGML_ASSERT(ok);
@@ -1641,7 +1691,7 @@ GGML_CALL static enum ggml_status ggml_backend_cann_graph_compute(
  * @return bool Returns true if the operation is supported by the backend,
  *              otherwise false.
  */
-GGML_CALL static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
+static bool ggml_backend_cann_supports_op(ggml_backend_t backend,
                                                     const ggml_tensor* op) {
     switch (op->op) {
         case GGML_OP_UNARY:
@@ -1763,7 +1813,7 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
  * @return bool Returns true if the CANN backend supports the buffer type,
  *              otherwise false.
  */
-GGML_CALL static bool ggml_backend_cann_supports_buft(
+static bool ggml_backend_cann_supports_buft(
     ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
     if (ggml_backend_buft_is_cann(buft)) {
         ggml_backend_cann_context * cann_ctx =
@@ -1789,7 +1839,7 @@ GGML_CALL static bool ggml_backend_cann_supports_buft(
  * @return bool Returns true if the operation should be offloaded, otherwise
  * false.
  */
-GGML_CALL static bool ggml_backend_cann_offload_op(ggml_backend_t backend,
+static bool ggml_backend_cann_offload_op(ggml_backend_t backend,
                                                    const ggml_tensor* op) {
     const int min_batch_size = 32;
     GGML_UNUSED(backend);
@@ -1909,11 +1959,8 @@ static ggml_backend_i ggml_backend_cann_interface = {
     /* .supports_op             = */ ggml_backend_cann_supports_op,
     /* .supports_buft           = */ ggml_backend_cann_supports_buft,
     /* .offload_op              = */ ggml_backend_cann_offload_op,
-    /* .event_new               = */ ggml_backend_cann_event_new,
-    /* .event_free              = */ ggml_backend_cann_event_free,
     /* .event_record            = */ ggml_backend_cann_event_record,
     /* .event_wait              = */ ggml_backend_cann_event_wait,
-    /* .event_synchronize       = */ ggml_backend_cann_event_synchronize,
 };
 
 /**
@@ -1930,91 +1977,46 @@ static ggml_guid_t ggml_backend_cann_guid() {
     return &guid;
 }
 
-GGML_CALL ggml_backend_t ggml_backend_cann_init(int32_t device) {
+ggml_backend_t ggml_backend_cann_init(int32_t device) {
     aclInit(nullptr);
     if (device < 0 || device >= ggml_backend_cann_get_device_count()) {
-        GGML_CANN_LOG_ERROR("%s: error: invalid device %d\n", __func__, device);
+        GGML_LOG_ERROR("%s: error: invalid device %d\n", __func__, device);
         return nullptr;
     }
 
     ggml_backend_cann_context* ctx = new ggml_backend_cann_context(device);
     if (ctx == nullptr) {
-        GGML_CANN_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
+        GGML_LOG_ERROR("%s: error: failed to allocate context\n", __func__);
         return nullptr;
     }
-
+    ggml_cann_set_device(ctx->device);
     ggml_backend_t cann_backend =
         new ggml_backend{/* .guid      = */ ggml_backend_cann_guid(),
                          /* .interface = */ ggml_backend_cann_interface,
+                         /* .device    = */ nullptr,
                          /* .context   = */ ctx};
 
     return cann_backend;
 }
 
-GGML_CALL bool ggml_backend_is_cann(ggml_backend_t backend) {
+bool ggml_backend_is_cann(ggml_backend_t backend) {
     return backend != NULL &&
            ggml_guid_matches(backend->guid, ggml_backend_cann_guid());
 }
 
-GGML_CALL int32_t ggml_backend_cann_get_device_count() {
+int32_t ggml_backend_cann_get_device_count() {
     return ggml_cann_info().device_count;
 }
 
-GGML_CALL void ggml_backend_cann_get_device_description(
+void ggml_backend_cann_get_device_description(
     int32_t device, char* description, size_t description_size) {
     ggml_cann_set_device(device);
     const char* soc_name = aclrtGetSocName();
     snprintf(description, description_size, "%s", soc_name);
 }
 
-GGML_CALL void ggml_backend_cann_get_device_memory(int32_t device, size_t* free,
-                                                   size_t* total) {
+void ggml_backend_cann_get_device_memory(int32_t device, size_t* free,
+                                         size_t* total) {
     ggml_cann_set_device(device);
     ACL_CHECK(aclrtGetMemInfo(ACL_HBM_MEM, free, total));
-}
-
-// backend registry
-/**
- * @brief Initializes a CANN backend based on the provided parameters.
- *
- * This function initializes a CANN backend using the device index and then
- * initializes the backend using `ggml_backend_cann_init`.
- *
- * @param params Parameters for initialization (unused in this implementation).
- * @param user_data User data containing the device index to initialize the
- * backend.
- * @return ggml_backend_t The initialized CANN backend.
- */
-GGML_CALL static ggml_backend_t ggml_backend_reg_cann_init(const char* params,
-                                                           void* user_data) {
-    ggml_backend_t cann_backend =
-        ggml_backend_cann_init((int)(intptr_t)user_data);
-    return cann_backend;
-
-    GGML_UNUSED(params);
-}
-
-extern "C" GGML_CALL int ggml_backend_cann_reg_devices();
-
-/**
- * @brief Registers CANN (Ascend) devices as backend options.
- *
- * This function initializes ACL, retrieves the number of available CANN
- * devices, and registers each device as a backend option using
- * `ggml_backend_register`. Each device is given a unique name based on
- * `GGML_CANN_NAME` followed by its index.
- *
- * @return int The number of CANN devices registered.
- */
-GGML_CALL int ggml_backend_cann_reg_devices() {
-    uint32_t device_count = ggml_backend_cann_get_device_count();
-    // initialization
-    for (uint32_t i = 0; i < device_count; i++) {
-        char name[128];
-        snprintf(name, sizeof(name), "CANN%d", i);
-        ggml_backend_register(name, ggml_backend_reg_cann_init,
-                              ggml_backend_cann_buffer_type(i),
-                              (void*)(intptr_t)i);
-    }
-    return device_count;
 }

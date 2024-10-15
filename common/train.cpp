@@ -1,9 +1,11 @@
 #include "train.h"
 #include "common.h"
 
+#include <algorithm>
 #include <random>
 #include <sstream>
 #include <functional>
+#include <cstring>
 
 struct random_normal_distribution {
     std::mt19937 gen;

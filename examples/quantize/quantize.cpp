@@ -26,6 +26,8 @@ static const std::vector<struct quant_option> QUANT_OPTIONS = {
     { "IQ2_M",    LLAMA_FTYPE_MOSTLY_IQ2_M,    " 2.7  bpw quantization",            },
     { "IQ1_S",    LLAMA_FTYPE_MOSTLY_IQ1_S,    " 1.56 bpw quantization",            },
     { "IQ1_M",    LLAMA_FTYPE_MOSTLY_IQ1_M,    " 1.75 bpw quantization",            },
+    { "TQ1_0",    LLAMA_FTYPE_MOSTLY_TQ1_0,    " 1.69 bpw ternarization",           },
+    { "TQ2_0",    LLAMA_FTYPE_MOSTLY_TQ2_0,    " 2.06 bpw ternarization",           },
     { "Q2_K",     LLAMA_FTYPE_MOSTLY_Q2_K,     " 2.96G, +3.5199 ppl @ Llama-3-8B",  },
     { "Q2_K_S",   LLAMA_FTYPE_MOSTLY_Q2_K_S,   " 2.96G, +3.1836 ppl @ Llama-3-8B",  },
     { "IQ3_XXS",  LLAMA_FTYPE_MOSTLY_IQ3_XXS,  " 3.06 bpw quantization",            },
@@ -64,6 +66,16 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
 
+static bool striequals(const char * a, const char * b) {
+    while (*a && *b) {
+        if (std::tolower(*a) != std::tolower(*b)) {
+            return false;
+        }
+        a++; b++;
+    }
+    return *a == *b;
+}
+
 static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftype, std::string & ftype_str_out) {
     std::string ftype_str;
 
@@ -71,7 +83,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
         ftype_str.push_back(std::toupper(ch));
     }
     for (auto & it : QUANT_OPTIONS) {
-        if (it.name == ftype_str) {
+        if (striequals(it.name.c_str(), ftype_str.c_str())) {
             ftype = it.ftype;
             ftype_str_out = it.name;
             return true;
@@ -226,15 +238,15 @@ static int prepare_imatrix(const std::string & imatrix_file,
 }
 
 static ggml_type parse_ggml_type(const char * arg) {
-    ggml_type result = GGML_TYPE_COUNT;
-    for (int j = 0; j < GGML_TYPE_COUNT; ++j) {
-        auto type = ggml_type(j);
+    for (int i = 0; i < GGML_TYPE_COUNT; ++i) {
+        auto type = (ggml_type)i;
         const auto * name = ggml_type_name(type);
-        if (name && strcmp(arg, name) == 0) {
-            result = type; break;
+        if (name && striequals(name, arg)) {
+            return type;
         }
     }
-    return result;
+    fprintf(stderr, "%s: invalid ggml_type '%s'\n", __func__, arg);
+    return GGML_TYPE_COUNT;
 }
 
 int main(int argc, char ** argv) {
@@ -255,12 +267,18 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--output-tensor-type") == 0) {
             if (arg_idx < argc-1) {
                 params.output_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.output_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
             } else {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--token-embedding-type") == 0) {
             if (arg_idx < argc-1) {
                 params.token_embedding_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.token_embedding_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
             } else {
                 usage(argv[0]);
             }

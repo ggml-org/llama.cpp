@@ -331,6 +331,10 @@ if __name__ == '__main__':
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 super().set_gguf_parameters()
 
+            def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+                # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
+                return ()
+
             def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
                 tensor_map: dict[str, PartialLoraTensor] = {}
 
@@ -363,7 +367,13 @@ if __name__ == '__main__':
                     yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-                dest = super().modify_tensors(data_torch, name, bid)
+                dest = list(super().modify_tensors(data_torch, name, bid))
+                # some archs may have the same tensor for lm_head and output (tie word embeddings)
+                # in this case, adapters targeting lm_head will fail when using llama-export-lora
+                # therefore, we ignore them for now
+                # see: https://github.com/ggerganov/llama.cpp/issues/9065
+                if name == "lm_head.weight" and len(dest) == 0:
+                    raise ValueError("lm_head is present in adapter, but is ignored in base model")
                 for dest_name, dest_data in dest:
                     assert isinstance(dest_data, LoraTorchTensor)
                     lora_a, lora_b = dest_data.get_lora_A_B()
@@ -386,7 +396,6 @@ if __name__ == '__main__':
             dry_run=args.dry_run,
             dir_lora_model=dir_lora,
             lora_alpha=alpha,
-            is_lora=True,
         )
 
         logger.info("Exporting model...")

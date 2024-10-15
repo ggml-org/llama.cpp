@@ -7,8 +7,8 @@ extern "C" {
 #endif
 
 typedef struct ggml_backend_buffer_type * ggml_backend_buffer_type_t;
-typedef struct ggml_backend_buffer * ggml_backend_buffer_t;
-typedef struct ggml_backend * ggml_backend_t;
+typedef struct      ggml_backend_buffer * ggml_backend_buffer_t;
+typedef struct             ggml_backend * ggml_backend_t;
 
 // Tensor allocator
 struct ggml_tallocr {
@@ -24,7 +24,7 @@ GGML_API void                ggml_tallocr_alloc(struct ggml_tallocr * talloc, st
 // Graph allocator
 /*
   Example usage:
-    ggml_gallocr_t galloc = ggml_gallocr_new(ggml_bacckend_cpu_buffer_type());
+    ggml_gallocr_t galloc = ggml_gallocr_new(ggml_backend_cpu_buffer_type());
 
     // optional: create a worst-case graph and reserve the buffers to avoid reallocations
     ggml_gallocr_reserve(galloc, build_graph(max_batch));

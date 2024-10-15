@@ -26,7 +26,11 @@ void ggml_cuda_op_mul_mat_q(
     // nrows_dst == nrows of the matrix that the kernel writes into
     const int64_t nrows_dst = id == ctx.device ? ne0 : row_diff;
 
-    const mmq_args args = {src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, stride00, src1_padded_row_size, src1_ncols, ne11, nrows_dst};
+    // The stream-k decomposition is only faster for recent NVIDIA GPUs.
+    // Also its fixup needs to allocate a temporary buffer in the memory pool.
+    // There are multiple parallel CUDA streams for src1_ncols != ne11 which would introduce a race condition for this buffer.
+    const bool use_stream_k = compute_capability >= CC_VOLTA && compute_capability < CC_OFFSET_AMD && src1_ncols == ne11;
+    const mmq_args args = {src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, stride00, src1_padded_row_size, src1_ncols, ne11, nrows_dst, use_stream_k};
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:

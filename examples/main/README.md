@@ -69,7 +69,7 @@ In this section, we cover the most commonly used options for running the `llama-
 -   `-c N, --ctx-size N`: Set the size of the prompt context. The default is 512, but LLaMA models were built with a context of 2048, which will provide better results for longer input/inference.
 -   `-mli, --multiline-input`: Allows you to write or paste multiple lines without ending each in '\'
 -   `-t N, --threads N`: Set the number of threads to use during generation. For optimal performance, it is recommended to set this value to the number of physical CPU cores your system has.
--   -   `-ngl N, --n-gpu-layers N`: When compiled with GPU support, this option allows offloading some layers to the GPU for computation. Generally results in increased performance.
+-   `-ngl N, --n-gpu-layers N`: When compiled with GPU support, this option allows offloading some layers to the GPU for computation. Generally results in increased performance.
 
 ## Input Prompts
 
@@ -160,6 +160,8 @@ The `--predict` option controls the number of tokens the model generates in resp
 A value of -1 will enable infinite text generation, even though we have a finite context window. When the context window is full, some of the earlier tokens (half of the tokens after `--keep`) will be discarded. The context must then be re-evaluated before generation can resume. On large models and/or large context windows, this will result in a significant pause in output.
 
 If the pause is undesirable, a value of -2 will stop generation immediately when the context is filled.
+
+The `--no-context-shift` option allows you to stop the infinite text generation once the finite context window is full.
 
 It is important to note that the generated text may be shorter than the specified number of tokens if an End-of-Sequence (EOS) token or a reverse prompt is encountered. In interactive mode, text generation will pause and control will be returned to the user. In non-interactive mode, the program will end. In both cases, the text generation may stop before reaching the specified `--predict` value. If you want the model to keep going without ever producing End-of-Sequence on its own, you can use the `--ignore-eos` parameter.
 

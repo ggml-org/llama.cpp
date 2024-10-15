@@ -26,16 +26,14 @@
           config.cudaSupport = true;
           config.allowUnfreePredicate =
             p:
-            builtins.all
-              (
-                license:
-                license.free
-                || builtins.elem license.shortName [
-                  "CUDA EULA"
-                  "cuDNN EULA"
-                ]
-              )
-              (p.meta.licenses or [ p.meta.license ]);
+            builtins.all (
+              license:
+              license.free
+              || builtins.elem license.shortName [
+                "CUDA EULA"
+                "cuDNN EULA"
+              ]
+            ) (p.meta.licenses or [ p.meta.license ]);
         };
         # Ensure dependencies use ROCm consistently
         pkgsRocm = import inputs.nixpkgs {

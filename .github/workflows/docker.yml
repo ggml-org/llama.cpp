@@ -15,10 +15,16 @@ on:
     branches:
       - master
     paths: ['.github/workflows/docker.yml', '.devops/*.Dockerfile', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal']
+  workflow_dispatch: # allows manual triggering, useful for debugging
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
+
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  packages: write
 
 jobs:
   push_to_registry:
@@ -37,15 +43,20 @@ jobs:
           - { tag: "light-cuda", dockerfile: ".devops/llama-cli-cuda.Dockerfile", platforms: "linux/amd64" }
           - { tag: "server-cuda", dockerfile: ".devops/llama-server-cuda.Dockerfile", platforms: "linux/amd64" }
           - { tag: "full-cuda", dockerfile: ".devops/full-cuda.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "light-rocm", dockerfile: ".devops/llama-cli-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          - { tag: "server-rocm", dockerfile: ".devops/llama-server-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          # Note: the full-rocm image is failing due to a "no space left on device" error. It is disabled for now to allow the workflow to complete.
+          - { tag: "light-musa", dockerfile: ".devops/llama-cli-musa.Dockerfile", platforms: "linux/amd64" }
+          - { tag: "server-musa", dockerfile: ".devops/llama-server-musa.Dockerfile", platforms: "linux/amd64" }
+          - { tag: "full-musa", dockerfile: ".devops/full-musa.Dockerfile", platforms: "linux/amd64" }
+          # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
+          #- { tag: "light-rocm", dockerfile: ".devops/llama-cli-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
+          #- { tag: "server-rocm", dockerfile: ".devops/llama-server-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
           #- { tag: "full-rocm", dockerfile: ".devops/full-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
           - { tag: "light-intel", dockerfile: ".devops/llama-cli-intel.Dockerfile", platforms: "linux/amd64" }
           - { tag: "server-intel", dockerfile: ".devops/llama-server-intel.Dockerfile", platforms: "linux/amd64" }
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # preserve git history, so we can determine the build number
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
@@ -59,6 +70,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          REPO_OWNER="${GITHUB_REPOSITORY_OWNER@L}"  # to lower case
+          REPO_NAME="${{ github.event.repository.name }}"
+
+          # determine tag name postfix (build number, commit hash)
+          if [[ "${{ env.GITHUB_BRANCH_NAME }}" == "master" ]]; then
+            TAG_POSTFIX="b${BUILD_NUMBER}"
+          else
+            SAFE_NAME=$(echo "${{ env.GITHUB_BRANCH_NAME }}" | tr '/' '-')
+            TAG_POSTFIX="${SAFE_NAME}-${SHORT_HASH}"
+          fi
+
+          # list all tags possible
+          TAGS=""
+          TAGS="${TAGS}ghcr.io/${REPO_OWNER}/${REPO_NAME}:${{ matrix.config.tag }},"
+          TAGS="${TAGS}ghcr.io/${REPO_OWNER}/${REPO_NAME}:${{ matrix.config.tag }}-${TAG_POSTFIX}"
+
+          echo "output_tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "output_tags=$TAGS"  # print out for debugging
+        env:
+          GITHUB_BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+          GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
       # https://github.com/jlumbroso/free-disk-space/tree/54081f138730dfa15788a46383842cd2f914a1be#example
       - name: Free Disk Space (Ubuntu)
@@ -77,40 +116,13 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Determine tag name
-        id: tag
-        shell: bash
-        run: |
-          BUILD_NUMBER="$(git rev-list --count HEAD)"
-          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
-            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
-          else
-            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
-            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Downcase github.repository_owner
-        run: |
-          echo "repository_owner_lowercase=${GITHUB_REPOSITORY_OWNER@L}" >> $GITHUB_ENV
-        env:
-          GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
-
-      - name: Build and push Docker image (versioned)
+      - name: Build and push Docker image (tagged + versioned)
         if: github.event_name == 'push'
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: ${{ matrix.config.platforms }}
-          tags: "ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ env.COMMIT_SHA }}"
-          file: ${{ matrix.config.dockerfile }}
-
-      - name: Build and push Docker image (tagged)
-        uses: docker/build-push-action@v4
-        with:
-          context: .
-          push: ${{ github.event_name == 'push' }}
-          platforms: ${{ matrix.config.platforms }}
-          tags: "ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }},ghcr.io/${{ env.repository_owner_lowercase }}/llama.cpp:${{ matrix.config.tag }}-${{ steps.tag.outputs.name }}"
+          # tag list is generated from step above
+          tags: ${{ steps.tag.outputs.output_tags }}
           file: ${{ matrix.config.dockerfile }}

@@ -77,6 +77,35 @@ Feature: Parallel
       | disabled  | 128       |
       | enabled   | 64        |
 
+  Scenario Outline: Multi users with number of prompts exceeding number of slots
+    Given a system prompt You are a writer.
+    And   a model tinyllama-2
+    Given a prompt:
+      """
+      Write a very long book.
+      """
+    And a prompt:
+      """
+      Write another a poem.
+      """
+    And a prompt:
+      """
+      What is LLM?
+      """
+    And a prompt:
+      """
+      The sky is blue and I love it.
+      """
+    And <n_predict> max tokens to predict
+    And streaming is <streaming>
+    Given concurrent OAI completions requests
+    Then the server is busy
+    Then the server is idle
+    Then all prompts are predicted with <n_predict> tokens
+    Examples:
+      | streaming | n_predict |
+      | disabled  | 128       |
+      | enabled   | 64        |
 
   Scenario:  Multi users with total number of tokens to predict exceeds the KV Cache size #3969
     Given a prompt:

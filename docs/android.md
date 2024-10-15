@@ -2,55 +2,82 @@
 # Android
 
 ## Build on Android using Termux
-[Termux](https://github.com/termux/termux-app#installation) is a method to execute `llama.cpp` on an Android device (no root required).
-```
-apt update && apt upgrade -y
-apt install git make cmake
-```
 
-It's recommended to move your model inside the `~/` directory for best performance:
-```
-cd storage/downloads
-mv model.gguf ~/
-```
+[Termux](https://termux.dev/en/) is an Android terminal emulator and Linux environment app (no root required). As of writing, Termux is available experimentally in the Google Play Store; otherwise, it may be obtained directly from the project repo or on F-Droid.
 
-[Get the code](https://github.com/ggerganov/llama.cpp#get-the-code) & [follow the Linux build instructions](https://github.com/ggerganov/llama.cpp#build) to build `llama.cpp`.
-
-## Building the Project using Android NDK
-Obtain the [Android NDK](https://developer.android.com/ndk) and then build with CMake.
-
-Execute the following commands on your computer to avoid downloading the NDK to your mobile. Alternatively, you can also do this in Termux:
-```
-$ mkdir build-android
-$ cd build-android
-$ export NDK=<your_ndk_directory>
-$ cmake -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-23 -DCMAKE_C_FLAGS=-march=armv8.4a+dotprod ..
-$ make
-```
-
-Install [termux](https://github.com/termux/termux-app#installation) on your device and run `termux-setup-storage` to get access to your SD card (if Android 11+ then run the command twice).
-
-Finally, copy these built `llama` binaries and the model file to your device storage. Because the file permissions in the Android sdcard cannot be changed, you can copy the executable files to the `/data/data/com.termux/files/home/bin` path, and then execute the following commands in Termux to add executable permission:
-
-(Assumed that you have pushed the built executable files to the /sdcard/llama.cpp/bin path using `adb push`)
-```
-$cp -r /sdcard/llama.cpp/bin /data/data/com.termux/files/home/
-$cd /data/data/com.termux/files/home/bin
-$chmod +x ./*
-```
-
-Download model [llama-2-7b-chat.Q4_K_M.gguf](https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF/blob/main/llama-2-7b-chat.Q4_K_M.gguf), and push it to `/sdcard/llama.cpp/`, then move it to `/data/data/com.termux/files/home/model/`
+With Termux, you can install and run `llama.cpp` as if the environment were Linux. Once in the Termux shell:
 
 ```
-$mv /sdcard/llama.cpp/llama-2-7b-chat.Q4_K_M.gguf /data/data/com.termux/files/home/model/
+$ apt update && apt upgrade -y
+$ apt install git cmake
 ```
 
-Now, you can start chatting:
+Then, follow the [build instructions](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md), specifically for CMake.
+
+Once the binaries are built, download your model of choice (e.g., from Hugging Face). It's recommended to place it in the `~/` directory for best performance:
+
 ```
-$cd /data/data/com.termux/files/home/bin
-$./llama-cli -m ../model/llama-2-7b-chat.Q4_K_M.gguf -n 128 -cml
+$ curl -L {model-url} -o ~/{model}.gguf
 ```
 
-Here's a demo of an interactive session running on Pixel 5 phone:
+Then, if you are not already in the repo directory, `cd` into `llama.cpp` and:
+
+```
+$ ./build/bin/llama-simple -m ~/{model}.gguf -c {context-size} -p "{your-prompt}"
+```
+
+Here, we show `llama-simple`, but any of the executables under `examples` should work, in theory. Be sure to set `context-size` to a reasonable number (say, 4096) to start with; otherwise, memory could spike and kill your terminal.
+
+To see what it might look like visually, here's an old demo of an interactive session running on a Pixel 5 phone:
 
 https://user-images.githubusercontent.com/271616/225014776-1d567049-ad71-4ef2-b050-55b0b3b9274c.mp4
+
+## Cross-compile using Android NDK
+It's possible to build `llama.cpp` for Android on your host system via CMake and the Android NDK. If you are interested in this path, ensure you already have an environment prepared to cross-compile programs for Android (i.e., install the Android SDK). Note that, unlike desktop environments, the Android environment ships with a limited set of native libraries, and so only those libraries are available to CMake when building with the Android NDK (see: https://developer.android.com/ndk/guides/stable_apis.)
+
+Once you're ready and have cloned `llama.cpp`, invoke the following in the project directory:
+
+```
+$ cmake \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DCMAKE_C_FLAGS="-march=armv8.7a" \
+  -DCMAKE_CXX_FLAGS="-march=armv8.7a" \
+  -DGGML_OPENMP=OFF \
+  -DGGML_LLAMAFILE=OFF \
+  -B build-android
+```
+
+Notes:
+  - While later versions of Android NDK ship with OpenMP, it must still be installed by CMake as a dependency, which is not supported at this time
+  - `llamafile` does not appear to support Android devices (see: https://github.com/Mozilla-Ocho/llamafile/issues/325)
+
+The above command should configure `llama.cpp` with the most performant options for modern devices. Even if your device is not running `armv8.7a`, `llama.cpp` includes runtime checks for available CPU features it can use.
+
+Feel free to adjust the Android ABI for your target. Once the project is configured:
+
+```
+$ cmake --build build-android --config Release -j{n}
+$ cmake --install build-android --prefix {install-dir} --config Release
+```
+
+After installing, go ahead and download the model of your choice to your host system. Then:
+
+```
+$ adb shell "mkdir /data/local/tmp/llama.cpp"
+$ adb push {install-dir} /data/local/tmp/llama.cpp/
+$ adb push {model}.gguf /data/local/tmp/llama.cpp/
+$ adb shell
+```
+
+In the `adb shell`:
+
+```
+$ cd /data/local/tmp/llama.cpp
+$ LD_LIBRARY_PATH=lib ./bin/llama-simple -m {model}.gguf -c {context-size} -p "{your-prompt}"
+```
+
+That's it!
+
+Be aware that Android will not find the library path `lib` on its own, so we must specify `LD_LIBRARY_PATH` in order to run the installed executables. Android does support `RPATH` in later API levels, so this could change in the future. Refer to the previous section for information about `context-size` (very important!) and running other `examples`.

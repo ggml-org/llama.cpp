@@ -274,7 +274,7 @@ fout.add_bool("clip.use_gelu", use_gelu)
 
 
 if has_llava_projector:
-    model.vision_model.encoder.layers.pop(-1)  # pyright: ignore[reportAttributeAccessIssue]
+    model.vision_model.encoder.layers.pop(-1)
     projector = torch.load(args.llava_projector)
     for name, data in projector.items():
         name = get_tensor_name(name)
@@ -288,7 +288,7 @@ if has_llava_projector:
 
     print("Projector tensors added\n")
 
-state_dict = model.state_dict()  # pyright: ignore[reportAttributeAccessIssue]
+state_dict = model.state_dict()
 for name, data in state_dict.items():
     if should_skip_tensor(name, has_text_encoder, has_vision_encoder, has_llava_projector):
         # we don't need this

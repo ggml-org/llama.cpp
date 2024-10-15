@@ -50,6 +50,8 @@
 #define CC_RDNA1      (CC_OFFSET_AMD + 1010)
 #define CC_RDNA2      (CC_OFFSET_AMD + 1030)
 #define CC_RDNA3      (CC_OFFSET_AMD + 1100)
+#define CC_QY1        210
+#define CC_QY2        220
 
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
@@ -134,6 +136,10 @@ typedef float2 dfloat2;
 #define INT8_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_TURING
 
+#if !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ <= CC_QY1)
+#define FLASH_ATTN_AVAILABLE
+#endif // !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ <= CC_QY1)
+
 static constexpr bool fast_fp16_available(const int cc) {
     return cc >= CC_PASCAL && cc != 610;
 }
@@ -168,6 +174,18 @@ static __device__ void no_device_code(
 #else
 #define NO_DEVICE_CODE //GGML_ABORT("NO_DEVICE_CODE not valid in host code.")
 #endif // __CUDA_ARCH__
+
+static __device__ __forceinline__ int warp_reduce_sum(int x) {
+#if !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_AMPERE
+    return __reduce_add_sync(0xffffffff, x);
+#else
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, mask, 32);
+    }
+    return x;
+#endif // !(defined(GGML_USE_HIPBLAS) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= CC_AMPERE
+}
 
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
@@ -569,6 +587,7 @@ struct ggml_graph_node_properties {
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
     void * src_address[GGML_MAX_SRC];
+    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
 };
 
 struct ggml_cuda_graph {

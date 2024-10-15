@@ -227,6 +227,7 @@ struct ggml_backend_cann_context {
      * @brief Destructor for cleaning up resources.
      */
     ~ggml_backend_cann_context() {
+        ggml_cann_set_device(device);
         if (copy_event != nullptr) {
             ACL_CHECK(aclrtDestroyEvent(copy_event));
         }

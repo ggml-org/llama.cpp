@@ -2,13 +2,14 @@
 #undef NDEBUG
 #endif
 
+#include "json-schema-to-grammar.h"
+
+#include "llama-grammar.h"
+
 #include <cassert>
 #include <fstream>
 #include <sstream>
 #include <regex>
-
-#include "json-schema-to-grammar.h"
-#include "grammar-parser.h"
 
 static std::string trim(const std::string & source) {
     std::string s(source);
@@ -40,7 +41,8 @@ struct TestCase {
     }
     void verify_expectation_parseable() const {
         try {
-            auto state = grammar_parser::parse(expected_grammar.c_str());
+            llama_grammar_parser state;
+            state.parse(expected_grammar.c_str());
             if (state.symbol_ids.find("root") == state.symbol_ids.end()) {
                 throw std::runtime_error("Grammar failed to parse:\n" + expected_grammar);
             }

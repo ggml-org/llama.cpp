@@ -259,7 +259,7 @@ static __global__ void flash_attn_tile_ext_f16(
         }
 
         half kqsum_j = __low2half(kqsum[j_VKQ_0/nwarps]) + __high2half(kqsum[j_VKQ_0/nwarps]);
-        kqsum_j = warp_reduce_sum(kqsum_j);
+        kqsum_j = warp_reduce_sum((float)kqsum_j);
 
 #pragma unroll
         for (int i00 = 0; i00 < D; i00 += 2*WARP_SIZE) {

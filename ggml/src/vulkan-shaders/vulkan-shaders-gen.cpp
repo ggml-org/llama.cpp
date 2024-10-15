@@ -200,6 +200,11 @@ void string_to_spv(const std::string& _name, const std::string& in_fname, const 
     #else
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", "--target-env=vulkan1.2", "-O", in_path, "-o",  out_fname};
     #endif
+
+    #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
+        cmd.push_back("-g");
+    #endif
+
     for (const auto& define : defines) {
         cmd.push_back("-D" + define.first + "=" + define.second);
     }

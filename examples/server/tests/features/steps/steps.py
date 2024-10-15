@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import asyncio
 import json
 import os
@@ -22,6 +25,8 @@ from behave.api.async_step import async_run_until_complete
 from prometheus_client import parser
 
 # pyright: reportRedeclaration=false
+
+DEFAULT_TIMEOUT_SECONDS = aiohttp.ClientTimeout(total=600)
 
 @step("a server listening on {server_fqdn}:{server_port}")
 def step_server_config(context, server_fqdn: str, server_port: str):
@@ -63,6 +68,7 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.server_api_key = None
     context.server_continuous_batching = False
     context.server_embeddings = False
+    context.server_reranking = False
     context.server_metrics = False
     context.server_process = None
     context.seed = None
@@ -72,10 +78,15 @@ def step_server_config(context, server_fqdn: str, server_port: str):
     context.response_format = None
     context.temperature = None
     context.lora_file = None
+    context.disable_ctx_shift = False
 
     context.tasks_result = []
     context.concurrent_tasks = []
     context.prompts = []
+
+    context.reranking_query = None
+    context.reranking_documents = []
+    context.reranking_results = None
 
 
 @step('a model file {hf_file} from HF repo {hf_repo}')
@@ -143,7 +154,7 @@ def step_n_slots(context, n_slots: int):
 
 @step('{n_predict:d} server max tokens to predict')
 def step_server_n_predict(context, n_predict: int):
-    context.n_server_predict = n_predict
+    context.n_server_predict = n_predict if n_predict > 0 else None
 
 
 @step('{slot_save_path} as slot save path')
@@ -166,15 +177,21 @@ def step_server_continuous_batching(context):
     context.server_continuous_batching = True
 
 
-@step('embeddings extraction')
+@step('enable embeddings endpoint')
 def step_server_embeddings(context):
     context.server_embeddings = True
 
+@step('enable reranking endpoint')
+def step_server_reranking(context):
+    context.server_reranking = True
 
 @step('prometheus compatible metrics exposed')
 def step_server_metrics(context):
     context.server_metrics = True
 
+@step('disable context shifting')
+def step_server_disable_ctx_shift(context):
+    context.disable_ctx_shift = True
 
 @step("the server is starting")
 def step_start_server(context):
@@ -200,17 +217,15 @@ def step_start_server(context):
             time.sleep(0.1)
 
 
-@step("the server is {expecting_status}")
-@async_run_until_complete
-async def step_wait_for_the_server_to_be_started(context, expecting_status: Literal['healthy', 'ready', 'idle', 'busy'] | str):
+async def wait_for_server_status_with_timeout(context, expecting_status: Literal['healthy', 'ready', 'idle', 'busy'] | str, timeout: int):
     match expecting_status:
         case 'healthy':
             await wait_for_slots_status(context, context.base_url, 200,
-                                        timeout=30)
+                                        timeout=timeout)
 
         case 'ready' | 'idle':
             await wait_for_slots_status(context, context.base_url, 200,
-                                        timeout=30,
+                                        timeout=timeout,
                                         params={'fail_on_no_slot': 1},
                                         slots_idle=context.n_slots,
                                         slots_processing=0)
@@ -221,6 +236,18 @@ async def step_wait_for_the_server_to_be_started(context, expecting_status: Lite
                                         slots_processing=context.n_slots)
         case _:
             assert False, "unknown status"
+
+
+@step("the server is {expecting_status} with timeout {timeout:d} seconds")
+@async_run_until_complete
+async def step_wait_for_server_status_with_timeout(context, expecting_status: Literal['healthy', 'ready', 'idle', 'busy'] | str, timeout: int):
+    await wait_for_server_status_with_timeout(context, expecting_status, timeout)
+
+
+@step("the server is {expecting_status}")
+@async_run_until_complete
+async def step_wait_for_server_status(context, expecting_status: Literal['healthy', 'ready', 'idle', 'busy'] | str):
+    await wait_for_server_status_with_timeout(context, expecting_status, 30)
 
 
 @step('all slots are {expected_slot_status_string}')
@@ -242,7 +269,7 @@ async def step_all_slots_status(context, expected_slot_status_string: Literal['i
 @step('a completion request with {api_error} api error')
 @async_run_until_complete
 async def step_request_completion(context, api_error: Literal['raised'] | str):
-    expect_api_error = api_error == 'raised'
+    expect_api_error = api_error == 'raised' or api_error != 'no'
     seeds = await completions_seed(context, num_seeds=1)
     completion = await request_completion(context.prompts.pop(),
                                           seeds[0] if seeds is not None else seeds,
@@ -257,8 +284,11 @@ async def step_request_completion(context, api_error: Literal['raised'] | str):
     context.tasks_result.append(completion)
     if context.debug:
         print(f"Completion response: {completion}")
-    if expect_api_error:
+    if api_error == 'raised':
         assert completion == 401, f"completion must be an 401 status code: {completion}"
+    elif api_error.isdigit():
+        api_error_code = int(api_error)
+        assert completion == api_error_code, f"completion must be an {api_error_code} status code: {completion}"
 
 
 @step('{predicted_n:d} tokens are predicted matching {re_content}')
@@ -430,6 +460,14 @@ def step_impl(context, n_ga_w):
 def step_prompt_passkey(context):
     context.prompt_passkey = context_text(context)
 
+@step('a rerank query')
+def step_set_rerank_query(context):
+    context.reranking_query = context_text(context)
+    context.reranking_documents = []
+
+@step('a rerank document')
+def step_set_rerank_document(context):
+    context.reranking_documents.append(context_text(context))
 
 @step('{n_prompts:d} fixed prompts')
 def step_fixed_prompts(context, n_prompts):
@@ -597,6 +635,22 @@ async def step_compute_embedding(context):
     context.embeddings = await request_embedding(context_text(context), None, base_url=context.base_url)
 
 
+@step('reranking request')
+@async_run_until_complete
+async def step_compute_reranking(context):
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
+        async with session.post(f'{context.base_url}/reranking',
+                                json={
+                                    "query": context.reranking_query,
+                                    "documents": context.reranking_documents,
+                                }) as response:
+            if response.status == 200:
+                response_json = await response.json()
+                context.reranking_results = response_json['results']
+            else:
+                context.reranking_results = response.status
+
+
 @step('all embeddings are the same')
 @async_run_until_complete
 async def step_all_embeddings_are_the_same(context):
@@ -630,6 +684,9 @@ def step_assert_embeddings(context):
     for embedding in context.embeddings:
         assert_embeddings(embedding)
 
+@step('embeddings request with {api_error_code:d} api error')
+def step_assert_embeddings(context, api_error_code: int):
+    assert context.embeddings == api_error_code, f"embeddings request must return code {api_error_code}, but got {context.embeddings}"
 
 @step('an OAI compatible embeddings computation request for')
 @async_run_until_complete
@@ -679,17 +736,61 @@ async def all_embeddings_are_generated(context):
     for i in range(n_embedding_requests):
         assert_embeddings(context.tasks_result.pop().pop())
 
+@step('reranking results are returned')
+def reranking_results_are_returned(context):
+    assert len(context.reranking_results) == len(context.reranking_documents)
+
+@step('reranking highest score is index {idx_high:d} and lowest score is index {idx_low:d}')
+def reranking_results_are_returned(context, idx_high: int, idx_low: int):
+    max_score, max_idx = 0, 0
+    min_score, min_idx = 0, 0
+    for res in context.reranking_results:
+        if max_score < res['relevance_score']:
+            max_score = res['relevance_score']
+            max_idx   = res['index']
+        if min_score > res['relevance_score']:
+            min_score = res['relevance_score']
+            min_idx   = res['index']
+    print(context.reranking_results)
+    assert max_idx == idx_high
+    assert min_idx == idx_low
 
 @step('adding special tokens')
 def step_tokenize_set_add_special(context):
     context.tokenize_add_special = True
 
 
+@step("tokenizing with pieces")
+@async_run_until_complete
+async def step_tokenize_with_pieces(context):
+    context.tokenized_text = context_text(context)
+    async with aiohttp.ClientSession() as session:
+        tokenize_args = {"content": context.tokenized_text, "with_pieces": True}
+        if getattr(context, "tokenize_add_special", None) is not None:
+            tokenize_args["add_special"] = context.tokenize_add_special
+
+        async with session.post(
+            f"{context.base_url}/tokenize", json=tokenize_args
+        ) as response:
+            assert response.status == 200
+            tokenize_json = await response.json()
+            context.tokens_with_pieces = tokenize_json["tokens"]
+
+
+@step("tokens are given with pieces")
+@async_run_until_complete
+async def step_tokenize_with_pieces(context):
+    # Verify that the response contains both token IDs and pieces
+    assert all(
+        "id" in token and "piece" in token for token in context.tokens_with_pieces
+    )
+
+
 @step('tokenizing')
 @async_run_until_complete
 async def step_tokenize(context):
     context.tokenized_text = context_text(context)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         tokenize_args = {
             "content": context.tokenized_text,
         }
@@ -706,7 +807,7 @@ async def step_tokenize(context):
 @async_run_until_complete
 async def step_detokenize(context):
     assert len(context.tokens) > 0
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{context.base_url}/detokenize',
                                 json={
                                     "tokens": context.tokens,
@@ -735,7 +836,7 @@ def step_strings_for_tokenization(context):
 @step('an OPTIONS request is sent from {origin}')
 @async_run_until_complete
 async def step_options_request(context, origin):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         headers = {'Authorization': f'Bearer {context.user_api_key}', 'Origin': origin}
         async with session.options(f'{context.base_url}/v1/chat/completions',
                                     headers=headers) as response:
@@ -751,7 +852,7 @@ def step_check_options_header_value(context, cors_header, cors_header_value):
 @step('prometheus metrics are exposed')
 @async_run_until_complete
 async def step_prometheus_metrics_exported(context):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with await session.get(f'{context.base_url}/metrics') as metrics_response:
             assert metrics_response.status == 200
             assert metrics_response.headers['Content-Type'] == "text/plain; version=0.0.4"
@@ -818,13 +919,13 @@ async def concurrent_requests(context, f_completion, *args, **kwargs):
     for prompt_no in range(context.n_prompts):
         shifted_args = [context.prompts.pop(), seeds[prompt_no], *args]
         context.concurrent_tasks.append(asyncio.create_task(f_completion(*shifted_args, **kwargs)))
-    await asyncio.sleep(0.1)
+    await asyncio.sleep(0.01)
 
 
 @step('the slot {slot_id:d} is saved with filename "{filename}"')
 @async_run_until_complete
 async def step_save_slot(context, slot_id, filename):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{context.base_url}/slots/{slot_id}?action=save',
                                 json={"filename": filename},
                                 headers={"Content-Type": "application/json"}) as response:
@@ -834,7 +935,7 @@ async def step_save_slot(context, slot_id, filename):
 @step('the slot {slot_id:d} is restored with filename "{filename}"')
 @async_run_until_complete
 async def step_restore_slot(context, slot_id, filename):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{context.base_url}/slots/{slot_id}?action=restore',
                                 json={"filename": filename},
                                 headers={"Content-Type": "application/json"}) as response:
@@ -844,7 +945,7 @@ async def step_restore_slot(context, slot_id, filename):
 @step('the slot {slot_id:d} is erased')
 @async_run_until_complete
 async def step_erase_slot(context, slot_id):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{context.base_url}/slots/{slot_id}?action=erase',
                                 headers={"Content-Type": "application/json"}) as response:
             context.response = response
@@ -853,7 +954,7 @@ async def step_erase_slot(context, slot_id):
 @step('switch {on_or_off} lora adapter {lora_id:d}')
 @async_run_until_complete
 async def toggle_lora_adapter(context, on_or_off: str, lora_id: int):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{context.base_url}/lora-adapters',
                                 json=[{'id': lora_id, 'scale': 1 if on_or_off == 'on' else 0}],
                                 headers={"Content-Type": "application/json"}) as response:
@@ -889,7 +990,7 @@ async def request_completion(prompt,
             print(f"Set user_api_key: {user_api_key}")
         headers['Authorization'] = f'Bearer {user_api_key}'
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{base_url}/completion',
                                 json={
                                     "input_prefix": prompt_prefix,
@@ -902,8 +1003,7 @@ async def request_completion(prompt,
                                     "temperature": temperature if temperature is not None else 0.8,
                                     "n_probs": 2,
                                 },
-                                headers=headers,
-                                timeout=3600) as response:
+                                headers=headers) as response:
             if expect_api_error is None or not expect_api_error:
                 assert response.status == 200
                 assert response.headers['Access-Control-Allow-Origin'] == origin
@@ -961,7 +1061,7 @@ async def oai_chat_completions(user_prompt,
     if async_client:
         origin = 'llama.cpp'
         headers = {'Authorization': f'Bearer {user_api_key}', 'Origin': origin}
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
             async with session.post(f'{base_url}{base_path}',
                                     json=payload,
                                     headers=headers) as response:
@@ -980,6 +1080,8 @@ async def oai_chat_completions(user_prompt,
                             event_data = line.split(': ', 1)
                             assert event_data[0] == 'data', f'Bad event code received: ```{event_data}```'
                             chunk_raw = event_data[1]
+                            if chunk_raw == '[DONE]':
+                                break
 
                             chunk = json.loads(chunk_raw)
                             assert len(chunk['choices']) == 1, f"no choices provided, line ```{line}```"
@@ -1047,15 +1149,17 @@ async def oai_chat_completions(user_prompt,
     return completion_response
 
 
-async def request_embedding(content, seed, base_url=None) -> list[list[float]]:
-    async with aiohttp.ClientSession() as session:
+async def request_embedding(content, seed, base_url=None) -> list[list[float]] | int:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with session.post(f'{base_url}/embedding',
                                 json={
                                     "content": content,
                                 }) as response:
-            assert response.status == 200
-            response_json = await response.json()
-            return [response_json['embedding']]
+            if response.status == 200:
+                response_json = await response.json()
+                return [response_json['embedding']]
+            else:
+                return response.status
 
 
 async def request_oai_embeddings(input, seed,
@@ -1068,14 +1172,13 @@ async def request_oai_embeddings(input, seed,
         headers=[]
         if user_api_key is not None:
             headers = {'Authorization': f'Bearer {user_api_key}', 'Origin': origin}
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
             async with session.post(f'{base_url}/v1/embeddings',
                                     json={
                                         "input": input,
                                         "model": model,
                                     },
-                                    headers=headers,
-                                    timeout=3600) as response:
+                                    headers=headers) as response:
                 assert response.status == 200, f"received status code not expected: {response.status}"
                 assert response.headers['Access-Control-Allow-Origin'] == origin
                 assert response.headers['Content-Type'] == "application/json; charset=utf-8"
@@ -1194,9 +1297,10 @@ async def wait_for_slots_status(context,
     if 'GITHUB_ACTIONS' in os.environ:
         timeout *= 2
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         while True:
-            async with await session.get(f'{base_url}/slots', params=params) as slots_response:
+            headers = {'Authorization': f'Bearer {context.server_api_key}'}
+            async with await session.get(f'{base_url}/slots', params=params, headers=headers) as slots_response:
                 status_code = slots_response.status
                 slots = await slots_response.json()
                 if context.debug:
@@ -1237,7 +1341,7 @@ def assert_embeddings(embeddings):
 
 
 async def request_slots_status(context, expected_slots):
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=DEFAULT_TIMEOUT_SECONDS) as session:
         async with await session.get(f'{context.base_url}/slots') as slots_response:
             assert slots_response.status == 200
             slots = await slots_response.json()
@@ -1284,6 +1388,7 @@ def start_server_background(context):
         context.server_path = os.environ['LLAMA_SERVER_BIN_PATH']
     server_listen_addr = context.server_fqdn
     server_args = [
+        '--slots', # requires to get slot status via /slots endpoint
         '--host', server_listen_addr,
         '--port', context.server_port,
     ]
@@ -1309,6 +1414,8 @@ def start_server_background(context):
         server_args.append('--cont-batching')
     if context.server_embeddings:
         server_args.append('--embedding')
+    if context.server_reranking:
+        server_args.append('--reranking')
     if context.server_metrics:
         server_args.append('--metrics')
     if context.model_alias:
@@ -1331,8 +1438,8 @@ def start_server_background(context):
         server_args.append('--verbose')
     if context.lora_file:
         server_args.extend(['--lora', context.lora_file])
-    if 'SERVER_LOG_FORMAT_JSON' not in os.environ:
-        server_args.extend(['--log-format', "text"])
+    if context.disable_ctx_shift:
+        server_args.extend(['--no-context-shift'])
 
     args = [str(arg) for arg in [context.server_path, *server_args]]
     print(f"bench: starting server with: {' '.join(args)}")

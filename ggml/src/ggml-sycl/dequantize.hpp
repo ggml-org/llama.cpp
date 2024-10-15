@@ -55,12 +55,12 @@ static __dpct_inline__ void dequantize_q4_1(const void *vx, const int64_t ib,
 #ifdef GGML_SYCL_F16
     // v = v * {d, d};
     // v = v + {m, m};
-    v.s0() = (v.s0() * d) + m;
-    v.s1() = (v.s1() * d) + m;
+    v.s0() = sycl::fma(v.s0(), d, m);
+    v.s1() = sycl::fma(v.s1(), d, m);
 
 #else
-    v.x() = (v.x() * d) + m;
-    v.y() = (v.y() * d) + m;
+    v.x() = sycl::fma(v.x(), d, m);
+    v.y() = sycl::fma(v.y(), d, m);
 #endif // GGML_SYCL_F16
 }
 
@@ -110,11 +110,11 @@ static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
 #ifdef GGML_SYCL_F16
     // v = v * {d, d};
     // v = v + {m, m};
-    v.s0() = (v.s0() * d) + m;
-    v.s1() = (v.s1() * d) + m;
+    v.s0() = sycl::fma(v.s0(), d, m);
+    v.s1() = sycl::fma(v.s1(), d, m);
 #else
-    v.x() = (v.x() * d) + m;
-    v.y() = (v.y() * d) + m;
+    v.x() = sycl::fma(v.x(), d, m);
+    v.y() = sycl::fma(v.y(), d, m);
 #endif // GGML_SYCL_F16
 }
 

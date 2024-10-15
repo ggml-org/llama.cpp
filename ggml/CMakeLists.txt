@@ -56,6 +56,15 @@ else()
     set(GGML_NATIVE_DEFAULT ON)
 endif()
 
+# defaults
+if (NOT GGML_LLAMAFILE_DEFAULT)
+    set(GGML_LLAMAFILE_DEFAULT OFF)
+endif()
+
+if (NOT GGML_CUDA_GRAPHS_DEFAULT)
+    set(GGML_CUDA_GRAPHS_DEFAULT OFF)
+endif()
+
 # general
 option(GGML_STATIC "ggml: static link libraries"         OFF)
 option(GGML_NATIVE "ggml: enable -march=native flag"     ${GGML_NATIVE_DEFAULT})
@@ -110,7 +119,7 @@ option(GGML_ACCELERATE                      "ggml: enable Accelerate framework" 
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
-option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             OFF)
+option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
@@ -127,7 +136,7 @@ set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
 option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)
 option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
-option(GGML_CUDA_USE_GRAPHS                 "ggml: use CUDA graphs (llama.cpp only)"          OFF)
+option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
 
 option(GGML_HIPBLAS                         "ggml: use hipBLAS"                               OFF)
 option(GGML_HIP_UMA                         "ggml: use HIP unified memory architecture"       OFF)
@@ -135,6 +144,7 @@ option(GGML_VULKAN                          "ggml: use Vulkan"                  
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
 option(GGML_VULKAN_DEBUG                    "ggml: enable Vulkan debug output"                OFF)
 option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug output"         OFF)
+option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_PERF                     "ggml: enable Vulkan perf output"                 OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)

@@ -11,7 +11,7 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 # Unless otherwise specified, we make a fat build.
 # List from https://github.com/ggerganov/llama.cpp/pull/1087#issuecomment-1682807878
 # This is mostly tied to rocBLAS supported archs.
-ARG ROCM_DOCKER_ARCH=\
+ARG ROCM_DOCKER_ARCH="\
     gfx803 \
     gfx900 \
     gfx906 \
@@ -21,7 +21,7 @@ ARG ROCM_DOCKER_ARCH=\
     gfx1030 \
     gfx1100 \
     gfx1101 \
-    gfx1102
+    gfx1102"
 
 COPY requirements.txt   requirements.txt
 COPY requirements       requirements
@@ -34,7 +34,7 @@ WORKDIR /app
 COPY . .
 
 # Set nvcc architecture
-ENV GPU_TARGETS=${ROCM_DOCKER_ARCH}
+ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}
 # Enable ROCm
 ENV GGML_HIPBLAS=1
 ENV CC=/opt/rocm/llvm/bin/clang

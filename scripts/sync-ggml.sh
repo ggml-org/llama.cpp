@@ -9,7 +9,7 @@ cp -rpv ../ggml/src/ggml-aarch64.c      ./ggml/src/ggml-aarch64.c
 cp -rpv ../ggml/src/ggml-aarch64.h      ./ggml/src/ggml-aarch64.h
 cp -rpv ../ggml/src/ggml-alloc.c        ./ggml/src/ggml-alloc.c
 cp -rpv ../ggml/src/ggml-backend-impl.h ./ggml/src/ggml-backend-impl.h
-cp -rpv ../ggml/src/ggml-backend.c      ./ggml/src/ggml-backend.c
+cp -rpv ../ggml/src/ggml-backend.cpp    ./ggml/src/ggml-backend.cpp
 cp -rpv ../ggml/src/ggml-cann/*         ./ggml/src/ggml-cann/
 cp -rpv ../ggml/src/ggml-cann.cpp       ./ggml/src/ggml-cann.cpp
 cp -rpv ../ggml/src/ggml-common.h       ./ggml/src/ggml-common.h

@@ -198,6 +198,8 @@ The following compilation options are also available to tweak performance:
 
 ### MUSA
 
+This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GPU. Make sure to have the MUSA SDK installed. You can download it from here: [MUSA SDK](https://developer.mthreads.com/sdk/download/musa).
+
 - Using `make`:
   ```bash
   make GGML_MUSA=1
@@ -208,6 +210,12 @@ The following compilation options are also available to tweak performance:
   cmake -B build -DGGML_MUSA=ON
   cmake --build build --config Release
   ```
+
+The environment variable [`MUSA_VISIBLE_DEVICES`](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) can be used to specify which GPU(s) will be used.
+
+The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted.
+
+Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
 
 ### hipBLAS
 
@@ -380,3 +388,9 @@ For detailed info, such as model/device supports, CANN install, please refer to 
 ### Android
 
 To read documentation for how to build on Android, [click here](./android.md)
+
+### Arm CPU optimized mulmat kernels
+
+Llama.cpp includes a set of optimized mulmat kernels for the Arm architecture, leveraging Arm® Neon™, int8mm and SVE instructions. These kernels are enabled at build time through the appropriate compiler cpu-type flags, such as `-DCMAKE_C_FLAGS=-march=armv8.2a+i8mm+sve`. Note that these optimized kernels require the model to be quantized into one of the formats: `Q4_0_4_4` (Arm Neon), `Q4_0_4_8` (int8mm) or `Q4_0_8_8` (SVE). The SVE mulmat kernel specifically requires a vector width of 256 bits. When running on devices with a different vector width, it is recommended to use the `Q4_0_4_8` (int8mm) or `Q4_0_4_4` (Arm Neon) formats for better performance. Refer to [examples/quantize/README.md](../examples/quantize/README.md) for more information on the quantization formats.
+
+To support `Q4_0_4_4`, you must build with `GGML_NO_LLAMAFILE=1` (`make`) or `-DGGML_LLAMAFILE=OFF` (`cmake`).

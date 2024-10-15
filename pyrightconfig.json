@@ -5,7 +5,8 @@
   "reportUnusedImport": "warning",
   "reportDuplicateImport": "error",
   "reportDeprecated": "warning",
-  "reportUnnecessaryTypeIgnoreComment": "warning",
+  "reportUnnecessaryTypeIgnoreComment": "information",
+  "disableBytesTypePromotions": false, // TODO: change once Python 3.12 is the minimum
   "executionEnvironments": [
     {
       // TODO: make this version override work correctly

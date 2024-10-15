@@ -21,6 +21,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  # https://github.com/DeterminateSystems/nix-installer-action?tab=readme-ov-file#with-flakehub
+  id-token: write
+  contents: read
+
 jobs:
   nix-build-aarch64:
     runs-on: ubuntu-latest

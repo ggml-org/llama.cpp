@@ -1,4 +1,4 @@
-#/bin/bash
+#!/bin/bash
 #
 # sample usage:
 #
@@ -712,6 +712,82 @@ function gg_run_embd_bge_small {
     set +e
 }
 
+function gg_sum_embd_bge_small {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'BGE Small (BERT):\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '- f16: \n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-f16.log)"
+    gg_printf '- q8_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q8_0.log)"
+}
+
+# rerank_tiny
+
+function gg_run_rerank_tiny {
+    cd ${SRC}
+
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/config.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/tokenizer.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/tokenizer_config.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/special_tokens_map.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/resolve/main/pytorch_model.bin
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/sentence_bert_config.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/vocab.txt
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/modules.json
+    gg_wget models-mnt/rerank-tiny/ https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/config.json
+
+    gg_wget models-mnt/rerank-tiny/1_Pooling https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/raw/main/1_Pooling/config.json
+
+    path_models="../models-mnt/rerank-tiny"
+
+    rm -rf build-ci-release && mkdir build-ci-release && cd build-ci-release
+
+    set -e
+
+    (time cmake -DCMAKE_BUILD_TYPE=Release ${CMAKE_EXTRA} .. ) 2>&1 | tee -a $OUT/${ci}-cmake.log
+    (time make -j$(nproc)                                    ) 2>&1 | tee -a $OUT/${ci}-make.log
+
+    python3 ../convert_hf_to_gguf.py ${path_models} --outfile ${path_models}/ggml-model-f16.gguf
+
+    model_f16="${path_models}/ggml-model-f16.gguf"
+
+    # for this model, the SEP token is "</s>"
+    (time ./bin/llama-embedding --model ${model_f16}  -p "what is panda?</s></s>hi\nwhat is panda?</s></s>it's a bear\nwhat is panda?</s></s>The giant panda (Ailuropoda melanoleuca), sometimes called a panda bear or simply panda, is a bear species endemic to China." --pooling rank --embd-normalize -1 --verbose-prompt) 2>&1 | tee -a $OUT/${ci}-rk-f16.log
+
+    # sample output
+    # rerank score 0:    0.029
+    # rerank score 1:    0.029
+    # rerank score 2:    0.135
+
+    # check that the score is in the range [$3, $4]
+    function check_score {
+        qnt="$1"
+        score=$(echo "$2" | grep -oE "[0-9]+\.[0-9]+" | tail -n 1)
+
+        if [ $(echo "$score < $3" | bc) -eq 1 ] || [ $(echo "$score > $4" | bc) -eq 1 ]; then
+            printf '  - %s @ %s (FAIL: score not in range [%s, %s])\n' "$qnt" "$score" "$3" "$4"
+            return 20
+        fi
+
+        printf '  - %s @ %s OK\n' "$qnt" "$score"
+        return 0
+    }
+
+    check_score "rerank score 0" "$(cat $OUT/${ci}-rk-f16.log | grep "rerank score 0")" "0.00" "0.05" | tee -a $OUT/${ci}-rk-f16.log
+    check_score "rerank score 1" "$(cat $OUT/${ci}-rk-f16.log | grep "rerank score 1")" "0.00" "0.05" | tee -a $OUT/${ci}-rk-f16.log
+    check_score "rerank score 2" "$(cat $OUT/${ci}-rk-f16.log | grep "rerank score 2")" "0.10" "0.30" | tee -a $OUT/${ci}-rk-f16.log
+
+    set +e
+}
+
+function gg_sum_rerank_tiny {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Rerank Tiny (Jina):\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '- f16: \n```\n%s\n```\n' "$(cat $OUT/${ci}-rk-f16.log)"
+}
+
 function gg_check_build_requirements {
     if ! command -v cmake &> /dev/null; then
         gg_printf 'cmake not found, please install'
@@ -726,16 +802,10 @@ function gg_check_build_requirements {
     fi
 }
 
-function gg_sum_embd_bge_small {
-    gg_printf '### %s\n\n' "${ci}"
-
-    gg_printf 'BGE Small (BERT):\n'
-    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
-    gg_printf '- f16: \n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-f16.log)"
-    gg_printf '- q8_0:\n```\n%s\n```\n' "$(cat $OUT/${ci}-tg-q8_0.log)"
-}
-
 ## main
+
+export LLAMA_LOG_PREFIX=1
+export LLAMA_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     # Create symlink: ./llama.cpp/models-mnt -> $MNT/models/models-mnt
@@ -759,6 +829,7 @@ test $ret -eq 0 && gg_run ctest_release
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run embd_bge_small
+    test $ret -eq 0 && gg_run rerank_tiny
 
     if [ -z ${GG_BUILD_CLOUD} ] || [ ${GG_BUILD_EXTRA_TESTS_0} ]; then
         test $ret -eq 0 && gg_run test_scripts_debug

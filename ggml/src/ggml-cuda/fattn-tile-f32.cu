@@ -44,13 +44,17 @@ static __global__ void flash_attn_tile_ext_f32(
         const int ne1,
         const int ne2,
         const int ne3) {
+#ifndef FLASH_ATTN_AVAILABLE
+    NO_DEVICE_CODE;
+    return;
+#endif // FLASH_ATTN_AVAILABLE
     // Skip unused kernel variants for faster compilation:
     if (use_logit_softcap && !(D == 128 || D == 256)) {
         NO_DEVICE_CODE;
         return;
     }
 
-    //In this kernel Q, K, V are matrices while i, j, k are matrix indices.
+    // In this kernel Q, K, V are matrices while i, j, k are matrix indices.
 
     const int ic0 = (blockIdx.x / parallel_blocks) * ncols; // Index of the Q/QKV column to work on.
     const int ip  =  blockIdx.x % parallel_blocks; // Index in group of blocks running for the same column in parallel.

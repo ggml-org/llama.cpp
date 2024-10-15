@@ -1,15 +1,16 @@
+#include "arg.h"
 #include "common.h"
+#include "log.h"
 #include "llama.h"
 
 #include <algorithm>
 #include <fstream>
+#include <iostream> // TODO: remove me
 
-static void print_usage(int argc, char ** argv, const gpt_params & params) {
-    gpt_params_print_usage(argc, argv, params);
-
-    LOG_TEE("\nexample usage:\n");
-    LOG_TEE("\n    %s --model ./models/bge-base-en-v1.5-f16.gguf --top-k 3 --context-file README.md --context-file License --chunk-size 100 --chunk-separator .\n", argv[0]);
-    LOG_TEE("\n");
+static void print_usage(int, char ** argv) {
+    LOG("\nexample usage:\n");
+    LOG("\n    %s --model ./models/bge-base-en-v1.5-f16.gguf --top-k 3 --context-file README.md --context-file License --chunk-size 100 --chunk-separator .\n", argv[0]);
+    LOG("\n");
 }
 
 struct chunk {
@@ -18,7 +19,7 @@ struct chunk {
     // original file position
     size_t filepos;
     // original text data
-    std::string textdata = "";
+    std::string textdata;
     // tokenized text data
     std::vector<llama_token> tokens;
     // embedding
@@ -32,14 +33,14 @@ static std::vector<chunk> chunk_file(const std::string & filename, int chunk_siz
     std::ifstream f(filename.c_str());
 
     if (!f.is_open()) {
-        fprintf(stderr, "Error: could not open file %s\n", filename.c_str());
+        LOG_ERR("could not open file %s\n", filename.c_str());
         return chunks;
     }
 
     chunk current_chunk;
     char buffer[1024];
     int64_t filepos = 0;
-    std::string current = "";
+    std::string current;
     while (f.read(buffer, 1024)) {
         current += std::string(buffer, f.gcount());
         size_t pos;
@@ -76,7 +77,7 @@ static std::vector<chunk> chunk_file(const std::string & filename, int chunk_siz
 static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
     size_t n_tokens = tokens.size();
     for (size_t i = 0; i < n_tokens; i++) {
-        llama_batch_add(batch, tokens[i], i, { seq_id }, true);
+        common_batch_add(batch, tokens[i], i, { seq_id }, true);
     }
 }
 
@@ -85,9 +86,9 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     llama_kv_cache_clear(ctx);
 
     // run model
-    fprintf(stderr, "%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
+    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
     if (llama_decode(ctx, batch) < 0) {
-        fprintf(stderr, "%s : failed to decode\n", __func__);
+        LOG_ERR("%s : failed to decode\n", __func__);
     }
 
     for (int i = 0; i < batch.n_tokens; i++) {
@@ -100,42 +101,41 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         if (embd == NULL) {
             embd = llama_get_embeddings_ith(ctx, i);
             if (embd == NULL) {
-                fprintf(stderr, "%s: failed to get embeddings for token %d\n", __func__, i);
+                LOG_ERR("%s: failed to get embeddings for token %d\n", __func__, i);
                 continue;
             }
         }
 
         float * out = output + batch.seq_id[i][0] * n_embd;
-        llama_embd_normalize(embd, out, n_embd);
+        common_embd_normalize(embd, out, n_embd);
     }
 }
 
 int main(int argc, char ** argv) {
-    gpt_params params;
+    common_params params;
 
-    if (!gpt_params_parse(argc, argv, params)) {
-        print_usage(argc, argv, params);
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_RETRIEVAL, print_usage)) {
         return 1;
     }
+
+    common_init();
 
     // For BERT models, batch size must be equal to ubatch size
     params.n_ubatch = params.n_batch;
     params.embedding = true;
 
     if (params.chunk_size <= 0) {
-        fprintf(stderr, "chunk_size must be positive\n");
+        LOG_ERR("chunk_size must be positive\n");
         return 1;
     }
     if (params.context_files.empty()) {
-        fprintf(stderr, "context_files must be specified\n");
+        LOG_ERR("context_files must be specified\n");
         return 1;
     }
 
-    print_build_info();
-
-    printf("processing files:\n");
+    LOG_INF("processing files:\n");
     for (auto & context_file : params.context_files) {
-        printf("%s\n", context_file.c_str());
+        LOG_INF("%s\n", context_file.c_str());
     }
 
     std::vector<chunk> chunks;
@@ -143,19 +143,19 @@ int main(int argc, char ** argv) {
         std::vector<chunk> file_chunk = chunk_file(context_file, params.chunk_size, params.chunk_separator);
         chunks.insert(chunks.end(), file_chunk.begin(), file_chunk.end());
     }
-    printf("Number of chunks: %ld\n", chunks.size());
+    LOG_INF("Number of chunks: %ld\n", chunks.size());
 
     llama_backend_init();
     llama_numa_init(params.numa);
 
     // load the model
-    llama_init_result llama_init = llama_init_from_gpt_params(params);
+    common_init_result llama_init = common_init_from_params(params);
 
     llama_model * model = llama_init.model;
     llama_context * ctx = llama_init.context;
 
     if (model == NULL) {
-        fprintf(stderr, "%s: error: unable to load model\n", __func__);
+        LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }
 
@@ -164,19 +164,19 @@ int main(int argc, char ** argv) {
 
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
     if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
-        fprintf(stderr, "%s: error: pooling type NONE not supported\n", __func__);
+        LOG_ERR("%s: pooling type NONE not supported\n", __func__);
         return 1;
     }
 
     if (n_ctx > n_ctx_train) {
-        fprintf(stderr, "%s: warning: model was trained on only %d context tokens (%d specified)\n",
+        LOG_WRN("%s: warning: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, n_ctx);
     }
 
     // print system information
     {
-        fprintf(stderr, "\n");
-        fprintf(stderr, "%s\n", gpt_params_get_system_info(params).c_str());
+        LOG_INF("\n");
+        LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
     // max batch size
@@ -185,9 +185,9 @@ int main(int argc, char ** argv) {
 
     // tokenize the prompts and trim
     for (auto & chunk : chunks) {
-        auto inp = ::llama_tokenize(ctx, chunk.textdata, true, false);
+        auto inp = common_tokenize(ctx, chunk.textdata, true, false);
         if (inp.size() > n_batch) {
-            fprintf(stderr, "%s: error: chunk size (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
+            LOG_ERR("%s: chunk size (%lld) exceeds batch size (%lld), increase batch size and re-run\n",
                     __func__, (long long int) inp.size(), (long long int) n_batch);
             return 1;
         }
@@ -201,12 +201,12 @@ int main(int argc, char ** argv) {
     // tokenization stats
     if (params.verbose_prompt) {
         for (int i = 0; i < (int) chunks.size(); i++) {
-            fprintf(stderr, "%s: prompt %d: '%s'\n", __func__, i, chunks[i].textdata.c_str());
-            fprintf(stderr, "%s: number of tokens in prompt = %zu\n", __func__, chunks[i].tokens.size());
+            LOG_INF("%s: prompt %d: '%s'\n", __func__, i, chunks[i].textdata.c_str());
+            LOG_INF("%s: number of tokens in prompt = %zu\n", __func__, chunks[i].tokens.size());
             for (int j = 0; j < (int) chunks[i].tokens.size(); j++) {
-                fprintf(stderr, "%6d -> '%s'\n", chunks[i].tokens[j], llama_token_to_piece(ctx, chunks[i].tokens[j]).c_str());
+                LOG_INF("%6d -> '%s'\n", chunks[i].tokens[j], common_token_to_piece(ctx, chunks[i].tokens[j]).c_str());
             }
-            fprintf(stderr, "\n\n");
+            LOG_INF("\n\n");
         }
     }
 
@@ -232,7 +232,7 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens + n_toks > n_batch) {
             float * out = emb + p * n_embd;
             batch_decode(ctx, batch, out, s, n_embd);
-            llama_batch_clear(batch);
+            common_batch_clear(batch);
             p += s;
             s = 0;
         }
@@ -258,22 +258,22 @@ int main(int argc, char ** argv) {
     // start loop, receive query and return top k similar chunks based on cosine similarity
     std::string query;
     while (true) {
-        printf("Enter query: ");
+        LOG("Enter query: ");
         std::getline(std::cin, query);
-        std::vector<int32_t> query_tokens = llama_tokenize(ctx, query, true);
+        std::vector<int32_t> query_tokens = common_tokenize(ctx, query, true);
 
         batch_add_seq(query_batch, query_tokens, 0);
 
         std::vector<float> query_emb(n_embd, 0);
         batch_decode(ctx, query_batch, query_emb.data(), 1, n_embd);
 
-        llama_batch_clear(query_batch);
+        common_batch_clear(query_batch);
 
         // compute cosine similarities
         {
             std::vector<std::pair<int, float>> similarities;
             for (int i = 0; i < n_chunks; i++) {
-                float sim = llama_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd);
+                float sim = common_embd_similarity_cos(chunks[i].embedding.data(), query_emb.data(), n_embd);
                 similarities.push_back(std::make_pair(i, sim));
             }
 
@@ -282,20 +282,22 @@ int main(int argc, char ** argv) {
                 return a.second > b.second;
             });
 
-            printf("Top %d similar chunks:\n", params.sparams.top_k);
+            LOG("Top %d similar chunks:\n", params.sparams.top_k);
             for (int i = 0; i < std::min(params.sparams.top_k, (int) chunks.size()); i++) {
-                printf("filename: %s\n", chunks[similarities[i].first].filename.c_str());
-                printf("filepos: %lld\n", (long long int) chunks[similarities[i].first].filepos);
-                printf("similarity: %f\n", similarities[i].second);
-                printf("textdata:\n%s\n", chunks[similarities[i].first].textdata.c_str());
-                printf("--------------------\n");
+                LOG("filename: %s\n", chunks[similarities[i].first].filename.c_str());
+                LOG("filepos: %lld\n", (long long int) chunks[similarities[i].first].filepos);
+                LOG("similarity: %f\n", similarities[i].second);
+                LOG("textdata:\n%s\n", chunks[similarities[i].first].textdata.c_str());
+                LOG("--------------------\n");
             }
         }
     }
 
+    LOG("\n");
+    llama_perf_context_print(ctx);
+
     // clean up
     llama_batch_free(query_batch);
-    llama_print_timings(ctx);
     llama_free(ctx);
     llama_free_model(model);
     llama_backend_free();

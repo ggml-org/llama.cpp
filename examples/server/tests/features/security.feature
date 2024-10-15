@@ -5,7 +5,7 @@ Feature: Security
   Background: Server startup with an api key defined
     Given a server listening on localhost:8080
     And   a model file tinyllamas/stories260K.gguf from HF repo ggml-org/models
-    And   a server api key llama.cpp
+    And   a server api key THIS_IS_THE_KEY
     Then  the server is starting
     Then  the server is healthy
 
@@ -16,11 +16,11 @@ Feature: Security
     And   a completion request with <api_error> api error
 
     Examples: Prompts
-      | api_key   | api_error |
-      | llama.cpp | no        |
-      | llama.cpp | no        |
-      | hackeme   | raised    |
-      |           | raised    |
+      | api_key         | api_error |
+      | THIS_IS_THE_KEY | no        |
+      | THIS_IS_THE_KEY | no        |
+      | hackeme         | raised    |
+      |                 | raised    |
 
   Scenario Outline: OAI Compatibility
     Given a system prompt test
@@ -32,10 +32,10 @@ Feature: Security
     Given an OAI compatible chat completions request with <api_error> api error
 
     Examples: Prompts
-      | api_key   | api_error |
-      | llama.cpp | no        |
-      | llama.cpp | no        |
-      | hackme    | raised    |
+      | api_key         | api_error |
+      | THIS_IS_THE_KEY | no        |
+      | THIS_IS_THE_KEY | no        |
+      | hackme          | raised    |
 
   Scenario Outline: OAI Compatibility (invalid response formats)
     Given a system prompt test
@@ -55,7 +55,7 @@ Feature: Security
 
 
   Scenario Outline: CORS Options
-    Given a user api key llama.cpp
+    Given a user api key THIS_IS_THE_KEY
     When  an OPTIONS request is sent from <origin>
     Then  CORS header <cors_header> is set to <cors_header_value>
 
