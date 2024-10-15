@@ -12522,7 +12522,7 @@ void float_act_quant(const int K, float* B, int32_t* dst, float* act_scale) {
     }
 }
 
-void weight_quant(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
+void weight_quant_f32(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
     double max = 0.00001;
 
     for (int i = 0; i < M * K; i++) {
@@ -12538,6 +12538,27 @@ void weight_quant(const int M, const int K, float* A, int32_t* dst, float* i2_sc
             continue;
         } else {
             dst[i] = (double)A[i] * i2_scale[0] > 0 ? 1 : -1;
+        }
+    }
+}
+
+void weight_quant_f16(const int M, const int K, uint16_t* A, int32_t* dst, float* i2_scale) {
+    double max = 0.00001;
+    for (int i = 0; i < M * K; i++) {
+        float temp_A = GGML_FP16_TO_FP32(A[i]);
+        if (fabs(temp_A) > max){
+            i2_scale[0] = fabs(temp_A);
+            break;
+        }
+    }
+    
+    for (int i = 0; i < M * K; ++i) {
+        float temp_A = GGML_FP16_TO_FP32(A[i]);
+        if (fabs((double)(temp_A)) < 1e-6) {
+            dst[i] = 0;
+            continue;
+        } else {
+            dst[i] = (double)temp_A * i2_scale[0] > 0 ? 1 : -1;
         }
     }
 }
@@ -12602,7 +12623,11 @@ static void ggml_compute_forward_mul_mat(
         int32_t* int_B = (int32_t*)malloc(1 * src0->ne[0] * sizeof(int32_t));
         int32_t* int_A = (int32_t*)malloc(src0->ne[0] * src0->ne[1] * sizeof(int32_t));
         float_act_quant(src1->ne[0], (float*)src1->data, int_B, act_scale);
-        weight_quant(src0->ne[1], src0->ne[0], (float*)src0->data, int_A, i2_scale);        
+        if (src0->type == 0) {
+            weight_quant_f32(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+        } else if (src0->type == 1) {
+            weight_quant_f16(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+        }   
         matrixMultiply_int(src0->ne[1], src1->ne[1], src0->ne[0], int_A, int_B, int_C);
         for (int i=0; i < src0->ne[1] * 1; i++) {
             ((float*)(dst->data))[i] = int_C[i] / act_scale[0] * i2_scale[0];
@@ -12654,7 +12679,7 @@ static void ggml_compute_forward_mul_mat(
             ggml_preprocessor(ne10, act_input, lut_scales, qlut);
         }
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params->threadpool);
 
         tmac_float_type * act_output;
         if (sizeof(tmac_float_type) == 2) {
@@ -12737,7 +12762,7 @@ static void ggml_compute_forward_mul_mat(
             ggml_preprocessor(ne11, three_k, two_k, act_input, lut_scales, three_qlut, two_qlut);
         }
 
-        ggml_barrier(params->shared);
+        ggml_barrier(params->threadpool);
 
         tmac_float_type * act_output;
         if (sizeof(tmac_float_type) == 2) {
