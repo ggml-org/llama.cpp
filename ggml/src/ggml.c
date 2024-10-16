@@ -3477,8 +3477,13 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
-        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1 || tensor->type == GGML_TYPE_TL2) {
+        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1) {
             nbytes = nbytes / 4 + 32;
+        }
+        else if (tensor->type == GGML_TYPE_TL2) {
+            nbytes = (tensor->ne[0] - 256) * tensor->ne[1] / 3 * 5 / 8 + 256 * tensor->ne[1] / 2 * 4 / 8;
+            if (nbytes % 32 != 0) nbytes = 32 - nbytes % 32 + nbytes;
+            nbytes += 32;
         }
     }
     else {
@@ -12612,34 +12617,34 @@ static void ggml_compute_forward_mul_mat(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-#ifndef GGML_BITNET_X86_TL2
-    if (src1->ne[1] <= 1 && src0->type != GGML_TYPE_TL1 && src0->type != GGML_TYPE_I2_S && src0->type != GGML_TYPE_TQ1_0 && src0->type != GGML_TYPE_TQ2_0 && src0->ne[1] != 32002 && src0->ne[1] != 96 && src0->ne[0] != 96) {
-        int32_t* int_C = (int32_t*)malloc(1 * src0->ne[1] * sizeof(int32_t));
-        for (int i = 0; i < src0->ne[1] * 1; i++) {
-            int_C[i] = 0;
-        }
-        float* act_scale = (float*)malloc(sizeof(float));
-        float* i2_scale = (float*)malloc(sizeof(float));
-        int32_t* int_B = (int32_t*)malloc(1 * src0->ne[0] * sizeof(int32_t));
-        int32_t* int_A = (int32_t*)malloc(src0->ne[0] * src0->ne[1] * sizeof(int32_t));
-        float_act_quant(src1->ne[0], (float*)src1->data, int_B, act_scale);
-        if (src0->type == 0) {
-            weight_quant_f32(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
-        } else if (src0->type == 1) {
-            weight_quant_f16(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
-        }   
-        matrixMultiply_int(src0->ne[1], src1->ne[1], src0->ne[0], int_A, int_B, int_C);
-        for (int i=0; i < src0->ne[1] * 1; i++) {
-            ((float*)(dst->data))[i] = int_C[i] / act_scale[0] * i2_scale[0];
-        }
-        free(int_A);
-        free(int_B);
-        free(int_C);
-        free(act_scale);
-        free(i2_scale);
-        return;
-    }
-#endif
+// #ifndef GGML_BITNET_X86_TL2
+//     if (src1->ne[1] <= 1 && src0->type != GGML_TYPE_TL1 && src0->type != GGML_TYPE_I2_S && src0->type != GGML_TYPE_TQ1_0 && src0->type != GGML_TYPE_TQ2_0 && src0->ne[1] != 32002 && src0->ne[1] != 96 && src0->ne[0] != 96) {
+//         int32_t* int_C = (int32_t*)malloc(1 * src0->ne[1] * sizeof(int32_t));
+//         for (int i = 0; i < src0->ne[1] * 1; i++) {
+//             int_C[i] = 0;
+//         }
+//         float* act_scale = (float*)malloc(sizeof(float));
+//         float* i2_scale = (float*)malloc(sizeof(float));
+//         int32_t* int_B = (int32_t*)malloc(1 * src0->ne[0] * sizeof(int32_t));
+//         int32_t* int_A = (int32_t*)malloc(src0->ne[0] * src0->ne[1] * sizeof(int32_t));
+//         float_act_quant(src1->ne[0], (float*)src1->data, int_B, act_scale);
+//         if (src0->type == 0) {
+//             weight_quant_f32(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+//         } else if (src0->type == 1) {
+//             weight_quant_f16(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+//         }   
+//         matrixMultiply_int(src0->ne[1], src1->ne[1], src0->ne[0], int_A, int_B, int_C);
+//         for (int i=0; i < src0->ne[1] * 1; i++) {
+//             ((float*)(dst->data))[i] = int_C[i] / act_scale[0] * i2_scale[0];
+//         }
+//         free(int_A);
+//         free(int_B);
+//         free(int_C);
+//         free(act_scale);
+//         free(i2_scale);
+//         return;
+//     }
+// #endif
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 #if defined(GGML_BITNET_ARM_TL1)
@@ -12721,7 +12726,6 @@ static void ggml_compute_forward_mul_mat(
     }
 #endif
 #if defined(GGML_BITNET_X86_TL2)
-#define BK3 96
     if (ggml_bitnet_can_mul_mat(src0, src1, dst)) {
         // src0: weight,     ne00 = k, ne01 = n
         // src1: activation, ne10 = k, ne11 = m
@@ -12737,7 +12741,7 @@ static void ggml_compute_forward_mul_mat(
         bitnet_float_type * lut_scales;
         int8_t * two_qlut;
         const int total_k = ne10;
-        const int three_k = (int)(total_k / BK3) * BK3;
+        const int three_k = (int)(total_k / wt->BK) * wt->BK;
         const int two_k = total_k - three_k;
 
         lut_scales = (bitnet_float_type *) (three_qlut + three_k / 3 * 16 * 2 * ne11);
@@ -12759,7 +12763,7 @@ static void ggml_compute_forward_mul_mat(
             } else {
                 act_input = src1->data;
             }
-            ggml_preprocessor(ne11, three_k, two_k, act_input, lut_scales, three_qlut, two_qlut);
+            ggml_preprocessor(ne11, ne01, three_k, two_k, act_input, lut_scales, three_qlut, two_qlut);
         }
 
         ggml_barrier(params->threadpool);
@@ -12809,7 +12813,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 512, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 512, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + i * 512 * three_k / 3 * 32,
                             wt->scales,
@@ -12825,7 +12829,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 512, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 512, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + i * 512 * two_k / 2 * 32,
                             wt->scales,
@@ -12843,7 +12847,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 256, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 256, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + bs512_num * 512 * three_k / 3 * 32 + i * 256 * three_k / 3 * 32,
                             wt->scales,
@@ -12859,7 +12863,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 256, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 256, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + bs512_num * 512 * two_k / 2 * 32 + i * 256 * two_k / 2 * 32,
                             wt->scales,
@@ -12878,7 +12882,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 128, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 128, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32 + i * 128 * three_k / 3 * 32,
                             wt->scales,
@@ -12894,7 +12898,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 128, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 128, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + bs512_num * 512 * two_k / 2 * 32 + bs256_num * 256 * two_k / 2 * 32 + i * 128 * two_k / 2 * 32,
                             wt->scales,
@@ -12914,7 +12918,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 32, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 32, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32\
                              + bs128_num * 128 * three_k / 3 * 32 + i * 32 * three_k / 3 * 32,
@@ -12931,7 +12935,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 32, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 32, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
                              + bs128_num * 128 * two_k / 2 * 32 + i * 32 * two_k / 2 * 32,
@@ -12952,7 +12956,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 8, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 8, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32\
                              + bs128_num * 128 * three_k / 3 * 32 + bs32_num * 32 * three_k / 3 * 32\
@@ -12973,7 +12977,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 8, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 8, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
                              + bs128_num * 128 * two_k / 2 * 32 + bs32_num * 32 * two_k / 2 * 32\
@@ -12998,7 +13002,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 1, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 1, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32 + \
                             bs128_num * 128 * three_k / 3 * 32 + bs32_num * 32 * three_k / 3 * 32\
@@ -13020,7 +13024,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 1, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 1, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
                              + bs128_num * 128 * two_k / 2 * 32 + bs32_num * 32 * two_k / 2 * 32\
@@ -13043,7 +13047,7 @@ static void ggml_compute_forward_mul_mat(
             const int sign_offset       = i_tile * sign_tile_size;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 1, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+            ggml_qgemm_lut( 1, ne01, ne00, three_k, ((uint8_t *)(wt->qweights) + w_offset),
                             sign + sign_offset,
                             three_qlut,
                             wt->scales,
@@ -13059,7 +13063,7 @@ static void ggml_compute_forward_mul_mat(
             const int two_w_offset          = i_tile * two_w_tile_size;
             const int two_dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( 1, two_k, two_A + two_w_offset, 
+            ggml_qgemm_lut( 1, ne01, ne00, two_k, two_A + two_w_offset, 
                             NULL,
                             two_qlut,
                             wt->scales,
