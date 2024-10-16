@@ -47,7 +47,7 @@
 #include <llamafile/sgemm.h>
 #endif
 #if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
-#include "ggml-tmac.h"
+#include "ggml-bitnet.h"
 #endif
 
 #if defined(_MSC_VER)
@@ -3871,7 +3871,7 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
             GGML_PRINT_DEBUG("%s: g_state initialized in %f ms\n", __func__, (t_end - t_start)/1000.0f);
         }
 #if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
-        ggml_tmac_init();
+        ggml_bitnet_init();
 #endif
 
 #if defined(__ARM_ARCH)
@@ -12643,22 +12643,22 @@ static void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 #if defined(GGML_BITNET_ARM_TL1)
-    if (ggml_tmac_can_mul_mat(src0, src1, dst)) {
+    if (ggml_bitnet_can_mul_mat(src0, src1, dst)) {
 
-        const int bits = ggml_tmac_get_type_bits(type);
+        const int bits = ggml_bitnet_get_type_bits(type);
         // src0: weight,     ne00 = k, ne01 = n
         // src1: activation, ne10 = k, ne11 = m
         char * wdata = params->wdata;
 
-        struct tmac_tensor_extra * wt = src0->extra;
+        struct bitnet_tensor_extra * wt = src0->extra;
         char * cur_wdata = wdata;
-        tmac_float_type * tmac_f_ptr = wdata;
-        if (sizeof(tmac_float_type) == 2) {
-            cur_wdata = wdata + MAX(ne10, ne01) * ne11 * sizeof(tmac_float_type);
+        bitnet_float_type * bitnet_f_ptr = wdata;
+        if (sizeof(bitnet_float_type) == 2) {
+            cur_wdata = wdata + MAX(ne10, ne01) * ne11 * sizeof(bitnet_float_type);
         };
         int8_t * qlut = cur_wdata;
-        tmac_float_type * lut_scales = (tmac_float_type *) (qlut + ne10 * ne11 * 16);
-        tmac_float_type * lut_biases = (tmac_float_type *) (lut_scales + wt->lut_scales_size * ne11);
+        bitnet_float_type * lut_scales = (bitnet_float_type *) (qlut + ne10 * ne11 * 16);
+        bitnet_float_type * lut_biases = (bitnet_float_type *) (lut_scales + wt->lut_scales_size * ne11);
 
         // g = 4
         if (ith == 0) {
@@ -12667,23 +12667,23 @@ static void ggml_compute_forward_mul_mat(
             // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
             // It's better to do this in ggml-backend.c,
             // but llama.cpp directly manipulates tensor.data for cbe in a lot of space.
-            ggml_tmac_transform_tensor(src0);
+            ggml_bitnet_transform_tensor(src0);
             GGML_ASSERT(src1->type == GGML_TYPE_F32);
-            tmac_float_type * act_input;
-            if (sizeof(tmac_float_type) == 2) {
-                ggml_fp32_to_fp16_row(src1->data, tmac_f_ptr, ne10 * ne11);
-                act_input = tmac_f_ptr;
+            bitnet_float_type * act_input;
+            if (sizeof(bitnet_float_type) == 2) {
+                ggml_fp32_to_fp16_row(src1->data, bitnet_f_ptr, ne10 * ne11);
+                act_input = bitnet_f_ptr;
             } else {
                 act_input = src1->data;
             }
-            ggml_preprocessor(ne10, act_input, lut_scales, qlut);
+            ggml_preprocessor(ne01, ne10, act_input, lut_scales, qlut);
         }
 
         ggml_barrier(params->threadpool);
 
-        tmac_float_type * act_output;
-        if (sizeof(tmac_float_type) == 2) {
-            act_output = tmac_f_ptr;
+        bitnet_float_type * act_output;
+        if (sizeof(bitnet_float_type) == 2) {
+            act_output = bitnet_f_ptr;
         } else {
             act_output = dst->data;
         }
@@ -12708,12 +12708,12 @@ static void ggml_compute_forward_mul_mat(
             const int lut_scales_offset = 0;
             const int dst_offset        = i_tile * c_tile_size;
 
-            ggml_qgemm_lut( ne00, ((uint8_t *)(wt->qweights) + w_offset), 
+            ggml_qgemm_lut( ne01, ne00, ((uint8_t *)(wt->qweights) + w_offset), 
                             qlut, 
                             wt->scales + scales_offset, 
                             lut_scales + lut_scales_offset, 
                             act_output + dst_offset);
-            if (sizeof(tmac_float_type) == 2) {
+            if (sizeof(bitnet_float_type) == 2) {
                 ggml_fp16_to_fp32_row(act_output + dst_offset, (float *) dst->data + dst_offset, ne01 / n_tile_num);
             }
         }
@@ -12722,25 +12722,25 @@ static void ggml_compute_forward_mul_mat(
 #endif
 #if defined(GGML_BITNET_X86_TL2)
 #define BK3 96
-    if (ggml_tmac_can_mul_mat(src0, src1, dst)) {
+    if (ggml_bitnet_can_mul_mat(src0, src1, dst)) {
         // src0: weight,     ne00 = k, ne01 = n
         // src1: activation, ne10 = k, ne11 = m
         char * wdata = params->wdata;
 
-        struct tmac_tensor_extra * wt = src0->extra;
+        struct bitnet_tensor_extra * wt = src0->extra;
         char * cur_wdata = wdata;
-        tmac_float_type * tmac_f_ptr = wdata;
-        if (sizeof(tmac_float_type) == 2) {
-            cur_wdata = wdata + MAX(ne10, ne01) * ne11 * sizeof(tmac_float_type);
+        bitnet_float_type * bitnet_f_ptr = wdata;
+        if (sizeof(bitnet_float_type) == 2) {
+            cur_wdata = wdata + MAX(ne10, ne01) * ne11 * sizeof(bitnet_float_type);
         };
         int8_t * three_qlut = cur_wdata;
-        tmac_float_type * lut_scales;
+        bitnet_float_type * lut_scales;
         int8_t * two_qlut;
         const int total_k = ne10;
         const int three_k = (int)(total_k / BK3) * BK3;
         const int two_k = total_k - three_k;
 
-        lut_scales = (tmac_float_type *) (three_qlut + three_k / 3 * 16 * 2 * ne11);
+        lut_scales = (bitnet_float_type *) (three_qlut + three_k / 3 * 16 * 2 * ne11);
         two_qlut = (int8_t *) (lut_scales + ne11);
 
         // g = 4
@@ -12750,12 +12750,12 @@ static void ggml_compute_forward_mul_mat(
             // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
             // It's better to do this in ggml-backend.c,
             // but llama.cpp directly manipulates tensor.data for cbe in a lot of space.
-            ggml_tmac_transform_tensor(src0);
+            ggml_bitnet_transform_tensor(src0);
             GGML_ASSERT(src1->type == GGML_TYPE_F32);
-            tmac_float_type * act_input;
-            if (sizeof(tmac_float_type) == 2) {
-                ggml_fp32_to_fp16_row(src1->data, tmac_f_ptr, ne10 * ne11);
-                act_input = tmac_f_ptr;
+            bitnet_float_type * act_input;
+            if (sizeof(bitnet_float_type) == 2) {
+                ggml_fp32_to_fp16_row(src1->data, bitnet_f_ptr, ne10 * ne11);
+                act_input = bitnet_f_ptr;
             } else {
                 act_input = src1->data;
             }
@@ -12764,9 +12764,9 @@ static void ggml_compute_forward_mul_mat(
 
         ggml_barrier(params->threadpool);
 
-        tmac_float_type * act_output;
-        if (sizeof(tmac_float_type) == 2) {
-            act_output = tmac_f_ptr;
+        bitnet_float_type * act_output;
+        if (sizeof(bitnet_float_type) == 2) {
+            act_output = bitnet_f_ptr;
         } else {
             act_output = dst->data;
         }
@@ -20346,8 +20346,8 @@ struct ggml_cplan ggml_graph_plan(
                     const enum ggml_type vec_dot_type = type_traits[node->src[0]->type].vec_dot_type;
 
 #if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
-                    if (ggml_tmac_can_mul_mat(node->src[0], node->src[1], node)) {
-                        cur = ggml_tmac_mul_mat_get_wsize(node->src[0], node->src[1], node);
+                    if (ggml_bitnet_can_mul_mat(node->src[0], node->src[1], node)) {
+                        cur = ggml_bitnet_mul_mat_get_wsize(node->src[0], node->src[1], node);
                     } else
 #endif
                     if (node->src[1]->type != vec_dot_type) {

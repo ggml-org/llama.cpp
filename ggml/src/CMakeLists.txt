@@ -1325,14 +1325,15 @@ add_library(ggml
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
-            ../include/inline_func.h
-            ../include/ggml-tmac.h
+            ../../../../include/bitnet-lut-kernels.h
+            ../../../../include/ggml-bitnet.h
             ggml.c
             ggml-alloc.c
             ggml-backend.cpp
             ggml-quants.c
             ggml-quants.h
-            ggml-tmac.cpp
+            ../../../../src/ggml-bitnet-mad.cpp
+            ../../../../src/ggml-bitnet-lut.cpp
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
@@ -1353,6 +1354,7 @@ endif()
 
 target_compile_definitions(ggml PUBLIC    ${GGML_CDEF_PUBLIC})
 target_include_directories(ggml PUBLIC  ../include)
+target_include_directories(ggml PUBLIC ../../../../include)
 target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
 target_link_directories   (ggml PRIVATE   ${GGML_EXTRA_LIBDIRS})
 target_compile_features   (ggml PRIVATE c_std_11) # don't bump
