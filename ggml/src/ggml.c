@@ -12823,7 +12823,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -12857,7 +12857,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -12892,7 +12892,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -12929,7 +12929,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -12971,7 +12971,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -13018,7 +13018,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
@@ -13057,7 +13057,7 @@ static void ggml_compute_forward_mul_mat(
 
         const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
         const int two_w_tile_size      = two_w_size / n_tile_num;
-        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2 + three_k * ne01 / 3 / 8;
         // auto gemm_start = std::chrono::high_resolution_clock::now();
         for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
             const int two_w_offset          = i_tile * two_w_tile_size;
