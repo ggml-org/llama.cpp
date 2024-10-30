@@ -61,6 +61,9 @@ actor LlamaContext {
     static func create_context(path: String) throws -> LlamaContext {
         llama_backend_init()
         var model_params = llama_model_default_params()
+        
+        // CPU only
+        model_params.n_gpu_layers = 0
 
 #if targetEnvironment(simulator)
         model_params.n_gpu_layers = 0
