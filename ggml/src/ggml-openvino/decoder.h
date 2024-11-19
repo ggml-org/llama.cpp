@@ -39,6 +39,8 @@ public:
 
     virtual std::string& get_output_name(size_t index) const = 0;
 
+    virtual size_t get_output_size() const = 0;
+
     virtual const std::string& get_op_type() const = 0;
 
     virtual const std::string& get_op_name() const = 0;

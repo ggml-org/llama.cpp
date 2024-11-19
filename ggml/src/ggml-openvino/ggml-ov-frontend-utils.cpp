@@ -29,8 +29,7 @@ enum ggml_status openvino_frontend_compute (ggml_backend_t backend, struct ggml_
 
     auto ggml_graph_iterator = get_ggml_graph_iterator(cgraph);
     std::shared_ptr<ov::frontend::tensorflow::GraphIterator> graph_iterator = ggml_graph_iterator;
-    GGML_LOG_ERROR("Decoder count in current GraphIterator: ");
-    GGML_LOG_ERROR(std::to_string(graph_iterator->size()).c_str());
+    GGML_LOG_ERROR("Decoder count in current GraphIterator: %s\n", std::to_string(graph_iterator->size()).c_str());
     
     // Load GraphIterator -> InputModel
     ov::frontend::InputModel::Ptr input_model = front_end->load(graph_iterator);

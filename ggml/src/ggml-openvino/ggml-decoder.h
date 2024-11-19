@@ -45,6 +45,8 @@ public:
 
     virtual std::string& get_output_name(size_t index) const override;
 
+    size_t get_output_size() const override; 
+
     virtual const std::string& get_op_type() const override;
 
     virtual const std::string& get_op_name() const override;
