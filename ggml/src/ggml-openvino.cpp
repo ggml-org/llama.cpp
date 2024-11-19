@@ -10,10 +10,29 @@
 #include <openvino/op/add.hpp>
 #include <openvino/op/subtract.hpp>
 
+#define GGML_OPENVINO_MAX_STREAMS 8
+
 struct ggml_backend_openvino_context {
-    int device;
-    std::string name;
-    std::string description;
+    int device;                          // the device ID currently in use
+    std::string name;                    // context Name
+    std::string description;             // context description
+
+    // OpenVINO core components
+    ov::Core core;                       // OpenVINO core interface
+    std::shared_ptr<ov::CompiledModel> model; // compiled Model
+    ov::InferRequest infer_request;      // inference Request
+
+    // OpenVINO Multi-stream support
+    static const int MAX_STREAMS = 8;    // define the maximum number of flows
+    std::vector<ov::InferRequest> streams; // used to support multi-stream reasoning
+    int current_stream;                  // the currently active stream index
+
+    // state Management
+    bool is_initialized;                 // initialize
+
+    ggml_backend_openvino_context()
+        : device(0), name("OpenVINO"), description("OpenVINO Backend Context"),
+          current_stream(0), is_initialized(false) {}
 };
 
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
@@ -32,10 +51,129 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_get_default_buffer_type(
     GGML_UNUSED(backend);
 }
 
+static void ggml_backend_openvino_add_forward(ggml_backend_openvino_context & ctx, ggml_tensor * dst) {
+    // Step 1: get the input tensor src0 和 src1
+    const ggml_tensor *src0 = dst->src[0];
+    const ggml_tensor *src1 = dst->src[1];
+
+    if (src0 == nullptr || src1 == nullptr) {
+        std::cerr << "Error: src0 or src1 is null." << std::endl;
+        return;
+    }
+
+    // Step 2: Check that the input tensor types and shapes match
+    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32) {
+        std::cerr << "Error: Unsupported tensor type. Only GGML_TYPE_F32 is supported for OpenVINO." << std::endl;
+        return;
+    }
+    if (src0->ne[0] != src1->ne[0] || src0->ne[1] != src1->ne[1]) {
+        std::cerr << "Error: src0 and src1 shapes do not match." << std::endl;
+        return;
+    }
+
+    // Step 3: Initialize OpenVINO model and streams (only done on first call)
+    if (!ctx.is_initialized) {
+        try {
+            // define input tensor shape
+            ov::Shape input_shape = {static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])};
+
+            // creat OpenVINO input node
+            auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+            auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+
+            // define add operation
+            auto add_node = std::make_shared<ov::op::v1::Add>(input0, input1);
+
+            // create model
+            auto model = std::make_shared<ov::Model>(add_node, ov::ParameterVector{input0, input1});
+
+            // compile model and store in context
+#ifdef  GGML_OPENVINO_GPU
+            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "GPU"));
+#elif   GGML_OPENVINO_NPU
+            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "NPU"));
+#else
+            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "CPU"));
+#endif
+            // initialize infer request
+            ctx.infer_request = ctx.model->create_infer_request();
+            ctx.is_initialized = true;
+
+            // std::cout << "OpenVINO add model initialized successfully." << std::endl;
+        } catch (const std::exception &e) {
+            std::cerr << "Error initializing OpenVINO model: " << e.what() << std::endl;
+            return;
+        }
+    }
+
+    // Step 4:  set input data, copy src0 and src1 data to OpenVINO input tensors
+    auto input_tensor0 = ctx.infer_request.get_tensor(ctx.model->input(0));
+    auto input_tensor1 = ctx.infer_request.get_tensor(ctx.model->input(1));
+
+    // Note: OpenVINO Tensor data is contiguous, make sure src0 and src1 data is contiguous.
+    std::memcpy(input_tensor0.data<float>(), src0->data, src0->nb[0] * src0->ne[0]);
+    std::memcpy(input_tensor1.data<float>(), src1->data, src1->nb[0] * src1->ne[0]);
+
+    // Step 5: execute inference
+    ctx.infer_request.infer();
+
+    // Step 6: get output data
+    ov::Tensor output_tensor = ctx.infer_request.get_tensor(ctx.model->output(0));
+
+    // Allocate memory for dst->data if not already allocated
+    if (dst->data == nullptr) {
+        dst->data = malloc(dst->nb[0] * dst->ne[0]);
+        if (dst->data == nullptr) {
+            std::cerr << "Error: Failed to allocate memory for dst->data." << std::endl;
+            return;
+        }
+    }
+    // Copy output data to dst
+    std::memcpy(dst->data, output_tensor.data<float>(), dst->nb[0] * dst->ne[0]);
+
+    // // Print results (optional, for debugging)
+    // float* dst_data = static_cast<float*>(dst->data);
+    // std::cout << "Output data:";
+    // for (int i = 0; i < std::min(10, static_cast<int>(dst->ne[0])); ++i) {
+    //     std::cout << dst_data[i] << " ";
+    // }
+    // std::cout << std::endl;
+}
+
 static void ggml_backend_openvino_add(ggml_backend_openvino_context & ctx, ggml_tensor * dst) {
     // Placeholder for OpenVINO add operation
-    GGML_ASSERT(ctx.device != 0);
+    // GGML_ASSERT(ctx.device != 0);
     GGML_ASSERT(dst->data != nullptr);
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    switch (src0->type) {
+        case GGML_TYPE_F16:
+            {
+                if (src1->type == GGML_TYPE_F16) {
+                    // ggml_backend_openvino_add_forward(ctx, dst, src0, src1);
+                } else if (src1->type == GGML_TYPE_F32) {
+                    // ggml_compute_forward_add_f16_f32(params, dst);
+                } else {
+                    GGML_ABORT("fatal error");
+                }
+            } break;
+        case GGML_TYPE_F32:
+            {
+                if (src1->type == GGML_TYPE_F32) {
+                    {
+                        ggml_backend_openvino_add_forward(ctx, dst);
+                    }
+                }
+                else {
+                    GGML_ABORT("fatal error");
+                }
+            } break;
+        default:
+            GGML_ABORT("%s: unsupported type %d\n", __func__, src1->type);
+    }
+
 }
 
 static void test_op_for_NONE() {
@@ -270,7 +408,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         case GGML_OP_UNARY:
             return false;
         case GGML_OP_NONE:
-            return true;
+            return false;
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
@@ -281,7 +419,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         {
             ov::op::v1::Add add;
             //add.evaluate(op->outputs[0], op->inputs[1]);
-            return false;
+            return true;
         }
         case GGML_OP_ADD1:
         case GGML_OP_SUB:
