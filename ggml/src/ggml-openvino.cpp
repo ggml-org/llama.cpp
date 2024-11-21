@@ -51,10 +51,18 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_get_default_buffer_type(
     GGML_UNUSED(backend);
 }
 
-static void ggml_backend_openvino_add_forward(ggml_backend_openvino_context & ctx, ggml_tensor * dst) {
+static void ggml_backend_openvino_add_forward(ggml_tensor * dst) {
     // Step 1: get the input tensor src0 和 src1
-    const ggml_tensor *src0 = dst->src[0];
-    const ggml_tensor *src1 = dst->src[1];
+    const struct ggml_tensor *src0 = dst->src[0];
+    const struct ggml_tensor *src1 = dst->src[1];
+
+    ov::Core core;
+
+    // set the shape and stride of dst
+    dst->ne[0] = src0->ne[0];
+    dst->ne[1] = src0->ne[1];
+    dst->nb[0] = src0->nb[0];
+    dst->nb[1] = src0->nb[1];
 
     if (src0 == nullptr || src1 == nullptr) {
         std::cerr << "Error: src0 or src1 is null." << std::endl;
@@ -71,76 +79,61 @@ static void ggml_backend_openvino_add_forward(ggml_backend_openvino_context & ct
         return;
     }
 
-    // Step 3: Initialize OpenVINO model and streams (only done on first call)
-    if (!ctx.is_initialized) {
-        try {
-            // define input tensor shape
-            ov::Shape input_shape = {static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])};
+    ov::Tensor input0 = ov::Tensor(ov::element::f32, {static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])}, src0->data);
+    ov::Tensor input1 = ov::Tensor(ov::element::f32, {static_cast<size_t>(src1->ne[0]), static_cast<size_t>(src1->ne[1])}, src1->data);
 
-            // creat OpenVINO input node
-            auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
-            auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+    auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])});
+    auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])});
+    auto add = std::make_shared<ov::op::v1::Add>(input0_param, input1_param);
+    auto function = std::make_shared<ov::Model>(add, ov::ParameterVector{input0_param, input1_param});
 
-            // define add operation
-            auto add_node = std::make_shared<ov::op::v1::Add>(input0, input1);
-
-            // create model
-            auto model = std::make_shared<ov::Model>(add_node, ov::ParameterVector{input0, input1});
-
-            // compile model and store in context
+    // compile model and store in context
 #ifdef  GGML_OPENVINO_GPU
-            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "GPU"));
+    auto compiled_model = core.compile_model(function, "GPU");
 #elif   GGML_OPENVINO_NPU
-            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "NPU"));
+    auto compiled_model = core.compile_model(function, "NPU");
 #else
-            ctx.model = std::make_shared<ov::CompiledModel>(ctx.core.compile_model(model, "CPU"));
+    auto compiled_model = core.compile_model(function, "CPU");
 #endif
-            // initialize infer request
-            ctx.infer_request = ctx.model->create_infer_request();
-            ctx.is_initialized = true;
-
-            // std::cout << "OpenVINO add model initialized successfully." << std::endl;
-        } catch (const std::exception &e) {
-            std::cerr << "Error initializing OpenVINO model: " << e.what() << std::endl;
-            return;
-        }
-    }
+    // initialize infer request
+    auto infer_request = compiled_model.create_infer_request();
 
     // Step 4:  set input data, copy src0 and src1 data to OpenVINO input tensors
-    auto input_tensor0 = ctx.infer_request.get_tensor(ctx.model->input(0));
-    auto input_tensor1 = ctx.infer_request.get_tensor(ctx.model->input(1));
-
-    // Note: OpenVINO Tensor data is contiguous, make sure src0 and src1 data is contiguous.
-    std::memcpy(input_tensor0.data<float>(), src0->data, src0->nb[0] * src0->ne[0]);
-    std::memcpy(input_tensor1.data<float>(), src1->data, src1->nb[0] * src1->ne[0]);
+    infer_request.set_tensor(input0_param, input0);
+    infer_request.set_tensor(input1_param, input1);
 
     // Step 5: execute inference
-    ctx.infer_request.infer();
+    infer_request.infer();
 
     // Step 6: get output data
-    ov::Tensor output_tensor = ctx.infer_request.get_tensor(ctx.model->output(0));
+    ov::Tensor output = infer_request.get_tensor(compiled_model.output());
 
-    // Allocate memory for dst->data if not already allocated
-    if (dst->data == nullptr) {
-        dst->data = malloc(dst->nb[0] * dst->ne[0]);
-        if (dst->data == nullptr) {
-            std::cerr << "Error: Failed to allocate memory for dst->data." << std::endl;
-            return;
-        }
-    }
-    // Copy output data to dst
-    std::memcpy(dst->data, output_tensor.data<float>(), dst->nb[0] * dst->ne[0]);
-
-    // // Print results (optional, for debugging)
-    // float* dst_data = static_cast<float*>(dst->data);
-    // std::cout << "Output data:";
-    // for (int i = 0; i < std::min(10, static_cast<int>(dst->ne[0])); ++i) {
-    //     std::cout << dst_data[i] << " ";
+    // // Allocate memory for dst->data if not already allocated
+    // if (dst->data == nullptr) {
+    //     dst->data = malloc(dst->nb[0] * dst->ne[0]);
+    //     if (dst->data == nullptr) {
+    //         std::cerr << "Error: Failed to allocate memory for dst->data." << std::endl;
+    //         return;
+    //     }
     // }
-    // std::cout << std::endl;
+
+    std::memcpy(dst->data, output.data(), output.get_byte_size());
+
+    if (dst->ne[0] != src0->ne[0] || dst->ne[1] != src0->ne[1]) {
+        std::cerr << "Error: dst tensor shape does not match input tensor shape." << std::endl;
+        return;
+    }
+
+    // float* dst_data1 = (float*)(dst->data);
+    // printf("Output data:");;
+    // for (int i = 0; i < (10 < (int)(dst->ne[0]) ? 10 : (int)(dst->ne[0])); ++i) {
+    //     printf("%f ", dst_data1[i]);
+    // }
+    // printf("\n");
+    // fflush(stdout);
 }
 
-static void ggml_backend_openvino_add(ggml_backend_openvino_context & ctx, ggml_tensor * dst) {
+static void ggml_backend_openvino_add(ggml_tensor * dst) {
     // Placeholder for OpenVINO add operation
     // GGML_ASSERT(ctx.device != 0);
     GGML_ASSERT(dst->data != nullptr);
@@ -163,7 +156,7 @@ static void ggml_backend_openvino_add(ggml_backend_openvino_context & ctx, ggml_
             {
                 if (src1->type == GGML_TYPE_F32) {
                     {
-                        ggml_backend_openvino_add_forward(ctx, dst);
+                        ggml_backend_openvino_add_forward(dst);
                     }
                 }
                 else {
@@ -181,16 +174,13 @@ static void test_op_for_NONE() {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    // TODO
-    ggml_backend_openvino_context * ctx = (ggml_backend_openvino_context *)backend->context;
-
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
         switch (node->op) {
             case GGML_OP_ADD:
                 // TODO
-                ggml_backend_openvino_add(*ctx, node);
+                ggml_backend_openvino_add(node);
                 break;
             case GGML_OP_MUL_MAT:
             case GGML_OP_OUT_PROD:
@@ -405,53 +395,8 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     // ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
 
     switch (op->op) {
-        case GGML_OP_UNARY:
-            return false;
-        case GGML_OP_NONE:
-            return false;
-        case GGML_OP_RESHAPE:
-        case GGML_OP_VIEW:
-        case GGML_OP_PERMUTE:
-        case GGML_OP_TRANSPOSE:
-        case GGML_OP_NORM:
-            return false;
         case GGML_OP_ADD:
-        {
-            ov::op::v1::Add add;
-            //add.evaluate(op->outputs[0], op->inputs[1]);
             return true;
-        }
-        case GGML_OP_ADD1:
-        case GGML_OP_SUB:
-        {
-            ov::op::v1::Subtract sub;
-            //sub.evaluate(TensorVector& outputs, const TensorVector& inputs);
-            return false;
-        }
-        case GGML_OP_MUL:
-        case GGML_OP_DIV:
-        case GGML_OP_RMS_NORM:
-        case GGML_OP_SCALE:
-        case GGML_OP_SQR:
-        case GGML_OP_SQRT:
-        case GGML_OP_SIN:
-        case GGML_OP_COS:
-        case GGML_OP_IM2COL:
-        case GGML_OP_POOL_2D:
-        case GGML_OP_SUM:
-        case GGML_OP_SUM_ROWS:
-        case GGML_OP_ARGSORT:
-        case GGML_OP_ACC:
-        case GGML_OP_GROUP_NORM:
-        case GGML_OP_UPSCALE:
-        case GGML_OP_PAD:
-        case GGML_OP_ARANGE:
-        case GGML_OP_TIMESTEP_EMBEDDING:
-        case GGML_OP_LEAKY_RELU:
-        case GGML_OP_CROSS_ENTROPY_LOSS:
-        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
-        case GGML_OP_OPT_STEP_ADAMW:
-            return false;
         default:
             return false;
     }
