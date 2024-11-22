@@ -45,7 +45,11 @@ public:
 
     virtual std::string& get_output_name(size_t index) const override;
 
-    size_t get_output_size() const override; 
+    virtual size_t get_output_size() const override; 
+
+    virtual bool is_graph_output(size_t index) const override;
+
+    virtual std::string& get_output_name(size_t index) const override;
 
     virtual const std::string& get_op_type() const override;
 
