@@ -86,15 +86,15 @@ static void ggml_backend_openvino_add_forward(ggml_tensor * dst) {
     auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])});
     auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, ov::Shape{static_cast<size_t>(src0->ne[0]), static_cast<size_t>(src0->ne[1])});
     auto add = std::make_shared<ov::op::v1::Add>(input0_param, input1_param);
-    auto function = std::make_shared<ov::Model>(add, ov::ParameterVector{input0_param, input1_param});
+    auto model = std::make_shared<ov::Model>(add, ov::ParameterVector{input0_param, input1_param});
 
     // compile model and store in context
 #ifdef  GGML_OPENVINO_GPU
-    auto compiled_model = core.compile_model(function, "GPU");
+    auto compiled_model = core.compile_model(model, "GPU");
 #elif   GGML_OPENVINO_NPU
-    auto compiled_model = core.compile_model(function, "NPU");
+    auto compiled_model = core.compile_model(model, "NPU");
 #else
-    auto compiled_model = core.compile_model(function, "CPU");
+    auto compiled_model = core.compile_model(model, "CPU");
 #endif
     // initialize infer request
     auto infer_request = compiled_model.create_infer_request();
@@ -157,7 +157,14 @@ static void ggml_backend_openvino_mul_forward(ggml_tensor * dst) {
 
     // create model
     auto model = std::make_shared<ov::Model>(multiply, ov::ParameterVector{input0, input1});
+    // compile model and store in context
+#ifdef  GGML_OPENVINO_GPU
+    ov::CompiledModel compiled_model = core.compile_model(model, "GPU");
+#elif   GGML_OPENVINO_NPU
+    ov::CompiledModel compiled_model = core.compile_model(model, "NPU");
+#else
     ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
+#endif
 
     ov::InferRequest infer_request = compiled_model.create_infer_request();
     infer_request.set_tensor(input0, tensor0);
