@@ -267,6 +267,12 @@ typedef struct {
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
 
+typedef struct {
+    uint8_t qs[QK_K/4];      // quants
+} block_i2_s;
+static_assert(sizeof(block_i2_s) == QK_K/4, "wrong gpu i2_s block size/padding");
+
+
 // 3-bit quantization
 // weight is represented as x = a * q
 // 16 blocks of 16 elements each
