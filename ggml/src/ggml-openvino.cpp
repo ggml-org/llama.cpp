@@ -9,6 +9,7 @@
 #include <openvino/op/op.hpp>
 #include <openvino/op/add.hpp>
 #include <openvino/op/subtract.hpp>
+#include <openvino/opsets/opset1.hpp>
 
 #define GGML_OPENVINO_MAX_STREAMS 8
 
@@ -133,6 +134,42 @@ static void ggml_backend_openvino_add_forward(ggml_tensor * dst) {
     // fflush(stdout);
 }
 
+static void ggml_backend_openvino_mul_forward(ggml_tensor * dst) {
+    struct ggml_tensor *src0 = dst->src[0];
+    struct ggml_tensor *src1 = dst->src[1];
+
+    ov::Core core;
+
+    // define shape
+    ov::Shape shape0 = {static_cast<size_t>(src0->ne[1]), static_cast<size_t>(src0->ne[0])};  // For Example: [7, 3072]
+    ov::Shape shape1 = {static_cast<size_t>(src1->ne[1]), static_cast<size_t>(src1->ne[0])};  // For Example: [1, 3072] -> broadcast to [7, 3072]
+
+    // create OpenVINO tensor (src0 and src1)
+    ov::Tensor tensor0(ov::element::f32, shape0, src0->data);
+    ov::Tensor tensor1(ov::element::f32, shape1, src1->data);
+
+    // define input parameters
+    auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, shape0);
+    auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, shape1);
+
+    // create a multiply operation using broadcasting
+    auto multiply = std::make_shared<ov::op::v1::Multiply>(input0, input1);
+
+    // create model
+    auto model = std::make_shared<ov::Model>(multiply, ov::ParameterVector{input0, input1});
+    ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
+
+    ov::InferRequest infer_request = compiled_model.create_infer_request();
+    infer_request.set_tensor(input0, tensor0);
+    infer_request.set_tensor(input1, tensor1);
+
+    infer_request.infer();
+
+    // get output tensor and copy it back to dst->data
+    ov::Tensor output_tensor = infer_request.get_output_tensor();
+    std::memcpy(dst->data, output_tensor.data<float>(), src0->ne[0] * src0->ne[1] * sizeof(float));
+}
+
 static void ggml_backend_openvino_add(ggml_tensor * dst) {
     // Placeholder for OpenVINO add operation
     // GGML_ASSERT(ctx.device != 0);
@@ -169,28 +206,49 @@ static void ggml_backend_openvino_add(ggml_tensor * dst) {
 
 }
 
-static void test_op_for_NONE() {
-    GGML_LOG_DEBUG("...test_op_for_NONE... \n");
+static void ggml_backend_openvino_mul(ggml_tensor * dst) {
+    GGML_ASSERT(dst->data != nullptr);
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 && "only f32 src1 supported for now");
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_backend_openvino_mul_forward(dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
+        if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
+            return GGML_STATUS_SUCCESS;
+        }
+
         switch (node->op) {
-            case GGML_OP_ADD:
-                // TODO
-                ggml_backend_openvino_add(node);
-                break;
-            case GGML_OP_MUL_MAT:
-            case GGML_OP_OUT_PROD:
-                break;
-            case GGML_OP_NONE:
-                test_op_for_NONE();
-            case GGML_OP_RESHAPE:
-            case GGML_OP_VIEW:
             case GGML_OP_PERMUTE:
+            case GGML_OP_RESHAPE:
             case GGML_OP_TRANSPOSE:
+            case GGML_OP_VIEW:
+                break;
+            case GGML_OP_ADD:
+                {
+                    ggml_backend_openvino_add(node);
+                } break;
+            case GGML_OP_MUL:
+                {
+                    ggml_backend_openvino_mul(node);
+                } break;
+            case GGML_OP_MUL_MAT:
                 break;
             default:
                 GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
@@ -395,8 +453,18 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     // ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
 
     switch (op->op) {
+        case GGML_OP_NONE:
+        case GGML_OP_PERMUTE:
+        case GGML_OP_RESHAPE:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_VIEW:
+            return true;
         case GGML_OP_ADD:
             return true;
+        case GGML_OP_MUL:
+            return true;
+        case GGML_OP_MUL_MAT:
+            return false;
         default:
             return false;
     }
