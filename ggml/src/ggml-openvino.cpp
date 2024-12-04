@@ -1,6 +1,7 @@
 #include "ggml-openvino.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+#include "ggml-openvino/utils.h"
 
 #include <string>
 #include <mutex>
@@ -234,33 +235,35 @@ static void ggml_backend_openvino_mul(ggml_tensor * dst) {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        struct ggml_tensor * node = cgraph->nodes[i];
+    // for (int i = 0; i < cgraph->n_nodes; i++) {
+    //     struct ggml_tensor * node = cgraph->nodes[i];
 
-        if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
-            return GGML_STATUS_SUCCESS;
-        }
+    //     if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
+    //         return GGML_STATUS_SUCCESS;
+    //     }
 
-        switch (node->op) {
-            case GGML_OP_PERMUTE:
-            case GGML_OP_RESHAPE:
-            case GGML_OP_TRANSPOSE:
-            case GGML_OP_VIEW:
-                break;
-            case GGML_OP_ADD:
-                {
-                    ggml_backend_openvino_add(node);
-                } break;
-            case GGML_OP_MUL:
-                {
-                    ggml_backend_openvino_mul(node);
-                } break;
-            case GGML_OP_MUL_MAT:
-                break;
-            default:
-                GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
-        }
-    }
+    //     switch (node->op) {
+    //         case GGML_OP_PERMUTE:
+    //         case GGML_OP_RESHAPE:
+    //         case GGML_OP_TRANSPOSE:
+    //         case GGML_OP_VIEW:
+    //             break;
+    //         case GGML_OP_ADD:
+    //             {
+    //                 ggml_backend_openvino_add(node);
+    //             } break;
+    //         case GGML_OP_MUL:
+    //             {
+    //                 ggml_backend_openvino_mul(node);
+    //             } break;
+    //         case GGML_OP_MUL_MAT:
+    //             break;
+    //         default:
+    //             GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
+    //     }
+    // }
+
+    openvino_frontend_compute(backend, cgraph);
 
     return GGML_STATUS_SUCCESS;
 
