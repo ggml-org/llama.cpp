@@ -59,6 +59,10 @@ public:
         return m_inputs[index];
     }
 
+    const ggml_tensor* get_output_ggml_tensor(size_t index) const {
+        return m_outputs[index];
+    }
+
     // virtual const std::vector<size_t>& outputs() const override;
 
     // virtual size_t output(size_t index) const override;

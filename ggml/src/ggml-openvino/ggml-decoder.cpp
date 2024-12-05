@@ -10,13 +10,21 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
         // Unary OPs 
         case GGML_OP_UNARY:
         case GGML_OP_RESHAPE:
-        case GGML_OP_VIEW:
+        case GGML_OP_TRANSPOSE:
+        case GGML_OP_PERMUTE:
+        case GGML_OP_CONT:
+        case GGML_OP_CPY:
+        case GGML_OP_RMS_NORM:
         {
             m_inputs.push_back(m_node->src[0]);
             m_outputs.push_back(m_node);
-            #ifdef GGML_OPENVINO_DEBUG
-                GGML_LOG_INFO("Decoder input 0: %f \n", *(float*)(m_node->src[0]->data));
-            #endif
+            break;
+        }
+        // For view, input is m_node itself
+        case GGML_OP_VIEW:
+        {
+            m_inputs.push_back(m_node);
+            m_outputs.push_back(m_node);
             break;
         }
         // SCALE
@@ -24,12 +32,6 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
         {
             m_inputs.push_back(m_node->src[0]);
             m_outputs.push_back(m_node);
-            #ifdef GGML_OPENVINO_DEBUG
-                float v;
-                memcpy(&v, m_node->op_params, sizeof(float));
-                GGML_LOG_INFO("Decoder input 0: %f \n", *(float*)(m_node->src[0]->data));
-                GGML_LOG_INFO("Scale: %f \n", v);
-            #endif
             break;
         }
         // OPs with 2 inputs
@@ -39,14 +41,20 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
         case GGML_OP_MUL_MAT:
         case GGML_OP_SUB:        
         case GGML_OP_GET_ROWS:
+        case GGML_OP_SOFT_MAX:
         {
             m_inputs.push_back(m_node->src[0]);
             m_inputs.push_back(m_node->src[1]);
             m_outputs.push_back(m_node);
-            #ifdef GGML_OPENVINO_DEBUG
-                GGML_LOG_INFO("Decoder input 0: %f \n", *(float*)(m_node->src[0]->data));
-                GGML_LOG_INFO("Decoder input 1: %f \n", *(float*)(m_node->src[1]->data));
-            #endif
+            break;
+        } 
+        // OPs with 3 inputs:
+        case GGML_OP_ROPE:
+        {
+            m_inputs.push_back(m_node->src[0]);
+            m_inputs.push_back(m_node->src[1]);
+            m_inputs.push_back(m_node->src[2]); // ???
+            m_outputs.push_back(m_node);
             break;
         } 
         default:
@@ -130,7 +138,6 @@ ov::PartialShape GgmlOvDecoder::get_output_shape(size_t index) const {
 ov::element::Type GgmlOvDecoder::get_output_type(size_t index) const {
     // TODO: Change to Output
     ov::element::Type type = ov::element::dynamic;
-    // GGML_LOG_DEBUG("%d\n", m_outputs[index]->type);
     switch (m_outputs[index]->type) {
         case GGML_TYPE_F32:
             type = ov::element::f32;
@@ -179,6 +186,8 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_OP_ACC, "GGML_OP_ACC"},
         {GGML_OP_ADD, "GGML_OP_ADD"},
         {GGML_OP_ADD1, "GGML_OP_ADD1"},
+        {GGML_OP_CONT, "GGML_OP_CONT"},
+        {GGML_OP_CPY, "GGML_OP_CPY"},
         {GGML_OP_DIV, "GGML_OP_DIV"},
         {GGML_OP_DUP, "GGML_OP_DUP"},
         {GGML_OP_GET_ROWS, "GGML_OP_GET_ROWS"},
@@ -186,8 +195,12 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_OP_MUL_MAT, "GGML_OP_MUL_MAT"},
         {GGML_OP_PERMUTE, "GGML_OP_PERMUTE"},
         {GGML_OP_RESHAPE, "GGML_OP_RESHAPE"},
+        {GGML_OP_RMS_NORM, "GGML_OP_RMS_NORM"},
+        {GGML_OP_ROPE, "GGML_OP_ROPE"},
         {GGML_OP_SCALE, "GGML_OP_SCALE"},
+        {GGML_OP_SOFT_MAX, "GGML_OP_SOFT_MAX"},
         {GGML_OP_SUB, "GGML_OP_SUB"},
+        {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
         {GGML_OP_UNARY, "GGML_OP_UNARY"},
         {GGML_OP_VIEW, "GGML_OP_VIEW"}
     };
