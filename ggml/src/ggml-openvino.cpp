@@ -458,6 +458,17 @@ static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(g
     return nullptr;
 }
 
+std::set<std::string> get_openvino_available_opsets() {
+    ov::Core core;
+    std::set<std::string> unique_ops;
+    for (const auto& opset  : ov::get_available_opsets()) {
+        for (const auto& op : opset.second().get_type_info_set()) {
+            unique_ops.insert(op.name).second;
+        }
+    }
+    return unique_ops;
+}
+
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
     // ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
