@@ -21616,6 +21616,15 @@ static int32_t llama_chat_apply_template_internal(
         if (add_ass) {
             ss << "<|assistant|>\n";
         }
+    } else if (tmpl == "falcon3" || (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>"))) {
+        // Falcon 3
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << "<|" << role << "|>\n" << message->content << "\n";
+        }
+        if (add_ass) {
+            ss << "<|assistant|>\n";
+        }
     } else if (tmpl == "zephyr" || tmpl_contains("<|user|>")) {
         // zephyr template
         for (auto message : chat) {
