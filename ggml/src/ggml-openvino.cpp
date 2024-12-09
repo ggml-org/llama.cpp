@@ -234,36 +234,130 @@ static void ggml_backend_openvino_mul(ggml_tensor * dst) {
     }
 }
 
+void ggml_compute_forward_get_rows_f16(struct ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+    const struct ggml_tensor *src1 = dst->src[1];
+
+    ov::Core core;
+
+    ov::Shape shape0 = {static_cast<size_t>(src0->ne[1]), static_cast<size_t>(src0->ne[0])};  // [3072, 7]
+    ov::Shape shape1 = {static_cast<size_t>(src1->ne[0])};  // [7]
+
+    ov::Tensor tensor0(ov::element::f16, shape0, src0->data);
+    ov::Tensor tensor1(ov::element::i32, shape1, src1->data);
+
+    auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, shape0);
+    auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::i32, shape1);
+
+    auto gather = std::make_shared<ov::op::v8::Gather>(input0, input1, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}));
+
+    auto model = std::make_shared<ov::Model>(gather, ov::ParameterVector{input0, input1});
+    ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
+
+    ov::InferRequest infer_request = compiled_model.create_infer_request();
+    infer_request.set_tensor(input0, tensor0);
+    infer_request.set_tensor(input1, tensor1);
+
+    infer_request.infer();
+
+    ov::Tensor output_tensor = infer_request.get_output_tensor();
+    // Convert output tensor data type from f16 to f32
+    ov::Tensor output_tensor_f32 = ov::Tensor(ov::element::f32, output_tensor.get_shape());
+    for (size_t i = 0; i < output_tensor.get_size(); ++i) {
+        output_tensor_f32.data<float>()[i] = static_cast<float>(output_tensor.data<ov::float16>()[i]);
+    }
+
+    // Copy the converted data to dst->data
+    std::memcpy(dst->data, output_tensor_f32.data<float>(), output_tensor_f32.get_byte_size());
+}
+
+void ggml_compute_forward_get_rows_f32(struct ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+    const struct ggml_tensor *src1 = dst->src[1];
+
+    ov::Core core;
+
+    ov::Shape shape0 = {static_cast<size_t>(src0->ne[1]), static_cast<size_t>(src0->ne[0])};  // [3072, 7]
+    ov::Shape shape1 = {static_cast<size_t>(src1->ne[0])};  // [7]
+
+    ov::Tensor tensor0(ov::element::f32, shape0, src0->data);
+    ov::Tensor tensor1(ov::element::i32, shape1, src1->data);
+
+    auto input0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, shape0);
+    auto input1 = std::make_shared<ov::op::v0::Parameter>(ov::element::i32, shape1);
+
+    auto gather = std::make_shared<ov::op::v8::Gather>(input0, input1, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {0}));
+
+    auto model = std::make_shared<ov::Model>(gather, ov::ParameterVector{input0, input1});
+    ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
+
+    ov::InferRequest infer_request = compiled_model.create_infer_request();
+    infer_request.set_tensor(input0, tensor0);
+    infer_request.set_tensor(input1, tensor1);
+
+    infer_request.infer();
+
+    ov::Tensor output_tensor = infer_request.get_output_tensor();
+
+    // Copy the converted data to dst->data
+    std::memcpy(dst->data, output_tensor.data<float>(), output_tensor.get_byte_size());
+}
+
+void ggml_compute_forward_get_rows(struct ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+    const struct ggml_tensor *src1 = dst->src[1];
+
+    switch (src0->type) {
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_get_rows_f16(dst);
+            } break;
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_get_rows_f32(dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+
+}
+
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    // for (int i = 0; i < cgraph->n_nodes; i++) {
-    //     struct ggml_tensor * node = cgraph->nodes[i];
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        struct ggml_tensor * node = cgraph->nodes[i];
 
-    //     if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
-    //         return GGML_STATUS_SUCCESS;
-    //     }
+        if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
+            return GGML_STATUS_SUCCESS;
+        }
 
-    //     switch (node->op) {
-    //         case GGML_OP_PERMUTE:
-    //         case GGML_OP_RESHAPE:
-    //         case GGML_OP_TRANSPOSE:
-    //         case GGML_OP_VIEW:
-    //             break;
-    //         case GGML_OP_ADD:
-    //             {
-    //                 ggml_backend_openvino_add(node);
-    //             } break;
-    //         case GGML_OP_MUL:
-    //             {
-    //                 ggml_backend_openvino_mul(node);
-    //             } break;
-    //         case GGML_OP_MUL_MAT:
-    //             break;
-    //         default:
-    //             GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
-    //     }
-    // }
+        switch (node->op) {
+            case GGML_OP_PERMUTE:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_TRANSPOSE:
+            case GGML_OP_VIEW:
+                break;
+            case GGML_OP_ADD:
+                {
+                    ggml_backend_openvino_add(node);
+                } break;
+            case GGML_OP_MUL:
+                {
+                    ggml_backend_openvino_mul(node);
+                } break;
+            case GGML_OP_MUL_MAT:
+                break;
+            case GGML_OP_GET_ROWS:
+                {
+                    ggml_compute_forward_get_rows(node);
+                } break;
+            default:
+                GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
+        }
+    }
 
-    openvino_frontend_compute(backend, cgraph);
+    // openvino_frontend_compute(backend, cgraph);
 
     return GGML_STATUS_SUCCESS;
 
