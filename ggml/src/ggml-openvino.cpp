@@ -325,39 +325,7 @@ void ggml_compute_forward_get_rows(struct ggml_tensor *dst) {
 }
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        struct ggml_tensor * node = cgraph->nodes[i];
-
-        if (node->op == GGML_OP_NONE || ggml_is_empty(node)) {
-            return GGML_STATUS_SUCCESS;
-        }
-
-        switch (node->op) {
-            case GGML_OP_PERMUTE:
-            case GGML_OP_RESHAPE:
-            case GGML_OP_TRANSPOSE:
-            case GGML_OP_VIEW:
-                break;
-            case GGML_OP_ADD:
-                {
-                    ggml_backend_openvino_add(node);
-                } break;
-            case GGML_OP_MUL:
-                {
-                    ggml_backend_openvino_mul(node);
-                } break;
-            case GGML_OP_MUL_MAT:
-                break;
-            case GGML_OP_GET_ROWS:
-                {
-                    ggml_compute_forward_get_rows(node);
-                } break;
-            default:
-                GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
-        }
-    }
-
-    // openvino_frontend_compute(backend, cgraph);
+    openvino_frontend_compute(backend, cgraph);
 
     return GGML_STATUS_SUCCESS;
 
@@ -558,7 +526,7 @@ std::set<std::string> get_openvino_available_opsets() {
     std::set<std::string> unique_ops;
     for (const auto& opset  : ov::get_available_opsets()) {
         for (const auto& op : opset.second().get_type_info_set()) {
-            unique_ops.insert(op.name).second;
+            unique_ops.insert(op.name);
         }
     }
     return unique_ops;
@@ -566,8 +534,12 @@ std::set<std::string> get_openvino_available_opsets() {
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
-    // ggml_backend_openvino_device_context * dev_ctx = (ggml_backend_openvino_device_context *) dev->context;
 
+#ifdef OPENVINO_OP_DEBUG
+static const std::set<std::string>& openvino_ops = []() -> const std::set<std::string>& {
+        static const std::set<std::string> ops = get_openvino_available_opsets();
+        return ops;
+    }();
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_PERMUTE:
@@ -584,6 +556,82 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         default:
             return false;
     }
+#else
+    static const std::set<std::string>& openvino_ops = []() -> const std::set<std::string>& {
+        static const std::set<std::string> ops = get_openvino_available_opsets();
+        return ops;
+    }();
+
+    static const std::map<ggml_op, std::vector<std::string>> op_mapping = {
+        {GGML_OP_ACC,                   {"Add"}},
+        {GGML_OP_ADD,                   {"Add"}},
+        {GGML_OP_ADD1,                  {"Add"}},
+        {GGML_OP_ADD_REL_POS,           {"Add", "MatMul", "Reshape"}},
+        {GGML_OP_ARANGE,                {"Range"}},
+        {GGML_OP_ARGMAX,                {"TopK"}},
+        {GGML_OP_ARGSORT,               {"TopK"}},
+        {GGML_OP_CLAMP,                 {"Clamp"}},
+        {GGML_OP_CONCAT,                {"Concat"}},
+        {GGML_OP_CONV_TRANSPOSE_1D,     {"ConvolutionBackpropData"}},
+        {GGML_OP_CONV_TRANSPOSE_2D,     {"ConvolutionBackpropData"}},
+        {GGML_OP_COS,                   {"Cos"}},
+        {GGML_OP_CROSS_ENTROPY_LOSS,    {"Softmax", "Log", "Multiply", "ReduceSum", "Negative"}},
+        {GGML_OP_DIAG,                  {"Eye", "Multiply"}},
+        {GGML_OP_DIAG_MASK_INF,         {"Eye", "Multiply", "Select", "Broadcast"}},
+        {GGML_OP_DIAG_MASK_ZERO,        {"Eye", "Multiply", "Select", "Broadcast"}},
+        {GGML_OP_DIV,                   {"Divide"}},
+        {GGML_OP_FLASH_ATTN_EXT,        {"ScaledDotProductAttention"}},
+        {GGML_OP_GET_ROWS,              {"Gather"}},
+        {GGML_OP_GROUP_NORM,            {"GroupNormalization"}},
+        {GGML_OP_IM2COL,                {"Custom", "Reshape", "Transpose"}},
+        {GGML_OP_LEAKY_RELU,            {"PReLU"}},
+        {GGML_OP_LOG,                   {"Log"}},
+        {GGML_OP_MEAN,                  {"ReduceMean"}},
+        {GGML_OP_MUL,                   {"Multiply"}},
+        {GGML_OP_MUL_MAT,               {"MatMul"}},
+        {GGML_OP_MUL_MAT_ID,            {"MatMul", "Identity"}},
+        {GGML_OP_NORM,                  {"NormalizeL2"}},
+        {GGML_OP_OUT_PROD,              {"MatMul", "Reshape"}},
+        {GGML_OP_PAD,                   {"Pad"}},
+        {GGML_OP_PERMUTE,               {"Transpose"}},
+        {GGML_OP_POOL_1D,               {"AvgPool", "MaxPool"}},
+        {GGML_OP_POOL_2D,               {"AvgPool", "MaxPool"}},
+        {GGML_OP_REPEAT,                {"Tile"}},
+        {GGML_OP_RESHAPE,               {"Reshape"}},
+        {GGML_OP_RMS_NORM,              {"Custom"}},
+        {GGML_OP_ROPE,                  {"Custom"}},
+        {GGML_OP_SCALE,                 {"Multiply", "Constant"}},
+        {GGML_OP_SET,                   {"Assign"}},
+        {GGML_OP_SIN,                   {"Sin"}},
+        {GGML_OP_SOFT_MAX,              {"Softmax"}},
+        {GGML_OP_SQR,                   {"Power"}},
+        {GGML_OP_SQRT,                  {"Sqrt"}},
+        {GGML_OP_SSM_CONV,              {"Custom"}},
+        {GGML_OP_SSM_SCAN,              {"Custom"}},
+        {GGML_OP_SUB,                   {"Subtract"}},
+        {GGML_OP_SUM,                   {"ReduceSum"}},
+        {GGML_OP_SUM_ROWS,              {"ReduceSum", "Squeeze", "Unsqueeze"}},
+        {GGML_OP_TIMESTEP_EMBEDDING,    {"Range", "Power", "Multiply", "Sin", "Cos", "Concat"}},
+        {GGML_OP_TRANSPOSE,             {"Transpose"}},
+        {GGML_OP_UPSCALE,               {"Interpolate"}},
+        {GGML_OP_VIEW,                  {"Reshape"}},
+        {GGML_OP_WIN_PART,              {"StridedSlice", "Concat", "Reshape", "Custom"}},
+        {GGML_OP_WIN_UNPART,            {"Reshape", "Transpose", "Custom"}},
+    };
+
+    auto it = op_mapping.find(op->op);
+    if (it == op_mapping.end()) {
+        return false;
+    }
+
+    for (const std::string& op_name : it->second) {
+        if (openvino_ops.count(op_name) == 0) {
+            return false;
+        }
+    }
+
+    return true;
+#endif
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
