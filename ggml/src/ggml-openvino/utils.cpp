@@ -29,8 +29,8 @@ std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<G
     return input_tensors;
 }
 
-std::map<std::string, ov::Tensor> get_ggml_graph_output_tensors(std::shared_ptr<GgmlOvGraphIterator> ggml_graph_iterator) {
-    std::map<std::string, ov::Tensor> output_tensors;
+std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvGraphIterator> ggml_graph_iterator) {
+    std::map<std::string, void*> output_tensors;
     auto output_names = ggml_graph_iterator->get_output_names();
     ggml_graph_iterator->reset();
     for (; !ggml_graph_iterator->is_end(); ggml_graph_iterator->next()) {
@@ -41,8 +41,7 @@ std::map<std::string, ov::Tensor> get_ggml_graph_output_tensors(std::shared_ptr<
                 #ifdef GGML_OPENVINO_DEBUG
                     printf("Output %d: %g\n", inp, *(double*)(output_data));
                 #endif
-                ov::Tensor output_tensor = ov::Tensor(decoder->get_output_type(inp), decoder->get_output_shape(inp).to_shape(), output_data);
-                output_tensors[decoder->get_output_name(inp)] = output_tensor;
+                output_tensors[decoder->get_output_name(inp)] = output_data;
             }
         }
     }
@@ -100,7 +99,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         #endif
     }
 
-
     //  Loading a model to the device
     ov::CompiledModel compiled_model = core.compile_model(model);
 
@@ -113,18 +111,18 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Set input tensor
     for (size_t i = 0; i < input_names.size(); i++) {
-        infer_request.set_input_tensor(i, input_tensors[input_names[i]]);
-    }
-
-    // Set output tensor
-
-    auto output_names = ggml_graph_iterator->get_output_names();
-    auto output_tensors = get_ggml_graph_output_tensors(ggml_graph_iterator);
-    for (size_t i = 0; i < output_names.size(); i++) {
-        infer_request.set_output_tensor(i, output_tensors[output_names[i]]);
+        infer_request.set_input_tensor(i, input_tensors[input_names[i]]);        
     }
 
     infer_request.infer();
+
+    // Set dst data for outputs
+    auto output_names = ggml_graph_iterator->get_output_names();
+    auto output_tensors = get_ggml_graph_output_dst(ggml_graph_iterator);
+    for (size_t i = 0; i < output_names.size(); i++) {
+        auto output_tensor = infer_request.get_output_tensor(i);
+        std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
+    }
     
     return GGML_STATUS_SUCCESS;
     GGML_UNUSED(backend);
