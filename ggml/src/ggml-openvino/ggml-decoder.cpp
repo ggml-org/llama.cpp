@@ -2,11 +2,8 @@
 #include <ggml.h>
 #include <ggml-impl.h>
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph)
-    :m_cgraph(cgraph),
-     m_node(node),
-     m_op_name(std::string(m_node->name)) {
-    switch (m_node->op) {
+void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
+    switch (node->op) {
         // Unary OPs 
         case GGML_OP_UNARY:
         case GGML_OP_RESHAPE:
@@ -16,22 +13,26 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
         case GGML_OP_CPY:
         case GGML_OP_RMS_NORM:
         {
-            m_inputs.push_back(m_node->src[0]);
-            m_outputs.push_back(m_node);
+            inputs[node->src[0]->name] = node->src[0];
+            outputs[node->name] = node;
+            m_input_names.push_back(node->src[0]->name);
+            m_output_names.push_back(node->name);
             break;
         }
-        // For view, input is m_node itself
+        // For view, input is node itself
         case GGML_OP_VIEW:
         {
-            m_inputs.push_back(m_node);
-            m_outputs.push_back(m_node);
+            inputs[node->src[0]->name] = node;
+            outputs[node->name] = node;
             break;
         }
         // SCALE
         case GGML_OP_SCALE:
         {
-            m_inputs.push_back(m_node->src[0]);
-            m_outputs.push_back(m_node);
+            inputs[node->src[0]->name] = node->src[0];
+            outputs[node->name] = node;
+            m_input_names.push_back(node->name);
+            m_output_names.push_back(node->name);
             break;
         }
         // OPs with 2 inputs
@@ -43,18 +44,25 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
         case GGML_OP_GET_ROWS:
         case GGML_OP_SOFT_MAX:
         {
-            m_inputs.push_back(m_node->src[0]);
-            m_inputs.push_back(m_node->src[1]);
-            m_outputs.push_back(m_node);
+            inputs[node->src[0]->name] = node->src[0];
+            inputs[node->src[1]->name] = node->src[1];
+            outputs[node->name] = node;
+            m_input_names.push_back(node->src[0]->name);
+            m_input_names.push_back(node->src[1]->name);
+            m_output_names.push_back(node->name);
             break;
         } 
         // OPs with 3 inputs:
         case GGML_OP_ROPE:
         {
-            m_inputs.push_back(m_node->src[0]);
-            m_inputs.push_back(m_node->src[1]);
-            m_inputs.push_back(m_node->src[2]); // ???
-            m_outputs.push_back(m_node);
+            inputs[node->src[0]->name] = node->src[0];
+            inputs[node->src[1]->name] = node->src[1];
+            inputs[node->src[2]->name] = node->src[2];
+            outputs[node->name] = node;
+            m_input_names.push_back(node->src[0]->name);
+            m_input_names.push_back(node->src[1]->name);
+            m_input_names.push_back(node->src[2]->name);
+            m_output_names.push_back(node->name);
             break;
         } 
         default:
@@ -62,13 +70,33 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
     }
 }
 
-ov::PartialShape GgmlOvDecoder::get_input_shape(size_t index) const {
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph)
+    :m_cgraph(cgraph),
+     m_node(node),
+     m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
+    m_inputs.clear();
+    m_outputs.clear();
+    m_input_names.clear();
+    m_output_names.clear();
+    // If first init 
+    if (m_node) {
+        set_input_output(m_node, m_inputs, m_outputs);
+    } else {
+        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+            auto cur_node = m_cgraph->nodes[node_n];
+            m_nodes.push_back(cur_node);
+            // Init model input and output
+            set_input_output(cur_node, m_inputs, m_outputs);
+        }
+    }
+}
+
+ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
     ov::PartialShape input_shape;
     // Use input_node->ne 
-    ggml_tensor * node = m_inputs[index];
+    ggml_tensor * node = m_inputs.at(name);
     std::vector<size_t> shape;
-    // GGML_MAX_DIMS
-    // for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+
     for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
         if (node->ne[i] == 0) {
             return input_shape;
@@ -79,10 +107,9 @@ ov::PartialShape GgmlOvDecoder::get_input_shape(size_t index) const {
     return input_shape;
 }
 
-ov::element::Type GgmlOvDecoder::get_input_type(size_t index) const {
+ov::element::Type GgmlOvDecoder::get_input_type(const std::string& name) const {
     ov::element::Type type = ov::element::dynamic;
-    // GGML_LOG_DEBUG("%d\n", m_inputs[index]->type);
-    switch (m_inputs[index]->type) {
+    switch (m_inputs.at(name)->type) {
         case GGML_TYPE_F32:
             type = ov::element::f32;
             break;
@@ -102,28 +129,24 @@ ov::element::Type GgmlOvDecoder::get_input_type(size_t index) const {
 }
 
 size_t GgmlOvDecoder::get_input_size() const {
-    return m_inputs.size();
-}
-
-bool GgmlOvDecoder::is_graph_input(size_t index) const {
-    if (m_inputs[index]->flags & GGML_TENSOR_FLAG_INPUT ) {
-        return true;
-    }
-    return false;
+    return m_input_names.size();
 }
 
 std::string& GgmlOvDecoder::get_input_name(size_t index) const {
-    m_name = std::string(m_inputs[index]->name);
+    m_name = m_input_names[index];
     return m_name;
 }
 
-ov::PartialShape GgmlOvDecoder::get_output_shape(size_t index) const {
+std::vector<std::string> GgmlOvDecoder::get_input_names() const {
+    return m_input_names;
+}
+
+ov::PartialShape GgmlOvDecoder::get_output_shape(const std::string& name) const {
     ov::PartialShape output_shape;
     // Use input_node->ne 
-    ggml_tensor * node = m_outputs[index];
+    ggml_tensor * node = m_outputs.at(name);
     std::vector<size_t> shape;
-    // GGML_MAX_DIMS
-    // for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+
     for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
         if (node->ne[i] == 0 ) {
             // empty if any dimension has no elements
@@ -135,10 +158,10 @@ ov::PartialShape GgmlOvDecoder::get_output_shape(size_t index) const {
     return output_shape;
 }
 
-ov::element::Type GgmlOvDecoder::get_output_type(size_t index) const {
+ov::element::Type GgmlOvDecoder::get_output_type(const std::string& name) const {
     // TODO: Change to Output
     ov::element::Type type = ov::element::dynamic;
-    switch (m_outputs[index]->type) {
+    switch (m_outputs.at(name)->type) {
         case GGML_TYPE_F32:
             type = ov::element::f32;
             break;
@@ -157,28 +180,29 @@ ov::element::Type GgmlOvDecoder::get_output_type(size_t index) const {
     return type;
 }
 
-bool GgmlOvDecoder::is_graph_output(size_t index) const {
-    if (m_outputs[index]->flags & GGML_TENSOR_FLAG_OUTPUT) {
-        return true;
-    }
-    return false;
-}
-
-int32_t* GgmlOvDecoder::get_output_op_params(size_t index) const{
-    return m_outputs[index]->op_params;
-}
-
-size_t GgmlOvDecoder::get_output_size() const {
-    return m_outputs.size();
+int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const{
+    return m_outputs.at(name)->op_params;
 }
 
 std::string& GgmlOvDecoder::get_output_name(size_t index) const {
-    m_name = std::string(m_outputs[index]->name);
+    m_name = std::string(m_output_names[index]);
     return m_name;
+}
+
+std::vector<std::string> GgmlOvDecoder::get_output_names() const {
+    return m_output_names;
 }
 
 const std::string& GgmlOvDecoder::get_op_name() const {
     return m_op_name;
+}
+
+void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
+    for (const auto& node : m_nodes) {
+        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph);
+        // m_decoders.push_back(decoder);
+        node_visitor(decoder);
+    }
 }
 
 const std::string& GgmlOvDecoder::get_op_type() const {
