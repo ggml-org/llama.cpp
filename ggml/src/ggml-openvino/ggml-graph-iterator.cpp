@@ -21,22 +21,20 @@ void GgmlOvGraphIterator::initialize_decoders() {
     // m_decoders.resize(static_cast<size_t>(nodes_size));
 
     for (int i = 0; i < nodes_size; ++i) {
-        // Skip View Op
-        // if (m_cgraph->nodes[i] ->op == GGML_OP_PERMUTE
-        //     || m_cgraph->nodes[i] ->op == GGML_OP_CPY ) {
-        //     continue;
-        // }
         auto decoder = std::make_shared<GgmlOvDecoder>(m_cgraph->nodes[i], m_cgraph);
         m_decoders.push_back(decoder);
         for (size_t inp = 0; inp < decoder->get_input_size(); ++inp) {
-            // if (i == 0 || decoder->is_graph_input(inp)) {
+            // Skip duplicate input name
+            if (std::find(m_input_names.begin(), m_input_names.end(), decoder->get_input_name(inp)) == m_input_names.end()) {
                 m_input_names.push_back(decoder->get_input_name(inp));
-            // }
+            }
         }
         for (size_t inp = 0; inp < decoder->get_output_size(); ++inp) {
-            // if (i == nodes_size - 1 || decoder->is_graph_output(inp)) {
+            // Skip duplicate output name
+            auto output_name = decoder->get_output_name(inp);
+            if (std::find(m_output_names.begin(), m_output_names.end(), output_name) == m_output_names.end()) {
                 m_output_names.push_back(decoder->get_output_name(inp));
-            // }
+            }
         }
     }
 
