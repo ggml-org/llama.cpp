@@ -324,6 +324,95 @@ void ggml_compute_forward_get_rows(struct ggml_tensor *dst) {
 
 }
 
+void ggml_backend_openvino_rms_norm_f32(ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+    assert(src0 != nullptr);
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(float));
+
+    const int64_t ne0 = src0->ne[0];
+    const int64_t ne1 = src0->ne[1];
+    const int64_t ne2 = src0->ne[2];
+    const int64_t ne3 = src0->ne[3];
+
+    const size_t input_size = ne0 * ne1 * ne2 * ne3;
+
+    const float *src_data = static_cast<const float *>(src0->data);
+    float *dst_data = static_cast<float *>(dst->data);
+    assert(dst_data != nullptr);
+
+    ov::Core core;
+
+    ov::Shape input_shape = {static_cast<size_t>(ne3), static_cast<size_t>(ne2),
+                             static_cast<size_t>(ne1), static_cast<size_t>(ne0)};
+    ov::Tensor input_tensor(ov::element::f32, input_shape, const_cast<float *>(src_data));
+
+    auto input_param = std::make_shared<ov::op::v0::Parameter>(
+        input_tensor.get_element_type(),
+        input_tensor.get_shape()
+    );
+    assert(input_param != nullptr && "Input parameter creation failed!");
+
+    auto square = std::make_shared<ov::op::v1::Multiply>(input_param, input_param);
+    auto reduce_sum = std::make_shared<ov::op::v1::ReduceSum>(
+        square,
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {3}),
+        true
+    );
+
+    auto mean = std::make_shared<ov::op::v1::Divide>(
+        reduce_sum,
+        ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {static_cast<float>(ne0)})
+    );
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+    auto rms = std::make_shared<ov::op::v0::Sqrt>(
+        std::make_shared<ov::op::v1::Add>(
+            mean,
+            ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {eps})
+        )
+    );
+
+    auto scale = std::make_shared<ov::op::v1::Divide>(
+        ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {1.0f}),
+        rms
+    );
+
+    auto normalized_input = std::make_shared<ov::op::v1::Multiply>(input_param, scale);
+
+    ov::ParameterVector parameters = {input_param};
+    auto function = std::make_shared<ov::Model>(ov::NodeVector{normalized_input}, parameters);
+
+    auto compiled_model = core.compile_model(function, "CPU");
+
+    auto infer_request = compiled_model.create_infer_request();
+
+    infer_request.set_input_tensor(0, input_tensor);
+
+    infer_request.infer();
+
+    auto output_tensor = infer_request.get_output_tensor();
+    assert(output_tensor.get_size() == input_size);
+
+    std::memcpy(dst_data, output_tensor.data<float>(), input_size * sizeof(float));
+}
+
+void ggml_backend_openvino_rms_norm(ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_backend_openvino_rms_norm_f32(dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     openvino_frontend_compute(backend, cgraph);
 
@@ -598,7 +687,7 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
         {GGML_OP_POOL_2D,               {"AvgPool", "MaxPool"}},
         {GGML_OP_REPEAT,                {"Tile"}},
         {GGML_OP_RESHAPE,               {"Reshape"}},
-        {GGML_OP_RMS_NORM,              {"Custom"}},
+        {GGML_OP_RMS_NORM,              {"Multiply", "Divide", "Sqrt"}},
         {GGML_OP_ROPE,                  {"Custom"}},
         {GGML_OP_SCALE,                 {"Multiply", "Constant"}},
         {GGML_OP_SET,                   {"Assign"}},
