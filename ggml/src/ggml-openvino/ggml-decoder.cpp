@@ -22,8 +22,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // For view, input is node itself
         case GGML_OP_VIEW:
         {
-            inputs[node->src[0]->name] = node;
+            inputs[node->name] = node;
             outputs[node->name] = node;
+            m_input_names.push_back(node->name);
+            m_output_names.push_back(node->name);
             break;
         }
         // SCALE
@@ -228,13 +230,33 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_OP_UNARY, "GGML_OP_UNARY"},
         {GGML_OP_VIEW, "GGML_OP_VIEW"}
     };
+    static const std::map<ggml_unary_op, std::string> unaryOpTypeMap = {
+        {GGML_UNARY_OP_ABS, "GGML_UNARY_OP_ABS"},
+        {GGML_UNARY_OP_SGN, "GGML_UNARY_OP_SGN"},
+        {GGML_UNARY_OP_NEG, "GGML_UNARY_OP_NEG"},
+        {GGML_UNARY_OP_STEP, "GGML_UNARY_OP_STEP"},
+        {GGML_UNARY_OP_TANH, "GGML_UNARY_OP_TANH"},
+        {GGML_UNARY_OP_ELU, "GGML_UNARY_OP_ELU"},
+        {GGML_UNARY_OP_RELU, "GGML_UNARY_OP_RELU"},
+        {GGML_UNARY_OP_SIGMOID, "GGML_UNARY_OP_SIGMOID"},
+        {GGML_UNARY_OP_GELU, "GGML_UNARY_OP_GELU"},
+        {GGML_UNARY_OP_GELU_QUICK, "GGML_UNARY_OP_GELU_QUICK"},
+        {GGML_UNARY_OP_SILU, "GGML_UNARY_OP_SILU"},
+        {GGML_UNARY_OP_HARDSWISH, "GGML_UNARY_OP_HARDSWISH"},
+        {GGML_UNARY_OP_HARDSIGMOID, "GGML_UNARY_OP_HARDSIGMOID"},
+        {GGML_UNARY_OP_EXP, "GGML_UNARY_OP_EXP"},
+        {GGML_UNARY_OP_COUNT, "GGML_UNARY_OP_COUNT"}
+    };
     auto it = opTypeMap.find(m_node->op);
     if (it != opTypeMap.end()) {
+        if (it->first == GGML_OP_UNARY) {
+            auto unary_it = unaryOpTypeMap.find(ggml_get_unary_op(m_node));
+            if (unary_it != unaryOpTypeMap.end()) {
+                return unary_it->second;
+            } 
+        }
         return it->second;
-    } else {
-        static const std::string unknown_op = "UNKNOWN_OP";
-        return unknown_op;
-    }
-    // static std::string op_type = ggml_op_name(m_node->op);
-    // return op_type;
+    } 
+    static const std::string unknown_op = "UNKNOWN_OP";
+    return unknown_op;
 }
