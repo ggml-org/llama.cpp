@@ -112,7 +112,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         auto output_tensor = infer_request.get_output_tensor(i);
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
         #ifdef GGML_OPENVINO_DEBUG
-            printf("Output %s after: %g\n", output_names[i], *(double*)(output_tensor.data()));
+            printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
         #endif
     }
     
