@@ -642,6 +642,13 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
             return true;
         case GGML_OP_MUL_MAT:
             return false;
+        case GGML_OP_UNARY:
+            switch (ggml_get_unary_op(op))
+            {
+                case GGML_UNARY_OP_SILU:
+                    return true;
+            }
+            return false; 
         default:
             return false;
     }
