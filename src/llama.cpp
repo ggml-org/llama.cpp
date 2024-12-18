@@ -6352,6 +6352,9 @@ static void llm_load_vocab(
                     tokenizer_pre == "falcon") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON;
             } else if (
+                    tokenizer_pre == "falcon3") {
+                vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_FALCON_3;
+            } else if (
                     tokenizer_pre == "mpt") {
                 vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_MPT;
             } else if (
@@ -21609,6 +21612,15 @@ static int32_t llama_chat_apply_template_internal(
         for (auto message : chat) {
             std::string role(message->role);
             ss << "<|" << role << "|>\n" << message->content << "<|end|>\n";
+        }
+        if (add_ass) {
+            ss << "<|assistant|>\n";
+        }
+    } else if (tmpl == "falcon3" || (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>"))) {
+        // Falcon 3
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << "<|" << role << "|>\n" << message->content << "\n";
         }
         if (add_ass) {
             ss << "<|assistant|>\n";
