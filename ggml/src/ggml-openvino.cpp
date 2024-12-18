@@ -642,11 +642,28 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
             return true;
         case GGML_OP_MUL_MAT:
             return false;
+        case GGML_OP_SOFT_MAX:
+            return true;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op))
             {
                 case GGML_UNARY_OP_SILU:
                     return true;
+                case GGML_UNARY_OP_ABS: 
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_NEG:
+                case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_SIGMOID:
+                case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_QUICK:
+                case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_HARDSIGMOID:
+                case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_COUNT:
+                    return false;
             }
             return false; 
         default:
