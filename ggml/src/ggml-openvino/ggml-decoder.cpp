@@ -47,11 +47,13 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         case GGML_OP_SOFT_MAX:
         {
             inputs[node->src[0]->name] = node->src[0];
-            inputs[node->src[1]->name] = node->src[1];
             outputs[node->name] = node;
             m_input_names.push_back(node->src[0]->name);
-            m_input_names.push_back(node->src[1]->name);
             m_output_names.push_back(node->name);
+            if (node->src[1]) {
+                inputs[node->src[1]->name] = node->src[1];
+                m_input_names.push_back(node->src[1]->name);
+            }
             break;
         } 
         // OPs with 3 inputs:
