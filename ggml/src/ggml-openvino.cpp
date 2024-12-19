@@ -334,9 +334,8 @@ void ggml_backend_openvino_rms_norm_f32(ggml_tensor *dst) {
     const int64_t ne0 = src0->ne[0];
     const int64_t ne1 = src0->ne[1];
     const int64_t ne2 = src0->ne[2];
-    const int64_t ne3 = src0->ne[3];
 
-    const size_t input_size = ne0 * ne1 * ne2 * ne3;
+    const size_t input_size = ne0 * ne1 * ne2;
 
     const float *src_data = static_cast<const float *>(src0->data);
     float *dst_data = static_cast<float *>(dst->data);
@@ -344,8 +343,7 @@ void ggml_backend_openvino_rms_norm_f32(ggml_tensor *dst) {
 
     ov::Core core;
 
-    ov::Shape input_shape = {static_cast<size_t>(ne3), static_cast<size_t>(ne2),
-                             static_cast<size_t>(ne1), static_cast<size_t>(ne0)};
+    ov::Shape input_shape = {static_cast<size_t>(ne2), static_cast<size_t>(ne1), static_cast<size_t>(ne0)};
     ov::Tensor input_tensor(ov::element::f32, input_shape, const_cast<float *>(src_data));
 
     auto input_param = std::make_shared<ov::op::v0::Parameter>(
@@ -357,7 +355,7 @@ void ggml_backend_openvino_rms_norm_f32(ggml_tensor *dst) {
     auto square = std::make_shared<ov::op::v1::Multiply>(input_param, input_param);
     auto reduce_sum = std::make_shared<ov::op::v1::ReduceSum>(
         square,
-        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {3}),
+        ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {2}),
         true
     );
 
@@ -383,9 +381,16 @@ void ggml_backend_openvino_rms_norm_f32(ggml_tensor *dst) {
     auto normalized_input = std::make_shared<ov::op::v1::Multiply>(input_param, scale);
 
     ov::ParameterVector parameters = {input_param};
-    auto function = std::make_shared<ov::Model>(ov::NodeVector{normalized_input}, parameters);
+    auto model = std::make_shared<ov::Model>(ov::NodeVector{normalized_input}, parameters);
 
-    auto compiled_model = core.compile_model(function, "CPU");
+    // static bool model_saved = false;
+    // if (!model_saved) {
+    //     std::cout << "\n rms model saved" << std::endl;
+    //     ov::save_model(model, "/<Your-Host-Path>/rms_norm_model.xml");
+    //     model_saved = true;
+    // }
+
+    auto compiled_model = core.compile_model(model, "CPU");
 
     auto infer_request = compiled_model.create_infer_request();
 
@@ -415,6 +420,18 @@ void ggml_backend_openvino_rms_norm(ggml_tensor * dst) {
 
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     openvino_frontend_compute(backend, cgraph);
+
+    // for (int i = 0; i < cgraph->n_nodes; i++) {
+    //     struct ggml_tensor * node = cgraph->nodes[i];
+
+    //     switch (node->op) {
+    //         case GGML_OP_RMS_NORM:
+    //             ggml_backend_openvino_rms_norm(node);
+    //             break;
+    //         default:
+    //             GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
+    //     }
+    // }
 
     return GGML_STATUS_SUCCESS;
 
