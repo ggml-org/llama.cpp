@@ -61,12 +61,14 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         {
             inputs[node->src[0]->name] = node->src[0];
             inputs[node->src[1]->name] = node->src[1];
-            inputs[node->src[2]->name] = node->src[2];
-            outputs[node->name] = node;
             m_input_names.push_back(node->src[0]->name);
             m_input_names.push_back(node->src[1]->name);
-            m_input_names.push_back(node->src[2]->name);
+            outputs[node->name] = node;
             m_output_names.push_back(node->name);
+            if (node->src[2]) {
+                inputs[node->src[2]->name] = node->src[2];
+                m_input_names.push_back(node->src[2]->name);
+            }
             break;
         } 
         default:
@@ -92,6 +94,9 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
             // Init model input and output
             set_input_output(cur_node, m_inputs, m_outputs);
         }
+        #ifdef GGML_OPENVINO_DEBUG
+            ggml_graph_print(m_cgraph);
+        #endif
     }
 }
 
