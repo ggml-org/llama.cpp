@@ -2249,6 +2249,17 @@ extern "C" {
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
 
+#define GGML_OP_PERF
+#if defined(GGML_OP_PERF)
+    // op: [ count, total_time ]
+    enum OP_STAT_ENUM {
+        OP_COUNT = 0,
+        OP_TOTAL_TIME,
+        OP_STAT_ENUM_LEN,
+    };
+    static float op_stats[GGML_OP_COUNT][OP_STAT_ENUM_LEN] = {0};
+#endif // defined(GGML_OP_PERF)
+
 #ifdef  __cplusplus
 }
 #endif

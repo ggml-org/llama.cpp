@@ -2501,11 +2501,21 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
                 }
 #endif
 
+#if defined(GGML_OP_PERF)
+                const uint64_t op_start_us = ggml_time_us();
+#endif // defined(GGML_OP_PERF)
+
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
                 GGML_ASSERT(ok);
+
+#if defined(GGML_OP_PERF)
+                const uint64_t op_end_us = ggml_time_us();
+                op_stats[node->op][OP_COUNT]      += 1;
+                op_stats[node->op][OP_TOTAL_TIME] += op_end_us - op_start_us;
+#endif // defined(GGML_OP_PERF)
             }
         }
 
@@ -2606,6 +2616,27 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         graph_evaluated_or_captured = true;
 #endif // USE_CUDA_GRAPH
     }
+
+#if defined(GGML_OP_PERF)
+    {
+        FILE *logFile = fopen("ggml_op_perf.log", "a");
+        fprintf(logFile, "## compute stats for each op: ##################################################\n");
+        float total_time = 0, total_count = 0;
+        for (int i = 0; i < GGML_OP_COUNT; ++i) {
+            total_count += op_stats[i][OP_COUNT];
+            total_time  += op_stats[i][OP_TOTAL_TIME];
+        }
+        for (int i = 0; i < GGML_OP_COUNT; ++i) {
+            fprintf(logFile,
+                "OP[%d] Stat: count = %9.0f, count%% = %3.2f%%, time = %12.0f, time%% = %3.2f%%\n",
+                i,
+                op_stats[i][OP_COUNT],      100 * op_stats[i][OP_COUNT] / total_count,
+                op_stats[i][OP_TOTAL_TIME], 100 * op_stats[i][OP_TOTAL_TIME] / total_time 
+            );
+        }
+        fclose(logFile);
+    }
+#endif // defined(GGML_OP_PERF)
 
     return GGML_STATUS_SUCCESS;
 }
