@@ -1769,23 +1769,39 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     //printf("src0 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
     //printf("src1 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
 
+#if defined(GGML_OP_PERF)
+    const uint64_t mm_start_us = ggml_time_us();
+#endif // defined(GGML_OP_PERF)
+    enum MUL_MAT_BRANCH_ENUM mul_mat_branch;
+
     if (!split && use_mul_mat_vec && dst->ne[3] == 1 && (src0->ne[1] < MMV_MAX_ROWS || any_gpus_without_fp16_mma)) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM
         // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec(ctx, src0, src1, dst);
+        mul_mat_branch = mm_ggml_cuda_mul_mat_vec;
     } else if (!split && src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16)
                && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
+        mul_mat_branch = mm_ggml_cuda_mul_mat_batched_cublas;
     } else if (use_mul_mat_vec) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec, nullptr);
+        mul_mat_branch = mm_ggml_cuda_op_mul_mat_vec;
     } else if (use_mul_mat_vec_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
+        mul_mat_branch = mm_ggml_cuda_op_mul_mat_vec_q;
     } else if (use_mul_mat_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
+        mul_mat_branch = mm_ggml_cuda_op_mul_mat_q;
     } else {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
+        mul_mat_branch = mm_ggml_cuda_op_mul_mat_cublas;
     }
+
+#if defined(GGML_OP_PERF)
+    const uint64_t mm_end_us = ggml_time_us();
+    mul_mat_branch_stats[mul_mat_branch] += mm_end_us - mm_start_us;
+#endif // defined(GGML_OP_PERF)
 }
 
 struct mmid_row_mapping {
@@ -2632,6 +2648,19 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
                 i,
                 op_stats[i][OP_COUNT],      100 * op_stats[i][OP_COUNT] / total_count,
                 op_stats[i][OP_TOTAL_TIME], 100 * op_stats[i][OP_TOTAL_TIME] / total_time 
+            );
+        }
+        float total_mm_time = op_stats[GGML_OP_MUL_MAT][OP_TOTAL_TIME];
+        // float total_mm_time = 0;
+        // for (int i = 0; i < mm_gpu_branch_count; ++i) {
+        //     total_mm_time  += mul_mat_branch_stats[i];
+        // }
+        for (int i = 0; i < mm_gpu_branch_count; i++) {
+            fprintf(logFile,
+                "MM[%d] Stat: time = %12.0f, time%% = %3.2f%%\n",
+                i,
+                mul_mat_branch_stats[i],
+                100 * mul_mat_branch_stats[i] / total_mm_time
             );
         }
         fclose(logFile);
