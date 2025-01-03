@@ -132,3 +132,29 @@
 #define cudaKernelNodeParams musaKernelNodeParams
 #define cudaStreamCaptureModeRelaxed musaStreamCaptureModeRelaxed
 #define cudaStreamEndCapture musaStreamEndCapture
+
+/** TODO: MUSA arch should match CUDA 11.4 */
+// #define CC_OFFSET_MT  99999999
+// #define __CUDA_ARCH__ CC_OFFSET_MT
+// #define __CUDA_ARCH__ 800
+
+/** TODO: following apis not supported yet by musa sdk: ***********
+
+__device__ __half hexp(const __half a) {
+    __half val;
+
+    float f_a = __half2float(a);
+    float f_result = expf(f_a);
+    val = __float2half(f_result);
+
+    return val;
+}
+
+__host__ __device__ __half2 h2exp(const __half2 a) {
+    __half2 result;
+    result.x = hexp(a.x);
+    result.y = hexp(a.y);
+    return result;
+}
+
+******************************************************************/

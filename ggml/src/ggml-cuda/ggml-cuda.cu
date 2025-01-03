@@ -178,6 +178,11 @@ static ggml_cuda_device_info ggml_cuda_init() {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
         info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_AMD;
+#elif defined(GGML_USE_MUSA)
+        /** TODO: MUSA arch should match CUDA 11.4 */
+        info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+        // info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_MT;
+        info.devices[id].cc = CC_AMPERE;
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
@@ -1671,9 +1676,6 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
         }
     }
 #else
-#ifdef GGML_USE_MUSA
-    GGML_ASSERT(false);
-#else // !GGML_USE_MUSA
     if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
         // use cublasGemmStridedBatchedEx
@@ -1716,7 +1718,6 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
                 cu_compute_type,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
     }
-#endif // GGML_USE_MUSA
 #endif
 
     if (dst->op_params[0] == GGML_PREC_DEFAULT) {
@@ -2637,6 +2638,11 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     {
         FILE *logFile = fopen("ggml_op_perf.log", "a");
         fprintf(logFile, "## compute stats for each op: ##################################################\n");
+        fprintf(logFile, ">> cc = %d, vmm = %d, total_vram = %u\n",
+            ggml_cuda_info().devices[cuda_ctx->device].cc,
+            ggml_cuda_info().devices[cuda_ctx->device].vmm,
+            ggml_cuda_info().devices[cuda_ctx->device].total_vram
+        );
         float total_time = 0, total_count = 0;
         for (int i = 0; i < GGML_OP_COUNT; ++i) {
             total_count += op_stats[i][OP_COUNT];
