@@ -58,8 +58,8 @@ int main(int argc, char ** argv) {
     // load the target model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -473,9 +473,6 @@ int main(int argc, char ** argv) {
     llama_kv_cache_view_free(&kvc_view);
 
     llama_batch_free(batch);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

@@ -151,8 +151,8 @@ int main(int argc, char ** argv) {
     // load the model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
@@ -298,7 +298,5 @@ int main(int argc, char ** argv) {
 
     // clean up
     llama_batch_free(query_batch);
-    llama_free(ctx);
-    llama_free_model(model);
     llama_backend_free();
 }

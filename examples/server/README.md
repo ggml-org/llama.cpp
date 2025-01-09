@@ -45,10 +45,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |
 | `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |
 | `-fa, --flash-attn` | enable Flash Attention (default: disabled)<br/>(env: LLAMA_ARG_FLASH_ATTN) |
-| `-p, --prompt PROMPT` | prompt to start generation with |
 | `--no-perf` | disable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_NO_PERF) |
-| `-f, --file FNAME` | a file containing the prompt (default: none) |
-| `-bf, --binary-file FNAME` | binary file containing the prompt (default: none) |
 | `-e, --escape` | process escapes sequences (\n, \r, \t, \', \", \\) (default: true) |
 | `--no-escape` | do not process escape sequences |
 | `--rope-scaling {none,linear,yarn}` | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE) |
@@ -345,7 +342,7 @@ node index.js
 
 > [!IMPORTANT]
 >
-> This endpoint is **not** OAI-compatible
+> This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/completions` instead.
 
 *Options:*
 
@@ -452,6 +449,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `response_fields`: A list of response fields, for example: `"response_fields": ["content", "generation_settings/n_predict"]`. If the specified field is missing, it will simply be omitted from the response without triggering an error. Note that fields with a slash will be unnested; for example, `generation_settings/n_predict` will move the field `n_predict` from the `generation_settings` object to the root of the response and give it a new name.
 
+`lora`: A list of LoRA adapters to be applied to this specific request. Each object in the list must contain `id` and `scale` fields. For example: `[{"id": 0, "scale": 0.5}, {"id": 1, "scale": 1.1}]`. If a LoRA adapter is not specified in the list, its scale will default to `0.0`. Please note that requests with different LoRA configurations will not be batched together, which may result in performance degradation.
+
 **Response format**
 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
@@ -523,6 +522,7 @@ These words will not be included in the completion, so make sure to add them to 
 - `tokens_evaluated`: Number of tokens evaluated in total from the prompt
 - `truncated`: Boolean indicating if the context size was exceeded during generation, i.e. the number of tokens provided in the prompt (`tokens_evaluated`) plus tokens generated (`tokens predicted`) exceeded the context size (`n_ctx`)
 
+
 ### POST `/tokenize`: Tokenize a given text
 
 *Options:*
@@ -573,6 +573,10 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 `tokens`: Set the tokens to detokenize.
 
 ### POST `/embedding`: Generate embedding of a given text
+
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/embeddings` instead.
 
 The same as [the embedding example](../embedding) does.
 
@@ -743,96 +747,6 @@ To use this endpoint with POST method, you need to start server with `--props`
 *Options:*
 
 - None yet
-
-### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
-
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
-
-*Options:*
-
-See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
-
-The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
-
-*Examples:*
-
-You can use either Python `openai` library with appropriate checkpoints:
-
-```python
-import openai
-
-client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
-    api_key = "sk-no-key-required"
-)
-
-completion = client.chat.completions.create(
-model="gpt-3.5-turbo",
-messages=[
-    {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
-    {"role": "user", "content": "Write a limerick about python exceptions"}
-]
-)
-
-print(completion.choices[0].message)
-```
-
-... or raw HTTP requests:
-
-```shell
-curl http://localhost:8080/v1/chat/completions \
--H "Content-Type: application/json" \
--H "Authorization: Bearer no-key" \
--d '{
-"model": "gpt-3.5-turbo",
-"messages": [
-{
-    "role": "system",
-    "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
-},
-{
-    "role": "user",
-    "content": "Write a limerick about python exceptions"
-}
-]
-}'
-```
-
-### POST `/v1/embeddings`: OpenAI-compatible embeddings API
-
-This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
-
-*Options:*
-
-See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
-
-*Examples:*
-
-- input as string
-
-  ```shell
-  curl http://localhost:8080/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer no-key" \
-  -d '{
-          "input": "hello",
-          "model":"GPT-4",
-          "encoding_format": "float"
-  }'
-  ```
-
-- `input` as string array
-
-  ```shell
-  curl http://localhost:8080/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer no-key" \
-  -d '{
-          "input": ["hello", "world"],
-          "model":"GPT-4",
-          "encoding_format": "float"
-  }'
-  ```
 
 ### POST `/embeddings`: non-OpenAI-compatible embeddings API
 
@@ -1030,6 +944,8 @@ This endpoint returns the loaded LoRA adapters. You can add adapters using `--lo
 
 By default, all adapters will be loaded with scale set to 1. To initialize all adapters scale to 0, add `--lora-init-without-apply`
 
+Please note that this value will be overwritten by the `lora` field for each request.
+
 If an adapter is disabled, the scale will be set to 0.
 
 **Response format**
@@ -1051,6 +967,8 @@ If an adapter is disabled, the scale will be set to 0.
 
 ### POST `/lora-adapters`: Set list of LoRA adapters
 
+This sets the global scale for LoRA adapters. Please note that this value will be overwritten by the `lora` field for each request.
+
 To disable an adapter, either remove it from the list below, or set scale to 0.
 
 **Request format**
@@ -1063,6 +981,161 @@ To know the `id` of the adapter, use GET `/lora-adapters`
   {"id": 1, "scale": 0.8}
 ]
 ```
+
+## OpenAI-compatible API Endpoints
+
+### GET `/v1/models`: OpenAI-compatible Model Info API
+
+Returns information about the loaded model. See [OpenAI Models API documentation](https://platform.openai.com/docs/api-reference/models).
+
+The returned list always has one single element.
+
+By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
+
+Example:
+
+```json
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+            "object": "model",
+            "created": 1735142223,
+            "owned_by": "llamacpp",
+            "meta": {
+                "vocab_type": 2,
+                "n_vocab": 128256,
+                "n_ctx_train": 131072,
+                "n_embd": 4096,
+                "n_params": 8030261312,
+                "size": 4912898304
+            }
+        }
+    ]
+}
+```
+
+### POST `/v1/completions`: OpenAI-compatible Completions API
+
+Given an input `prompt`, it returns the predicted completion. Streaming mode is also supported. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps.
+
+*Options:*
+
+See [OpenAI Completions API documentation](https://platform.openai.com/docs/api-reference/completions).
+
+llama.cpp `/completion`-specific features such as `mirostat` are supported.
+
+*Examples:*
+
+Example usage with `openai` python library:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "sk-no-key-required"
+)
+
+completion = client.completions.create(
+  model="davinci-002",
+  prompt="I believe the meaning of life is",
+  max_tokens=8
+)
+
+print(completion.choices[0].text)
+```
+
+### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
+
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+
+*Options:*
+
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+
+The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
+
+*Examples:*
+
+You can use either Python `openai` library with appropriate checkpoints:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "sk-no-key-required"
+)
+
+completion = client.chat.completions.create(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
+    {"role": "user", "content": "Write a limerick about python exceptions"}
+  ]
+)
+
+print(completion.choices[0].message)
+```
+
+... or raw HTTP requests:
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer no-key" \
+-d '{
+"model": "gpt-3.5-turbo",
+"messages": [
+{
+    "role": "system",
+    "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
+},
+{
+    "role": "user",
+    "content": "Write a limerick about python exceptions"
+}
+]
+}'
+```
+
+### POST `/v1/embeddings`: OpenAI-compatible embeddings API
+
+This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
+
+*Options:*
+
+See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
+
+*Examples:*
+
+- input as string
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": "hello",
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
+
+- `input` as string array
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": ["hello", "world"],
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
 
 ## More examples
 

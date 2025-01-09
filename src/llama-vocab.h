@@ -1,12 +1,24 @@
 #pragma once
 
-#include "llama-impl.h"
+#include "llama.h"
 
 #include <string>
 #include <vector>
 #include <unordered_map>
 #include <map>
 #include <set>
+
+static const char * llama_model_vocab_type_name(enum llama_vocab_type type){
+    switch (type) {
+        case LLAMA_VOCAB_TYPE_NONE: return "no vocab";
+        case LLAMA_VOCAB_TYPE_SPM:  return "SPM";
+        case LLAMA_VOCAB_TYPE_BPE:  return "BPE";
+        case LLAMA_VOCAB_TYPE_WPM:  return "WPM";
+        case LLAMA_VOCAB_TYPE_UGM:  return "UGM";
+        case LLAMA_VOCAB_TYPE_RWKV: return "RWKV";
+        default:                    return "unknown";
+    }
+}
 
 struct llm_tokenizer;
 

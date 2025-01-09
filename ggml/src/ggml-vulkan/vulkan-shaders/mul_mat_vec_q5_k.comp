@@ -6,11 +6,6 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout (constant_id = 0) const uint BLOCK_SIZE = 32;
-layout (constant_id = 1) const uint NUM_ROWS = 1;
-
-shared FLOAT_TYPE tmpsh[NUM_ROWS][BLOCK_SIZE];
-
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
@@ -33,24 +28,17 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint q_offset = 32*v_im + l0;
     const uint y_offset = 64*v_im + l0;
 
-    FLOAT_TYPE temp[NUM_ROWS];
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
 
-    [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
-        temp[i] = FLOAT_TYPE(0);
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
     }
 
     [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += it_size) {
         const uint y1_idx = i * QUANT_K + y_offset;
         const uint y2_idx = y1_idx + 128;
-
-        B_TYPE_VEC2 by10 =  data_b_v2[(b_offset + y1_idx) / 2];
-        B_TYPE_VEC2 by116 = data_b_v2[(b_offset + y1_idx) / 2 + 8];
-        B_TYPE_VEC2 by132 = data_b_v2[(b_offset + y1_idx) / 2 + 16];
-        B_TYPE_VEC2 by148 = data_b_v2[(b_offset + y1_idx) / 2 + 24];
-        B_TYPE_VEC2 by20 =  data_b_v2[(b_offset + y2_idx) / 2];
-        B_TYPE_VEC2 by216 = data_b_v2[(b_offset + y2_idx) / 2 + 8];
-        B_TYPE_VEC2 by232 = data_b_v2[(b_offset + y2_idx) / 2 + 16];
-        B_TYPE_VEC2 by248 = data_b_v2[(b_offset + y2_idx) / 2 + 24];
 
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
             const uint ib0 = a_offset / QUANT_K + (first_row+n)*num_blocks_per_row;
@@ -116,53 +104,47 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             const uint32_t q4_14 = qs64_80_hi4.z;
             const uint32_t q4_15 = qs64_80_hi4.w;
 
-            const FLOAT_TYPE sx =
-              fma(FLOAT_TYPE(by10.x), q4_0,
-              fma(FLOAT_TYPE(by10.y), q4_1,
-              fma(FLOAT_TYPE(by116.x), q4_2,
-                 FLOAT_TYPE(by116.y) * q4_3)));
-            const FLOAT_TYPE sy =
-              fma(FLOAT_TYPE(by132.x), q4_4,
-              fma(FLOAT_TYPE(by132.y), q4_5,
-              fma(FLOAT_TYPE(by148.x), q4_6,
-                 FLOAT_TYPE(by148.y) * q4_7)));
-            const FLOAT_TYPE sz =
-              fma(FLOAT_TYPE(by20.x), q4_8,
-              fma(FLOAT_TYPE(by20.y), q4_9,
-              fma(FLOAT_TYPE(by216.x), q4_10,
-                 FLOAT_TYPE(by216.y) * q4_11)));
-            const FLOAT_TYPE sw =
-              fma(FLOAT_TYPE(by232.x), q4_12,
-              fma(FLOAT_TYPE(by232.y), q4_13,
-              fma(FLOAT_TYPE(by248.x), q4_14,
-                 FLOAT_TYPE(by248.y) * q4_15)));
-            const FLOAT_TYPE smin =
-              fma(FLOAT_TYPE(by10.x) + FLOAT_TYPE(by10.y) + FLOAT_TYPE(by116.x) + FLOAT_TYPE(by116.y), sc2,
-              fma(FLOAT_TYPE(by132.x) + FLOAT_TYPE(by132.y) + FLOAT_TYPE(by148.x) + FLOAT_TYPE(by148.y), sc3,
-              fma(FLOAT_TYPE(by20.x) + FLOAT_TYPE(by20.y) + FLOAT_TYPE(by216.x) + FLOAT_TYPE(by216.y), sc6,
-                  (FLOAT_TYPE(by232.x) + FLOAT_TYPE(by232.y) + FLOAT_TYPE(by248.x) + FLOAT_TYPE(by248.y)) * sc7)));
-            temp[n] = fma(dall, fma(sx, sc0, fma(sy, sc1, fma(sz, sc4, sw * sc5))), fma(-dmin, smin, temp[n]));
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                B_TYPE_VEC2 by10 =  data_b_v2[(j*p.batch_stride_b + b_offset + y1_idx) / 2];
+                B_TYPE_VEC2 by116 = data_b_v2[(j*p.batch_stride_b + b_offset + y1_idx) / 2 + 8];
+                B_TYPE_VEC2 by132 = data_b_v2[(j*p.batch_stride_b + b_offset + y1_idx) / 2 + 16];
+                B_TYPE_VEC2 by148 = data_b_v2[(j*p.batch_stride_b + b_offset + y1_idx) / 2 + 24];
+                B_TYPE_VEC2 by20 =  data_b_v2[(j*p.batch_stride_b + b_offset + y2_idx) / 2];
+                B_TYPE_VEC2 by216 = data_b_v2[(j*p.batch_stride_b + b_offset + y2_idx) / 2 + 8];
+                B_TYPE_VEC2 by232 = data_b_v2[(j*p.batch_stride_b + b_offset + y2_idx) / 2 + 16];
+                B_TYPE_VEC2 by248 = data_b_v2[(j*p.batch_stride_b + b_offset + y2_idx) / 2 + 24];
+
+                const FLOAT_TYPE sx =
+                  fma(FLOAT_TYPE(by10.x), q4_0,
+                  fma(FLOAT_TYPE(by10.y), q4_1,
+                  fma(FLOAT_TYPE(by116.x), q4_2,
+                     FLOAT_TYPE(by116.y) * q4_3)));
+                const FLOAT_TYPE sy =
+                  fma(FLOAT_TYPE(by132.x), q4_4,
+                  fma(FLOAT_TYPE(by132.y), q4_5,
+                  fma(FLOAT_TYPE(by148.x), q4_6,
+                     FLOAT_TYPE(by148.y) * q4_7)));
+                const FLOAT_TYPE sz =
+                  fma(FLOAT_TYPE(by20.x), q4_8,
+                  fma(FLOAT_TYPE(by20.y), q4_9,
+                  fma(FLOAT_TYPE(by216.x), q4_10,
+                     FLOAT_TYPE(by216.y) * q4_11)));
+                const FLOAT_TYPE sw =
+                  fma(FLOAT_TYPE(by232.x), q4_12,
+                  fma(FLOAT_TYPE(by232.y), q4_13,
+                  fma(FLOAT_TYPE(by248.x), q4_14,
+                     FLOAT_TYPE(by248.y) * q4_15)));
+                const FLOAT_TYPE smin =
+                  fma(FLOAT_TYPE(by10.x) + FLOAT_TYPE(by10.y) + FLOAT_TYPE(by116.x) + FLOAT_TYPE(by116.y), sc2,
+                  fma(FLOAT_TYPE(by132.x) + FLOAT_TYPE(by132.y) + FLOAT_TYPE(by148.x) + FLOAT_TYPE(by148.y), sc3,
+                  fma(FLOAT_TYPE(by20.x) + FLOAT_TYPE(by20.y) + FLOAT_TYPE(by216.x) + FLOAT_TYPE(by216.y), sc6,
+                      (FLOAT_TYPE(by232.x) + FLOAT_TYPE(by232.y) + FLOAT_TYPE(by248.x) + FLOAT_TYPE(by248.y)) * sc7)));
+                temp[j][n] = fma(dall, fma(sx, sc0, fma(sy, sc1, fma(sz, sc4, sw * sc5))), fma(-dmin, smin, temp[j][n]));
+            }
         }
     }
 
-    // sum up partial sums and write back result
-    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-        tmpsh[n][tid] = temp[n];
-    }
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE/2; s > 0; s >>= 1) {
-        if (tid < s) {
-            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-                tmpsh[n][tid] += tmpsh[n][tid + s];
-            }
-        }
-        barrier();
-    }
-    if (tid == 0) {
-        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            data_d[d_offset + first_row + n] = D_TYPE(tmpsh[n][0]);
-        }
-    }
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
 
 void main() {

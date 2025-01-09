@@ -10,16 +10,8 @@ MODEL_DRAFT_FILE_URL = "https://huggingface.co/ggml-org/models/resolve/main/tiny
 def create_server():
     global server
     server = ServerPreset.stories15m_moe()
-    # download draft model file if needed
-    file_name = MODEL_DRAFT_FILE_URL.split('/').pop()
-    model_draft_file = f'../../../{file_name}'
-    if not os.path.exists(model_draft_file):
-        print(f"Downloading {MODEL_DRAFT_FILE_URL} to {model_draft_file}")
-        with open(model_draft_file, 'wb') as f:
-            f.write(requests.get(MODEL_DRAFT_FILE_URL).content)
-        print(f"Done downloading draft model file")
     # set default values
-    server.model_draft = model_draft_file
+    server.model_draft = download_file(MODEL_DRAFT_FILE_URL)
     server.draft_min = 4
     server.draft_max = 8
 

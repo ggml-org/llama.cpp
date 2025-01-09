@@ -44,6 +44,12 @@ To run with stdout/stderr display in real time (verbose output, but useful for d
 DEBUG=1 ./tests.sh -s -v -x
 ```
 
+To run single test unit:
+
+```shell
+./tests.sh unit/test_{name of test case here}.py -v -x
+```
+
 Hint: You can compile and run test in single command, useful for local developement:
 
 ```shell

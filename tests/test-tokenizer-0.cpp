@@ -152,7 +152,7 @@ int main(int argc, char **argv) {
 
         mparams.vocab_only = true;
 
-        model = llama_load_model_from_file(fname.c_str(), mparams);
+        model = llama_model_load_from_file(fname.c_str(), mparams);
 
         if (model == NULL) {
             fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
@@ -165,7 +165,7 @@ int main(int argc, char **argv) {
 
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
-            llama_free_model(model);
+            llama_model_free(model);
             return 1;
         }
     }
@@ -300,7 +300,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "%s : tokens written to '%s'\n", __func__, (fname_text + ".tokcpp").c_str());
     }
 
-    llama_free_model(model);
+    llama_model_free(model);
     llama_free(ctx);
 
     llama_backend_free();

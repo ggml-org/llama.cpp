@@ -305,7 +305,9 @@ Java_android_llama_cpp_LLamaAndroid_new_1batch(JNIEnv *, jobject, jint n_tokens,
 extern "C"
 JNIEXPORT void JNICALL
 Java_android_llama_cpp_LLamaAndroid_free_1batch(JNIEnv *, jobject, jlong batch_pointer) {
-    llama_batch_free(*reinterpret_cast<llama_batch *>(batch_pointer));
+    //llama_batch_free(*reinterpret_cast<llama_batch *>(batch_pointer));
+    const auto batch = reinterpret_cast<llama_batch *>(batch_pointer);
+    delete batch;
 }
 
 extern "C"

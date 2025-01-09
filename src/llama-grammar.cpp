@@ -1,5 +1,6 @@
 #include "llama-grammar.h"
 
+#include "llama-impl.h"
 #include "llama-vocab.h"
 #include "llama-sampling.h"
 

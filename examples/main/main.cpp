@@ -145,18 +145,18 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    std::vector<common_chat_msg> chat_msgs;
-
     g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
+
+    std::vector<common_chat_msg> chat_msgs;
 
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
 
-    model = llama_init.model;
-    ctx = llama_init.context;
+    model = llama_init.model.get();
+    ctx = llama_init.context.get();
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n", __func__);
@@ -494,7 +494,7 @@ int main(int argc, char ** argv) {
         }
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-        if (decoder_start_token_id == -1) {
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
             decoder_start_token_id = llama_token_bos(model);
         }
 
@@ -831,7 +831,7 @@ int main(int argc, char ** argv) {
                     // if user stop generation mid-way, we must add EOT to finish model's last response
                     if (need_insert_eot && format_chat) {
                         llama_token eot = llama_token_eot(model);
-                        embd_inp.push_back(eot == -1 ? llama_token_eos(model) : eot);
+                        embd_inp.push_back(eot == LLAMA_TOKEN_NULL ? llama_token_eos(model) : eot);
                         need_insert_eot = false;
                     }
 
@@ -888,9 +888,6 @@ int main(int argc, char ** argv) {
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

@@ -5,11 +5,6 @@
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
-layout (constant_id = 0) const uint BLOCK_SIZE = 32;
-layout (constant_id = 1) const uint NUM_ROWS = 1;
-
-shared FLOAT_TYPE tmpsh[NUM_ROWS][BLOCK_SIZE];
-
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     uint a_offset, b_offset, d_offset;
     get_offsets(a_offset, b_offset, d_offset);
@@ -32,23 +27,16 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint s_offset = 8*v_im;
     const uint y_offset = 128*v_im + l0;
 
-    FLOAT_TYPE temp[NUM_ROWS];
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
 
-    [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
-        temp[i] = FLOAT_TYPE(0);
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
     }
 
     [[unroll]] for (uint i = ix; i < num_blocks_per_row; i += it_size) {
         const uint y_idx = i * QUANT_K + y_offset;
-
-        B_TYPE_VEC2 b0 = data_b_v2[(b_offset + y_idx) / 2 + 0];
-        B_TYPE_VEC2 b16 = data_b_v2[(b_offset + y_idx) / 2 + 8];
-        B_TYPE_VEC2 b32 = data_b_v2[(b_offset + y_idx) / 2 + 16];
-        B_TYPE_VEC2 b48 = data_b_v2[(b_offset + y_idx) / 2 + 24];
-        B_TYPE_VEC2 b64 = data_b_v2[(b_offset + y_idx) / 2 + 32];
-        B_TYPE_VEC2 b80 = data_b_v2[(b_offset + y_idx) / 2 + 40];
-        B_TYPE_VEC2 b96 = data_b_v2[(b_offset + y_idx) / 2 + 48];
-        B_TYPE_VEC2 b112 = data_b_v2[(b_offset + y_idx) / 2 + 56];
 
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
             const uint ib0 = a_offset / QUANT_K + (first_row+n)*num_blocks_per_row;
@@ -74,48 +62,42 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             uvec2 qs0 =  uvec2(unpack8(qs0_u16));
             uvec2 qs16 = uvec2(unpack8(qs16_u16));
 
-            FLOAT_TYPE sum1 = FLOAT_TYPE(0.0);
-            FLOAT_TYPE sum2 = FLOAT_TYPE(0.0);
-            [[unroll]] for (int l = 0; l < 2; ++l) {
-                sum1 = fma(FLOAT_TYPE(b0[l]),   FLOAT_TYPE(s0_lo4[0]) * FLOAT_TYPE((qs0[l]  >> 0) & 3),
-                       fma(FLOAT_TYPE(b16[l]),  FLOAT_TYPE(s0_lo4[1]) * FLOAT_TYPE((qs16[l] >> 0) & 3),
-                       fma(FLOAT_TYPE(b32[l]),  FLOAT_TYPE(s0_lo4[2]) * FLOAT_TYPE((qs0[l]  >> 2) & 3),
-                       fma(FLOAT_TYPE(b48[l]),  FLOAT_TYPE(s0_lo4[3]) * FLOAT_TYPE((qs16[l] >> 2) & 3),
-                       fma(FLOAT_TYPE(b64[l]),  FLOAT_TYPE(s4_lo4[0]) * FLOAT_TYPE((qs0[l]  >> 4) & 3),
-                       fma(FLOAT_TYPE(b80[l]),  FLOAT_TYPE(s4_lo4[1]) * FLOAT_TYPE((qs16[l] >> 4) & 3),
-                       fma(FLOAT_TYPE(b96[l]),  FLOAT_TYPE(s4_lo4[2]) * FLOAT_TYPE((qs0[l]  >> 6) & 3),
-                       fma(FLOAT_TYPE(b112[l]), FLOAT_TYPE(s4_lo4[3]) * FLOAT_TYPE((qs16[l] >> 6) & 3), sum1))))))));
-                sum2 = fma(FLOAT_TYPE(b0[l]),   FLOAT_TYPE(s0_hi4[0]),
-                       fma(FLOAT_TYPE(b16[l]),  FLOAT_TYPE(s0_hi4[1]),
-                       fma(FLOAT_TYPE(b32[l]),  FLOAT_TYPE(s0_hi4[2]),
-                       fma(FLOAT_TYPE(b48[l]),  FLOAT_TYPE(s0_hi4[3]),
-                       fma(FLOAT_TYPE(b64[l]),  FLOAT_TYPE(s4_hi4[0]),
-                       fma(FLOAT_TYPE(b80[l]),  FLOAT_TYPE(s4_hi4[1]),
-                       fma(FLOAT_TYPE(b96[l]),  FLOAT_TYPE(s4_hi4[2]),
-                       fma(FLOAT_TYPE(b112[l]), FLOAT_TYPE(s4_hi4[3]), sum2))))))));
+            [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+                B_TYPE_VEC2 b0 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 0];
+                B_TYPE_VEC2 b16 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 8];
+                B_TYPE_VEC2 b32 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 16];
+                B_TYPE_VEC2 b48 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 24];
+                B_TYPE_VEC2 b64 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 32];
+                B_TYPE_VEC2 b80 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 40];
+                B_TYPE_VEC2 b96 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 48];
+                B_TYPE_VEC2 b112 = data_b_v2[(j*p.batch_stride_b + b_offset + y_idx) / 2 + 56];
+
+                FLOAT_TYPE sum1 = FLOAT_TYPE(0.0);
+                FLOAT_TYPE sum2 = FLOAT_TYPE(0.0);
+                [[unroll]] for (int l = 0; l < 2; ++l) {
+                    sum1 = fma(FLOAT_TYPE(b0[l]),   FLOAT_TYPE(s0_lo4[0]) * FLOAT_TYPE((qs0[l]  >> 0) & 3),
+                           fma(FLOAT_TYPE(b16[l]),  FLOAT_TYPE(s0_lo4[1]) * FLOAT_TYPE((qs16[l] >> 0) & 3),
+                           fma(FLOAT_TYPE(b32[l]),  FLOAT_TYPE(s0_lo4[2]) * FLOAT_TYPE((qs0[l]  >> 2) & 3),
+                           fma(FLOAT_TYPE(b48[l]),  FLOAT_TYPE(s0_lo4[3]) * FLOAT_TYPE((qs16[l] >> 2) & 3),
+                           fma(FLOAT_TYPE(b64[l]),  FLOAT_TYPE(s4_lo4[0]) * FLOAT_TYPE((qs0[l]  >> 4) & 3),
+                           fma(FLOAT_TYPE(b80[l]),  FLOAT_TYPE(s4_lo4[1]) * FLOAT_TYPE((qs16[l] >> 4) & 3),
+                           fma(FLOAT_TYPE(b96[l]),  FLOAT_TYPE(s4_lo4[2]) * FLOAT_TYPE((qs0[l]  >> 6) & 3),
+                           fma(FLOAT_TYPE(b112[l]), FLOAT_TYPE(s4_lo4[3]) * FLOAT_TYPE((qs16[l] >> 6) & 3), sum1))))))));
+                    sum2 = fma(FLOAT_TYPE(b0[l]),   FLOAT_TYPE(s0_hi4[0]),
+                           fma(FLOAT_TYPE(b16[l]),  FLOAT_TYPE(s0_hi4[1]),
+                           fma(FLOAT_TYPE(b32[l]),  FLOAT_TYPE(s0_hi4[2]),
+                           fma(FLOAT_TYPE(b48[l]),  FLOAT_TYPE(s0_hi4[3]),
+                           fma(FLOAT_TYPE(b64[l]),  FLOAT_TYPE(s4_hi4[0]),
+                           fma(FLOAT_TYPE(b80[l]),  FLOAT_TYPE(s4_hi4[1]),
+                           fma(FLOAT_TYPE(b96[l]),  FLOAT_TYPE(s4_hi4[2]),
+                           fma(FLOAT_TYPE(b112[l]), FLOAT_TYPE(s4_hi4[3]), sum2))))))));
+                }
+                temp[j][n] = fma(dall, sum1, fma(-dmin, sum2, temp[j][n]));
             }
-            temp[n] = fma(dall, sum1, fma(-dmin, sum2, temp[n]));
         }
     }
 
-    // sum up partial sums and write back result
-    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-        tmpsh[n][tid] = temp[n];
-    }
-    barrier();
-    [[unroll]] for (uint s = BLOCK_SIZE/2; s > 0; s >>= 1) {
-        if (tid < s) {
-            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-                tmpsh[n][tid] += tmpsh[n][tid + s];
-            }
-        }
-        barrier();
-    }
-    if (tid == 0) {
-        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
-            data_d[d_offset + first_row + n] = D_TYPE(tmpsh[n][0]);
-        }
-    }
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
 
 void main() {

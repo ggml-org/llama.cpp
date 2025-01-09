@@ -66,11 +66,21 @@ body:
     validations:
       required: false
   - type: textarea
+    id: command
+    attributes:
+      label: Compile command
+      description: >
+        Please provide the exact command you used to compile llama.cpp. For example: `cmake -B ...`.
+        This will be automatically formatted into code, so no need for backticks.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
     id: logs
     attributes:
       label: Relevant log output
       description: >
-          Please copy and paste any relevant log output, including the command that you entered and any generated text.
+          Please copy and paste any relevant log output, including any generated text.
           This will be automatically formatted into code, so no need for backticks.
       render: shell
     validations:

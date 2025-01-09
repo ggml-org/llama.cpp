@@ -1,17 +1,18 @@
+#include "ggml.h"
+#include "gguf.h"
 #include "llama.h"
 #include "common.h"
 
 #include <algorithm>
-#include <cmath>
+#include <cinttypes>
+#include <climits>
+#include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include <stdio.h>
-#include <string.h>
-#include <climits>
-#include <stdexcept>
 
 #if defined(_WIN32)
     #include <windows.h>
@@ -297,7 +298,7 @@ struct split_strategy {
                 total_size += ggml_nbytes(t);
             }
             total_size = total_size / 1000 / 1000; // convert to megabytes
-            printf("split %05d: n_tensors = %d, total_size = %zuM\n", i_split + 1, gguf_get_n_tensors(ctx_out), total_size);
+            printf("split %05d: n_tensors = %" PRIi64 ", total_size = %zuM\n", i_split + 1, gguf_get_n_tensors(ctx_out), total_size);
             i_split++;
         }
     }

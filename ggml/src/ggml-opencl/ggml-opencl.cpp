@@ -2744,13 +2744,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     cl_image_format     img_fmt_1d;
     cl_image_desc       img_desc_1d;
     cl_buffer_region    region;
-    cl_mem              A_image1d;
-    cl_mem              B_image1d;
-    cl_mem              B_sub_buffer;
-    cl_mem              C_d;
+    cl_mem              A_image1d = nullptr;
+    cl_mem              B_image1d = nullptr;
+    cl_mem              B_sub_buffer = nullptr;
+    cl_mem              C_d = nullptr;
     // for B transpose
-    cl_mem B_d;
-    cl_mem B_d_input_image;
+    cl_mem B_d = nullptr;
+    cl_mem B_d_input_image = nullptr;
     // <--------------------------------------------> //
 
     // define matrix dimensions

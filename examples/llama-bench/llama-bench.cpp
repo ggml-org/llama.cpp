@@ -1526,10 +1526,10 @@ int main(int argc, char ** argv) {
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
             if (lmodel) {
-                llama_free_model(lmodel);
+                llama_model_free(lmodel);
             }
 
-            lmodel = llama_load_model_from_file(inst.model.c_str(), inst.to_llama_mparams());
+            lmodel = llama_model_load_from_file(inst.model.c_str(), inst.to_llama_mparams());
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
                 return 1;
@@ -1540,7 +1540,7 @@ int main(int argc, char ** argv) {
         llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
-            llama_free_model(lmodel);
+            llama_model_free(lmodel);
             return 1;
         }
 
@@ -1626,7 +1626,7 @@ int main(int argc, char ** argv) {
         ggml_threadpool_free_fn(threadpool);
     }
 
-    llama_free_model(lmodel);
+    llama_model_free(lmodel);
 
     if (p) {
         p->print_footer();

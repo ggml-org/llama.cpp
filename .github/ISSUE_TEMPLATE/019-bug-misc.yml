@@ -53,6 +53,16 @@ body:
     validations:
       required: false
   - type: textarea
+    id: command
+    attributes:
+      label: Command line
+      description: >
+        Please provide the exact commands you entered, if applicable. For example: `llama-server -m ... -c ...`, `llama-cli -m ...`, etc.
+        This will be automatically formatted into code, so no need for backticks.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
     id: info
     attributes:
       label: Problem description & steps to reproduce
@@ -74,7 +84,7 @@ body:
     attributes:
       label: Relevant log output
       description: >
-          If applicable, please copy and paste any relevant log output, including the command that you entered and any generated text.
+          If applicable, please copy and paste any relevant log output, including any generated text.
           This will be automatically formatted into code, so no need for backticks.
       render: shell
     validations:

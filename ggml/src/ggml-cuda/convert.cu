@@ -680,6 +680,8 @@ to_fp32_cuda_t ggml_get_to_fp32_cuda(ggml_type type) {
             return dequantize_row_iq3_s_cuda;
         case GGML_TYPE_F16:
             return convert_unary_cuda<half>;
+        case GGML_TYPE_BF16:
+            return convert_unary_cuda<nv_bfloat16>;
         default:
             return nullptr;
     }

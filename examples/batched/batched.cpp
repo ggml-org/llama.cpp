@@ -41,7 +41,7 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_load_model_from_file(params.model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n" , __func__);
@@ -120,7 +120,7 @@ int main(int argc, char ** argv) {
         }
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-        if (decoder_start_token_id == -1) {
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
             decoder_start_token_id = llama_token_bos(model);
         }
 
@@ -236,7 +236,7 @@ int main(int argc, char ** argv) {
 
     llama_sampler_free(smpl);
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
 
     llama_backend_free();
 

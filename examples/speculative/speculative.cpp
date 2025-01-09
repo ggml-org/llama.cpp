@@ -72,8 +72,9 @@ int main(int argc, char ** argv) {
 
     // load the target model
     common_init_result llama_init_tgt = common_init_from_params(params);
-    model_tgt = llama_init_tgt.model;
-    ctx_tgt = llama_init_tgt.context;
+
+    model_tgt = llama_init_tgt.model.get();
+    ctx_tgt   = llama_init_tgt.context.get();
 
     // load the draft model
     params.devices = params.speculative.devices;
@@ -85,8 +86,9 @@ int main(int argc, char ** argv) {
 
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
     common_init_result llama_init_dft = common_init_from_params(params);
-    model_dft = llama_init_dft.model;
-    ctx_dft = llama_init_dft.context;
+
+    model_dft = llama_init_dft.model.get();
+    ctx_dft   = llama_init_dft.context.get();
 
     const bool vocab_type_tgt = llama_vocab_type(model_tgt);
     LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
@@ -630,12 +632,6 @@ int main(int argc, char ** argv) {
     }
 
     llama_batch_free(batch_dft);
-
-    llama_free(ctx_tgt);
-    llama_free_model(model_tgt);
-
-    llama_free(ctx_dft);
-    llama_free_model(model_dft);
 
     llama_backend_free();
 

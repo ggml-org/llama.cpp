@@ -1,8 +1,10 @@
 #pragma once
 
-#include "llama-impl.h"
+#include "llama.h"
 
 #include <map>
+#include <string>
+#include <vector>
 
 struct llama_vocab;
 

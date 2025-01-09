@@ -342,9 +342,11 @@ void process_shaders() {
         matmul_shaders(true, matmul_id, false, false, false);
         matmul_shaders(true, matmul_id, false, false, true);
 
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
         // Coopmat, fp32acc and fp16acc
         matmul_shaders(true, matmul_id, true, false, false);
         matmul_shaders(true, matmul_id, true, false, true);
+#endif
 
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
         // Coopmat2, fp32acc and fp16acc

@@ -458,8 +458,9 @@ int main(int argc, char ** argv) {
     llama_context * ctx_cts = NULL;
 
     common_init_result llama_init_ttc = common_init_from_params(params);
-    model_ttc = llama_init_ttc.model;
-    ctx_ttc = llama_init_ttc.context;
+
+    model_ttc = llama_init_ttc.model.get();
+    ctx_ttc   = llama_init_ttc.context.get();
 
     // TODO: refactor in a common struct
     params.model     = params.vocoder.model;
@@ -470,8 +471,9 @@ int main(int argc, char ** argv) {
     params.embedding = true;
 
     common_init_result llama_init_cts = common_init_from_params(params);
-    model_cts = llama_init_cts.model;
-    ctx_cts = llama_init_cts.context;
+
+    model_cts = llama_init_cts.model.get();
+    ctx_cts   = llama_init_cts.context.get();
 
     std::vector<common_sampler *> smpl(n_parallel);
     for (int i = 0; i < n_parallel; ++i) {
@@ -919,12 +921,6 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     save_wav16(fname, audio, n_sr);
 
     LOG_INF("%s: audio written to file '%s'\n", __func__, fname.c_str());
-
-    llama_free(ctx_ttc);
-    llama_free_model(model_ttc);
-
-    llama_free(ctx_cts);
-    llama_free_model(model_cts);
 
     llama_backend_free();
 

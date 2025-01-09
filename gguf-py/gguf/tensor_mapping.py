@@ -276,6 +276,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert_gate", # qwen2moe
         ),
 
+        MODEL_TENSOR.FFN_EXP_PROBS_B: (
+            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3
+        ),
+
         # Feed-forward up
         MODEL_TENSOR.FFN_UP: (
             "gpt_neox.layers.{bid}.mlp.dense_h_to_4h",                # gptneox

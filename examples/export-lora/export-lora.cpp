@@ -1,7 +1,9 @@
-#include "arg.h"
-#include "common.h"
 #include "ggml.h"
 #include "ggml-alloc.h"
+#include "gguf.h"
+
+#include "arg.h"
+#include "common.h"
 
 #include <map>
 #include <vector>

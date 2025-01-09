@@ -194,9 +194,12 @@ static inline __m256i sum_i16_pairs_int32x8(const __m256i x) {
 }
 
 static inline __m256i mul_sum_us8_pairs_int32x8(const __m256i ax, const __m256i sy) {
-#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
     const __m256i zero = _mm256_setzero_si256();
     return _mm256_dpbusd_epi32(zero, ax, sy);
+#elif defined(__AVXVNNI__)
+    const __m256i zero = _mm256_setzero_si256();
+    return _mm256_dpbusd_avx_epi32(zero, ax, sy);
 #else
     // Perform multiplication and create 16-bit values
     const __m256i dot = _mm256_maddubs_epi16(ax, sy);
@@ -4166,6 +4169,8 @@ static ggml_backend_buffer_t ggml_backend_cpu_aarch64_buffer_type_alloc_buffer(g
     buffer->buft              = buft;
     buffer->iface.init_tensor = ggml_backend_cpu_aarch64_buffer_init_tensor;
     buffer->iface.set_tensor  = ggml_backend_cpu_aarch64_buffer_set_tensor;
+    buffer->iface.get_tensor  = nullptr;
+    buffer->iface.cpy_tensor  = nullptr;
     return buffer;
 }
 

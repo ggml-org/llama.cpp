@@ -1987,8 +1987,9 @@ int main(int argc, char ** argv) {
     // load the model and apply lora adapter, if any
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
@@ -2022,9 +2023,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

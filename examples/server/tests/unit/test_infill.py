@@ -18,7 +18,7 @@ def test_infill_without_input_extra():
         "input_suffix": "}\n",
     })
     assert res.status_code == 200
-    assert match_regex("(Ann|small|shiny)+", res.body["content"])
+    assert match_regex("(Ann|small|shiny|Daddy)+", res.body["content"])
 
 
 def test_infill_with_input_extra():

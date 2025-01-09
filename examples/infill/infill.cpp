@@ -131,8 +131,8 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
     common_init_result llama_init = common_init_from_params(params);
 
-    model = llama_init.model;
-    ctx = llama_init.context;
+    model = llama_init.model.get();
+    ctx = llama_init.context.get();
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
@@ -580,9 +580,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     common_perf_print(ctx, smpl);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     common_sampler_free(smpl);
     llama_backend_free();

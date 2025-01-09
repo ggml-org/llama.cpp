@@ -3,6 +3,7 @@
 #include <musa_runtime.h>
 #include <musa.h>
 #include <mublas.h>
+#include <musa_bf16.h>
 #include <musa_fp16.h>
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
@@ -132,3 +133,5 @@
 #define cudaKernelNodeParams musaKernelNodeParams
 #define cudaStreamCaptureModeRelaxed musaStreamCaptureModeRelaxed
 #define cudaStreamEndCapture musaStreamEndCapture
+
+typedef mt_bfloat16 nv_bfloat16;

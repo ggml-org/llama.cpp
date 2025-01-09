@@ -22,6 +22,11 @@ common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> 
     return *this;
 }
 
+common_arg & common_arg::set_excludes(std::initializer_list<enum llama_example> excludes) {
+    this->excludes = std::move(excludes);
+    return *this;
+}
+
 common_arg & common_arg::set_env(const char * env) {
     help = help + "\n(env: " + env + ")";
     this->env = env;
@@ -35,6 +40,10 @@ common_arg & common_arg::set_sparam() {
 
 bool common_arg::in_example(enum llama_example ex) {
     return examples.find(ex) != examples.end();
+}
+
+bool common_arg::is_exclude(enum llama_example ex) {
+    return excludes.find(ex) != excludes.end();
 }
 
 bool common_arg::get_value_from_env(std::string & output) {
@@ -420,7 +429,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
      * - if both {LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_*,} are set, we will prioritize the LLAMA_EXAMPLE_* matching current example
      */
     auto add_opt = [&](common_arg arg) {
-        if (arg.in_example(ex) || arg.in_example(LLAMA_EXAMPLE_COMMON)) {
+        if ((arg.in_example(ex) || arg.in_example(LLAMA_EXAMPLE_COMMON)) && !arg.is_exclude(ex)) {
             ctx_arg.options.push_back(std::move(arg));
         }
     };
@@ -649,7 +658,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.prompt = value;
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -673,7 +682,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.prompt.pop_back();
             }
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
         "an input file (repeat to specify multiple files)",
@@ -700,7 +709,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.prompt = ss.str();
             fprintf(stderr, "Read %zu bytes from binary file %s\n", params.prompt.size(), value.c_str());
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-e", "--escape"},
         string_format("process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: %s)", params.escape ? "true" : "false"),
@@ -1512,7 +1521,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0 });
+            params.lora_adapters.push_back({ std::string(value), 1.0, nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -1520,7 +1529,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora-scaled"}, "FNAME", "SCALE",
         "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale) });
+            params.lora_adapters.push_back({ fname, std::stof(scale), nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));

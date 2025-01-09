@@ -34,7 +34,6 @@
 
 #define LLAMA_DEFAULT_SEED 0xFFFFFFFF
 
-// TODO: use everywhere in the implementation
 #define LLAMA_TOKEN_NULL -1
 
 #define LLAMA_FILE_MAGIC_GGLA 0x67676c61u // 'ggla'
@@ -105,6 +104,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_EXAONE         = 25,
         LLAMA_VOCAB_PRE_TYPE_CHAMELEON      = 26,
         LLAMA_VOCAB_PRE_TYPE_MINERVA        = 27,
+        LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28,
     };
 
     enum llama_rope_type {
@@ -385,6 +385,7 @@ extern "C" {
     } llama_chat_message;
 
     // lora adapter
+    // TODO: rename to llama_adapter_lora
     struct llama_lora_adapter;
 
     // Helpers for getting default parameters
@@ -412,11 +413,19 @@ extern "C" {
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
-    LLAMA_API struct llama_model * llama_load_model_from_file(
+    DEPRECATED(LLAMA_API struct llama_model * llama_load_model_from_file(
+                             const char * path_model,
+              struct llama_model_params   params),
+            "use llama_model_load_from_file instead");
+
+    LLAMA_API struct llama_model * llama_model_load_from_file(
                              const char * path_model,
               struct llama_model_params   params);
 
-    LLAMA_API void llama_free_model(struct llama_model * model);
+    DEPRECATED(LLAMA_API void llama_free_model(struct llama_model * model),
+            "use llama_model_free instead");
+
+    LLAMA_API void llama_model_free(struct llama_model * model);
 
     // TODO: rename to llama_init_from_model
     LLAMA_API struct llama_context * llama_new_context_with_model(
@@ -501,14 +510,19 @@ extern "C" {
             const char * fname_out,
             const llama_model_quantize_params * params);
 
+    //
+    // Adapters
+    //
+
     // Load a LoRA adapter from file
-    // The loaded adapter will be associated to the given model, and will be free when the model is deleted
+    // TODO: rename to llama_adapter_lora_init
     LLAMA_API struct llama_lora_adapter * llama_lora_adapter_init(
             struct llama_model * model,
             const char * path_lora);
 
     // Add a loaded LoRA adapter to given context
     // This will not modify model's weight
+    // TODO: rename to llama_set_adapter_lora
     LLAMA_API int32_t llama_lora_adapter_set(
             struct llama_context * ctx,
             struct llama_lora_adapter * adapter,
@@ -516,16 +530,18 @@ extern "C" {
 
     // Remove a specific LoRA adapter from given context
     // Return -1 if the adapter is not present in the context
+    // TODO: rename to llama_rm_adapter_lora
     LLAMA_API int32_t llama_lora_adapter_remove(
             struct llama_context * ctx,
             struct llama_lora_adapter * adapter);
 
     // Remove all LoRA adapters from given context
-    LLAMA_API void llama_lora_adapter_clear(
-            struct llama_context * ctx);
+    // TODO: rename to llama_clear_adapter_lora
+    LLAMA_API void llama_lora_adapter_clear(struct llama_context * ctx);
 
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted
+    // TODO: rename to llama_adapter_lora_free
     LLAMA_API void llama_lora_adapter_free(struct llama_lora_adapter * adapter);
 
     // Apply a loaded control vector to a llama_context, or if data is NULL, clear
@@ -534,6 +550,7 @@ extern "C" {
     // to an n_embd x n_layers buffer starting from layer 1.
     // il_start and il_end are the layer range the vector should apply to (both inclusive)
     // See llama_control_vector_load in common to load a control vector.
+    // TODO: rename to llama_adapter_cvec_apply
     LLAMA_API int32_t llama_control_vector_apply(
             struct llama_context * lctx,
                      const float * data,
@@ -545,6 +562,8 @@ extern "C" {
     //
     // KV cache
     //
+
+    // TODO: remove llama_kv_cache_view_* API
 
     // Information associated with an individual cell in the KV cache view.
     struct llama_kv_cache_view_cell {
@@ -592,7 +611,10 @@ extern "C" {
     LLAMA_API void llama_kv_cache_view_free(struct llama_kv_cache_view * view);
 
     // Update the KV cache view structure with the current state of the KV cache. (use only for debugging purposes)
+    // TODO: change signature to llama_kv_cache_view_update(struct llama_kv_cache_view * view, const struct llama_context * ctx)
     LLAMA_API void llama_kv_cache_view_update(const struct llama_context * ctx, struct llama_kv_cache_view * view);
+
+    ///
 
     // Returns the number of tokens in the KV cache (slow, use only for debug)
     // If a KV cell has multiple sequences assigned to it, it will be counted multiple times
@@ -662,6 +684,9 @@ extern "C" {
     LLAMA_API llama_pos llama_kv_cache_seq_pos_max(
             struct llama_context * ctx,
                     llama_seq_id   seq_id);
+
+    // TODO: the llama_kv_cache_defrag and llama_kv_cache_update API tightly couples llama_context with llama_kv_cache
+    //       how to avoid this?
 
     // Defragment the KV cache
     // This will be applied:

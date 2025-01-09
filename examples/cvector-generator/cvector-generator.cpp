@@ -1,7 +1,9 @@
+#include "ggml.h"
+#include "gguf.h"
+
 #include "arg.h"
 #include "common.h"
 #include "llama.h"
-#include "ggml.h"
 #include "pca.hpp"
 #include "mean.hpp"
 
@@ -415,12 +417,13 @@ int main(int argc, char ** argv) {
     // load the model to get hparams
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
 
     // int n_ctx = llama_n_ctx(ctx);
     int n_layers = llama_n_layer(model);
     int n_embd = llama_n_embd(model);
+
     // get model hint param (a.k.a model arch name)
     char model_hint[128];
     llama_model_meta_val_str(model, "general.architecture", model_hint, 128);
@@ -474,8 +477,6 @@ int main(int argc, char ** argv) {
 
     // done with the model, we can now free it to make gain some memory
     printf("Done evaluate prompts, unload model...\n");
-    llama_free(ctx);
-    llama_free_model(model);
 
     bool use_pca = params.cvector_dimre_method == DIMRE_METHOD_PCA;
 

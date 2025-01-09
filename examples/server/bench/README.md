@@ -6,10 +6,10 @@ Benchmark is using [k6](https://k6.io/).
 
 SSE is not supported by default in k6, you have to build k6 with the [xk6-sse](https://github.com/phymbert/xk6-sse) extension.
 
-Example:
+Example (assuming golang >= 1.21 is installed):
 ```shell
 go install go.k6.io/xk6/cmd/xk6@latest
-xk6 build master \
+$GOPATH/bin/xk6 build master \
 --with github.com/phymbert/xk6-sse
 ```
 
@@ -33,7 +33,7 @@ The server must answer OAI Chat completion requests on `http://localhost:8080/v1
 
 Example:
 ```shell
-server --host localhost --port 8080 \
+llama-server --host localhost --port 8080 \
   --model ggml-model-q4_0.gguf \
   --cont-batching \
   --metrics \

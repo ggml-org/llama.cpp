@@ -382,19 +382,6 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
     return formatted_chat;
 }
 
-static std::string llama_get_chat_template(const struct llama_model * model) {
-    std::string template_key = "tokenizer.chat_template";
-    // call with NULL buffer to get the total size of the string
-    int32_t res = llama_model_meta_val_str(model, template_key.c_str(), NULL, 0);
-    if (res < 2) {
-        return "";
-    } else {
-        std::vector<char> model_template(res + 1, 0);
-        llama_model_meta_val_str(model, template_key.c_str(), model_template.data(), model_template.size());
-        return std::string(model_template.data(), model_template.size() - 1);
-    }
-}
-
 //
 // base64 utils (TODO: move to common in the future)
 //
@@ -520,7 +507,7 @@ static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
 
 // format incomplete utf-8 multibyte character for output
 static std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token) {
-    std::string out = token == -1 ? "" : common_token_to_piece(ctx, token);
+    std::string out = token == LLAMA_TOKEN_NULL ? "" : common_token_to_piece(ctx, token);
 
     // if the size is 1 and first bit is 1, meaning it's a partial character
     //   (size > 1 meaning it's already a known token)
@@ -549,10 +536,49 @@ static bool server_sent_event(httplib::DataSink & sink, const char * event, cons
 // OAI utils
 //
 
-static json oaicompat_completion_params_parse(
-    const struct llama_model * model,
-    const json & body, /* openai api json semantics */
-    const std::string & chat_template) {
+static json oaicompat_completion_params_parse(const json & body) {
+    json llama_params;
+
+    if (!body.contains("prompt")) {
+        throw std::runtime_error("\"prompt\" is required");
+    }
+
+    // Handle "stop" field
+    if (body.contains("stop") && body.at("stop").is_string()) {
+        llama_params["stop"] = json::array({body.at("stop").get<std::string>()});
+    } else {
+        llama_params["stop"] = json_value(body, "stop", json::array());
+    }
+
+    // Handle "n" field
+    int n_choices = json_value(body, "n", 1);
+    if (n_choices != 1) {
+        throw std::runtime_error("Only one completion choice is allowed");
+    }
+
+    // Params supported by OAI but unsupported by llama.cpp
+    static const std::vector<std::string> unsupported_params { "best_of", "echo", "suffix" };
+    for (const auto & param : unsupported_params) {
+        if (body.contains(param)) {
+            throw std::runtime_error("Unsupported param: " + param);
+        }
+    }
+
+    // Copy remaining properties to llama_params
+    for (const auto & item : body.items()) {
+        // Exception: if "n_predict" is present, we overwrite the value specified earlier by "max_tokens"
+        if (!llama_params.contains(item.key()) || item.key() == "n_predict") {
+            llama_params[item.key()] = item.value();
+        }
+    }
+
+    return llama_params;
+}
+
+static json oaicompat_chat_completion_params_parse(
+        const struct llama_model * model,
+        const json & body, /* openai api json semantics */
+        const std::string & chat_template) {
     json llama_params;
 
     // Apply chat template to the list of messages
@@ -770,4 +796,45 @@ static std::vector<llama_token_data> get_token_probabilities(llama_context * ctx
     }
 
     return cur;
+}
+
+static bool are_lora_equal(
+        const std::vector<common_lora_adapter_info> & l1,
+        const std::vector<common_lora_adapter_info> & l2) {
+    if (l1.size() != l2.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < l1.size(); ++i) {
+        // we don't check lora.path to reduce the time complexity
+        if (l1[i].scale != l2[i].scale || l1[i].ptr != l2[i].ptr) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// parse lora config from JSON request, returned a copy of lora_base with updated scale
+static std::vector<common_lora_adapter_info> parse_lora_request(
+        const std::vector<common_lora_adapter_info> & lora_base,
+        const json & data) {
+    std::vector<common_lora_adapter_info> lora(lora_base);
+    int max_idx = lora.size();
+
+    // clear existing value
+    for (auto & entry : lora) {
+        entry.scale = 0.0f;
+    }
+
+    // set value
+    for (const auto & entry : data) {
+        int id      = json_value(entry, "id", -1);
+        float scale = json_value(entry, "scale", 0.0f);
+        if (0 <= id && id < max_idx) {
+            lora[id].scale = scale;
+        } else {
+            throw std::runtime_error("invalid adapter id");
+        }
+    }
+
+    return lora;
 }

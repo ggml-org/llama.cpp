@@ -430,8 +430,9 @@ static void process_logits(
 
 static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
     const int n_ctx = llama_n_ctx(ctx);
+
+    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -618,8 +619,9 @@ int main(int argc, char ** argv) {
     // init
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
     if (model == nullptr || ctx == nullptr) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
@@ -654,9 +656,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

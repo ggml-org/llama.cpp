@@ -13,10 +13,10 @@ int main(int argc, char ** argv) {
 
     std::thread([&model_path]() {
         llama_backend_init();
-        auto * model = llama_load_model_from_file(model_path, llama_model_default_params());
+        auto * model = llama_model_load_from_file(model_path, llama_model_default_params());
         auto * ctx = llama_new_context_with_model(model, llama_context_default_params());
         llama_free(ctx);
-        llama_free_model(model);
+        llama_model_free(model);
         llama_backend_free();
     }).join();
 

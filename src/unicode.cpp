@@ -667,18 +667,24 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
         { "\\p{N}", unicode_cpt_flags::NUMBER },
         { "\\p{L}", unicode_cpt_flags::LETTER },
         { "\\p{P}", unicode_cpt_flags::PUNCTUATION },
+        { "\\p{M}", unicode_cpt_flags::ACCENT_MARK },
+        { "\\p{S}", unicode_cpt_flags::SYMBOL },
     };
 
     static const std::map<int, int> k_ucat_cpt = {
         { unicode_cpt_flags::NUMBER,      0xD1 },
         { unicode_cpt_flags::LETTER,      0xD2 },
         { unicode_cpt_flags::PUNCTUATION, 0xD3 },
+        { unicode_cpt_flags::ACCENT_MARK, 0xD4 },
+        { unicode_cpt_flags::SYMBOL,      0xD5 },
     };
 
     static const std::map<int, std::string> k_ucat_map = {
         { unicode_cpt_flags::NUMBER,      "\x30-\x39" }, // 0-9
         { unicode_cpt_flags::LETTER,      "\x41-\x5A\x61-\x7A" }, // A-Za-z
         { unicode_cpt_flags::PUNCTUATION, "\x21-\x23\x25-\x2A\x2C-\x2F\x3A-\x3B\x3F-\x40\\\x5B-\\\x5D\x5F\\\x7B\\\x7D" }, // !-#%-*,-/:-;?-@\[-\]_\{\}
+        { unicode_cpt_flags::ACCENT_MARK, "" }, // no sub-128 codepoints
+        { unicode_cpt_flags::SYMBOL,      "\\\x24\\\x2B\x3C-\x3E\x5E\x60\\\x7C" }, // $+<=>^`|
     };
 
     // compute collapsed codepoints only if needed by at least one regex
