@@ -1,6 +1,7 @@
-#include "ggml-openvino.h"
 #include "ggml-backend-impl.h"
+#include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
+#include "ggml-openvino.h"
 #include "ggml-openvino/utils.h"
 
 #include <string>
@@ -418,20 +419,425 @@ void ggml_backend_openvino_rms_norm(ggml_tensor * dst) {
     }
 }
 
+
+void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+    const struct ggml_tensor * src1 = dst->src[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int ith = 0;
+    const int nth = 1;
+
+    const enum ggml_type type = src0->type;
+    const auto *type_traits = ggml_get_type_traits(type);
+
+    enum ggml_type           const vec_dot_type         = type_traits->vec_dot_type;
+    ggml_from_float_t        const from_float           = type_traits->from_float;
+    ggml_from_float_to_mat_t const from_float_to_mat    = type_traits->from_float_to_mat;
+    int64_t                  const vec_dot_num_rows     = type_traits->nrows;
+    int64_t                  const matmul_num_cols      = type_traits->ncols;
+    int64_t                  const blck_size_interleave = type_traits->blck_size_interleave;
+    ggml_gemv_t              const gemv                 = type_traits->gemv;
+    ggml_gemm_t              const gemm                 = type_traits->gemm;
+
+    GGML_ASSERT(ne0 == ne01);
+    GGML_ASSERT(ne1 == ne11);
+    GGML_ASSERT(ne2 == ne12);
+    GGML_ASSERT(ne3 == ne13);
+
+    // we don't support permuted src0 or src1
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    // src1->type = GGML_TYPE_F32, vec_dot_type = GGML_TYPE_F16
+    // The main function of this code is to convert the data of src1 from GGML_TYPE_F32 type to vec_dot_type (i.e. GGML_TYPE_F16) and store the result in params->wdata.
+    // The code processes data of different dimensions through multiple loops and conditional judgments and uses different conversion functions to complete data conversion.
+    std::unique_ptr<char[]> wdata(new char[ne13 * ggml_row_size(vec_dot_type, ne10) * ne11 * ne12]);
+    if (src1->type != vec_dot_type) {
+        const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
+        const size_t nbw2 = nbw1*ne11;
+        const size_t nbw3 = nbw2*ne12;
+
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+        for (int64_t i13 = 0; i13 < ne13; ++i13) {
+            for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
+                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                           (void *)               (wdata.get() + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                           ne10);
+                }
+            }
+        }
+    }
+
+    // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
+    const int64_t nr0 = ne0;
+
+    // This is the size of the rest of the dimensions of the result
+    const int64_t nr1 = ne1 * ne2 * ne3;
+
+    // dot kernels can handle 1 row and col at a time, but mmla kernels can process 2 rows and cols
+    int64_t num_rows_per_vec_dot = vec_dot_num_rows;
+    // TODO: currently the mmla kernels support only even numbered rows/cols.
+    // this check can be removed once they are extended to support odd numbered rows/cols too
+    if ((nr0 % 2 != 0) || (ne11 % 2 != 0)) {
+        num_rows_per_vec_dot = 1;
+    }
+
+    // Now select a reasonable chunk size.
+    int chunk_size = 16;
+
+    // We need to step up the size if it's small
+    if (nr0 == 1 || nr1 == 1) {
+        chunk_size = 64;
+    }
+
+    // distribute the work across the inner or outer loop based on which one is larger
+    // The number of chunks in the 0/1 dim.
+    // CEIL(nr0/chunk_size)
+    int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
+    int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
+
+    // The number of elements in each chunk
+    const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+    const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
+
+    // The first chunk comes from our thread_id, the rest will get auto-assigned.
+    int current_chunk = ith;
+
+    while (current_chunk < nchunk0 * nchunk1) {
+        const int64_t ith0 = current_chunk % nchunk0;
+        const int64_t ith1 = current_chunk / nchunk0;
+
+        const int64_t ir0_start = dr0 * ith0;
+        const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
+
+        const int64_t ir1_start = dr1 * ith1;
+        const int64_t ir1_end = MIN(ir1_start + dr1, nr1);
+
+        const bool src1_cont = ggml_is_contiguous(src1);
+
+        ggml_vec_dot_t const vec_dot      = type_traits->vec_dot;
+        enum ggml_type const vec_dot_type = type_traits->vec_dot_type;
+
+        // broadcast factors
+        const int64_t r2 = ne12 / ne02;
+        const int64_t r3 = ne13 / ne03;
+
+        // threads with no work simply yield (not sure if it helps)
+        if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
+            return;
+        }
+
+        // const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+
+        assert(ne12 % ne02 == 0);
+        assert(ne13 % ne03 == 0);
+
+        // block-tiling attempt
+        const int64_t blck_0 = 16;
+        const int64_t blck_1 = 16;
+
+        const size_t src1_col_stride = src1_cont || src1->type != vec_dot_type ? row_size : nb11;
+
+        // attempt to reduce false-sharing (does not seem to make a difference)
+        // 16 * 2, accounting for mmla kernels
+        float tmp[32];
+
+        for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
+            for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
+                for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
+                    const int64_t i13 = (ir1 / (ne12 * ne1));
+                    const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
+                    const int64_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
+
+                    // broadcast src0 into src1
+                    const int64_t i03 = i13 / r3;
+                    const int64_t i02 = i12 / r2;
+
+                    const int64_t i1 = i11;
+                    const int64_t i2 = i12;
+                    const int64_t i3 = i13;
+
+                    const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
+
+                    // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
+                    //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
+                    //       the original src1 data pointer, so we should index using the indices directly
+                    const char * src1_col = (const char*)wdata.get() +
+                        (src1_cont || src1->type != vec_dot_type
+                            ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
+                            : (i11 * nb11 + i12 * nb12 + i13 * nb13));
+                    float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
+
+                    for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
+                        vec_dot(ne00, &tmp[ir0 - iir0],
+                                (num_rows_per_vec_dot > 1 ? 16 : 0),
+                                src0_row + ir0 * nb01,
+                                (num_rows_per_vec_dot > 1 ? nb01 : 0),
+                                src1_col,
+                                (num_rows_per_vec_dot > 1 ? src1_col_stride : 0),
+                                num_rows_per_vec_dot);
+                    }
+
+                    for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
+                        memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
+                    }
+                }
+            }
+        }
+
+        if (nth >= nchunk0 * nchunk1) {
+            break;
+        }
+
+        // current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
+        current_chunk++;
+    }
+}
+
+void ggml_backend_openvino_reshape(ggml_tensor *dst) {
+
+    GGML_UNUSED(dst);
+}
+
+void ggml_backend_openvino_view(ggml_tensor *dst) {
+
+    GGML_UNUSED(dst);
+}
+
+void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+
+    // Validate tensor properties
+    GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
+    GGML_ASSERT(src0->type == dst->type);
+
+    // Determine tensor properties
+    const size_t element_size = ggml_type_size(src0->type);
+
+    // Case 1: Both tensors are contiguous
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
+        // OpenVINO tensors for src and dst
+        // Source is 1D since it's contiguous
+        ov::Tensor src_tensor(ov::element::f32, {src0->ne[0]}, src0->data);
+        // // Destination is 1D since it's contiguous
+        ov::Tensor dst_tensor(ov::element::f32, {dst->ne[0]}, dst->data);
+
+        // Perform the memory copy row by row
+        size_t row_size = dst->nb[0];  // Size of one row in destination
+        size_t src_stride = src0->nb[0];  // Stride for source tensor
+
+        for (size_t i = 0; i < dst->ne[0]; ++i) {
+            std::memcpy((char *)dst_tensor.data()+i*row_size, (char *)src_tensor.data()+i*src_stride, row_size);
+        }
+        return;
+    }
+
+    // Case 2: Compatible types, dimensions, and strides
+    const size_t ne00 = src0->ne[0];
+    const size_t ne01 = src0->ne[1];
+    const size_t nb00 = src0->nb[0];
+    const size_t nb01 = src0->nb[1];
+    const size_t nb0 = dst->nb[0];
+
+    if (src0->type == dst->type && ne00 == dst->ne[0] && nb00 == element_size && nb0 == element_size) {
+        for (size_t i01 = 0; i01 < ne01; ++i01) {
+            const char *src_row = reinterpret_cast<const char *>(src0->data) + i01 * nb01;
+            char *dst_row = reinterpret_cast<char *>(dst->data) + i01 * dst->nb[1];
+
+            ov::Tensor src_row_tensor(ov::element::f32, {ne00}, const_cast<void *>(reinterpret_cast<const void *>(src_row)));
+            ov::Tensor dst_row_tensor(ov::element::f32, {ne00}, reinterpret_cast<void *>(dst_row));
+
+            std::memcpy(dst_row_tensor.data<float>(), src_row_tensor.data<float>(), ne00 * sizeof(float));
+        }
+        return;
+    }
+
+    // Case 3: Non-contiguous source, contiguous destination
+    const int64_t ne02 = src0->ne[2];
+    const int64_t ne03 = src0->ne[3];
+    const int64_t nb02 = src0->nb[2];
+    const int64_t nb03 = src0->nb[3];
+
+    // dst->ne        =[3072,7,1,1],       dst->nb =[4,12288,86016,86016],          dst->type=GGML_TYPE_F32
+    // dst->src[0]->ne=[96,32,7,1], dst->src[0]->nb=[4,2688,384,86016],     dst->src[0]->type=GGML_TYPE_F32
+    if (ggml_is_contiguous(dst)) {
+        const size_t rs = ne00 * element_size; // Row size in bytes for dst
+
+        // Create OpenVINO tensors for source and destination
+        // The tensors are reshaped to a 2D structure (num_rows x ne00) for easier iteration and compatibility with the simplified loop.
+        ov::Tensor src_tensor(ov::element::f32, ov::Shape{ne03 * ne02 * ne01, ne00}, src0->data);
+        ov::Tensor dst_tensor(ov::element::f32, ov::Shape{ne03 * ne02 * ne01, ne00}, dst->data);
+
+        // Perform the copy in a single loop
+        const size_t num_rows = ne03 * ne02 * ne01;
+        for (size_t row = 0; row < num_rows; ++row) {
+            // Calculate the source row pointer based on original strides
+            // The source row pointer is calculated based on the combined index row and the strides nb03, nb02, and nb01.
+            const char* src0_ptr = (char*)src_tensor.data() +
+                                    // Calculates which block of the i03 dimension the current row belongs to
+                                   (row / (ne02 * ne01)) * nb03 +   // 0
+                                    // Calculates which block of the i02 dimension the current row belongs to within the current i03 block.
+                                   ((row / ne01) % ne02) * nb02 +   // 0,   0,......,    0,384,  384,......,  384,768,......, 2304
+                                    // Calculates the position within the current i02 block in terms of the i01 index.
+                                   (row % ne01) * nb01;             // 0,2688,......,83328,  0, 2688,......,83328,  0,......, 83328
+
+            // Destination row pointer is linear
+            // Since dst is contiguous, its rows are accessed linearly using a single stride rs, simplifying the destination pointer calculation.
+            char* dst_ptr = (char*)dst_tensor.data() + row * rs;
+
+            // Copy row
+            std::memcpy(dst_ptr, src0_ptr, rs);
+        }
+        return;
+    }
+    std::cout << "Duplication of bytes completed successfully." << std::endl;
+}
+
+static void ggml_backend_openvino_transpose(ggml_tensor *dst) {
+    // NOP
+    GGML_UNUSED(dst);
+}
+
+static void ggml_backend_openvino_permute(const struct ggml_tensor * dst) {
+    // NOP
+    GGML_UNUSED(dst);
+}
+
+void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
+    const struct ggml_tensor *src0 = dst->src[0];
+    assert(src0 != nullptr);
+    assert(ggml_nelements(dst) == ggml_nelements(src0));
+
+    // Extract shapes
+    ov::Shape src_shape(src0->ne, src0->ne + 4);
+    ov::Shape dst_shape(dst->ne, dst->ne + 4);
+
+    // Initialize OpenVINO core
+    ov::Core core;
+
+    // Create OpenVINO parameter for the source tensor
+    auto src_input = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
+
+    std::shared_ptr<ov::Model> model;
+    if (ggml_is_contiguous(dst)) {
+        // Contiguous Case: Flatten src and reshape to dst shape
+        ov::Shape flattened_shape = {ggml_nelements(src0)};
+        auto flatten = std::make_shared<ov::op::v1::Reshape>(
+            src_input, ov::op::v0::Constant::create(ov::element::i64, {1}, flattened_shape), false);
+
+        auto reshape_to_dst = std::make_shared<ov::op::v1::Reshape>(
+            flatten, ov::op::v0::Constant::create(ov::element::i64, {4}, dst_shape), false);
+
+        auto dst_output = std::make_shared<ov::op::v0::Convert>(reshape_to_dst, ov::element::f16);
+
+        model = std::make_shared<ov::Model>(
+            ov::ResultVector{std::make_shared<ov::op::v0::Result>(dst_output)},
+            ov::ParameterVector{src_input},
+            "ContiguousCopy");
+            // Compile and execute the model
+        auto compiled_model = core.compile_model(model, "CPU");
+
+        ov::Tensor src_tensor(ov::element::f32, src_shape, src0->data);
+        ov::Tensor dst_tensor(ov::element::f16, dst_shape, dst->data);
+
+        auto infer_request = compiled_model.create_infer_request();
+        infer_request.set_input_tensor(0, src_tensor);
+        infer_request.set_output_tensor(0, dst_tensor);
+        infer_request.infer();
+    } else {
+        // Non-contiguous case: element-wise copy
+        for (int64_t i03 = 0; i03 < dst->ne[3]; ++i03) {
+            for (int64_t i02 = 0; i02 < dst->ne[2]; ++i02) {
+                for (int64_t i01 = 0; i01 < dst->ne[1]; ++i01) {
+                    for (int64_t i00 = 0; i00 < dst->ne[0]; ++i00) {
+                        const char *src_ptr = static_cast<const char *>(src0->data) +
+                                              i00 * src0->nb[0] + i01 * src0->nb[1] +
+                                              i02 * src0->nb[2] + i03 * src0->nb[3];
+
+                        char *dst_ptr = static_cast<char *>(dst->data) +
+                                        i00 * dst->nb[0] + i01 * dst->nb[1] +
+                                        i02 * dst->nb[2] + i03 * dst->nb[3];
+
+                        *(ggml_fp16_t *)dst_ptr = GGML_FP32_TO_FP16(*(const float *)src_ptr);
+                    }
+                }
+            }
+        }
+    }
+}
+
 static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    openvino_frontend_compute(backend, cgraph);
+    // Find the indices of GGML_OP_CONT, GGML_OP_CPY nodes, GGML_OP_MUL_MAT and so on.
+    std::vector<int> cont_indices;
+    std::vector<int> reshape_indices;
+    std::vector<int> view_indices;
 
-    // for (int i = 0; i < cgraph->n_nodes; i++) {
-    //     struct ggml_tensor * node = cgraph->nodes[i];
+    std::vector<int> cpy_indices;
+    std::vector<int> transpose_indices;
+    std::vector<int> permute_indices;
 
-    //     switch (node->op) {
-    //         case GGML_OP_RMS_NORM:
-    //             ggml_backend_openvino_rms_norm(node);
-    //             break;
-    //         default:
-    //             GGML_ABORT("%s: unsupported op %s\n", __func__, ggml_op_desc(node));
-    //     }
-    // }
+    std::vector<int> mul_mat_indices;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op == GGML_OP_CONT) {
+            cont_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_RESHAPE) {
+            reshape_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_VIEW) {
+            view_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_CPY) {
+            cpy_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_TRANSPOSE) {
+            transpose_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_PERMUTE) {
+            permute_indices.push_back(i);
+        } else if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT) {
+            mul_mat_indices.push_back(i);
+        }
+    }
+
+    // Process nodes in order
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
+            ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
+        } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
+            ggml_backend_openvino_reshape(cgraph->nodes[i]);
+        } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
+            ggml_backend_openvino_view(cgraph->nodes[i]);
+        } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
+            ggml_backend_openvino_cpy(cgraph->nodes[i]);
+        } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {
+            ggml_backend_openvino_transpose(cgraph->nodes[i]);
+        } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
+            ggml_backend_openvino_permute(cgraph->nodes[i]);
+        } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
+            ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
+        } else {
+            // Process a range of nodes with openvino_frontend_compute
+            int start_index = i;
+            while (i < cgraph->n_nodes &&
+                    std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end() &&
+                    std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end() &&
+                    std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()) {
+                i++;
+            }
+            if (start_index < i) {
+                openvino_frontend_compute(backend, cgraph, start_index, --i);
+            }
+        }
+    }
 
     return GGML_STATUS_SUCCESS;
 

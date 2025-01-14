@@ -76,7 +76,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
     }
 }
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph)
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index)
     :m_cgraph(cgraph),
      m_node(node),
      m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
@@ -88,7 +88,8 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
     if (m_node) {
         set_input_output(m_node, m_inputs, m_outputs);
     } else {
-        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        // for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        for (int node_n = start_index; node_n <= end_index; node_n++) {
             auto cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
             // Init model input and output

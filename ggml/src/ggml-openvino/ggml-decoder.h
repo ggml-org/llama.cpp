@@ -7,7 +7,7 @@ class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
     using ov::frontend::ggml::GgmlDecoder::GgmlDecoder;
 
-    GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph);
+    GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph, const int32_t start_index=0, const int32_t end_index=0);
 
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
