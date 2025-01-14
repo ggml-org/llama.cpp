@@ -6,8 +6,8 @@
 
 using ov::frontend::ggml::GgmlDecoder;
 
-std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph) {
-    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph);
+std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index) {
+    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, start_index, end_index);
 }
 
 std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
@@ -52,7 +52,7 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     return front_end;
 }
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index) {
     ov::Core core;
     auto devices = core.get_available_devices();
     // Get GGML Frontend 
@@ -65,7 +65,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
             GGML_LOG_INFO("GGML FrontEnd is initialized \n");
         #endif
     }
-    auto ggml_decoder = get_ggml_decoder(cgraph);
+    auto ggml_decoder = get_ggml_decoder(cgraph, start_index, end_index);
     std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
     // Load GraphIterator -> InputModel
     ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
