@@ -58,8 +58,10 @@ int main(int argc, char ** argv) {
     // load the target model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -147,7 +149,7 @@ int main(int argc, char ** argv) {
     }
 
     // here we keep adding new n-grams as we go
-    ngram_container ngrams_observed(llama_n_vocab(model), N, G);
+    ngram_container ngrams_observed(llama_vocab_n_tokens(vocab), N, G);
 
     // debug
     struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, W + G + 1);
@@ -297,7 +299,7 @@ int main(int argc, char ** argv) {
                 }
                 fflush(stdout);
 
-                if (llama_token_is_eog(model, id)) {
+                if (llama_vocab_is_eog(vocab, id)) {
                     has_eos = true;
                 }
 
@@ -473,9 +475,6 @@ int main(int argc, char ** argv) {
     llama_kv_cache_view_free(&kvc_view);
 
     llama_batch_free(batch);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

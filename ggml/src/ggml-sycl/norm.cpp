@@ -31,7 +31,7 @@ static void norm_f32(const float* x, float* dst, const int ncols, const float ep
         */
         item_ct1.barrier(sycl::access::fence_space::local_space);
         mean_var = 0.f;
-        int nreduce = nwarps / WARP_SIZE;
+        size_t nreduce = nwarps / WARP_SIZE;
         for (size_t i = 0; i < nreduce; i += 1)
         {
             mean_var += s_sum[lane_id + i * WARP_SIZE];
@@ -55,7 +55,7 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
     const int nthreads = item_ct1.get_local_range(2);
     const int nwarps = nthreads / WARP_SIZE;
     start += item_ct1.get_local_id(2);
-    int nreduce = nwarps / WARP_SIZE;
+    size_t nreduce = nwarps / WARP_SIZE;
 
     if (end >= ne_elements) {
         end = ne_elements;
@@ -163,7 +163,7 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const floa
         converged control flow. You may need to adjust the code.
         */
         item_ct1.barrier(sycl::access::fence_space::local_space);
-        int nreduce = nwarps / WARP_SIZE;
+        size_t nreduce = nwarps / WARP_SIZE;
         tmp = 0.f;
         for (size_t i = 0; i < nreduce; i += 1)
         {
@@ -352,6 +352,7 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* 
     (void)src1;
     (void)dst;
     (void)src1_dd;
+    GGML_UNUSED(ctx);
 }
 
 void ggml_sycl_op_rms_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,

@@ -20,11 +20,13 @@ if [ -n "$GGML_CUDA" ]; then
     cmake_opts="-DGGML_CUDA=ON"
 fi
 
+dir="build-bench"
+
 function run {
-    rm -fr build > /dev/null
-    cmake -B build -S . $cmake_opts > /dev/null
-    cmake --build build -t llama-bench > /dev/null
-    build/bin/llama-bench -o sql -oe md $bench_args | sqlite3 llama-bench.sqlite
+    rm -fr ${dir} > /dev/null
+    cmake -B ${dir} -S . $cmake_opts > /dev/null
+    cmake --build ${dir} -t llama-bench > /dev/null
+    ${dir}/bin/llama-bench -o sql -oe md $bench_args | sqlite3 llama-bench.sqlite
 }
 
 git checkout $1 > /dev/null

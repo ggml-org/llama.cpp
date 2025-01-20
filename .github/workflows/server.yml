@@ -79,7 +79,7 @@ jobs:
       # Setup nodejs (to be used for verifying bundled index.html)
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: '22.11.0'
 
       - name: Verify bundled index.html
         id: verify_server_index_html
@@ -112,9 +112,9 @@ jobs:
               -DGGML_OPENMP=OFF ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
-      - name: Build
-        id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
+      - name: Build (sanitizers)
+        id: cmake_build_sanitizers
+        if: ${{ matrix.sanitizer != '' && matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
               -DGGML_NATIVE=OFF \
@@ -124,11 +124,30 @@ jobs:
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
+      - name: Build (sanitizers)
+        id: cmake_build
+        if: ${{ matrix.sanitizer == '' }}
+        run: |
+          cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DLLAMA_BUILD_SERVER=ON \
+              -DLLAMA_CURL=ON \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
       - name: Tests
         id: server_integration_tests
+        if: ${{ matrix.sanitizer == '' }}
         run: |
           cd examples/server/tests
           ./tests.sh
+
+      - name: Tests (sanitizers)
+        id: server_integration_tests_sanitizers
+        if: ${{ matrix.sanitizer != '' }}
+        run: |
+          cd examples/server/tests
+          LLAMA_SANITIZE=1 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow

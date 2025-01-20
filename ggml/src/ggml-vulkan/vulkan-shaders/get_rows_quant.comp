@@ -31,6 +31,8 @@ void main() {
     const uint y_offset = QUANT_R == 1 ? 1 : QUANT_K/2;
 
     vec2 v = dequantize(ib, iqs, 0);
+    const vec2 dm = get_dm(ib, 0);
+    v = v * dm.x + dm.y;
 
     data_d[d_offset + iybs + iqs           ] = D_TYPE(v.x);
     data_d[d_offset + iybs + iqs + y_offset] = D_TYPE(v.y);

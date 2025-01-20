@@ -1,23 +1,57 @@
-import './styles.css';
+import './styles.scss';
 import { createApp, defineComponent, shallowRef, computed, h } from 'vue/dist/vue.esm-bundler.js';
-import { llama } from './completion.js';
 import MarkdownIt from 'markdown-it';
+import TextLineStream from 'textlinestream';
+
+// math formula rendering
+import 'katex/dist/katex.min.css';
+import markdownItKatexGpt from './katex-gpt';
+import markdownItKatexNormal from '@vscode/markdown-it-katex';
+
+// code highlighting
+import hljs from './highlight-config';
+import daisyuiThemes from 'daisyui/src/theming/themes';
+
+// ponyfill for missing ReadableStream asyncIterator on Safari
+import { asyncIterator } from '@sec-ant/readable-stream/ponyfill/asyncIterator';
+
+const isDev = import.meta.env.MODE === 'development';
 
 // utility functions
 const isString = (x) => !!x.toLowerCase;
-const isNumeric = (n) => !isString(n) && !isNaN(n);
+const isBoolean = (x) => x === true || x === false;
+const isNumeric = (n) => !isString(n) && !isNaN(n) && !isBoolean(n);
 const escapeAttr = (str) => str.replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-const copyStr = (str) => navigator.clipboard.writeText(str);
+const copyStr = (textToCopy) => {
+  // Navigator clipboard api needs a secure context (https)
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(textToCopy);
+  } else {
+    // Use the 'out of viewport hidden text area' trick
+    const textArea = document.createElement('textarea');
+    textArea.value = textToCopy;
+    // Move textarea out of the viewport so it's not visible
+    textArea.style.position = 'absolute';
+    textArea.style.left = '-999999px';
+    document.body.prepend(textArea);
+    textArea.select();
+    document.execCommand('copy');
+  }
+};
 
 // constants
-const BASE_URL = localStorage.getItem('base') // for debugging
-  || (new URL('.', document.baseURI).href).toString(); // for production
+const BASE_URL = isDev
+  ? (localStorage.getItem('base') || 'https://localhost:8080') // for debugging
+  : (new URL('.', document.baseURI).href).toString().replace(/\/$/, ''); // for production
+console.log({ BASE_URL });
+
 const CONFIG_DEFAULT = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
   apiKey: '',
   systemMessage: 'You are a helpful assistant.',
+  showTokensPerSecond: false,
   // make sure these default values are in sync with `common.h`
-  samplers: 'dkypmxt',
+  samplers: 'edkypmxt',
   temperature: 0.8,
   dynatemp_range: 0.0,
   dynatemp_exponent: 1.0,
@@ -65,12 +99,39 @@ const CONFIG_INFO = {
 // config keys having numeric value (i.e. temperature, top_k, top_p, etc)
 const CONFIG_NUMERIC_KEYS = Object.entries(CONFIG_DEFAULT).filter(e => isNumeric(e[1])).map(e => e[0]);
 // list of themes supported by daisyui
-const THEMES = ['light', 'dark', 'cupcake', 'bumblebee', 'emerald', 'corporate', 'synthwave', 'retro', 'cyberpunk', 'valentine', 'halloween', 'garden', 'forest', 'aqua', 'lofi', 'pastel', 'fantasy', 'wireframe', 'black', 'luxury', 'dracula', 'cmyk', 'autumn', 'business', 'acid', 'lemonade', 'night', 'coffee', 'winter', 'dim', 'nord', 'sunset'];
+const THEMES = ['light', 'dark']
+  // make sure light & dark are always at the beginning
+  .concat(Object.keys(daisyuiThemes).filter(t => t !== 'light' && t !== 'dark'));
 
 // markdown support
 const VueMarkdown = defineComponent(
   (props) => {
-    const md = shallowRef(new MarkdownIt({ breaks: true }));
+    const md = shallowRef(new MarkdownIt({
+      breaks: true,
+      highlight: function (str, lang) { // Add highlight.js
+        if (lang && hljs.getLanguage(lang)) {
+          try {
+            return '<pre dir="auto"><code class="hljs">' +
+                   hljs.highlight(str, { language: lang, ignoreIllegals: true }).value +
+                   '</code></pre>';
+          } catch (__) {}
+        }
+        return '<pre dir="auto"><code class="hljs">' + md.value.utils.escapeHtml(str) + '</code></pre>';
+      }
+    }));
+    // support latex with double dollar sign and square brackets
+    md.value.use(markdownItKatexGpt, {
+      delimiters: [
+        { left: '\\[', right: '\\]', display: true },
+        { left: '\\(', right: '\\)', display: false },
+        { left: '$$', right: '$$', display: false },
+        // do not add single dollar sign here, other wise it will confused with dollar used for money symbol
+      ],
+      throwOnError: false,
+    });
+    // support latex with single dollar sign
+    md.value.use(markdownItKatexNormal, { throwOnError: false });
+    // add copy button to code blocks
     const origFenchRenderer = md.value.renderer.rules.fence;
     md.value.renderer.rules.fence = (tokens, idx, ...args) => {
       const content = tokens[idx].content;
@@ -84,9 +145,9 @@ const VueMarkdown = defineComponent(
     };
     window.copyStr = copyStr;
     const content = computed(() => md.value.render(props.source));
-    return () => h("div", { innerHTML: content.value });
+    return () => h('div', { innerHTML: content.value });
   },
-  { props: ["source"] }
+  { props: ['source'] }
 );
 
 // input field to be used by settings modal
@@ -98,6 +159,48 @@ const SettingsModalShortInput = defineComponent({
     configDefault: Object,
     configInfo: Object,
     modelValue: [Object, String, Number],
+  },
+});
+
+// message bubble component
+const MessageBubble = defineComponent({
+  components: {
+    VueMarkdown
+  },
+  template: document.getElementById('message-bubble').innerHTML,
+  props: {
+    config: Object,
+    msg: Object,
+    isGenerating: Boolean,
+    editUserMsgAndRegenerate: Function,
+    regenerateMsg: Function,
+  },
+  data() {
+    return {
+      editingContent: null,
+    };
+  },
+  computed: {
+    timings() {
+      if (!this.msg.timings) return null;
+      return {
+        ...this.msg.timings,
+        prompt_per_second: this.msg.timings.prompt_n / (this.msg.timings.prompt_ms / 1000),
+        predicted_per_second: this.msg.timings.predicted_n / (this.msg.timings.predicted_ms / 1000),
+      };
+    }
+  },
+  methods: {
+    copyMsg() {
+      copyStr(this.msg.content);
+    },
+    editMsg() {
+      this.editUserMsgAndRegenerate({
+        ...this.msg,
+        content: this.editingContent,
+      });
+      this.editingContent = null;
+    },
   },
 });
 
@@ -192,10 +295,29 @@ const chatScrollToBottom = (requiresNearBottom) => {
   }
 };
 
+// wrapper for SSE
+async function* sendSSEPostRequest(url, fetchOptions) {
+  const res = await fetch(url, fetchOptions);
+  const lines = res.body
+    .pipeThrough(new TextDecoderStream())
+    .pipeThrough(new TextLineStream());
+  for await (const line of asyncIterator(lines)) {
+    if (isDev) console.log({line});
+    if (line.startsWith('data:') && !line.endsWith('[DONE]')) {
+      const data = JSON.parse(line.slice(5));
+      yield data;
+    } else if (line.startsWith('error:')) {
+      const data = JSON.parse(line.slice(6));
+      throw new Error(data.message || 'Unknown error');
+    }
+  }
+};
+
 const mainApp = createApp({
   components: {
     VueMarkdown,
     SettingsModalShortInput,
+    MessageBubble,
   },
   data() {
     return {
@@ -209,11 +331,11 @@ const mainApp = createApp({
       selectedTheme: StorageUtils.getTheme(),
       config: StorageUtils.getConfig(),
       showConfigDialog: false,
-      editingMsg: null,
       // const
       themes: THEMES,
       configDefault: {...CONFIG_DEFAULT},
       configInfo: {...CONFIG_INFO},
+      isDev,
     }
   },
   computed: {},
@@ -225,6 +347,16 @@ const mainApp = createApp({
       if (this.isGenerating) chatScrollToBottom(true);
     });
     resizeObserver.observe(pendingMsgElem);
+    this.setSelectedTheme(this.selectedTheme);
+  },
+  watch: {
+    viewingConvId: function(val, oldVal) {
+      if (val != oldVal) {
+        this.fetchMessages();
+        chatScrollToBottom();
+        this.hideSidebar();
+      }
+    }
   },
   methods: {
     hideSidebar() {
@@ -232,23 +364,17 @@ const mainApp = createApp({
     },
     setSelectedTheme(theme) {
       this.selectedTheme = theme;
+      document.body.setAttribute('data-theme', theme);
+      document.body.setAttribute('data-color-scheme', daisyuiThemes[theme]?.['color-scheme'] ?? 'auto');
       StorageUtils.setTheme(theme);
     },
     newConversation() {
       if (this.isGenerating) return;
       this.viewingConvId = StorageUtils.getNewConvId();
-      this.editingMsg = null;
-      this.fetchMessages();
-      chatScrollToBottom();
-      this.hideSidebar();
     },
     setViewingConv(convId) {
       if (this.isGenerating) return;
       this.viewingConvId = convId;
-      this.editingMsg = null;
-      this.fetchMessages();
-      chatScrollToBottom();
-      this.hideSidebar();
     },
     deleteConv(convId) {
       if (this.isGenerating) return;
@@ -256,7 +382,6 @@ const mainApp = createApp({
         StorageUtils.remove(convId);
         if (this.viewingConvId === convId) {
           this.viewingConvId = StorageUtils.getNewConvId();
-          this.editingMsg = null;
         }
         this.fetchConversation();
         this.fetchMessages();
@@ -291,7 +416,6 @@ const mainApp = createApp({
       this.fetchConversation();
       this.fetchMessages();
       this.inputMsg = '';
-      this.editingMsg = null;
       this.generateMessage(currConvId);
       chatScrollToBottom();
     },
@@ -299,7 +423,6 @@ const mainApp = createApp({
       if (this.isGenerating) return;
       this.pendingMsg = { id: Date.now()+1, role: 'assistant', content: null };
       this.isGenerating = true;
-      this.editingMsg = null;
 
       try {
         const abortController = new AbortController();
@@ -330,23 +453,37 @@ const mainApp = createApp({
           dry_allowed_length: this.config.dry_allowed_length,
           dry_penalty_last_n: this.config.dry_penalty_last_n,
           max_tokens: this.config.max_tokens,
+          timings_per_token: !!this.config.showTokensPerSecond,
           ...(this.config.custom.length ? JSON.parse(this.config.custom) : {}),
-          ...(this.config.apiKey ? { api_key: this.config.apiKey } : {}),
         };
-        const config = {
-          controller: abortController,
-          api_url: BASE_URL,
-          endpoint: '/chat/completions',
-        };
-        for await (const chunk of llama(prompt, params, config)) {
-          const stop = chunk.data.stop;
-          const addedContent = chunk.data.choices[0].delta.content;
+        const chunks = sendSSEPostRequest(`${BASE_URL}/v1/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(this.config.apiKey ? {'Authorization': `Bearer ${this.config.apiKey}`} : {})
+          },
+          body: JSON.stringify(params),
+          signal: abortController.signal,
+        });
+        for await (const chunk of chunks) {
+          const stop = chunk.stop;
+          const addedContent = chunk.choices[0].delta.content;
           const lastContent = this.pendingMsg.content || '';
           if (addedContent) {
             this.pendingMsg = {
               id: this.pendingMsg.id,
               role: 'assistant',
               content: lastContent + addedContent,
+            };
+          }
+          const timings = chunk.timings;
+          if (timings && this.config.showTokensPerSecond) {
+            // only extract what's really needed, to save some space
+            this.pendingMsg.timings = {
+              prompt_n: timings.prompt_n,
+              prompt_ms: timings.prompt_ms,
+              predicted_n: timings.predicted_n,
+              predicted_ms: timings.predicted_ms,
             };
           }
         }
@@ -387,14 +524,10 @@ const mainApp = createApp({
       this.fetchMessages();
       this.generateMessage(currConvId);
     },
-    copyMsg(msg) {
-      copyStr(msg.content);
-    },
     editUserMsgAndRegenerate(msg) {
       if (this.isGenerating) return;
       const currConvId = this.viewingConvId;
       const newContent = msg.content;
-      this.editingMsg = null;
       StorageUtils.filterAndKeepMsgs(currConvId, (m) => m.id < msg.id);
       StorageUtils.appendMsg(currConvId, {
         id: Date.now(),
@@ -441,6 +574,17 @@ const mainApp = createApp({
     fetchMessages() {
       this.messages = StorageUtils.getOneConversation(this.viewingConvId)?.messages ?? [];
     },
+
+    // debug functions
+    async debugImportDemoConv() {
+      const res = await fetch('/demo-conversation.json');
+      const demoConv = await res.json();
+      StorageUtils.remove(demoConv.id);
+      for (const msg of demoConv.messages) {
+        StorageUtils.appendMsg(demoConv.id, msg);
+      }
+      this.fetchConversation();
+    }
   },
 });
 mainApp.config.errorHandler = alert;

@@ -33,8 +33,10 @@ int main(int argc, char ** argv){
     // load the model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // tokenize the prompt
     std::vector<llama_token> inp;
@@ -136,7 +138,7 @@ int main(int argc, char ** argv){
                 LOG("%s", token_str.c_str());
             }
 
-            if (llama_token_is_eog(model, id)) {
+            if (llama_vocab_is_eog(vocab, id)) {
                 has_eos = true;
             }
 
@@ -242,9 +244,6 @@ int main(int argc, char ** argv){
     common_sampler_free(smpl);
 
     llama_batch_free(batch_tgt);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

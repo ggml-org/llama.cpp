@@ -2,7 +2,10 @@
 #if !defined(GGML_TYPES_COMP)
 #define GGML_TYPES_COMP
 
-#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_16bit_storage : require
 
 #if defined(DATA_A_F32)
 #define QUANT_K 1
@@ -224,6 +227,11 @@ struct block_q4_K_packed32
     uint32_t qs[QUANT_K_Q4_K/2/4];
 };
 
+struct block_q4_K_packed128
+{
+    uvec4 q4k[9];
+};
+
 #if defined(DATA_A_Q4_K)
 #define QUANT_K QUANT_K_Q4_K
 #define A_TYPE block_q4_K
@@ -247,6 +255,11 @@ struct block_q5_K_packed16
     uint16_t scales[12/2];
     uint16_t qh[QUANT_K_Q5_K/8/2];
     uint16_t qs[QUANT_K_Q5_K/2/2];
+};
+
+struct block_q5_K_packed128
+{
+    uvec4 q5k[11];
 };
 
 #if defined(DATA_A_Q5_K)

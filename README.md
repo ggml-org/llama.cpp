@@ -69,6 +69,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [Qwen models](https://huggingface.co/models?search=Qwen/Qwen)
 - [x] [PLaMo-13B](https://github.com/ggerganov/llama.cpp/pull/3557)
 - [x] [Phi models](https://huggingface.co/models?search=microsoft/phi)
+- [x] [PhiMoE](https://github.com/ggerganov/llama.cpp/pull/11003)
 - [x] [GPT-2](https://huggingface.co/gpt2)
 - [x] [Orion 14B](https://github.com/ggerganov/llama.cpp/pull/5118)
 - [x] [InternLM2](https://huggingface.co/models?search=internlm2)
@@ -98,6 +99,8 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [Jais](https://huggingface.co/inceptionai/jais-13b-chat)
 - [x] [Bielik-11B-v2.3](https://huggingface.co/collections/speakleash/bielik-11b-v23-66ee813238d9b526a072408a)
 - [x] [RWKV-6](https://github.com/BlinkDL/RWKV-LM)
+- [x] [QRWKV-6](https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1)
+- [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
 
 #### Multimodal
 
@@ -110,6 +113,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [Mini CPM](https://huggingface.co/models?search=MiniCPM)
 - [x] [Moondream](https://huggingface.co/vikhyatk/moondream2)
 - [x] [Bunny](https://github.com/BAAI-DCAI/Bunny)
+- [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
 
 </details>
 
@@ -199,6 +203,8 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
 - [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
 - [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
+- [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server
+- [Kalavai](https://github.com/kalavai-net/kalavai-client) - Crowdsource end to end LLM deployment at any scale
 
 </details>
 
@@ -219,7 +225,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [SYCL](docs/backend/SYCL.md) | Intel and Nvidia GPU |
 | [MUSA](docs/build.md#musa) | Moore Threads MTT GPU |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
-| [hipBLAS](docs/build.md#hipblas) | AMD GPU |
+| [HIP](docs/build.md#hip) | AMD GPU |
 | [Vulkan](docs/build.md#vulkan) | GPU |
 | [CANN](docs/build.md#cann) | Ascend NPU |
 
@@ -240,6 +246,8 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
+You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from Hugging Face by using this CLI argument: `-hf <user>/<model>[:quant]`
+
 After downloading a model, use the CLI tools to run it locally - see below.
 
 `llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
@@ -258,21 +266,12 @@ To learn more about model quantization, [read this documentation](examples/quant
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
 
 - <details open>
-    <summary>Run simple text completion</summary>
-
-    ```bash
-    llama-cli -m model.gguf -p "I believe the meaning of life is" -n 128
-
-    # I believe the meaning of life is to find your own truth and to live in accordance with it. For me, this means being true to myself and following my passions, even if they don't align with societal expectations. I think that's what I love about yoga – it's not just a physical practice, but a spiritual one too. It's about connecting with yourself, listening to your inner voice, and honoring your own unique journey.
-    ```
-
-    </details>
-
-- <details>
     <summary>Run in conversation mode</summary>
 
+    Models with a built-in chat template will automatically activate conversation mode. If this doesn't occur, you can manually enable it by adding `-cnv` and specifying a suitable chat template with `--chat-template NAME`
+
     ```bash
-    llama-cli -m model.gguf -p "You are a helpful assistant" -cnv
+    llama-cli -m model.gguf
 
     # > hi, who are you?
     # Hi there! I'm your helpful assistant! I'm an AI-powered chatbot designed to assist and provide information to users like you. I'm here to help answer your questions, provide guidance, and offer support on a wide range of topics. I'm a friendly and knowledgeable AI, and I'm always happy to help with anything you need. What's on your mind, and how can I assist you today?
@@ -284,17 +283,28 @@ To learn more about model quantization, [read this documentation](examples/quant
     </details>
 
 - <details>
-    <summary>Run with custom chat template</summary>
+    <summary>Run in conversation mode with custom chat template</summary>
 
     ```bash
-    # use the "chatml" template
-    llama-cli -m model.gguf -p "You are a helpful assistant" -cnv --chat-template chatml
+    # use the "chatml" template (use -h to see the list of supported templates)
+    llama-cli -m model.gguf -cnv --chat-template chatml
 
     # use a custom template
-    llama-cli -m model.gguf -p "You are a helpful assistant" -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
+    llama-cli -m model.gguf -cnv --in-prefix 'User: ' --reverse-prompt 'User:'
     ```
 
-    [Supported templates](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template)
+    </details>
+
+- <details>
+    <summary>Run simple text completion</summary>
+
+    To disable conversation mode explicitly, use `-no-cnv`
+
+    ```bash
+    llama-cli -m model.gguf -p "I believe the meaning of life is" -n 128 -no-cnv
+
+    # I believe the meaning of life is to find your own truth and to live in accordance with it. For me, this means being true to myself and following my passions, even if they don't align with societal expectations. I think that's what I love about yoga – it's not just a physical practice, but a spiritual one too. It's about connecting with yourself, listening to your inner voice, and honoring your own unique journey.
+    ```
 
     </details>
 
@@ -412,7 +422,7 @@ To learn more about model quantization, [read this documentation](examples/quant
 [^1]: [examples/perplexity/README.md](examples/perplexity/README.md)
 [^2]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
 
-## [`llama-bench`](example/bench)
+## [`llama-bench`](examples/llama-bench)
 
 #### Benchmark the performance of the inference for various parameters.
 
@@ -433,6 +443,20 @@ To learn more about model quantization, [read this documentation](examples/quant
 
     </details>
 
+## [`llama-run`](examples/run)
+
+#### A comprehensive example for running `llama.cpp` models. Useful for inferencing. Used with RamaLama [^3].
+
+- <details>
+    <summary>Run a model with a specific prompt (by default it's pulled from Ollama registry)</summary>
+
+    ```bash
+    llama-run granite-code
+    ```
+
+    </details>
+
+[^3]: [RamaLama](https://github.com/containers/ramalama)
 
 ## [`llama-simple`](examples/simple)
 

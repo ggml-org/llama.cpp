@@ -302,7 +302,7 @@ static void run_pca(
 
         // prepare output vector
         struct ggml_tensor * ctrl_out = v_output[il];
-        ggml_format_name(ctrl_out, "direction.%ld", il+1);
+        ggml_format_name(ctrl_out, "direction.%zu", il+1);
 
         // run power_iteration
         params.i_layer = il;

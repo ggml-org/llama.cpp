@@ -1,5 +1,6 @@
 #include "llama-grammar.h"
 
+#include "llama-impl.h"
 #include "llama-vocab.h"
 #include "llama-sampling.h"
 
@@ -822,15 +823,11 @@ llama_grammar_stacks & llama_grammar_get_stacks(struct llama_grammar * grammar) 
     return grammar->stacks;
 }
 
-void llama_grammar_accept(
-        const llama_grammar_rules  & rules,
-        const llama_grammar_stacks & stacks,
-        const uint32_t               chr,
-              llama_grammar_stacks & stacks_new) {
-    stacks_new.clear();
-    stacks_new.reserve(stacks.size());
+void llama_grammar_accept(struct llama_grammar * grammar, uint32_t chr) {
+    llama_grammar_stacks stacks_new;
+    stacks_new.reserve(grammar->stacks.size());
 
-    for (const auto & stack : stacks) {
+    for (const auto & stack : grammar->stacks) {
         if (stack.empty()) {
             continue;
         }
@@ -844,9 +841,11 @@ void llama_grammar_accept(
             if (!llama_grammar_is_end_of_sequence(pos)) {
                 new_stack.push_back(pos);
             }
-            llama_grammar_advance_stack(rules, new_stack, stacks_new);
+            llama_grammar_advance_stack(grammar->rules, new_stack, stacks_new);
         }
     }
+
+    grammar->stacks = std::move(stacks_new);
 }
 
 llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
@@ -1051,7 +1050,12 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
 }
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
-    llama_grammar * result = new llama_grammar { grammar.vocab, grammar.rules, grammar.stacks, grammar.partial_utf8, };
+    llama_grammar * result = new llama_grammar {
+        grammar.vocab,
+        grammar.rules,
+        grammar.stacks,
+        grammar.partial_utf8,
+    };
 
     // redirect elements in stacks to point to new rules
     for (size_t is = 0; is < result->stacks.size(); is++) {
@@ -1059,7 +1063,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
             for (size_t ir0 = 0; ir0 < grammar.rules.size(); ir0++) {
                 for (size_t ir1 = 0; ir1 < grammar.rules[ir0].size(); ir1++) {
                     if (grammar.stacks[is][ie] == &grammar.rules[ir0][ir1]) {
-                         result->stacks[is][ie]  =  &result->rules[ir0][ir1];
+                        result->stacks[is][ie] =  &result->rules[ir0][ir1];
                     }
                 }
             }
@@ -1088,9 +1092,9 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
     for (size_t i = 0; i < cur_p->size; ++i) {
         const llama_token id      = cur_p->data[i].id;
-        const std::string & piece = grammar.vocab->cache_token_to_piece.at(id);
+        const std::string & piece = grammar.vocab->token_to_piece(id);
 
-        if (llama_token_is_eog_impl(*grammar.vocab, id)) {
+        if (grammar.vocab->is_eog(id)) {
             if (!allow_eog) {
                 cur_p->data[i].logit = -INFINITY;
             }
@@ -1111,7 +1115,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
     GGML_ASSERT(grammar.vocab != nullptr);
 
-    if (llama_token_is_eog_impl(*grammar.vocab, token)) {
+    if (grammar.vocab->is_eog(token)) {
         for (const auto & stack : grammar.stacks) {
             if (stack.empty()) {
                 return;
@@ -1120,17 +1124,14 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
         GGML_ABORT("fatal error");
     }
 
-    const std::string & piece = grammar.vocab->cache_token_to_piece.at(token);
+    const std::string & piece = grammar.vocab->token_to_piece(token);
 
     // Note terminating 0 in decoded string
     const auto   decoded     = decode_utf8(piece, grammar.partial_utf8);
     const auto & code_points = decoded.first;
 
-    llama_grammar_stacks stacks_new;
-
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        llama_grammar_accept(grammar.rules, grammar.stacks, *it, stacks_new);
-        grammar.stacks = std::move(stacks_new);
+        llama_grammar_accept(&grammar, *it);
     }
 
     grammar.partial_utf8 = decoded.second;

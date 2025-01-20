@@ -11,6 +11,7 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
     std::vector<std::vector<float>> result;
 
     const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     llama_batch batch = llama_batch_init(llama_n_batch(ctx), 0, 1);
 
@@ -19,16 +20,16 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
 
         const std::string input_string = instruction + sentences[i];
 
-        std::vector<llama_token> inputs = common_tokenize(model, input_string, true, false);
+        std::vector<llama_token> inputs = common_tokenize(vocab, input_string, true, false);
 
         const int32_t n_toks = inputs.size();
 
         // GritLM seems to have EOS = ""
         // https://github.com/ContextualAI/gritlm/blob/92025b16534712b31b3c4aaaf069350e222bd5f8/gritlm/gritlm.py#L18
-        // inputs.push_back(llama_token_eos(model));
+        // inputs.push_back(llama_vocab_eos(vocab));
 
         // we want to ignore instruction tokens for mean pooling
-        const int32_t n_inst = common_tokenize(model, instruction, true, false).size();
+        const int32_t n_inst = common_tokenize(vocab, instruction, true, false).size();
 
 #ifdef GRIT_DEBUG
         // debug tokens - should be matching as referenced in the GritLM sample
@@ -52,7 +53,7 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
         llama_decode(ctx, batch);
 
         // get embedding dimensions
-        uint64_t n_embd = llama_n_embd(model);
+        uint64_t n_embd = llama_model_n_embd(model);
 
         // allocate embedding output
         std::vector<float> emb_unorm(n_embd, 0.0f);
@@ -75,7 +76,7 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
         }
 
         std::vector<float> emb_norm(emb_unorm.size());
-        common_embd_normalize(emb_unorm.data(), emb_norm.data(), n_embd);
+        common_embd_normalize(emb_unorm.data(), emb_norm.data(), n_embd, 2);
         result.push_back(emb_norm);
 
 #ifdef GRIT_DEBUG
@@ -97,7 +98,9 @@ static std::string generate(llama_context * ctx, llama_sampler * smpl, const std
     std::string result;
 
     const llama_model * model = llama_get_model(ctx);
-    llama_token eos_token = llama_token_eos(model);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    llama_token eos_token = llama_vocab_eos(vocab);
 
     llama_kv_cache_clear(ctx);
     llama_set_embeddings(ctx, false);
@@ -105,7 +108,7 @@ static std::string generate(llama_context * ctx, llama_sampler * smpl, const std
 
     llama_batch bat = llama_batch_init(llama_n_batch(ctx), 0, 1);
 
-    std::vector<llama_token> inputs = common_tokenize(model, prompt, false, true);
+    std::vector<llama_token> inputs = common_tokenize(vocab, prompt, false, true);
     int32_t i_current_token = 0;
 
     while (true) {
@@ -165,10 +168,10 @@ int main(int argc, char * argv[]) {
 
     llama_backend_init();
 
-    llama_model * model = llama_load_model_from_file(params.model.c_str(), mparams);
+    llama_model * model = llama_model_load_from_file(params.model.c_str(), mparams);
 
     // create generation context
-    llama_context * ctx = llama_new_context_with_model(model, cparams);
+    llama_context * ctx = llama_init_from_model(model, cparams);
 
     auto sparams = llama_sampler_chain_default_params();
 
@@ -197,7 +200,7 @@ int main(int argc, char * argv[]) {
         const std::vector<std::vector<float>> d_rep = encode(ctx, documents, gritlm_instruction(""));
         const std::vector<std::vector<float>> q_rep = encode(ctx, queries,   gritlm_instruction(instruction));
 
-        const int n_embd = llama_n_embd(model);
+        const int n_embd = llama_model_n_embd(model);
 
         const float cosine_sim_q0_d0 = common_embd_similarity_cos(q_rep[0].data(), d_rep[0].data(), n_embd);
         const float cosine_sim_q0_d1 = common_embd_similarity_cos(q_rep[0].data(), d_rep[1].data(), n_embd);
@@ -219,7 +222,7 @@ int main(int argc, char * argv[]) {
 
     llama_sampler_free(smpl);
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
     llama_backend_free();
 
     return 0;

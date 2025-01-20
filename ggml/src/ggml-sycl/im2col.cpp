@@ -120,6 +120,7 @@ void ggml_sycl_op_im2col(
         im2col_sycl(src1_dd, (float *)dst_dd, IW, IH, OW, OH, KW, KH, IC, batch, batch_offset, delta_offset, s0, s1, p0, p1, d0, d1, main_stream);
     }
 
-    (void) src0;
-    (void) src0_dd;
+    GGML_UNUSED(src0);
+    GGML_UNUSED(src0_dd);
+    GGML_UNUSED(ctx);
 }

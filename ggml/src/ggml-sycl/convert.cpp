@@ -424,7 +424,7 @@ static void convert_unary(const void * __restrict__ vx, dst_t * __restrict__ y, 
     const int64_t global_id = item_ct1.get_local_id(2) + work_group_size * item_ct1.get_group(2);
 
     // make each work-item deal with more elements since sycl global range can not exceed max int
-    const src_t * x = (src_t *) vx;
+    const src_t * x = (const src_t *) vx;
     for (int64_t i = global_id; i < k; i += work_group_size * item_ct1.get_group_range(2)) {
         y[i] = x[i];
     }

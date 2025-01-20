@@ -51,8 +51,8 @@ public:
         const auto a_in_md = dnnl::memory::desc(a_dims, at, a_trans ? tag::ba : tag::ab);
         const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_trans ? tag::ba : tag::ab);
         const auto c_md = dnnl::memory::desc(c_dims, ct, tag::ab);
-        auto a_mem = dnnl::memory(a_in_md, eng, (void*)a);
-        auto b_mem = dnnl::memory(b_in_md, eng, (void*)b);
+        auto a_mem = dnnl::memory(a_in_md, eng, const_cast<void*>(a));
+        auto b_mem = dnnl::memory(b_in_md, eng, const_cast<void*>(b));
         auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_in_md, b_in_md, c_md);
         auto c_mem = dnnl::memory(matmul_pd.dst_desc(), eng, c);
 
@@ -79,8 +79,8 @@ public:
         const auto a_in_md = dnnl::memory::desc(a_dims, at, a_trans ? tag::ba : tag::ab);
         const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_trans ? tag::ba : tag::ab);
         const auto c_md = dnnl::memory::desc(c_dims, ct, tag::ab);
-        auto a_mem = dnnl::memory(a_in_md, eng, (void*)a);
-        auto b_mem = dnnl::memory(b_in_md, eng, (void*)b);
+        auto a_mem = dnnl::memory(a_in_md, eng, const_cast<void*>(a));
+        auto b_mem = dnnl::memory(b_in_md, eng, const_cast<void*>(b));
         auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_in_md, b_in_md, c_md);
         auto c_mem = dnnl::memory(matmul_pd.dst_desc(), eng, c);
 

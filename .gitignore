@@ -18,6 +18,7 @@
 *.metallib
 *.o
 *.so
+*.swp
 *.tmp
 
 # IDE / OS

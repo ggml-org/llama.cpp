@@ -103,3 +103,19 @@ else()
         DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
         )
 endif() # GGML_METAL_EMBED_LIBRARY
+
+if (NOT GGML_METAL_EMBED_LIBRARY)
+    install(
+        FILES src/ggml-metal/ggml-metal.metal
+        PERMISSIONS
+            OWNER_READ
+            OWNER_WRITE
+            GROUP_READ
+            WORLD_READ
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+        install(
+            FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+endif()

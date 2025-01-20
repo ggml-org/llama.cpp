@@ -18,10 +18,6 @@
 #include <unistd.h>
 #endif
 
-#if defined(_OPENMP)
-#include <omp.h>
-#endif
-
 #if (defined(_WIN32) || defined(_WIN64))
 #define RESTRICT __restrict
 #else
@@ -1382,13 +1378,13 @@ struct tinygemm_kernel_avx<float, ggml_fp16_t, float, BLOCK_M, BLOCK_N, BLOCK_K>
 #define PACKED_INDEX(n, k, KB, tile_size) (n * KB + k) * tile_size
 
 template<typename TB, int BLOCK_K>
-void convert_B_packed_format(void * RESTRICT packed_B, const TB * RESTRICT B, int N, int K, int n_threads) {
+void convert_B_packed_format(void * RESTRICT packed_B, const TB * RESTRICT B, int N, int K) {
     const int NB = N / TILE_N;
     const int KB = K / BLOCK_K;
     const int TILE_SIZE = get_tile_size<TB>();
 
     // parallel on NB should be enough
-    parallel_for(n_threads, NB, [&](int begin, int end) {
+    parallel_for(NB, [&](int begin, int end) {
         for (int n = begin; n < end; ++n) {
             for (int k = 0; k < KB; ++k) {
                 int n0 = n * TILE_N;
@@ -2334,15 +2330,8 @@ void ggml_backend_amx_convert_weight(struct ggml_tensor * tensor, const void * d
     const int K = tensor->ne[0]; // ne0: in_features
     const int N = tensor->ne[1]; // ne1: out_features
 
-#if defined(_OPENMP)
-    // the buffer ctx is not initialized when .set_tensor is called
-    int n_threads = omp_get_num_threads();
-#else
-    int n_threads = 1;
-#endif
-
     GGML_DISPATCH_QTYPES(TYPE, [&] {
-        convert_B_packed_format<type, blck_size>((void *)((char *)tensor->data + offset), (const type *)data, N, K, n_threads);
+        convert_B_packed_format<type, blck_size>((void *)((char *)tensor->data + offset), (const type *)data, N, K);
     });
 }
 

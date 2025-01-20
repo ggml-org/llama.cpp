@@ -53,6 +53,9 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-quants.h"
 
+#include <atomic>
+#include <array>
+
 #ifdef _MSC_VER
 #define NOINLINE __declspec(noinline)
 #else
@@ -134,6 +137,16 @@ inline __m512 madd(__m512 a, __m512 b, __m512 c) {
     return _mm512_fmadd_ps(a, b, c);
 }
 #endif
+#if defined(__AVX512BF16__)
+template <>
+inline __m512 madd(__m512bh a, __m512bh b, __m512 c) {
+    return _mm512_dpbf16_ps(c, a, b);
+}
+template <>
+inline __m256 madd(__m256bh a, __m256bh b, __m256 c) {
+    return _mm256_dpbf16_ps(c, a, b);
+}
+#endif
 #endif
 
 #if defined(__ARM_FEATURE_FMA)
@@ -204,6 +217,7 @@ template <> inline float32x4_t load(const float *p) {
     return vld1q_f32(p);
 }
 #if !defined(_MSC_VER)
+// FIXME: this should check for __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
 template <> inline float16x8_t load(const ggml_fp16_t *p) {
     return vld1q_f16((const float16_t *)p);
 }
@@ -225,6 +239,13 @@ template <> inline __m256 load(const float *p) {
 }
 #endif // __AVX__
 
+#if defined(__AVX2__) || defined(__AVX512F__)
+template <> inline __m256 load(const ggml_bf16_t *p) {
+    return _mm256_castsi256_ps(
+        _mm256_slli_epi32(_mm256_cvtepu16_epi32(_mm_loadu_si128((const __m128i *)p)), 16));
+}
+#endif // __AVX2__
+
 #if defined(__F16C__)
 template <> inline __m256 load(const ggml_fp16_t *p) {
     return _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)p));
@@ -238,7 +259,26 @@ template <> inline __m512 load(const float *p) {
 template <> inline __m512 load(const ggml_fp16_t *p) {
     return _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)p));
 }
+template <> inline __m512 load(const ggml_bf16_t *p) {
+    return _mm512_castsi512_ps(
+        _mm512_slli_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *)p)), 16));
+}
 #endif // __AVX512F__
+
+#if defined(__AVX512BF16__)
+template <> inline __m512bh load(const ggml_bf16_t *p) {
+    return (__m512bh)_mm512_loadu_ps((const float *)p);
+}
+template <> inline __m256bh load(const ggml_bf16_t *p) {
+    return (__m256bh)_mm256_loadu_ps((const float *)p);
+}
+template <> inline __m512bh load(const float *p) {
+    return _mm512_cvtne2ps_pbh(_mm512_loadu_ps(p + 16), _mm512_loadu_ps(p));
+}
+template <> inline __m256bh load(const float *p) {
+    return _mm512_cvtneps_pbh(_mm512_loadu_ps(p));
+}
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // CONSTANTS
@@ -251,199 +291,170 @@ static const __m128i iq4nlt = _mm_loadu_si128((const __m128i *) kvalues_iq4nl);
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // FLOATING POINT MATRIX MULTIPLICATION
 
+template <int M>
+static inline int64_t BLOCK_SIZE(size_t m) {
+    const int64_t NB_BLOC_M = (m + M - 1) / M;
+    return (m % NB_BLOC_M == 0) ? m / NB_BLOC_M : (m / NB_BLOC_M) + 1;
+}
+
+static constexpr inline int64_t BLOC_POS(int64_t ib, int64_t ibN, int64_t bloc_size) {
+    return ib < ibN ? ib * bloc_size : ibN * bloc_size + (ib - ibN) * (bloc_size - 1);
+}
+
 template <int KN, typename D, typename V, typename TA, typename TB, typename TC>
 class tinyBLAS {
   public:
-    tinyBLAS(int64_t k,
+    tinyBLAS(const ggml_compute_params * params, int64_t k,
              const TA *A, int64_t lda,
              const TB *B, int64_t ldb,
-             TC *C, int64_t ldc,
-             int ith, int nth)
-        : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
+             TC *C, int64_t ldc)
+        : params(params), A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc) {
     }
 
-    void matmul(int64_t m, int64_t n) {
-        mnpack(0, m, 0, n);
+    bool matmul(int64_t m, int64_t n) {
+        if (k % KN != 0)
+            return false;
+        // compute RM for only need tile with size RM&RM-1
+#if VECTOR_REGISTERS == 32
+        if (m % 16 == 0 && (m/16 >= params->nth)) {
+            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+            mnpack<4, 6, 4>(m, n, SIZE_N, 12);
+            return true;
+        }
+        if (m % 8 == 0 ) {
+            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+            mnpack<4, 6, 2>(m, n, SIZE_N, 12);
+            return true;
+        }
+        if (m % 4 == 0) {
+            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+            mnpack<4, 6, 1>(m, n, SIZE_N, 12);
+            return true;
+        }
+#else  // VECTOR_REGISTERS == 16
+        if (m % 16 == 0 && (m/16 >= params->nth)) {
+            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+            mnpack<4, 3, 4>(m, n, SIZE_N, 24);
+            return true;
+        }
+        if (m % 8 == 0 ) {
+            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+            mnpack<4, 3, 2>(m, n, SIZE_N, 24);
+            return true;
+        }
+        if (m % 4 == 0) {
+            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+            mnpack<4, 3, 1>(m, n, SIZE_N, 24);
+            return true;
+        }
+#endif
+        return false;
     }
 
   private:
-    NOINLINE void mnpack(int64_t m0, int64_t m, int64_t n0, int64_t n) {
-        int64_t mc, nc, mp, np;
-        switch ((MIN(m - m0, 5) << 4) | MIN(n - n0, 5)) {
-#if VECTOR_REGISTERS == 32
-        case 0x55:
-            mc = 5;
-            nc = 5;
-            gemm<5, 5>(m0, m, n0, n);
-            break;
-        case 0x45:
-            mc = 4;
-            nc = 5;
-            gemm<4, 5>(m0, m, n0, n);
-            break;
-        case 0x54:
-            mc = 5;
-            nc = 4;
-            gemm<5, 4>(m0, m, n0, n);
-            break;
-        case 0x44:
-            mc = 4;
-            nc = 4;
-            gemm<4, 4>(m0, m, n0, n);
-            break;
-        case 0x53:
-            mc = 5;
-            nc = 3;
-            gemm<5, 3>(m0, m, n0, n);
-            break;
-        case 0x35:
-            mc = 3;
-            nc = 5;
-            gemm<3, 5>(m0, m, n0, n);
-            break;
-        case 0x43:
-            mc = 4;
-            nc = 3;
-            gemm<4, 3>(m0, m, n0, n);
-            break;
-#else
-        case 0x55:
-        case 0x54:
-        case 0x53:
-        case 0x45:
-        case 0x44:
-        case 0x43:
-            mc = 4;
-            nc = 3;
-            gemm<4, 3>(m0, m, n0, n);
-            break;
-        case 0x35:
-#endif
-        case 0x34:
-            mc = 3;
-            nc = 4;
-            gemm<3, 4>(m0, m, n0, n);
-            break;
-        case 0x52:
-            mc = 5;
-            nc = 2;
-            gemm<5, 2>(m0, m, n0, n);
-            break;
-        case 0x33:
-            mc = 3;
-            nc = 3;
-            gemm<3, 3>(m0, m, n0, n);
-            break;
-        case 0x25:
-            mc = 2;
-            nc = 5;
-            gemm<2, 5>(m0, m, n0, n);
-            break;
-        case 0x42:
-            mc = 4;
-            nc = 2;
-            gemm<4, 2>(m0, m, n0, n);
-            break;
-        case 0x24:
-            mc = 2;
-            nc = 4;
-            gemm<2, 4>(m0, m, n0, n);
-            break;
-        case 0x32:
-            mc = 3;
-            nc = 2;
-            gemm<3, 2>(m0, m, n0, n);
-            break;
-        case 0x23:
-            mc = 2;
-            nc = 3;
-            gemm<2, 3>(m0, m, n0, n);
-            break;
-        case 0x51:
-            mc = 5;
-            nc = 1;
-            gemm<5, 1>(m0, m, n0, n);
-            break;
-        case 0x41:
-            mc = 4;
-            nc = 1;
-            gemm<4, 1>(m0, m, n0, n);
-            break;
-        case 0x22:
-            mc = 2;
-            nc = 2;
-            gemm<2, 2>(m0, m, n0, n);
-            break;
-        case 0x15:
-            mc = 1;
-            nc = 5;
-            gemm<1, 5>(m0, m, n0, n);
-            break;
-        case 0x14:
-            mc = 1;
-            nc = 4;
-            gemm<1, 4>(m0, m, n0, n);
-            break;
-        case 0x31:
-            mc = 3;
-            nc = 1;
-            gemm<3, 1>(m0, m, n0, n);
-            break;
-        case 0x13:
-            mc = 1;
-            nc = 3;
-            gemm<1, 3>(m0, m, n0, n);
-            break;
-        case 0x21:
-            mc = 2;
-            nc = 1;
-            gemm<2, 1>(m0, m, n0, n);
-            break;
-        case 0x12:
-            mc = 1;
-            nc = 2;
-            gemm<1, 2>(m0, m, n0, n);
-            break;
-        case 0x11:
-            mc = 1;
-            nc = 1;
-            gemm<1, 1>(m0, m, n0, n);
-            break;
-        default:
-            return;
+    template <int RM, int RN, int BM>
+    inline void mnpack(int64_t m, int64_t n, int64_t SIZE_N, int64_t BN) {
+        if (SIZE_N == RN) {
+            return gemm<RM, RN, BM>(m, n, BN);
         }
-        mp = m0 + (m - m0) / mc * mc;
-        np = n0 + (n - n0) / nc * nc;
-        mnpack(mp, m, n0, np);
-        mnpack(m0, m, np, n);
+        if constexpr (RN > 1) {
+            return mnpack<RM, RN-1, BM>(m, n, SIZE_N, BN);
+        } else {
+            GGML_LOG_ERROR("mnpack<%d, %d> bloc size not supported\n", RM, (int)SIZE_N);
+            GGML_ASSERT(false); // we have miss something.
+        }
     }
 
     template <int RM, int RN>
-    NOINLINE void gemm(int64_t m0, int64_t m, int64_t n0, int64_t n) {
-        int64_t ytiles = (m - m0) / RM;
-        int64_t xtiles = (n - n0) / RN;
-        int64_t tiles = xtiles * ytiles;
-        int64_t duty = (tiles + nth - 1) / nth;
-        int64_t start = duty * ith;
-        int64_t end = start + duty;
-        if (end > tiles)
-            end = tiles;
-        for (int64_t job = start; job < end; ++job) {
-            int64_t ii = m0 + job / xtiles * RM;
-            int64_t jj = n0 + job % xtiles * RN;
-            D Cv[RN][RM] = {};
-            for (int64_t l = 0; l < k; l += KN)
-                for (int64_t j = 0; j < RN; ++j)
-                    for (int64_t i = 0; i < RM; ++i)
-                        Cv[j][i] = madd(load<V>(A + lda * (ii + i) + l),
-                                        load<V>(B + ldb * (jj + j) + l),
-                                        Cv[j][i]);
-            for (int64_t j = 0; j < RN; ++j)
-                for (int64_t i = 0; i < RM; ++i)
-                    C[ldc * (jj + j) + (ii + i)] = hsum(Cv[j][i]);
+    inline void gemm_bloc(int64_t ii, int64_t jj) {
+        D Cv[RN][RM] = {};
+        for (int64_t l = 0; l < k; l += KN) {
+            // help compiler for op order.
+            if constexpr (RM <= RN) {
+                V Av[RM];
+                for (int64_t i = 0; i < RM; ++i) {
+                    Av[i] = load<V>(A + lda * (ii + i) + l);
+                }
+                for (int64_t j = 0; j < RN; ++j) {
+                    V Bv = load<V>(B + ldb * (jj + j) + l);
+                    for (int64_t i = 0; i < RM; ++i) {
+                        Cv[j][i] = madd(Av[i], Bv, Cv[j][i]);
+                    }
+                }
+            } else {
+                V Bv[RN];
+                for (int64_t j = 0; j < RN; ++j) {
+                    Bv[j] = load<V>(B + ldb * (jj + j) + l);
+                }
+                for (int64_t i = 0; i < RM; ++i) {
+                    V Av = load<V>(A + lda * (ii + i) + l);
+                    for (int64_t j = 0; j < RN; ++j) {
+                        Cv[j][i] = madd(Av, Bv[j], Cv[j][i]);
+                    }
+                }
+            }
         }
+        for (int64_t j = 0; j < RN; ++j)
+            for (int64_t i = 0; i < RM; ++i)
+                C[ldc * (jj + j) + (ii + i)] = hsum(Cv[j][i]);
     }
 
+    template <int RM, int RN, int BM>
+    NOINLINE void gemm(int64_t m, int64_t n, int64_t BN) {
+        static std::atomic<int64_t> current_chunk;
+
+        GGML_ASSERT(m % (RM * BM) == 0);
+        const int64_t ytiles = m / (RM * BM);
+        const int64_t xtiles = (n + RN -1) / RN;
+        const int64_t jj_RN = (xtiles - (xtiles * RN - n));
+
+        // "round" bloc_size to "nearest" BN
+        const int64_t NB_BN = xtiles < BN ? 1 : (xtiles + BN / 2) / BN;
+        const int64_t SIZE_BN = xtiles % NB_BN == 0 ? xtiles / NB_BN : xtiles / NB_BN + 1;
+        const int64_t jj_BN = (NB_BN - (NB_BN * SIZE_BN - xtiles));
+        const int64_t nb_job = ytiles * NB_BN;
+
+        if (params->ith == 0) {
+            GGML_ASSERT( jj_BN * SIZE_BN + (NB_BN - jj_BN) * (SIZE_BN - 1) == xtiles);
+            // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
+            std::atomic_store_explicit(&current_chunk, (int64_t)params->nth, std::memory_order_relaxed);
+        }
+
+        ggml_barrier(params->threadpool);
+
+        int64_t job = params->ith;
+        while (job < nb_job) {
+            const int64_t ii = (job % ytiles) * RM * BM;
+            const int64_t jb =  job / ytiles;
+            const int64_t jr0 = BLOC_POS(jb  , jj_BN, SIZE_BN);
+            const int64_t jrN = BLOC_POS(jb+1, jj_BN, SIZE_BN);
+
+            const int64_t jj0 = BLOC_POS(jr0, jj_RN, RN);
+            const int64_t jj2 = BLOC_POS(jrN, jj_RN, RN);
+            const int64_t jj1 = jj2 < jj_RN * RN ? jj2 : jj_RN * RN;
+
+            for (int64_t bi = 0; bi < BM * RM; bi += RM) {
+                int64_t jj = jj0;
+                for (; jj < jj1; jj += RN) {
+                    gemm_bloc<RM, RN>(ii + bi, jj);
+                }
+                if constexpr (RN > 1) {
+                    for (; jj < jj2; jj += RN - 1) {
+                        gemm_bloc<RM, RN-1>(ii + bi, jj);
+                    }
+                }
+                GGML_ASSERT(jj == jj2);
+            }
+
+            // next step.
+            job = std::atomic_fetch_add_explicit(&current_chunk, (int64_t)1, std::memory_order_relaxed);
+        }
+
+        ggml_barrier(params->threadpool);
+        return;
+    }
+
+    const ggml_compute_params * params;
     const TA *const A;
     const TB *const B;
     TC *const C;
@@ -451,8 +462,6 @@ class tinyBLAS {
     const int64_t lda;
     const int64_t ldb;
     const int64_t ldc;
-    const int ith;
-    const int nth;
 };
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -992,8 +1001,10 @@ class tinyBLAS_Q0_AVX {
 
     inline __m256 updot(__m256i u, __m256i s) {
         __m256i res;
-#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
         res = _mm256_dpbusd_epi32(_mm256_setzero_si256(), u, s);
+#elif defined(__AVXVNNI__)
+        res = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), u, s);
 #else
         res = _mm256_madd_epi16(_mm256_set1_epi16(1), _mm256_maddubs_epi16(u, s));
 #endif
@@ -1042,6 +1053,704 @@ class tinyBLAS_Q0_AVX {
    } \
 
 template <typename TA, typename TB, typename TC>
+class tinyBLAS_Q0_PPC {
+  public:
+    tinyBLAS_Q0_PPC(int64_t k,
+                const TA *A, int64_t lda,
+                const TB *B, int64_t ldb,
+                TC *C, int64_t ldc,
+                int ith, int nth)
+        : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
+    }
+
+    void matmul(int64_t m, int64_t n) {
+        mnpack(0, m, 0, n);
+    }
+
+  private:
+
+    template<int RM, int RN>
+    inline void save_res(int ii, int jj, int idx, vector float* fin_res) {
+       for (int I = 0; I < RM; I++) {
+          for (int J = 0; J < RN; J++) {
+             *((float*)(C+ii+((jj+J)*ldc)+I)) = *((float*)&fin_res[idx+I]+J);
+          }
+       }
+    }
+
+    template<int size>
+    inline void compute(acc_t* ACC, int c_idx, int s_idx, std::array<int, size>& comparray, vector float* vs, vector float* fin_res) {
+       vector signed int vec_C[4];
+       vector float CA[4] = {0};
+       vector float res[4] = {0};
+       __builtin_mma_disassemble_acc(vec_C, ACC);
+       for (int i = 0; i < 4; i++) {
+          CA[i] = vec_splats((float)(((double)comparray[c_idx+i]) * -128.0));
+          res[i] = vec_add(vec_ctf(vec_C[i], 0), CA[i]);
+          fin_res[s_idx+i] = vec_madd(res[i], vs[s_idx+i], fin_res[s_idx+i]);
+       }
+    }
+
+    template<typename VA, typename VB>
+    void packNormal(const TA* a, int64_t lda, int rows, int cols, VA* vec, bool flip) {
+        int64_t i, j;
+        TA *aoffset = NULL;
+        VA *vecOffset = NULL;
+        TA *aoffset1 = NULL, *aoffset2 = NULL, *aoffset3 = NULL, *aoffset4 = NULL;
+        TA *aoffset5 = NULL, *aoffset6 = NULL, *aoffset7 = NULL, *aoffset8 = NULL;
+        __vector_pair C1, C2, C3, C4, C5, C6, C7, C8;
+        VB c1[2] = {0}, c2[2] = {0}, c3[2] = {0}, c4[2]={0};
+        VB c5[2] = {0}, c6[2] = {0}, c7[2] = {0}, c8[2]={0};
+        VB t1, t2, t3, t4, t5, t6, t7, t8;
+        vector unsigned char xor_vector;
+        uint8_t flip_vec = 0x80;
+        xor_vector = vec_splats(flip_vec);
+        vector unsigned char swiz1 = {0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23};
+        vector unsigned char swiz2 = {8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31};
+        vector unsigned char swiz3 = {0, 1, 2, 3, 8, 9, 10, 11, 16, 17, 18, 19, 24, 25, 26, 27};
+        vector unsigned char swiz4 = {4, 5, 6, 7, 12, 13, 14, 15, 20, 21, 22, 23, 28, 29, 30, 31};
+
+        aoffset = const_cast<TA*>(a);
+        vecOffset = vec;
+        j = (rows >> 3);
+        if (j > 0) {
+            do {
+            aoffset1 = aoffset;
+            aoffset2 = aoffset1 + lda;
+            aoffset3 = aoffset2 + lda;
+            aoffset4 = aoffset3 + lda;
+            aoffset5 = aoffset4 + lda;
+            aoffset6 = aoffset5 + lda;
+            aoffset7 = aoffset6 + lda;
+            aoffset8 = aoffset7 + lda;
+            aoffset += 8 * lda;
+
+            i = (cols >> 3);
+            if (i > 0) {
+               do {
+                    C1 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset1->qs);
+                    C2 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset2->qs);
+                    C3 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset3->qs);
+                    C4 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset4->qs);
+                    C5 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset5->qs);
+                    C6 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset6->qs);
+                    C7 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset7->qs);
+                    C8 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset8->qs);
+
+                    __builtin_vsx_disassemble_pair(c1, &C1);
+                    __builtin_vsx_disassemble_pair(c2, &C2);
+                    __builtin_vsx_disassemble_pair(c3, &C3);
+                    __builtin_vsx_disassemble_pair(c4, &C4);
+                    __builtin_vsx_disassemble_pair(c5, &C5);
+                    __builtin_vsx_disassemble_pair(c6, &C6);
+                    __builtin_vsx_disassemble_pair(c7, &C7);
+                    __builtin_vsx_disassemble_pair(c8, &C8);
+
+                    t1 = vec_perm(c1[0], c2[0], swiz1);
+                    t2 = vec_perm(c1[0], c2[0], swiz2);
+                    t3 = vec_perm(c3[0], c4[0], swiz1);
+                    t4 = vec_perm(c3[0], c4[0], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset);
+                    vec_xst(t6, 0, vecOffset+16);
+                    vec_xst(t7, 0, vecOffset+32);
+                    vec_xst(t8, 0, vecOffset+48);
+
+                    t1 = vec_perm(c1[1], c2[1], swiz1);
+                    t2 = vec_perm(c1[1], c2[1], swiz2);
+                    t3 = vec_perm(c3[1], c4[1], swiz1);
+                    t4 = vec_perm(c3[1], c4[1], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset+64);
+                    vec_xst(t6, 0, vecOffset+80);
+                    vec_xst(t7, 0, vecOffset+96);
+                    vec_xst(t8, 0, vecOffset+112);
+
+                    t1 = vec_perm(c5[0], c6[0], swiz1);
+                    t2 = vec_perm(c5[0], c6[0], swiz2);
+                    t3 = vec_perm(c7[0], c8[0], swiz1);
+                    t4 = vec_perm(c7[0], c8[0], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset+128);
+                    vec_xst(t6, 0, vecOffset+144);
+                    vec_xst(t7, 0, vecOffset+160);
+                    vec_xst(t8, 0, vecOffset+176);
+
+                    t1 = vec_perm(c5[1], c6[1], swiz1);
+                    t2 = vec_perm(c5[1], c6[1], swiz2);
+                    t3 = vec_perm(c7[1], c8[1], swiz1);
+                    t4 = vec_perm(c7[1], c8[1], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset+192);
+                    vec_xst(t6, 0, vecOffset+208);
+                    vec_xst(t7, 0, vecOffset+224);
+                    vec_xst(t8, 0, vecOffset+240);
+
+                    aoffset1 += lda;
+                    aoffset2 += lda;
+                    aoffset3 += lda;
+                    aoffset4 += lda;
+                    aoffset5 += lda;
+                    aoffset6 += lda;
+                    aoffset7 += lda;
+                    aoffset8 += lda;
+                    vecOffset += 256;
+                    i--;
+               } while(i > 0);
+            }
+            j--;
+        } while(j > 0);
+    }
+
+    if (rows & 4) {
+            aoffset1 = aoffset;
+            aoffset2 = aoffset1 + lda;
+            aoffset3 = aoffset2 + lda;
+            aoffset4 = aoffset3 + lda;
+            aoffset += 4 * lda;
+
+        i = (cols >> 3);
+            if (i > 0) {
+               do {
+                    C1 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset1->qs);
+                    C2 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset2->qs);
+                    C3 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset3->qs);
+                    C4 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset4->qs);
+
+                    __builtin_vsx_disassemble_pair(c1, &C1);
+                    __builtin_vsx_disassemble_pair(c2, &C2);
+                    __builtin_vsx_disassemble_pair(c3, &C3);
+                    __builtin_vsx_disassemble_pair(c4, &C4);
+
+                    t1 = vec_perm(c1[0], c2[0], swiz1);
+                    t2 = vec_perm(c1[0], c2[0], swiz2);
+                    t3 = vec_perm(c3[0], c4[0], swiz1);
+                    t4 = vec_perm(c3[0], c4[0], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset);
+                    vec_xst(t6, 0, vecOffset+16);
+                    vec_xst(t7, 0, vecOffset+32);
+                    vec_xst(t8, 0, vecOffset+48);
+
+                    t1 = vec_perm(c1[1], c2[1], swiz1);
+                    t2 = vec_perm(c1[1], c2[1], swiz2);
+                    t3 = vec_perm(c3[1], c4[1], swiz1);
+                    t4 = vec_perm(c3[1], c4[1], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset+64);
+                    vec_xst(t6, 0, vecOffset+80);
+                    vec_xst(t7, 0, vecOffset+96);
+                    vec_xst(t8, 0, vecOffset+112);
+
+                    aoffset1 += lda;
+                    aoffset2 += lda;
+                    aoffset3 += lda;
+                    aoffset4 += lda;
+                    vecOffset += 128;
+                    i--;
+               } while(i > 0);
+            }
+        }
+        if (rows & 3) {
+            aoffset1 = aoffset;
+            aoffset2 = aoffset1 + lda;
+            aoffset3 = aoffset2 + lda;
+            i = (cols >> 3);
+        if (i > 0) {
+                do {
+                    switch(rows) {
+                        case 3: C3 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset3->qs);
+                                __builtin_vsx_disassemble_pair(c3, &C3);
+                        case 2: C2 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset2->qs);
+                                __builtin_vsx_disassemble_pair(c2, &C2);
+                        case 1: C1 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset1->qs);
+                                __builtin_vsx_disassemble_pair(c1, &C1);
+                                break;
+                    }
+                    t1 = vec_perm(c1[0], c2[0], swiz1);
+                    t2 = vec_perm(c1[0], c2[0], swiz2);
+                    t3 = vec_perm(c3[0], c4[0], swiz1);
+                    t4 = vec_perm(c3[0], c4[0], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset);
+                    vec_xst(t6, 0, vecOffset+16);
+                    vec_xst(t7, 0, vecOffset+32);
+                    vec_xst(t8, 0, vecOffset+48);
+
+                    t1 = vec_perm(c1[1], c2[1], swiz1);
+                    t2 = vec_perm(c1[1], c2[1], swiz2);
+                    t3 = vec_perm(c3[1], c4[1], swiz1);
+                    t4 = vec_perm(c3[1], c4[1], swiz2);
+                    t5 = vec_perm(t1, t3, swiz3);
+                    t6 = vec_perm(t1, t3, swiz4);
+                    t7 = vec_perm(t2, t4, swiz3);
+                    t8 = vec_perm(t2, t4, swiz4);
+                    if (flip == true) {
+                       t5 = vec_xor(t5, xor_vector);
+                       t6 = vec_xor(t6, xor_vector);
+                       t7 = vec_xor(t7, xor_vector);
+                       t8 = vec_xor(t8, xor_vector);
+                    }
+                    vec_xst(t5, 0, vecOffset+64);
+                    vec_xst(t6, 0, vecOffset+80);
+                    vec_xst(t7, 0, vecOffset+96);
+                    vec_xst(t8, 0, vecOffset+112);
+
+                    aoffset1 += lda;
+                    aoffset2 += lda;
+                    aoffset3 += lda;
+                    vecOffset += 128;
+                    i--;
+               } while(i > 0);
+            }
+        }
+    }
+
+    void mnpack(int64_t m0, int64_t m, int64_t n0, int64_t n) {
+        int64_t mc, nc, mp, np;
+        int m_rem = MIN(m - m0, 8);
+        int n_rem = MIN(n - n0, 8);
+        // TO-DO: KERNEL_16x8 and KERNEL_8x16 are having some performance
+        // issues. After resolving them, below code will be enabled.
+        /*if (m_rem >= 16 && n_rem >= 8) {
+            mc = 16;
+            nc = 8;
+            gemm<16,8>(m0, m, n0, n);
+        } else if(m_rem >= 8 && n_rem >= 16) {
+            mc = 8;
+            nc = 16;
+            gemm<8,16>(m0, m, n0, n);
+        }*/
+        if (m_rem >= 8 && n_rem >= 8) {
+            mc = 8;
+            nc = 8;
+            gemm<8,8>(m0, m, n0, n);
+        } else if (m_rem >= 4 && n_rem >= 8) {
+            mc = 4;
+            nc = 8;
+            gemm<4,8>(m0, m, n0, n);
+        } else if (m_rem >= 8 && n_rem >= 4) {
+            mc = 8;
+            nc = 4;
+            gemm<8,4>(m0, m, n0, n);
+        } else if (m_rem >= 4 && n_rem >= 4) {
+            mc = 4;
+            nc = 4;
+            gemm_small<4, 4>(m0, m, n0, n);
+        } else if ((m_rem < 4) && (n_rem > 4)) {
+            nc = 4;
+            switch(m_rem) {
+                case 1:
+                    mc = 1;
+                    gemm_small<1, 4>(m0, m, n0, n);
+                    break;
+                case 2:
+                    mc = 2;
+                    gemm_small<2, 4>(m0, m, n0, n);
+                    break;
+                case 3:
+                    mc = 3;
+                    gemm_small<3, 4>(m0, m, n0, n);
+                    break;
+                default:
+                    return;
+            }
+        } else if ((m_rem > 4) && (n_rem < 4)) {
+            mc = 4;
+            switch(n_rem) {
+                case 1:
+                    nc = 1;
+                    gemm_small<4, 1>(m0, m, n0, n);
+                    break;
+                case 2:
+                    nc = 2;
+                    gemm_small<4, 2>(m0, m, n0, n);
+                    break;
+                case 3:
+                    nc = 3;
+                    gemm_small<4, 3>(m0, m, n0, n);
+                    break;
+                default:
+                    return;
+            }
+        } else {
+            switch((m_rem << 4) | n_rem) {
+                case 0x43:
+                    mc = 4;
+                    nc = 3;
+                    gemm_small<4, 3>(m0, m, n0, n);
+                    break;
+                case 0x42:
+                    mc = 4;
+                    nc = 2;
+                    gemm_small<4, 2>(m0, m, n0, n);
+                    break;
+                case 0x41:
+                    mc = 4;
+                    nc = 1;
+                    gemm_small<4, 1>(m0, m, n0, n);
+                    break;
+                case 0x34:
+                    mc = 3;
+                    nc = 4;
+                    gemm_small<3, 4>(m0, m, n0, n);
+                    break;
+                case 0x33:
+                    mc = 3;
+                    nc = 3;
+                    gemm_small<3, 3>(m0, m, n0, n);
+                    break;
+                case 0x32:
+                    mc = 3;
+                    nc = 2;
+                    gemm_small<3, 2>(m0, m, n0, n);
+                    break;
+                case 0x31:
+                    mc = 3;
+                    nc = 1;
+                    gemm_small<3, 1>(m0, m, n0, n);
+                    break;
+                case 0x24:
+                    mc = 2;
+                    nc = 4;
+                    gemm_small<2, 4>(m0, m, n0, n);
+                    break;
+                case 0x23:
+                    mc = 2;
+                    nc = 3;
+                    gemm_small<2, 3>(m0, m, n0, n);
+                    break;
+                case 0x22:
+                    mc = 2;
+                    nc = 2;
+                    gemm_small<2, 2>(m0, m, n0, n);
+                    break;
+                case 0x21:
+                    mc = 2;
+                    nc = 1;
+                    gemm_small<2, 1>(m0, m, n0, n);
+                    break;
+                case 0x14:
+                    mc = 1;
+                    nc = 4;
+                    gemm_small<1, 4>(m0, m, n0, n);
+                    break;
+                case 0x13:
+                    mc = 1;
+                    nc = 3;
+                    gemm_small<1, 3>(m0, m, n0, n);
+                    break;
+                case 0x12:
+                    mc = 1;
+                    nc = 2;
+                    gemm_small<1, 2>(m0, m, n0, n);
+                    break;
+                case 0x11:
+                    mc = 1;
+                    nc = 1;
+                    gemm_small<1, 1>(m0, m, n0, n);
+                    break;
+                default:
+                    return;
+            }
+        }
+        mp = m0 + (m - m0) / mc * mc;
+        np = n0 + (n - n0) / nc * nc;
+        mnpack(mp, m, n0, np);
+        mnpack(m0, m, np, n);
+    }
+
+    void KERNEL_4x8(int64_t ii, int64_t jj) {
+        vec_t vec_A[8], vec_B[16] = {0};
+        acc_t acc_0, acc_1;
+        std::array<int, 4> comparray;
+        vector float fin_res[8] = {0};
+        vector float vs[8] = {0};
+        for (int l = 0; l < k; l++) {
+            __builtin_mma_xxsetaccz(&acc_0);
+            __builtin_mma_xxsetaccz(&acc_1);
+            packNormal<int8_t, vector signed char>((A+(ii*lda)+l), lda, 4, 8, (int8_t*)vec_A, false);
+            packNormal<uint8_t, vector unsigned char>((B+(jj*ldb)+l), ldb, 8, 8, (uint8_t*)vec_B, true);
+            for(int x = 0; x < 8; x++) {
+                __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x], vec_B[x]);
+                __builtin_mma_xvi8ger4pp(&acc_1, vec_A[x], vec_B[x+8]);
+            }
+            for (int I = 0; I<4; I++) {
+                for (int J = 0; J<4; J++) {
+                    *((float*)&vs[I]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J)*ldb)+l)->d));
+                    *((float*)&vs[I+4]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J+4)*ldb)+l)->d));
+                }
+            }
+            auto aoffset = A+(ii*lda)+l;
+            for (int i = 0; i < 4; i++) {
+                comparray[i] = 0;
+                int ca = 0;
+                const int8_t *at = aoffset->qs;
+                for (int j = 0; j < 32; j++)
+                    ca += (int)*at++;
+                comparray[i] = ca;
+                aoffset += lda;
+            }
+            compute<4>(&acc_0, 0, 0, comparray, vs, fin_res);
+            compute<4>(&acc_1, 0, 4, comparray, vs, fin_res);
+        }
+        save_res<4, 4>(ii, jj, 0, fin_res);
+        save_res<4, 4>(ii, jj+4, 4, fin_res);
+    }
+
+    void KERNEL_8x4(int64_t ii, int64_t jj) {
+        vec_t vec_A[16], vec_B[8] = {0};
+        acc_t acc_0, acc_1;
+        std::array<int, 8> comparray;
+        vector float fin_res[8] = {0};
+        vector float vs[8] = {0};
+        for (int l = 0; l < k; l++) {
+            __builtin_mma_xxsetaccz(&acc_0);
+            __builtin_mma_xxsetaccz(&acc_1);
+            packNormal<int8_t, vector signed char>((A+(ii*lda)+l), lda, 8, 8, (int8_t*)vec_A, false);
+            packNormal<uint8_t, vector unsigned char>((B+(jj*ldb)+l), ldb, 4, 8, (uint8_t*)vec_B, true);
+            for(int x = 0; x < 8; x++) {
+                __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x], vec_B[x]);
+                __builtin_mma_xvi8ger4pp(&acc_1, vec_A[x+8], vec_B[x]);
+            }
+            for (int I = 0; I<8; I++) {
+                for (int J = 0; J<4; J++) {
+                    *((float*)&vs[I]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J)*ldb)+l)->d));
+                }
+            }
+            auto aoffset = A+(ii*lda)+l;
+            for (int i = 0; i < 8; i++) {
+                comparray[i] = 0;
+                int ca = 0;
+                const int8_t *at = aoffset->qs;
+                for (int j = 0; j < 32; j++)
+                    ca += (int)*at++;
+                comparray[i] = ca;
+                aoffset += lda;
+            }
+            compute<8>(&acc_0, 0, 0, comparray, vs, fin_res);
+            compute<8>(&acc_1, 4, 4, comparray, vs, fin_res);
+        }
+        save_res<4, 4>(ii, jj, 0, fin_res);
+        save_res<4, 4>(ii+4, jj, 4, fin_res);
+    }
+
+    void KERNEL_8x8(int64_t ii, int64_t jj) {
+        vec_t vec_A[16], vec_B[16] = {0};
+        acc_t acc_0, acc_1, acc_2, acc_3;
+        std::array<int, 8> comparray;
+        vector float fin_res[16] = {0};
+        vector float vs[16] = {0};
+        for (int l = 0; l < k; l++) {
+            __builtin_mma_xxsetaccz(&acc_0);
+            __builtin_mma_xxsetaccz(&acc_1);
+            __builtin_mma_xxsetaccz(&acc_2);
+            __builtin_mma_xxsetaccz(&acc_3);
+            packNormal<int8_t, vector signed char>((A+(ii*lda)+l), lda, 8, 8, (int8_t*)vec_A, false);
+            packNormal<uint8_t, vector unsigned char>((B+(jj*ldb)+l), ldb, 8, 8, (uint8_t*)vec_B, true);
+            for(int x = 0; x < 8; x++) {
+                __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x], vec_B[x]);
+                __builtin_mma_xvi8ger4pp(&acc_1, vec_A[x+8], vec_B[x]);
+                __builtin_mma_xvi8ger4pp(&acc_2, vec_A[x], vec_B[x+8]);
+                __builtin_mma_xvi8ger4pp(&acc_3, vec_A[x+8], vec_B[x+8]);
+            }
+            for (int I = 0; I<8; I++) {
+                for (int J = 0; J<4; J++) {
+                    *((float*)&vs[I]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J)*ldb)+l)->d));
+                    *((float*)&vs[I+8]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J+4)*ldb)+l)->d));
+                }
+            }
+            auto aoffset = A+(ii*lda)+l;
+            for (int i = 0; i < 8; i++) {
+                comparray[i] = 0;
+                int ca = 0;
+                const int8_t *at = aoffset->qs;
+                for (int j = 0; j < 32; j++)
+                    ca += (int)*at++;
+                comparray[i] = ca;
+                aoffset += lda;
+            }
+            compute<8>(&acc_0, 0, 0, comparray, vs, fin_res);
+            compute<8>(&acc_1, 4, 4, comparray, vs, fin_res);
+            compute<8>(&acc_2, 0, 8, comparray, vs, fin_res);
+            compute<8>(&acc_3, 4, 12, comparray, vs, fin_res);
+        }
+        save_res<4, 4>(ii, jj, 0, fin_res);
+        save_res<4, 4>(ii+4, jj, 4, fin_res);
+        save_res<4, 4>(ii, jj+4, 8, fin_res);
+        save_res<4, 4>(ii+4, jj+4, 12, fin_res);
+    }
+
+    template<int RM, int RN>
+    void gemm_small(int64_t m0, int64_t m, int64_t n0, int64_t n) {
+        int64_t ytiles = (m - m0) / RM;
+        int64_t xtiles = (n - n0) / RN;
+        int64_t tiles = xtiles * ytiles;
+        int64_t duty = (tiles + nth - 1) / nth;
+        int64_t start = duty * ith;
+        int64_t end = start + duty;
+        vec_t vec_A[8], vec_B[8] = {0};
+        vector signed int vec_C[4];
+        acc_t acc_0;
+
+        if (end > tiles)
+            end = tiles;
+        for (int64_t job = start; job < end; ++job) {
+            int64_t ii = m0 + job / xtiles * RM;
+            int64_t jj = n0 + job % xtiles * RN;
+            std::array<int, RM> comparray;
+            vector float res[4] = {0};
+            vector float fin_res[4] = {0};
+            vector float vs[4] = {0};
+            vector float CA[4] = {0};
+            __builtin_prefetch((A+(ii*lda)+0)->qs, 0, 1); // prefetch first value
+            __builtin_prefetch((B+(jj*ldb)+0)->qs, 0, 1); // prefetch first value
+            for (int l = 0; l < k; l++) {
+                __builtin_prefetch((A+(ii*lda)+(l+1))->qs, 0, 1); // prefetch one loop ahead
+                __builtin_prefetch((B+(jj*ldb)+(l+1))->qs, 0, 1); // prefetch one loop ahead
+                __builtin_mma_xxsetaccz(&acc_0);
+                packNormal<int8_t, vector signed char>((A+(ii*lda)+l), lda, RM, 8, (int8_t*)vec_A, false);
+                packNormal<uint8_t, vector unsigned char>((B+(jj*ldb)+l), ldb, RN, 8, (uint8_t*)vec_B, true);
+                for(int x = 0; x < 8; x+=4) {
+                    __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x], vec_B[x]);
+                    __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x+1], vec_B[x+1]);
+                    __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x+2], vec_B[x+2]);
+                    __builtin_mma_xvi8ger4pp(&acc_0, vec_A[x+3], vec_B[x+3]);
+                }
+                for (int I = 0; I<RM; I++) {
+                    for (int J = 0; J<RN; J++) {
+                        *((float*)&vs[I]+J) = (unhalf((A+((ii+I)*lda)+l)->d) * unhalf((B+((jj+J)*ldb)+l)->d));
+                    }
+                }
+                __builtin_mma_disassemble_acc(vec_C, &acc_0);
+                auto aoffset = A+(ii*lda)+l;
+                for (int i = 0; i < RM; i++) {
+                    comparray[i] = 0;
+                    int ca = 0;
+                    const int8_t *at = aoffset->qs;
+                    for (int j = 0; j < 32; j++)
+                        ca += (int)*at++;
+                    comparray[i] = ca;
+                    aoffset += lda;
+                }
+
+                for (int i = 0; i < RM; i++) {
+                    CA[i] = vec_splats((float)(((double)comparray[i]) * -128.0));
+                    res[i] = vec_add(vec_ctf(vec_C[i], 0), CA[i]);
+                    fin_res[i] = vec_madd(res[i], vs[i], fin_res[i]);
+                }
+            }
+            save_res<RM, RN>(ii, jj, 0, fin_res);
+        }
+    }
+
+    template<int RM, int RN>
+    inline void kernel(int64_t ii, int64_t jj) {
+       if constexpr(RM == 4 && RN == 8) {
+          KERNEL_4x8(ii,jj);
+       } else if constexpr(RM == 8 && RN == 4) {
+          KERNEL_8x4(ii,jj);
+       } else if constexpr(RM == 8 && RN == 8) {
+          KERNEL_8x8(ii,jj);
+       } else {
+          static_assert(false, "RN/RM values not supported");
+       }
+    }
+
+    template <int RM, int RN>
+    NOINLINE void gemm(int64_t m0, int64_t m, int64_t n0, int64_t n) {
+        int64_t ytiles = (m - m0) / RM;
+        int64_t xtiles = (n - n0) / RN;
+        int64_t tiles = xtiles * ytiles;
+        int64_t duty = (tiles + nth - 1) / nth;
+        int64_t start = duty * ith;
+        int64_t end = start + duty;
+        if (end > tiles)
+            end = tiles;
+        for (int64_t job = start; job < end; ++job) {
+            int64_t ii = m0 + job / xtiles * RM;
+            int64_t jj = n0 + job % xtiles * RN;
+            kernel<RM, RN>(ii, jj);
+        }
+    }
+
+    const TA *const A;
+    const TB *const B;
+    TC *C;
+    TA *At;
+    TB *Bt;
+    const int64_t k;
+    const int64_t lda;
+    const int64_t ldb;
+    const int64_t ldc;
+    const int ith;
+    const int nth;
+};
+
+template <typename TA, typename TB, typename TC>
 class tinyBLAS_PPC {
   public:
     tinyBLAS_PPC(int64_t k,
@@ -1060,13 +1769,17 @@ class tinyBLAS_PPC {
 
     void (tinyBLAS_PPC::*kernel)(int64_t, int64_t);
 
-    void READ_BLOCK(const float* a, int64_t lda, int rows, int cols, float* vec) {
+    template<typename VA>
+    void packTranspose(const TA* a, int64_t lda, int rows, int cols, TA* vec) {
         int64_t i, j;
-        float *aoffset = NULL, *boffset = NULL;
-        float *aoffset1 = NULL, *aoffset2 = NULL, *aoffset3 = NULL, *aoffset4 = NULL;
-        float *aoffset5 = NULL, *aoffset6 = NULL, *aoffset7 = NULL, *aoffset8 = NULL;
-
-        aoffset = const_cast<float*>(a);
+        TA *aoffset = NULL, *boffset = NULL;
+        TA *aoffset1 = NULL, *aoffset2 = NULL, *aoffset3 = NULL, *aoffset4 = NULL;
+        TA *aoffset5 = NULL, *aoffset6 = NULL, *aoffset7 = NULL, *aoffset8 = NULL;
+        __vector_pair C1, C2, C3, C4, C5, C6, C7, C8;
+        VA c1[2] = {0}, c2[2] = {0}, c3[2] = {0}, c4[2] = {0};
+        VA c5[2] = {0}, c6[2] = {0}, c7[2] = {0}, c8[2] = {0};
+        VA t1, t2, t3, t4, t5, t6, t7, t8;
+        aoffset = const_cast<TA*>(a);
         boffset = vec;
         j = (rows >> 3);
         if (j > 0) {
@@ -1082,9 +1795,6 @@ class tinyBLAS_PPC {
                 aoffset += 8 * lda;
                 i = (cols >> 3);
                 if (i > 0) {
-                    __vector_pair C1, C2, C3, C4, C5, C6, C7, C8;
-                    vector float c1[2], c2[2], c3[2], c4[2], c5[2], c6[2], c7[2], c8[2];
-                    vector float t1, t2, t3, t4, t5, t6, t7, t8;
                     do {
                         C1 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset1);
                         C2 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset2);
@@ -1164,21 +1874,19 @@ class tinyBLAS_PPC {
                     } while(i > 0);
                 }
                 if (cols & 4) {
-                    vector float c1, c2, c3, c4, c5, c6, c7, c8;
-                    vector float t1, t2, t3, t4, t5, t6, t7, t8;
-                    c1 = vec_xl(0, aoffset1);
-                    c2 = vec_xl(0, aoffset2);
-                    c3 = vec_xl(0, aoffset3);
-                    c4 = vec_xl(0, aoffset4);
-                    c5 = vec_xl(0, aoffset5);
-                    c6 = vec_xl(0, aoffset6);
-                    c7 = vec_xl(0, aoffset7);
-                    c8 = vec_xl(0, aoffset8);
+                    c1[0] = vec_xl(0, aoffset1);
+                    c2[0] = vec_xl(0, aoffset2);
+                    c3[0] = vec_xl(0, aoffset3);
+                    c4[0] = vec_xl(0, aoffset4);
+                    c5[0] = vec_xl(0, aoffset5);
+                    c6[0] = vec_xl(0, aoffset6);
+                    c7[0] = vec_xl(0, aoffset7);
+                    c8[0] = vec_xl(0, aoffset8);
 
-                    t1 = vec_mergeh(c1, c2);
-                    t2 = vec_mergeh(c3, c4);
-                    t3 = vec_mergeh(c5, c6);
-                    t4 = vec_mergeh(c7, c8);
+                    t1 = vec_mergeh(c1[0], c2[0]);
+                    t2 = vec_mergeh(c3[0], c4[0]);
+                    t3 = vec_mergeh(c5[0], c6[0]);
+                    t4 = vec_mergeh(c7[0], c8[0]);
                     t5 = vec_xxpermdi(t1, t2, 0);
                     t6 = vec_xxpermdi(t3, t4, 0);
                     t7 = vec_xxpermdi(t1, t2, 3);
@@ -1188,10 +1896,10 @@ class tinyBLAS_PPC {
                     vec_xst(t7, 0, boffset+8);
                     vec_xst(t8, 0, boffset+12);
 
-                    t1 = vec_mergel(c1, c2);
-                    t2 = vec_mergel(c3, c4);
-                    t3 = vec_mergel(c5, c6);
-                    t4 = vec_mergel(c7, c8);
+                    t1 = vec_mergel(c1[0], c2[0]);
+                    t2 = vec_mergel(c3[0], c4[0]);
+                    t3 = vec_mergel(c5[0], c6[0]);
+                    t4 = vec_mergel(c7[0], c8[0]);
                     t5 = vec_xxpermdi(t1, t2, 0);
                     t6 = vec_xxpermdi(t3, t4, 0);
                     t7 = vec_xxpermdi(t1, t2, 3);
@@ -1213,9 +1921,6 @@ class tinyBLAS_PPC {
             aoffset += 4 * lda;
             i = (cols >> 3);
             if (i > 0) {
-                __vector_pair C1, C2, C3, C4;
-                vector float c1[2], c2[2], c3[2], c4[2];
-                vector float t1, t2, t3, t4, t5, t6, t7, t8;
                 do {
                     C1 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset1);
                     C2 = __builtin_vsx_lxvp(0, (__vector_pair*)aoffset2);
@@ -1262,22 +1967,20 @@ class tinyBLAS_PPC {
             }
 
             if (cols & 4) {
-                vector float c1, c2, c3, c4;
-                vector float t1, t2, t3, t4;
-                c1 = vec_xl(0, aoffset1);
-                c2 = vec_xl(0, aoffset2);
-                c3 = vec_xl(0, aoffset3);
-                c4 = vec_xl(0, aoffset4);
+                c1[0] = vec_xl(0, aoffset1);
+                c2[0] = vec_xl(0, aoffset2);
+                c3[0] = vec_xl(0, aoffset3);
+                c4[0] = vec_xl(0, aoffset4);
 
-                t1 = vec_mergeh(c1, c2);
-                t2 = vec_mergeh(c3, c4);
+                t1 = vec_mergeh(c1[0], c2[0]);
+                t2 = vec_mergeh(c3[0], c4[0]);
                 t3 = vec_xxpermdi(t1, t2, 0);
                 t4 = vec_xxpermdi(t1, t2, 3);
                 vec_xst(t3, 0, boffset);
                 vec_xst(t4, 0, boffset+4);
 
-                t1 = vec_mergel(c1, c2);
-                t2 = vec_mergel(c3, c4);
+                t1 = vec_mergel(c1[0], c2[0]);
+                t2 = vec_mergel(c3[0], c4[0]);
                 t3 = vec_xxpermdi(t1, t2, 0);
                 t4 = vec_xxpermdi(t1, t2, 3);
                 vec_xst(t3, 0, boffset+8);
@@ -1289,21 +1992,19 @@ class tinyBLAS_PPC {
             aoffset2 = aoffset1 + lda;
             aoffset3 = aoffset2 + lda;
             if (cols & 4) {
-                vector float c1, c2, c3, c4 = {0};
-                vector float t1, t2, t3, t4;
-                c1 = vec_xl(0, aoffset1);
-                c2 = vec_xl(0, aoffset2);
-                c3 = vec_xl(0, aoffset3);
+                c1[0] = vec_xl(0, aoffset1);
+                c2[0] = vec_xl(0, aoffset2);
+                c3[0] = vec_xl(0, aoffset3);
 
-                t1 = vec_mergeh(c1, c2);
-                t2 = vec_mergeh(c3, c4);
+                t1 = vec_mergeh(c1[0], c2[0]);
+                t2 = vec_mergeh(c3[0], c4[0]);
                 t3 = vec_xxpermdi(t1, t2, 0);
                 t4 = vec_xxpermdi(t1, t2, 3);
                 vec_xst(t3, 0, boffset);
                 vec_xst(t4, 0, boffset+4);
 
-                t1 = vec_mergel(c1, c2);
-                t2 = vec_mergel(c3, c4);
+                t1 = vec_mergel(c1[0], c2[0]);
+                t2 = vec_mergel(c3[0], c4[0]);
                 t3 = vec_xxpermdi(t1, t2, 0);
                 t4 = vec_xxpermdi(t1, t2, 3);
                 vec_xst(t3, 0, boffset+8);
@@ -1311,14 +2012,13 @@ class tinyBLAS_PPC {
             }
         }
     }
-
     void KERNEL_4x4(int64_t ii, int64_t jj) {
         vec_t vec_A[4], vec_B[4], vec_C[4];
         acc_t acc_0;
         __builtin_mma_xxsetaccz(&acc_0);
         for (int l = 0; l < k; l+=4) {
-            READ_BLOCK(A+(ii*lda)+l, lda, 4, 4, (float*)vec_A);
-            READ_BLOCK(B+(jj*ldb)+l, ldb, 4, 4, (float*)vec_B);
+            packTranspose<vector float>(A+(ii*lda)+l, lda, 4, 4, (TA*)vec_A);
+            packTranspose<vector float>(B+(jj*ldb)+l, ldb, 4, 4, (TA*)vec_B);
             __builtin_mma_xvf32gerpp(&acc_0, vec_A[0], vec_B[0]);
             __builtin_mma_xvf32gerpp(&acc_0, vec_A[1], vec_B[1]);
             __builtin_mma_xvf32gerpp(&acc_0, vec_A[2], vec_B[2]);
@@ -1333,8 +2033,8 @@ class tinyBLAS_PPC {
         __builtin_mma_xxsetaccz(&acc_0);
         __builtin_mma_xxsetaccz(&acc_1);
         for (int64_t l = 0; l < k; l+=4) {
-            READ_BLOCK(A+(ii*lda)+l, lda, 4, 4, (float*)vec_A);
-            READ_BLOCK(B+(jj*ldb)+l, ldb, 8, 4, (float*)vec_B);
+            packTranspose<vector float>(A+(ii*lda)+l, lda, 4, 4, (TA*)vec_A);
+            packTranspose<vector float>(B+(jj*ldb)+l, ldb, 8, 4, (TA*)vec_B);
             __builtin_mma_xvf32gerpp(&acc_0, vec_A[0], (vec_t)vec_B[0]);
             __builtin_mma_xvf32gerpp(&acc_1, vec_A[0], (vec_t)vec_B[1]);
             __builtin_mma_xvf32gerpp(&acc_0, vec_A[1], (vec_t)vec_B[2]);
@@ -1354,8 +2054,8 @@ class tinyBLAS_PPC {
         __builtin_mma_xxsetaccz(&acc_0);
         __builtin_mma_xxsetaccz(&acc_1);
         for (int64_t l = 0; l < k; l+=4) {
-            READ_BLOCK(A+(ii*lda)+l, lda, 8, 4, (float*)vec_A);
-            READ_BLOCK(B+(jj*ldb)+l, ldb, 4, 4, (float*)vec_B);
+            packTranspose<vector float>(A+(ii*lda)+l, lda, 8, 4, (TA*)vec_A);
+            packTranspose<vector float>(B+(jj*ldb)+l, ldb, 4, 4, (TA*)vec_B);
             __builtin_mma_xvf32gerpp(&acc_0, (vec_t)vec_A[0], vec_B[0]);
             __builtin_mma_xvf32gerpp(&acc_1, (vec_t)vec_A[1], vec_B[0]);
             __builtin_mma_xvf32gerpp(&acc_0, (vec_t)vec_A[2], vec_B[1]);
@@ -1377,8 +2077,8 @@ class tinyBLAS_PPC {
         __builtin_mma_xxsetaccz(&acc_2);
         __builtin_mma_xxsetaccz(&acc_3);
         for (int l = 0; l < k; l+=8) {
-            READ_BLOCK(A+(ii*lda)+l, lda, 8, 8, (float*)vec_A);
-            READ_BLOCK(B+(jj*ldb)+l, ldb, 8, 8, (float*)vec_B);
+            packTranspose<vector float>(A+(ii*lda)+l, lda, 8, 8, (TA*)vec_A);
+            packTranspose<vector float>(B+(jj*ldb)+l, ldb, 8, 8, (TA*)vec_B);
             for(int x = 0; x < 16; x+=2) {
                 __builtin_mma_xvf32gerpp(&acc_0, (vec_t)vec_A[x], vec_B[x]);
                 __builtin_mma_xvf32gerpp(&acc_1, (vec_t)vec_A[x], vec_B[x+1]);
@@ -1561,15 +2261,15 @@ class tinyBLAS_PPC {
             vec_t vec_A[4], vec_B[4];
             for (int l=0; l<k; l+=4) {
                 if (RN >= 4 && RM == 1) {
-                    float* a = const_cast<float*>(A+(ii)*lda+l);
-                    READ_BLOCK(B+(jj*ldb)+l, ldb, 4, 4, (float*)vec_B);
+                    TA* a = const_cast<TA*>(A+(ii)*lda+l);
+                    packTranspose<vector float>(B+(jj*ldb)+l, ldb, 4, 4, (TA*)vec_B);
                     vec_A[0] = (vec_t)vec_xl(0,a);
-                    vec_A[1] = (vec_t)vec_splats(*((float*)&vec_A+1));
-                    vec_A[2] = (vec_t)vec_splats(*((float*)&vec_A+2));
-                    vec_A[3] = (vec_t)vec_splats(*((float*)&vec_A+3));
+                    vec_A[1] = (vec_t)vec_splats(*((TA*)&vec_A+1));
+                    vec_A[2] = (vec_t)vec_splats(*((TA*)&vec_A+2));
+                    vec_A[3] = (vec_t)vec_splats(*((TA*)&vec_A+3));
                 } else {
-                    READ_BLOCK(A+(ii*lda)+l, lda, RM, 4, (float*)vec_A);
-                    READ_BLOCK(B+(jj*ldb)+l, ldb, RN, 4, (float*)vec_B);
+                    packTranspose<vector float>(A+(ii*lda)+l, lda, RM, 4, (TA*)vec_A);
+                    packTranspose<vector float>(B+(jj*ldb)+l, ldb, RN, 4, (TA*)vec_B);
                 }
                 __builtin_mma_xvf32gerpp(&acc_0, vec_A[0], vec_B[0]);
                 __builtin_mma_xvf32gerpp(&acc_0, vec_A[1], vec_B[1]);
@@ -1579,7 +2279,7 @@ class tinyBLAS_PPC {
             __builtin_mma_disassemble_acc(vec_C, &acc_0);
             for (int I = 0; I < RM; I++) {
                 for (int J = 0; J < RN; J++) {
-                    *((float*)(C+ii+((jj+J)*ldc)+I)) = *((float*)&vec_C[I]+J);
+                    *((TC*)(C+ii+((jj+J)*ldc)+I)) = *((TC*)&vec_C[I]+J);
                 }
             }
        }
@@ -1656,8 +2356,9 @@ class tinyBLAS_PPC {
  * @param Ctype is GGML data type of `C`
  * @return true if this function was able to service the matmul request
  */
-bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
-                     int64_t ldc, int ith, int nth, int Atype, int Btype, int Ctype) {
+bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
+                     const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
+                     int64_t ldc, int Atype, int Btype, int Ctype) {
 
     assert(m >= 0);
     assert(n >= 0);
@@ -1665,8 +2366,8 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
     assert(lda >= k);
     assert(ldb >= k);
     assert(ldc >= m);
-    assert(nth > 0);
-    assert(ith < nth);
+    assert(params->nth > 0);
+    assert(params->ith < params->nth);
 
     // only enable sgemm for prompt processing
     if (n < 2)
@@ -1681,37 +2382,25 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
         if (Btype != GGML_TYPE_F32)
             return false;
 #if defined(__AVX512F__)
-        if (k % 16)
-            return false;
-        tinyBLAS<16, __m512, __m512, float, float, float> tb{
+        tinyBLAS<16, __m512, __m512, float, float, float> tb{ params,
             k, (const float *)A, lda,
             (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+            (float *)C, ldc};
+        return tb.matmul(m, n);
 #elif defined(__AVX__) || defined(__AVX2__)
-        if (k % 8)
-            return false;
-        tinyBLAS<8, __m256, __m256, float, float, float> tb{
+        tinyBLAS<8, __m256, __m256, float, float, float> tb{ params,
             k, (const float *)A, lda,
             (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+            (float *)C, ldc};
+        return tb.matmul(m, n);
 #elif defined(__ARM_NEON)
         if (n < 4)
             return false;
-        if (k % 4)
-            return false;
-        tinyBLAS<4, float32x4_t, float32x4_t, float, float, float> tb{
+        tinyBLAS<4, float32x4_t, float32x4_t, float, float, float> tb{ params,
             k, (const float *)A, lda,
             (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+            (float *)C, ldc};
+        return tb.matmul(m, n);
 #elif defined(__MMA__)
         if (k % 8)
             return false;
@@ -1719,7 +2408,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const float *)A, lda,
             (const float *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #else
@@ -1727,60 +2416,71 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
 #endif
     }
 
+    case GGML_TYPE_BF16: {
+#if defined(__AVX512BF16__)
+        if (Btype == GGML_TYPE_BF16) {
+            tinyBLAS<32, __m512, __m512bh, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+#elif defined(__AVX512F__)
+        if (Btype == GGML_TYPE_BF16) {
+            tinyBLAS<16, __m512, __m512, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+#elif defined(__AVX2__)
+        if (Btype == GGML_TYPE_BF16) {
+            tinyBLAS<8, __m256, __m256, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+#endif
+        return false;
+    }
     case GGML_TYPE_F16: {
 #if defined(__AVX512F__)
-        if (k % 16)
-            return false;
-        if (Btype != GGML_TYPE_F32)
-            return false;
-        tinyBLAS<16, __m512, __m512, ggml_fp16_t, float, float> tb{
-            k, (const ggml_fp16_t *)A, lda,
-            (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+        if (Btype == GGML_TYPE_F16) {
+            tinyBLAS<16, __m512, __m512, ggml_fp16_t, ggml_fp16_t, float> tb{ params, k,
+                (const ggml_fp16_t *)A, lda,
+                (const ggml_fp16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #elif (defined(__AVX__) || defined(__AVX2__)) && defined(__F16C__)
-        if (k % 8)
-            return false;
-        if (Btype != GGML_TYPE_F32)
-            return false;
-        tinyBLAS<8, __m256, __m256, ggml_fp16_t, float, float> tb{
-            k, (const ggml_fp16_t *)A, lda,
-            (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+        if (Btype == GGML_TYPE_F16) {
+            tinyBLAS<8, __m256, __m256, ggml_fp16_t, ggml_fp16_t, float> tb{ params, k,
+                (const ggml_fp16_t *)A, lda,
+                (const ggml_fp16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #elif defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC) && !defined(_MSC_VER)
         if (n < 8)
             return false;
-        if (k % 8)
-            return false;
-        if (Btype != GGML_TYPE_F16)
-            return false;
-        tinyBLAS<8, float16x8_t, float16x8_t, ggml_fp16_t, ggml_fp16_t, float> tb{
-            k, (const ggml_fp16_t *)A, lda,
-            (const ggml_fp16_t *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
+        if (Btype == GGML_TYPE_F16) {
+            tinyBLAS<8, float16x8_t, float16x8_t, ggml_fp16_t, ggml_fp16_t, float> tb{ params,
+                k, (const ggml_fp16_t *)A, lda,
+                (const ggml_fp16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #elif defined(__ARM_NEON) && !defined(_MSC_VER)
-        if (k % 4)
-            return false;
-        if (Btype != GGML_TYPE_F32)
-            return false;
-        tinyBLAS<4, float32x4_t, float32x4_t, ggml_fp16_t, float, float> tb{
-            k, (const ggml_fp16_t *)A, lda,
-            (const float *)B, ldb,
-            (float *)C, ldc,
-            ith, nth};
-        tb.matmul(m, n);
-        return true;
-#else
-        return false;
+        if (Btype == GGML_TYPE_F32) {
+            tinyBLAS<4, float32x4_t, float32x4_t, ggml_fp16_t, float, float> tb{ params,
+                k, (const ggml_fp16_t *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #endif
+        return false;
     }
 
     case GGML_TYPE_Q8_0: {
@@ -1791,7 +2491,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_q8_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #elif defined(__ARM_FEATURE_DOTPROD)
@@ -1799,9 +2499,23 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_q8_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
+
+#elif defined(__MMA__)
+        if (n < 8 && n != 4)
+           return false;
+        if (m < 8 && m != 4)
+           return false;
+        tinyBLAS_Q0_PPC<block_q8_0, block_q8_0, float> tb{
+            k, (const block_q8_0 *)A, lda,
+            (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+
 #else
         return false;
 #endif
@@ -1815,7 +2529,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_q4_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #elif defined(__ARM_FEATURE_DOTPROD)
@@ -1823,7 +2537,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_q4_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #else
@@ -1839,7 +2553,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_q5_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #else
@@ -1855,7 +2569,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
             k, (const block_iq4_nl *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,
-            ith, nth};
+            params->ith, params->nth};
         tb.matmul(m, n);
         return true;
 #else
@@ -1867,6 +2581,7 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
         return false;
     }
 
+    (void)params;
     (void)m;
     (void)n;
     (void)k;
@@ -1876,8 +2591,6 @@ bool llamafile_sgemm(int64_t m, int64_t n, int64_t k, const void *A, int64_t lda
     (void)ldb;
     (void)C;
     (void)ldc;
-    (void)ith;
-    (void)nth;
     (void)Atype;
     (void)Btype;
     (void)Ctype;

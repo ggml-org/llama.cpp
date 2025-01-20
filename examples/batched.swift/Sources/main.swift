@@ -23,12 +23,12 @@ defer {
 }
 
 let model_params = llama_model_default_params()
-guard let model = llama_load_model_from_file(modelPath.cString(using: .utf8), model_params) else {
+guard let model = llama_model_load_from_file(modelPath.cString(using: .utf8), model_params) else {
     print("Failed to load model")
     exit(1)
 }
 defer {
-    llama_free_model(model)
+    llama_model_free(model)
 }
 
 var tokens = tokenize(text: prompt, add_bos: true)
@@ -141,7 +141,7 @@ while n_cur <= n_len {
         let new_token_id = llama_sampler_sample(smpl, context, i_batch[i])
 
         // is it an end of stream? -> mark the stream as finished
-        if llama_token_is_eog(model, new_token_id) || n_cur == n_len {
+        if llama_vocab_is_eog(model, new_token_id) || n_cur == n_len {
             i_batch[i] = -1
             // print("")
             if n_parallel > 1 {

@@ -237,7 +237,7 @@ void upscale_f32(const float  *x, float *dst, const int nb00, const int nb01,
     int i02 = i12 / sf2;
     int i03 = i13 / sf3;
 
-    dst[index] = *(float *)((char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00);
+    dst[index] = *(const float *)((const char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00);
 }
 
 void pad_f32(const float  *x, float *dst, const int ne0, const int ne00, const int ne01, const int ne02,
@@ -251,8 +251,7 @@ void pad_f32(const float  *x, float *dst, const int ne0, const int ne00, const i
     // operation
     int offset_dst = nidx + item_ct1.get_group(1) * ne0 +
                      item_ct1.get_group(0) * ne0 * item_ct1.get_group_range(1);
-    if (nidx < ne00 && item_ct1.get_group(1) < ne01 &&
-        item_ct1.get_group(0) < ne02) {
+    if (nidx < ne00 && item_ct1.get_group(1) < (size_t) ne01 && item_ct1.get_group(0) < (size_t) ne02) {
         int offset_src = nidx + item_ct1.get_group(1) * ne00 +
                          item_ct1.get_group(0) * ne00 * ne01;
             dst[offset_dst] = x[offset_src];
@@ -520,9 +519,10 @@ inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     silu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -535,9 +535,10 @@ inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     gelu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
                                     const ggml_tensor *src1, ggml_tensor *dst,
@@ -550,9 +551,10 @@ inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, const ggml_
 
     gelu_quick_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -564,9 +566,10 @@ inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, const ggml_tensor
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     tanh_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -579,9 +582,10 @@ inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -595,9 +599,10 @@ inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, const ggml
 
     hardsigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -610,9 +615,10 @@ inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, const ggml_t
 
     hardswish_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -625,9 +631,10 @@ inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     exp_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -640,9 +647,10 @@ inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     log_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -655,9 +663,10 @@ inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, const ggml_ten
 
     sigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -670,9 +679,10 @@ inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     sqrt_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -685,9 +695,10 @@ inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     sin_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -700,9 +711,10 @@ inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     cos_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -715,9 +727,10 @@ inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, const ggml_tensor
 
     step_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -730,9 +743,10 @@ inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     neg_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -749,9 +763,10 @@ inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, const ggml_
 
     leaky_relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), negative_slope, main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -764,9 +779,10 @@ inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     sqr_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
@@ -787,9 +803,10 @@ inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, const ggml_ten
                      dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3,
                      main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -805,9 +822,10 @@ inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, const ggml_tensor 
         src0->ne[0], src0->ne[1], src0->ne[2],
         dst->ne[0], dst->ne[1], dst->ne[2], main_stream);
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -827,7 +845,8 @@ inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, const ggml_tensor 
 
     acc_f32_sycl(src0_dd, src1_dd, dst_dd, ggml_nelements(dst), src1->ne[0], src1->ne[1], src1->ne[2], nb1, nb2, offset, main_stream);
 
-    (void) dst;
+    GGML_UNUSED(dst);
+    GGML_UNUSED(ctx);
 }
 
 inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
@@ -863,149 +882,149 @@ inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, const ggml_tensor 
 }
 
 
-void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_sqrt);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sqrt);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_sin(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_sin);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sin);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_cos(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_cos);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_cos);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_acc(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_acc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_acc);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_acc);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_gelu(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_gelu);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_gelu);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_silu(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_silu);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_silu);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_gelu_quick(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_gelu_quick);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_gelu_quick);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_tanh(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_tanh);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_tanh);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_relu(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_relu);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_relu);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_sigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_sigmoid);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sigmoid);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_hardsigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_hardsigmoid);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_hardsigmoid);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_hardswish(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_hardswish);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-
-void ggml_sycl_exp(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_exp);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_log(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_log);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_neg(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_neg);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_step(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_step);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_leaky_relu(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_leaky_relu);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_sqr);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_upscale);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
-}
-
-void ggml_sycl_pad(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_pad);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_hardswish);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 
-
-void ggml_sycl_add(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_add);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_exp);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_sub(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_sub);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_log);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_mul(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_mul);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_neg);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-void ggml_sycl_div(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_sycl_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, src0, src1, dst, ggml_sycl_op_div);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_step);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_leaky_relu);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sqr);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_upscale);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_pad);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+
+
+void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_add);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sub);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_mul);
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
+}
+
+void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
+    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_div);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }

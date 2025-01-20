@@ -59,7 +59,7 @@ static void rwkv_wkv_f32_kernel(
         float y = 0;
 
         // Process in chunks of 4 for better vectorization
-        sycl::float4 k4, r4, tf4, td4, s4, kv4;
+        sycl::float4 k4, r4, tf4, td4, s4;
         #pragma unroll
         for (int j = 0; j < head_size; j += 4) {
             // Load data in vec4 chunks
@@ -95,8 +95,10 @@ static void rwkv_wkv_f32_kernel(
     }
 }
 
-void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst) {
+void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
+
+    const ggml_tensor *src0 = dst->src[0];
+    const ggml_tensor *src1 = dst->src[1];
 
     const float* k_d = (const float*)dst->src[0]->data;
     const float* v_d = (const float*)dst->src[1]->data;
@@ -107,9 +109,9 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, const ggml_tensor* s
     float* dst_d = (float*)dst->data;
 
     const int64_t B = dst->src[5]->ne[1];
-    const int64_t T = dst->src[0]->ne[3];
+    const int64_t T = dst->src[0]->ne[2];
     const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[2];
+    const int64_t H = dst->src[0]->ne[1];
 
     GGML_ASSERT(dst->src[5]->type == GGML_TYPE_F32);
     GGML_ASSERT(C % H == 0);
@@ -131,8 +133,11 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, const ggml_tensor* s
             [=](sycl::nd_item<3> item_ct1) {
                 rwkv_wkv_f32_kernel(
                     B, T, C, H, k_d, v_d, r_d, tf_d, td_d, s_d, dst_d,
-                    item_ct1, shared_mem_acc.get_pointer()
+                    item_ct1, (float*)shared_mem_acc.get_multi_ptr<sycl::access::decorated::no>().get()
                 );
             });
     });
+
+    GGML_UNUSED(src0);
+    GGML_UNUSED(src1);
 }

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		1809696D2D05A39F00400EE8 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = 1809696C2D05A39F00400EE8 /* llama */; };
 		549479CB2AC9E16000E0F78B /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 549479CA2AC9E16000E0F78B /* Metal.framework */; };
 		79E1D9CD2B4CD16E005F8E46 /* InputButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E1D9CC2B4CD16E005F8E46 /* InputButton.swift */; };
 		7FA3D2B32B2EA2F600543F92 /* DownloadButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FA3D2B22B2EA2F600543F92 /* DownloadButton.swift */; };
@@ -17,7 +18,6 @@
 		8A3F84242AC4C891005E2EE8 /* models in Resources */ = {isa = PBXBuildFile; fileRef = 8A3F84232AC4C891005E2EE8 /* models */; };
 		8A907F332AC7138A006146EA /* LibLlama.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A907F322AC7134E006146EA /* LibLlama.swift */; };
 		8A9F7C4D2AC332EE008AE1EA /* LlamaState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A9F7C4C2AC332EE008AE1EA /* LlamaState.swift */; };
-		DF810E132B4A5BA200301144 /* llama in Frameworks */ = {isa = PBXBuildFile; productRef = DF810E122B4A5BA200301144 /* llama */; };
 		F1FE20E22B465ECA00B45541 /* LoadCustomButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1FE20E12B465EC900B45541 /* LoadCustomButton.swift */; };
 /* End PBXBuildFile section */
 
@@ -42,7 +42,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DF810E132B4A5BA200301144 /* llama in Frameworks */,
+				1809696D2D05A39F00400EE8 /* llama in Frameworks */,
 				549479CB2AC9E16000E0F78B /* Metal.framework in Frameworks */,
 				8A39BE0A2AC7601100BFEB40 /* Accelerate.framework in Frameworks */,
 			);
@@ -151,7 +151,7 @@
 			);
 			name = llama.swiftui;
 			packageProductDependencies = (
-				DF810E122B4A5BA200301144 /* llama */,
+				1809696C2D05A39F00400EE8 /* llama */,
 			);
 			productName = llama.swiftui;
 			productReference = 8A1C83732AC328BD0096AF73 /* llama.swiftui.app */;
@@ -429,7 +429,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		DF810E122B4A5BA200301144 /* llama */ = {
+		1809696C2D05A39F00400EE8 /* llama */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = llama;
 		};

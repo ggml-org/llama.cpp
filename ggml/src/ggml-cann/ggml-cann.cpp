@@ -1747,6 +1747,15 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (*ext_factor != 0) {
                 return false;
             }
+
+            const int mode = ((const int32_t *) op->op_params)[2];
+            if (mode & GGML_ROPE_TYPE_MROPE) {
+                return false;
+            }
+            if (mode & GGML_ROPE_TYPE_VISION) {
+                return false;
+            }
+
             return true;
         }
         case GGML_OP_UPSCALE: {
@@ -2089,7 +2098,7 @@ static void * ggml_backend_cann_reg_get_proc_address(ggml_backend_reg_t reg, con
 static const ggml_backend_reg_i ggml_backend_cann_reg_interface = {
     /* .get_name          = */ ggml_backend_cann_reg_get_name,
     /* .get_device_count  = */ ggml_backend_cann_reg_get_device_count,
-    /* .get_device_get    = */ ggml_backend_cann_reg_get_device,
+    /* .get_device        = */ ggml_backend_cann_reg_get_device,
     /* .get_proc_address  = */ ggml_backend_cann_reg_get_proc_address,
 };
 

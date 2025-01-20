@@ -407,6 +407,9 @@ class SimpleChat {
                 if (curLine.startsWith("data:")) {
                     curLine = curLine.substring(5);
                 }
+                if (curLine.trim() === "[DONE]") {
+                    break;
+                }
                 let curJson = JSON.parse(curLine);
                 console.debug("DBUG:SC:PART:Json:", curJson);
                 this.append_response(this.response_extract_stream(curJson, apiEP));

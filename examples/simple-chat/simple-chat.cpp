@@ -69,18 +69,20 @@ int main(int argc, char ** argv) {
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ngl;
 
-    llama_model * model = llama_load_model_from_file(model_path.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
     if (!model) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
         return 1;
     }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // initialize the context
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = n_ctx;
     ctx_params.n_batch = n_ctx;
 
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr , "%s: error: failed to create the llama_context\n" , __func__);
         return 1;
@@ -93,13 +95,13 @@ int main(int argc, char ** argv) {
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     // helper function to evaluate a prompt and generate a response
-    auto generate = [&](const std::string & prompt) {
+    auto generate = [&](const std::string & prompt, bool is_first) {
         std::string response;
 
         // tokenize the prompt
-        const int n_prompt_tokens = -llama_tokenize(model, prompt.c_str(), prompt.size(), NULL, 0, true, true);
+        const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
         std::vector<llama_token> prompt_tokens(n_prompt_tokens);
-        if (llama_tokenize(model, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), llama_get_kv_cache_used_cells(ctx) == 0, true) < 0) {
+        if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), llama_get_kv_cache_used_cells(ctx) == 0, true) < 0) {
             GGML_ABORT("failed to tokenize the prompt\n");
         }
 
@@ -124,13 +126,13 @@ int main(int argc, char ** argv) {
             new_token_id = llama_sampler_sample(smpl, ctx, -1);
 
             // is it an end of generation?
-            if (llama_token_is_eog(model, new_token_id)) {
+            if (llama_vocab_is_eog(vocab, new_token_id)) {
                 break;
             }
 
             // convert the token to a string, print it and add it to the response
             char buf[256];
-            int n = llama_token_to_piece(model, new_token_id, buf, sizeof(buf), 0, true);
+            int n = llama_token_to_piece(vocab, new_token_id, buf, sizeof(buf), 0, true);
             if (n < 0) {
                 GGML_ABORT("failed to convert token to piece\n");
             }
@@ -159,12 +161,14 @@ int main(int argc, char ** argv) {
             break;
         }
 
+        const char * tmpl = llama_model_chat_template(model);
+
         // add the user input to the message list and format it
         messages.push_back({"user", strdup(user.c_str())});
-        int new_len = llama_chat_apply_template(model, nullptr, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
         if (new_len > (int)formatted.size()) {
             formatted.resize(new_len);
-            new_len = llama_chat_apply_template(model, nullptr, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+            new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
         }
         if (new_len < 0) {
             fprintf(stderr, "failed to apply the chat template\n");
@@ -176,12 +180,12 @@ int main(int argc, char ** argv) {
 
         // generate a response
         printf("\033[33m");
-        std::string response = generate(prompt);
+        std::string response = generate(prompt, prev_len == 0);
         printf("\n\033[0m");
 
         // add the response to the messages
         messages.push_back({"assistant", strdup(response.c_str())});
-        prev_len = llama_chat_apply_template(model, nullptr, messages.data(), messages.size(), false, nullptr, 0);
+        prev_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), false, nullptr, 0);
         if (prev_len < 0) {
             fprintf(stderr, "failed to apply the chat template\n");
             return 1;
@@ -194,7 +198,7 @@ int main(int argc, char ** argv) {
     }
     llama_sampler_free(smpl);
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
 
     return 0;
 }

@@ -12,6 +12,9 @@
 
 #include "common.hpp"
 
+#include "ggml-backend-impl.h"
+#include "ggml-impl.h"
+
 int get_current_device_id() {
   return dpct::dev_mgr::instance().current_device_id();
 }
@@ -28,11 +31,7 @@ void* ggml_sycl_host_malloc(size_t size) try {
 
   if (err != 0) {
     // clear the error
-    fprintf(
-        stderr,
-        "WARNING: failed to allocate %.2f MB of pinned memory: %s\n",
-        size / 1024.0 / 1024.0,
-        "syclGetErrorString is not supported");
+    GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,    "syclGetErrorString is not supported");
     return nullptr;
   }
 
@@ -52,6 +51,10 @@ void ggml_sycl_host_free(void* ptr) try {
   std::exit(1);
 }
 
+bool gpu_has_xmx(sycl::device &dev) {
+    return dev.has(sycl::aspect::ext_intel_matrix);
+}
+
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size) {
   const int64_t max_range = std::numeric_limits<int>::max();
   int64_t sycl_down_blk_size = block_size;
@@ -66,17 +69,11 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
 void ggml_sycl_op_flatten(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
                                  const ggml_tensor *src1, ggml_tensor *dst,
                                  const ggml_sycl_op_flatten_t op) try {
-    const int64_t nrows0 = ggml_nrows(src0);
 
     const bool use_src1 = src1 != nullptr;
-    const int64_t nrows1 = use_src1 ? ggml_nrows(src1) : 1;
-
-    GGML_ASSERT(!use_src1 || src1->backend != GGML_BACKEND_TYPE_GPU_SPLIT);
-    GGML_ASSERT(              dst->backend != GGML_BACKEND_TYPE_GPU_SPLIT);
-
-    ggml_tensor_extra_gpu * src0_extra =            (ggml_tensor_extra_gpu *) src0->extra;
-    ggml_tensor_extra_gpu * src1_extra = use_src1 ? (ggml_tensor_extra_gpu *) src1->extra : nullptr;
-    ggml_tensor_extra_gpu * dst_extra  =            (ggml_tensor_extra_gpu *)  dst->extra;
+    if(use_src1)
+      GGML_ASSERT(strcmp(src1->buffer->buft->iface.get_name(src1->buffer->buft), GGML_SYCL_NAME "_Split") != 0);
+    GGML_ASSERT(strcmp(dst->buffer->buft->iface.get_name(dst->buffer->buft), GGML_SYCL_NAME "_Split") != 0);
 
     // dd = data device
     float * src0_ddf = (float *) src0->data;

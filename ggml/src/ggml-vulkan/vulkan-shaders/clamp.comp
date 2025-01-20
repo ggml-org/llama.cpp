@@ -12,6 +12,6 @@ void main() {
         return;
     }
 
-    const FLOAT_TYPE val = FLOAT_TYPE(data_a[src0_idx(idx)]);
-    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(val < p.param1 ? p.param1 : (val > p.param2 ? p.param2 : val));
+    const FLOAT_TYPE val = FLOAT_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(val < p.param1 ? p.param1 : (val > p.param2 ? p.param2 : val));
 }

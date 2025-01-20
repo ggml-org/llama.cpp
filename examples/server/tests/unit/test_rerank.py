@@ -53,3 +53,26 @@ def test_invalid_rerank_req(documents):
     })
     assert res.status_code == 400
     assert "error" in res.body
+
+
+@pytest.mark.parametrize(
+    "query,doc1,doc2,n_tokens",
+    [
+        ("Machine learning is", "A machine", "Learning is", 19),
+        ("Which city?", "Machine learning is ", "Paris, capitale de la", 26),
+    ]
+)
+def test_rerank_usage(query, doc1, doc2, n_tokens):
+    global server
+    server.start()
+
+    res = server.make_request("POST", "/rerank", data={
+        "query": query,
+        "documents": [
+            doc1,
+            doc2,
+        ]
+    })
+    assert res.status_code == 200
+    assert res.body['usage']['prompt_tokens'] == res.body['usage']['total_tokens']
+    assert res.body['usage']['prompt_tokens'] == n_tokens

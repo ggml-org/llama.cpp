@@ -5,3 +5,4 @@ numpy~=1.26.4
 openai~=1.55.3
 prometheus-client~=0.20.0
 requests~=2.32.3
+wget~=3.2

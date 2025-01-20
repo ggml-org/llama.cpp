@@ -1,12 +1,11 @@
 [tool.poetry]
 name = "gguf"
-version = "0.10.0"
+version = "0.15.0"
 description = "Read and write ML models in GGUF for GGML"
 authors = ["GGML <ggml@ggml.ai>"]
 packages = [
     {include = "gguf"},
     {include = "gguf/py.typed"},
-    {include = "scripts"},
 ]
 readme = "README.md"
 homepage = "https://ggml.ai"
@@ -33,7 +32,7 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-gguf-convert-endian = "scripts:gguf_convert_endian_entrypoint"
-gguf-dump = "scripts:gguf_dump_entrypoint"
-gguf-set-metadata = "scripts:gguf_set_metadata_entrypoint"
-gguf-new-metadata = "scripts:gguf_new_metadata_entrypoint"
+gguf-convert-endian = "gguf.scripts:gguf_convert_endian_entrypoint"
+gguf-dump = "gguf.scripts:gguf_dump_entrypoint"
+gguf-set-metadata = "gguf.scripts:gguf_set_metadata_entrypoint"
+gguf-new-metadata = "gguf.scripts:gguf_new_metadata_entrypoint"

@@ -126,6 +126,8 @@ connection = sqlite3.connect(input_file)
 cursor = connection.cursor()
 builds = cursor.execute("SELECT DISTINCT build_commit FROM test;").fetchall()
 
+commit_short_len = len(builds[0][0])
+
 try:
     repo = git.Repo(".", search_parent_directories=True)
 except git.InvalidGitRepositoryError:
@@ -138,11 +140,11 @@ def find_parent_in_data(commit: git.Commit):
     seen_hexsha8 = set()
     while heap:
         depth, current_commit = heapq.heappop(heap)
-        current_hexsha8 = commit.hexsha[:8]
+        current_hexsha8 = commit.hexsha[:commit_short_len]
         if (current_hexsha8,) in builds:
             return current_hexsha8
         for parent in commit.parents:
-            parent_hexsha8 = parent.hexsha[:8]
+            parent_hexsha8 = parent.hexsha[:commit_short_len]
             if parent_hexsha8 not in seen_hexsha8:
                 seen_hexsha8.add(parent_hexsha8)
                 heapq.heappush(heap, (depth + 1, parent))
@@ -156,9 +158,9 @@ def get_all_parent_hexsha8s(commit: git.Commit):
 
     while unvisited:
         current_commit = unvisited.pop(0)
-        visited.append(current_commit.hexsha[:8])
+        visited.append(current_commit.hexsha[:commit_short_len])
         for parent in current_commit.parents:
-            if parent.hexsha[:8] not in visited:
+            if parent.hexsha[:commit_short_len] not in visited:
                 unvisited.append(parent)
 
     return visited
@@ -169,10 +171,10 @@ def get_commit_name(hexsha8):
     if repo is None:
         return hexsha8
     for h in repo.heads:
-        if h.commit.hexsha[:8] == hexsha8:
+        if h.commit.hexsha[:commit_short_len] == hexsha8:
             return h.name
     for t in repo.tags:
-        if t.commit.hexsha[:8] == hexsha8:
+        if t.commit.hexsha[:commit_short_len] == hexsha8:
             return t.name
     return hexsha8
 
@@ -183,13 +185,13 @@ def get_commit_hexsha8(name):
         return None
     for h in repo.heads:
         if h.name == name:
-            return h.commit.hexsha[:8]
+            return h.commit.hexsha[:commit_short_len]
     for t in repo.tags:
         if t.name == name:
-            return t.commit.hexsha[:8]
+            return t.commit.hexsha[:commit_short_len]
     for c in repo.iter_commits("--all"):
-        if c.hexsha[:8] == name[:8]:
-            return c.hexsha[:8]
+        if c.hexsha[:commit_short_len] == name[:commit_short_len]:
+            return c.hexsha[:commit_short_len]
     return None
 
 

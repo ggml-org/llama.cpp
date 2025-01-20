@@ -1,0 +1,33 @@
+{
+  "demo": true,
+  "id": "conv-1734086746930",
+  "lastModified": 1734087548943,
+  "messages": [
+    {
+      "id": 1734086764521,
+      "role": "user",
+      "content": "this is a demo conversation, used in dev mode"
+    },
+    {
+      "id": 1734087548327,
+      "role": "assistant",
+      "content": "This is the formula:\n\n$\\frac{e^{x_i}}{\\sum_{j=1}^{n}e^{x_j}}$\n\nGiven an input vector \\(\\mathbf{x} = [x_1, x_2, \\ldots, x_n]\\)\n\n\\[\ny_i = \\frac{e^{x_i}}{\\sum_{j=1}^n e^{x_j}}\n\\]\n\nCode block latex:\n```latex\n\\frac{e^{x_i}}{\\sum_{j=1}^{n}e^{x_j}}\n```\n\nTest dollar sign: $1234 $4567\n\nInvalid latex syntax: $E = mc^$ and $$E = mc^$$",
+      "timings": {
+        "prompt_n": 1,
+        "prompt_ms": 28.923,
+        "predicted_n": 25,
+        "predicted_ms": 573.016
+      }
+    },
+    {
+      "id": 1734087548328,
+      "role": "user",
+      "content": "this is a demo conversation, used in dev mode"
+    },
+    {
+      "id": 1734087548329,
+      "role": "assistant",
+      "content": "Code block:\n```js\nconsole.log('hello world')\n```\n```sh\nls -la /dev\n```"
+    }
+  ]
+}

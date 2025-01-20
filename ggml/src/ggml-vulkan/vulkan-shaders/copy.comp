@@ -13,8 +13,8 @@ void main() {
     }
 
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
-    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(data_a[src0_idx(idx)]);
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
 #else
-    data_d[p.d_offset + dst_idx(idx)] = data_a[src0_idx(idx)];
+    data_d[get_doffset() + dst_idx(idx)] = data_a[get_aoffset() + src0_idx(idx)];
 #endif
 }

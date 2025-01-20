@@ -76,7 +76,7 @@ class LibLlamaModel:
         self.ffi = libllama.ffi
         if isinstance(mparams, dict):
             mparams = libllama.model_default_params(**mparams)
-        self.model = self.lib.llama_load_model_from_file(path_model.encode(), mparams)
+        self.model = self.lib.llama_model_load_from_file(path_model.encode(), mparams)
         if not self.model:
             raise RuntimeError("error: failed to load model '%s'" % path_model)
         if isinstance(cparams, dict):
@@ -92,7 +92,7 @@ class LibLlamaModel:
         if self.ctx:
             self.lib.llama_free(self.ctx)
         if self.model:
-            self.lib.llama_free_model(self.model)
+            self.lib.llama_model_free(self.model)
         self.ctx = None
         self.model = None
         self.lib = None

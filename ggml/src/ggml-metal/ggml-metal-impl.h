@@ -103,6 +103,21 @@ typedef struct {
 } ggml_metal_kargs_cpy;
 
 typedef struct {
+    int64_t  ne10;
+    int64_t  ne11;
+    int64_t  ne12;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t offs;
+    bool     inplace;
+} ggml_metal_kargs_set;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne01;
     int32_t  ne02;

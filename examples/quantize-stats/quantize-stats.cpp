@@ -1,7 +1,7 @@
-#include "common.h"
 #include "ggml.h"
 #include "llama.h"
-#include "llama-impl.h"
+#include "llama-context.h"
+#include "common.h"
 
 #include <algorithm>
 #include <cassert>
@@ -9,11 +9,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <map>
 #include <numeric>
 #include <regex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include <thread>
 #include <mutex>
@@ -311,7 +309,7 @@ int main(int argc, char ** argv) {
         auto mparams = llama_model_default_params();
         mparams.use_mlock  = false;
 
-        model = llama_load_model_from_file(params.model.c_str(), mparams);
+        model = llama_model_load_from_file(params.model.c_str(), mparams);
 
         if (model == NULL) {
             fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
@@ -321,22 +319,22 @@ int main(int argc, char ** argv) {
         auto cparams = llama_context_default_params();
         cparams.n_ctx = 256;
 
-        ctx = llama_new_context_with_model(model, cparams);
+        ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
-            llama_free_model(model);
+            llama_model_free(model);
             return 1;
         }
     }
 
-    const auto &tensors = llama_internal_get_tensor_map(ctx);
+    const auto & tensors = llama_internal_get_tensor_map(ctx);
 
     // check layer tensors
     int included_layers = 0;
     int64_t max_nelements = 0;
     bool is_f16 = false;
-    for (const auto& kv_tensor : tensors) {
+    for (const auto & kv_tensor : tensors) {
         if (!layer_included(params, kv_tensor.first)) {
             continue;
         }
@@ -349,7 +347,7 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s: error: Quantization should be tested with a float model, "
                 "this model contains already quantized layers (%s is type %d)\n", __func__, kv_tensor.first.c_str(), kv_tensor.second->type);
             llama_free(ctx);
-            llama_free_model(model);
+            llama_model_free(model);
             return 1;
         }
         included_layers++;
@@ -371,8 +369,8 @@ int main(int argc, char ** argv) {
         if (!params.include_types.empty() && std::find(params.include_types.begin(), params.include_types.end(), i) == params.include_types.end()) {
             continue;
         }
-        const auto *  qfns     = ggml_get_type_traits(type);
-        const auto *  qfns_cpu = ggml_get_type_traits_cpu(type);
+        const auto * qfns     = ggml_get_type_traits(type);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
         if (qfns_cpu->from_float && qfns->to_float) {
             if (params.verbose) {
                 printf("testing %s ...\n",  ggml_type_name(type));
@@ -382,7 +380,7 @@ int main(int argc, char ** argv) {
 
             error_stats global_stats {};
 
-            for (const auto& kv_tensor : tensors) {
+            for (const auto & kv_tensor : tensors) {
                 if (!layer_included(params, kv_tensor.first)) {
                     continue;
                 }
@@ -411,7 +409,7 @@ int main(int argc, char ** argv) {
 
 
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
     // report timing
     {
         const int64_t t_main_end_us = ggml_time_us();

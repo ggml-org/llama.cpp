@@ -97,14 +97,17 @@ int main(int argc, char ** argv) {
     // load the model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
         return 1;
     }
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
 
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
@@ -147,7 +150,7 @@ int main(int argc, char ** argv) {
     // check if the last token is SEP
     // it should be automatically added by the tokenizer when 'tokenizer.ggml.add_eos_token' is set to 'true'
     for (auto & inp : inputs) {
-        if (inp.empty() || inp.back() != llama_token_sep(model)) {
+        if (inp.empty() || inp.back() != llama_vocab_sep(vocab)) {
             LOG_WRN("%s: last token in the prompt is not SEP\n", __func__);
             LOG_WRN("%s: 'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header\n", __func__);
         }
@@ -180,7 +183,7 @@ int main(int argc, char ** argv) {
     }
 
     // allocate output
-    const int n_embd = llama_n_embd(model);
+    const int n_embd = llama_model_n_embd(model);
     std::vector<float> embeddings(n_embd_count * n_embd, 0);
     float * emb = embeddings.data();
 
@@ -316,8 +319,6 @@ int main(int argc, char ** argv) {
 
     // clean up
     llama_batch_free(batch);
-    llama_free(ctx);
-    llama_free_model(model);
     llama_backend_free();
 
     return 0;

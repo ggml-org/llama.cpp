@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <sstream>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -40,7 +39,7 @@ public:
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
-    bool load_imatrix(const char * file_name);
+    bool load_imatrix(const char * fname);
 private:
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
@@ -429,9 +428,13 @@ static void process_logits(
 }
 
 static bool compute_imatrix(llama_context * ctx, const common_params & params) {
-    const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const bool add_bos = llama_vocab_get_add_bos(vocab);
     const int n_ctx = llama_n_ctx(ctx);
+
+    GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -467,7 +470,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     const int n_chunk_max = tokens.size() / n_ctx;
 
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
-    const int n_vocab = llama_n_vocab(llama_get_model(ctx));
+    const int n_vocab = llama_vocab_n_tokens(vocab);
     const int n_batch = params.n_batch;
 
     int count = 0;
@@ -507,7 +510,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
 
             // add BOS token for the first batch of each chunk
             if (add_bos && j == 0) {
-                tokens[batch_start] = llama_token_bos(llama_get_model(ctx));
+                tokens[batch_start] = llama_vocab_bos(vocab);
             }
 
             common_batch_clear(batch);
@@ -618,14 +621,15 @@ int main(int argc, char ** argv) {
     // init
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
     if (model == nullptr || ctx == nullptr) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
     }
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     if (params.n_ctx > n_ctx_train) {
         LOG_WRN("%s: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, params.n_ctx);
@@ -654,9 +658,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n");
     llama_perf_context_print(ctx);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

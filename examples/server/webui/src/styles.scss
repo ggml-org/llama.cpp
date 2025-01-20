@@ -1,0 +1,48 @@
+@use "sass:meta";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.markdown {
+  h1, h2, h3, h4, h5, h6, ul, ol, li { all: revert; }
+  pre {
+    @apply whitespace-pre-wrap rounded-lg p-2;
+    border: 1px solid currentColor;
+  }
+  /* TODO: fix markdown table */
+}
+
+.show-on-hover {
+  @apply md:opacity-0 md:group-hover:opacity-100;
+}
+.btn-mini {
+  @apply cursor-pointer hover:shadow-md;
+}
+.chat-screen { max-width: 900px; }
+
+.chat-bubble-base-300 {
+  --tw-bg-opacity: 1;
+  --tw-text-opacity: 1;
+  @apply bg-base-300 text-base-content;
+}
+
+/* Highlight.js */
+[data-color-scheme='light'] {
+  @include meta.load-css('highlight.js/styles/stackoverflow-light');
+}
+[data-color-scheme='dark'] {
+  @include meta.load-css('highlight.js/styles/stackoverflow-dark');
+}
+[data-color-scheme='auto'] {
+  @media (prefers-color-scheme: light) {
+    @include meta.load-css('highlight.js/styles/stackoverflow-light');
+  }
+  @media (prefers-color-scheme: dark) {
+    @include meta.load-css('highlight.js/styles/stackoverflow-dark');
+  }
+}
+.hljs {
+  background: transparent !important;
+  padding: 0.5em !important;
+}

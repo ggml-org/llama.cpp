@@ -30,12 +30,12 @@ void main() {
     const bool is_src0 = i0 < p.ne00 && i1 < p.ne01 && i2 < p.ne02 && i3 < p.ne03;
 
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
-    data_d[p.d_offset + dst_idx] = D_TYPE(is_src0 ? data_a[src0_idx] : data_b[src1_idx]);
+    data_d[get_doffset() + dst_idx] = D_TYPE(is_src0 ? data_a[get_aoffset() + src0_idx] : data_b[get_boffset() + src1_idx]);
 #else
     if (is_src0) {
-        data_d[p.d_offset + dst_idx] = data_a[src0_idx];
+        data_d[get_doffset() + dst_idx] = data_a[get_aoffset() + src0_idx];
     } else {
-        data_d[p.d_offset + dst_idx] = data_b[src1_idx];
+        data_d[get_doffset() + dst_idx] = data_b[get_boffset() + src1_idx];
     }
 #endif
 }

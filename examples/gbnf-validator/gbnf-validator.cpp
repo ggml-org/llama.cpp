@@ -11,19 +11,15 @@
 static bool llama_grammar_validate(struct llama_grammar * grammar, const std::string & input_str, size_t & error_pos, std::string & error_msg) {
     const auto cpts = unicode_cpts_from_utf8(input_str);
 
-    const llama_grammar_rules  & rules      = llama_grammar_get_rules (grammar);
-          llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
+    auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
     size_t pos = 0;
     for (const auto & cpt : cpts) {
-        const llama_grammar_stacks stacks_prev = llama_grammar_get_stacks(grammar); // copy
-
-        llama_grammar_accept(rules, stacks_prev, cpt, stacks_cur);
+        llama_grammar_accept(grammar, cpt);
 
         if (stacks_cur.empty()) {
             error_pos = pos;
             error_msg = "Unexpected character '" + unicode_cpt_to_utf8(cpt) + "'";
-            stacks_cur = stacks_prev;
             return false;
         }
         ++pos;
@@ -82,7 +78,8 @@ int main(int argc, char** argv) {
 
     llama_grammar * grammar = llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root");
     if (grammar == nullptr) {
-        throw std::runtime_error("Failed to initialize llama_grammar");
+        fprintf(stdout, "Failed to initialize llama_grammar\n");
+        return 1;
     }
     // Read the input file
     std::string input_str;

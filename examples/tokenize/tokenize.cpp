@@ -31,6 +31,7 @@ static void print_usage_information(const char * argv0) {
     printf("    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
     printf("    --stdin                              read prompt from standard input.\n");
     printf("    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
+    printf("    --no-escape                          do not escape input (such as \\n, \\t, etc.).\n");
     printf("    --no-parse-special                   do not parse control tokens.\n");
     printf("    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
     printf("    --show-count                         print the total number of tokens.\n");
@@ -198,6 +199,7 @@ int main(int raw_argc, char ** raw_argv) {
     // variables where to put any arguments we see.
     bool printing_ids = false;
     bool no_bos = false;
+    bool no_escape = false;
     bool no_parse_special = false;
     bool disable_logging = false;
     bool show_token_count = false;
@@ -232,6 +234,9 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "--no-bos") {
             no_bos = true;
+        }
+        else if (arg == "--no-escape") {
+            no_escape = true;
         }
         else if (arg == "--no-parse-special") {
             no_parse_special = true;
@@ -333,14 +338,16 @@ int main(int raw_argc, char ** raw_argv) {
 
     llama_model_params model_params = llama_model_default_params();
     model_params.vocab_only = true;
-    llama_model * model = llama_load_model_from_file(model_path, model_params);
+    llama_model * model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
         fprintf(stderr, "Error: could not load model from file '%s'.\n", model_path);
         return 1;
     }
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     llama_context_params ctx_params = llama_context_default_params();
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Error: could not create context.\n");
         return 1;
@@ -360,12 +367,17 @@ int main(int raw_argc, char ** raw_argv) {
         prompt = stdin_buffer.str();
     }
 
-    const bool model_wants_add_bos = llama_add_bos_token(model);
+    const bool model_wants_add_bos = llama_vocab_get_add_bos(vocab);
     const bool add_bos = model_wants_add_bos && !no_bos;
     const bool parse_special = !no_parse_special;
+    const bool escape = !no_escape;
+
+    if (escape) {
+        string_process_escapes(prompt);
+    }
 
     std::vector<llama_token> tokens;
-    tokens = common_tokenize(model, prompt, add_bos, parse_special);
+    tokens = common_tokenize(vocab, prompt, add_bos, parse_special);
 
     if (printing_ids) {
         printf("[");
@@ -394,11 +406,11 @@ int main(int raw_argc, char ** raw_argv) {
     }
 
     if (show_token_count) {
-        printf("Total number of tokens: %ld\n", tokens.size());
+        printf("Total number of tokens: %zu\n", tokens.size());
     }
     // silence valgrind
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
 
     return 0;
 }

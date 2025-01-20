@@ -41,7 +41,7 @@ echo PASS
 echo
 
 # 2b. Test the sharded model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-split-00001-of-00006.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-00001-of-00006.gguf --n-predict 32
 echo PASS
 echo
 
@@ -51,7 +51,7 @@ echo PASS
 echo
 
 # 3b. Test the merged model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-merge.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge.gguf --n-predict 32
 echo PASS
 echo
 
@@ -61,7 +61,7 @@ echo PASS
 echo
 
 # 4b. Test the sharded model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-split-32-tensors-00001-of-00007.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-32-tensors-00001-of-00007.gguf --n-predict 32
 echo PASS
 echo
 
@@ -71,7 +71,7 @@ echo
 #echo
 
 # 5b. Test the merged model is loading properly
-#$MAIN --model $WORK_PATH/ggml-model-merge-2.gguf --n-predict 32
+#$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge-2.gguf --n-predict 32
 #echo PASS
 #echo
 
@@ -81,7 +81,7 @@ echo PASS
 echo
 
 # 6b. Test the sharded model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-split-2G-00001-of-00002.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-split-2G-00001-of-00002.gguf --n-predict 32
 echo PASS
 echo
 

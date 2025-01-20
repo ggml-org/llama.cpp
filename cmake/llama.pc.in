@@ -6,5 +6,5 @@ includedir=${prefix}/include
 Name: llama
 Description: Port of Facebook's LLaMA model in C/C++
 Version: @PROJECT_VERSION@
-Libs: -L${libdir} -lllama
+Libs: -L${libdir} -lggml  -lggml-base -lllama
 Cflags: -I${includedir}

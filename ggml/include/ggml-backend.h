@@ -203,6 +203,8 @@ extern "C" {
     // Backend registry
     //
 
+    GGML_API void ggml_backend_device_register(ggml_backend_dev_t device);
+
     // Backend (reg) enumeration
     GGML_API size_t             ggml_backend_reg_count(void);
     GGML_API ggml_backend_reg_t ggml_backend_reg_get(size_t index);
@@ -228,6 +230,7 @@ extern "C" {
     GGML_API void               ggml_backend_unload(ggml_backend_reg_t reg);
     // Load all known backends from dynamic libraries
     GGML_API void               ggml_backend_load_all(void);
+    GGML_API void               ggml_backend_load_all_from_path(const char * dir_path);
 
     //
     // Backend scheduler

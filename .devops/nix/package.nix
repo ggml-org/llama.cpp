@@ -31,6 +31,7 @@
   # Increases the runtime closure size by ~700M
   useMpi ? false,
   useRocm ? config.rocmSupport,
+  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   enableCurl ? true,
   useVulkan ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
@@ -188,7 +189,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" (builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets))
+      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
     ]
     ++ optionals useMetalKit [
       (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")

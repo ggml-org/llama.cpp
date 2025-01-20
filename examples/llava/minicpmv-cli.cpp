@@ -31,7 +31,7 @@ static struct llama_model * llava_init(common_params * params) {
 
     llama_model_params model_params = common_model_params_to_llama(*params);
 
-    llama_model * model = llama_load_model_from_file(params->model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params->model.c_str(), model_params);
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return NULL;
@@ -54,7 +54,7 @@ static struct llava_context * llava_init_context(common_params * params, llama_m
         ctx_params.n_ctx = params->n_ctx;
     }
 
-    llama_context * ctx_llama = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx_llama = llama_init_from_model(model, ctx_params);
 
     if (ctx_llama == NULL) {
         LOG_ERR("%s: failed to create the llama_context\n" , __func__);
@@ -75,7 +75,7 @@ static void llava_free(struct llava_context * ctx_llava) {
     }
 
     llama_free(ctx_llava->ctx_llama);
-    llama_free_model(ctx_llava->model);
+    llama_model_free(ctx_llava->model);
     llama_backend_free();
 }
 
@@ -167,8 +167,12 @@ static const char * sample(struct common_sampler * smpl,
                            int * n_past) {
     const llama_token id = common_sampler_sample(smpl, ctx_llama, -1);
     common_sampler_accept(smpl, id, true);
+
+    const llama_model * model = llama_get_model(ctx_llama);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     static std::string ret;
-    if (llama_token_is_eog(llama_get_model(ctx_llama), id)) {
+    if (llama_vocab_is_eog(vocab, id)) {
         ret = "</s>";
     } else {
         ret = common_token_to_piece(ctx_llama, id);

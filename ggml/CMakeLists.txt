@@ -32,6 +32,13 @@ else()
     endif()
 endif()
 
+# remove the lib prefix on win32 mingw
+if (WIN32)
+    set(CMAKE_STATIC_LIBRARY_PREFIX "")
+    set(CMAKE_SHARED_LIBRARY_PREFIX "")
+    set(CMAKE_SHARED_MODULE_PREFIX  "")
+endif()
+
 option(BUILD_SHARED_LIBS "ggml: build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
 option(GGML_BACKEND_DL   "ggml: build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
 
@@ -67,10 +74,10 @@ if (NOT GGML_CUDA_GRAPHS_DEFAULT)
 endif()
 
 # general
-option(GGML_STATIC "ggml: static link libraries"         OFF)
-option(GGML_NATIVE "ggml: enable -march=native flag"     ${GGML_NATIVE_DEFAULT})
-option(GGML_LTO    "ggml: enable link time optimization" OFF)
-option(GGML_CCACHE "ggml: use ccache if available"       ON)
+option(GGML_STATIC "ggml: static link libraries"                     OFF)
+option(GGML_NATIVE "ggml: optimize the build for the current system" ${GGML_NATIVE_DEFAULT})
+option(GGML_LTO    "ggml: enable link time optimization"             OFF)
+option(GGML_CCACHE "ggml: use ccache if available"                   ON)
 
 # debug
 option(GGML_ALL_WARNINGS           "ggml: enable all compiler warnings"                   ON)
@@ -113,8 +120,9 @@ endif()
 option(GGML_LASX             "ggml: enable lasx"             ON)
 option(GGML_LSX              "ggml: enable lsx"              ON)
 option(GGML_RVV              "ggml: enable rvv"              ON)
-option(GGML_SVE              "ggml: enable SVE"              OFF)
+
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
+set(GGML_CPU_ARM_ARCH "" CACHE STRING "ggml: CPU architecture for ARM")
 
 
 if (WIN32)
@@ -171,6 +179,14 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
+
+option(GGML_OPENCL                          "ggml: use OpenCL"                                OFF)
+option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
+option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
+option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
+
+# toolchain for vulkan-shaders-gen
+set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
 # extra artifacts
 option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
@@ -230,7 +246,8 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-metal.h
     include/ggml-rpc.h
     include/ggml-sycl.h
-    include/ggml-vulkan.h)
+    include/ggml-vulkan.h
+    include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #if (GGML_METAL)
@@ -238,26 +255,6 @@ set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
 #endif()
 install(TARGETS ggml LIBRARY PUBLIC_HEADER)
 install(TARGETS ggml-base LIBRARY)
-
-# FIXME: this should be done in the backend cmake files
-if (GGML_METAL)
-    # FIXME: does this need to be installed with GGML_METAL_EMBED_LIBRARY?
-    install(
-        FILES src/ggml-metal/ggml-metal.metal
-        PERMISSIONS
-            OWNER_READ
-            OWNER_WRITE
-            GROUP_READ
-            WORLD_READ
-        DESTINATION ${CMAKE_INSTALL_BINDIR})
-
-    if (NOT GGML_METAL_EMBED_LIBRARY)
-        install(
-            FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-            DESTINATION ${CMAKE_INSTALL_BINDIR}
-        )
-    endif()
-endif()
 
 if (GGML_STANDALONE)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ggml.pc.in

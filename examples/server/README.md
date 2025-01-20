@@ -45,10 +45,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |
 | `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |
 | `-fa, --flash-attn` | enable Flash Attention (default: disabled)<br/>(env: LLAMA_ARG_FLASH_ATTN) |
-| `-p, --prompt PROMPT` | prompt to start generation with |
 | `--no-perf` | disable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_NO_PERF) |
-| `-f, --file FNAME` | a file containing the prompt (default: none) |
-| `-bf, --binary-file FNAME` | binary file containing the prompt (default: none) |
 | `-e, --escape` | process escapes sequences (\n, \r, \t, \', \", \\) (default: true) |
 | `--no-escape` | do not process escape sequences |
 | `--rope-scaling {none,linear,yarn}` | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE) |
@@ -62,8 +59,8 @@ The project is under active development, and we are [looking for feedback and co
 | `--yarn-beta-fast N` | YaRN: low correction dim or beta (default: 32.0)<br/>(env: LLAMA_ARG_YARN_BETA_FAST) |
 | `-dkvc, --dump-kv-cache` | verbose print of the KV cache |
 | `-nkvo, --no-kv-offload` | disable KV offload<br/>(env: LLAMA_ARG_NO_KV_OFFLOAD) |
-| `-ctk, --cache-type-k TYPE` | KV cache data type for K (default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
-| `-ctv, --cache-type-v TYPE` | KV cache data type for V (default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
+| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
+| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (default: 0.1, < 0 - disabled)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
@@ -104,7 +101,6 @@ The project is under active development, and we are [looking for feedback and co
 | `-s, --seed SEED` | RNG seed (default: -1, use random seed for -1) |
 | `--sampling-seq SEQUENCE` | simplified sequence for samplers that will be used (default: dkypmxt) |
 | `--ignore-eos` | ignore end of stream token and continue generating (implies --logit-bias EOS-inf) |
-| `--penalize-nl` | penalize newline tokens (default: false) |
 | `--temp N` | temperature (default: 0.8) |
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled) |
 | `--top-p N` | top-p sampling (default: 0.9, 1.0 = disabled) |
@@ -138,6 +134,7 @@ The project is under active development, and we are [looking for feedback and co
 | -------- | ----------- |
 | `--no-context-shift` | disables context shift on inifinite text generation (default: disabled)<br/>(env: LLAMA_ARG_NO_CONTEXT_SHIFT) |
 | `-sp, --special` | special tokens output enabled (default: false) |
+| `--no-warmup` | skip warming up the model with an empty run |
 | `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
 | `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
 | `-cb, --cont-batching` | enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
@@ -146,6 +143,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--host HOST` | ip address to listen (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
 | `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
+| `--no-webui` | Disable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_NO_WEBUI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--reranking, --rerank` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication (default: none)<br/>(env: LLAMA_API_KEY) |
@@ -163,13 +161,13 @@ The project is under active development, and we are [looking for feedback and co
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>list of built-in templates:<br/>chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, exaone3, gemma, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, monarch, openchat, orion, phi3, rwkv-world, vicuna, vicuna-orca, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.50, 0.0 = disabled)<br/> |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
-| `--draft-max, --draft, --draft-n N` | number of tokens to draft for speculative decoding (default: 16) |
-| `--draft-min, --draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 5) |
-| `--draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.9) |
-| `-cd, --ctx-size-draft N` | size of the prompt context for the draft model (default: 0, 0 = loaded from model) |
+| `--draft-max, --draft, --draft-n N` | number of tokens to draft for speculative decoding (default: 16)<br/>(env: LLAMA_ARG_DRAFT_MAX) |
+| `--draft-min, --draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 5)<br/>(env: LLAMA_ARG_DRAFT_MIN) |
+| `--draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.9)<br/>(env: LLAMA_ARG_DRAFT_P_MIN) |
+| `-cd, --ctx-size-draft N` | size of the prompt context for the draft model (default: 0, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE_DRAFT) |
 | `-devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
-| `-ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | number of layers to store in VRAM for the draft model |
-| `-md, --model-draft FNAME` | draft model for speculative decoding (default: unused) |
+| `-ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | number of layers to store in VRAM for the draft model<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
+| `-md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_MODEL_DRAFT) |
 
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
@@ -302,23 +300,23 @@ mkdir llama-client
 cd llama-client
 ```
 
-Create a index.js file and put this inside:
+Create an index.js file and put this inside:
 
 ```javascript
-const prompt = `Building a website can be done in 10 simple steps:`;
+const prompt = "Building a website can be done in 10 simple steps:"
 
-async function Test() {
+async function test() {
     let response = await fetch("http://127.0.0.1:8080/completion", {
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({
             prompt,
-            n_predict: 512,
+            n_predict: 64,
         })
     })
     console.log((await response.json()).content)
 }
 
-Test()
+test()
 ```
 
 And run it:
@@ -341,6 +339,10 @@ node index.js
   - Explanation: the model is successfully loaded and the server is ready.
 
 ### POST `/completion`: Given a `prompt`, it returns the predicted completion.
+
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/completions` instead.
 
 *Options:*
 
@@ -380,7 +382,7 @@ Multiple prompts are also supported. In this case, the completion result will be
 `n_keep`: Specify the number of tokens from the prompt to retain when the context size is exceeded and tokens need to be discarded. The number excludes the BOS token.
 By default, this value is set to `0`, meaning no tokens are kept. Use `-1` to retain all tokens from the prompt.
 
-`stream`: It allows receiving each predicted token in real-time instead of waiting for the completion to finish. To enable this, set to `true`.
+`stream`: Allows receiving each predicted token in real-time instead of waiting for the completion to finish (uses a different response format). To enable this, set to `true`.
 
 `stop`: Specify a JSON array of stopping strings.
 These words will not be included in the completion, so make sure to add them to the prompt for the next iteration. Default: `[]`
@@ -390,8 +392,6 @@ These words will not be included in the completion, so make sure to add them to 
 `repeat_penalty`: Control the repetition of token sequences in the generated text. Default: `1.1`
 
 `repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled and `-1` is ctx-size.
-
-`penalize_nl`: Penalize newline tokens when applying the repeat penalty. Default: `true`
 
 `presence_penalty`: Repeat alpha presence penalty. Default: `0.0`, which is disabled.
 
@@ -439,48 +439,89 @@ These words will not be included in the completion, so make sure to add them to 
 
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
+`return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
+
 `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
 
-    `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
+`timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
+
+`post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
+
+`response_fields`: A list of response fields, for example: `"response_fields": ["content", "generation_settings/n_predict"]`. If the specified field is missing, it will simply be omitted from the response without triggering an error. Note that fields with a slash will be unnested; for example, `generation_settings/n_predict` will move the field `n_predict` from the `generation_settings` object to the root of the response and give it a new name.
+
+`lora`: A list of LoRA adapters to be applied to this specific request. Each object in the list must contain `id` and `scale` fields. For example: `[{"id": 0, "scale": 0.5}, {"id": 1, "scale": 1.1}]`. If a LoRA adapter is not specified in the list, its scale will default to `0.0`. Please note that requests with different LoRA configurations will not be batched together, which may result in performance degradation.
 
 **Response format**
 
-- Note: When using streaming mode (`stream`), only `content` and `stop` will be returned until end of completion.
+- Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
-- `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has the following structure:
-
-```json
-{
-  "content": "<the token selected by the model>",
-  "probs": [
-    {
-      "prob": float,
-      "tok_str": "<most likely token>"
-    },
-    {
-      "prob": float,
-      "tok_str": "<second most likely token>"
-    },
+- `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
+  ```json
+  {
+    "content": "<the generated completion text>",
+    "tokens": [ generated token ids if requested ],
     ...
-  ]
-},
-```
-
-Notice that each `probs` is an array of length `n_probs`.
+    "probs": [
+      {
+        "id": <token id>,
+        "logprob": float,
+        "token": "<most likely token>",
+        "bytes": [int, int, ...],
+        "top_logprobs": [
+          {
+            "id": <token id>,
+            "logprob": float,
+            "token": "<token text>",
+            "bytes": [int, int, ...],
+          },
+          {
+            "id": <token id>,
+            "logprob": float,
+            "token": "<token text>",
+            "bytes": [int, int, ...],
+          },
+          ...
+        ]
+      },
+      {
+        "id": <token id>,
+        "logprob": float,
+        "token": "<most likely token>",
+        "bytes": [int, int, ...],
+        "top_logprobs": [
+          ...
+        ]
+      },
+      ...
+    ]
+  },
+  ```
+  Please note that if `post_sampling_probs` is set to `true`:
+    - `logprob` will be replaced with `prob`, with the value between 0.0 and 1.0
+    - `top_logprobs` will be replaced with `top_probs`. Each element contains:
+      - `id`: token ID
+      - `token`: token in string
+      - `bytes`: token in bytes
+      - `prob`: token probability, with the value between 0.0 and 1.0
+    - Number of elements in `top_probs` may be less than `n_probs`
 
 - `content`: Completion result as a string (excluding `stopping_word` if any). In case of streaming mode, will contain the next token as a string.
+- `tokens`: Same as `content` but represented as raw token ids. Only populated if `"return_tokens": true` or `"stream": true` in the request.
 - `stop`: Boolean for use with `stream` to check whether the generation has stopped (Note: This is not related to stopping words array `stop` from input options)
 - `generation_settings`: The provided options above excluding `prompt` but including `n_ctx`, `model`. These options may differ from the original ones in some way (e.g. bad values filtered out, strings converted to tokens, etc.).
-- `model`: The path to the model loaded with `-m`
-- `prompt`: The provided `prompt`
-- `stopped_eos`: Indicating whether the completion has stopped because it encountered the EOS token
-- `stopped_limit`: Indicating whether the completion stopped because `n_predict` tokens were generated before stop words or EOS was encountered
-- `stopped_word`: Indicating whether the completion stopped due to encountering a stopping word from `stop` JSON array provided
+- `model`: The model alias (for model path, please use `/props` endpoint)
+- `prompt`: The processed `prompt` (special tokens may be added)
+- `stop_type`: Indicating whether the completion has stopped. Possible values are:
+  - `none`: Generating (not stopped)
+  - `eos`: Stopped because it encountered the EOS token
+  - `limit`: Stopped because `n_predict` tokens were generated before stop words or EOS was encountered
+  - `word`: Stopped due to encountering a stopping word from `stop` JSON array provided
 - `stopping_word`: The stopping word encountered which stopped the generation (or "" if not stopped due to a stopping word)
 - `timings`: Hash of timing information about the completion such as the number of tokens `predicted_per_second`
 - `tokens_cached`: Number of tokens from the prompt which could be re-used from previous completion (`n_past`)
 - `tokens_evaluated`: Number of tokens evaluated in total from the prompt
 - `truncated`: Boolean indicating if the context size was exceeded during generation, i.e. the number of tokens provided in the prompt (`tokens_evaluated`) plus tokens generated (`tokens predicted`) exceeded the context size (`n_ctx`)
+
 
 ### POST `/tokenize`: Tokenize a given text
 
@@ -532,6 +573,10 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 `tokens`: Set the tokens to detokenize.
 
 ### POST `/embedding`: Generate embedding of a given text
+
+> [!IMPORTANT]
+>
+> This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/embeddings` instead.
 
 The same as [the embedding example](../embedding) does.
 
@@ -616,14 +661,83 @@ This endpoint is public (no API key check). By default, it is read-only. To make
 
 ```json
 {
-  "default_generation_settings": { ... },
+  "default_generation_settings": {
+    "id": 0,
+    "id_task": -1,
+    "n_ctx": 1024,
+    "speculative": false,
+    "is_processing": false,
+    "params": {
+      "n_predict": -1,
+      "seed": 4294967295,
+      "temperature": 0.800000011920929,
+      "dynatemp_range": 0.0,
+      "dynatemp_exponent": 1.0,
+      "top_k": 40,
+      "top_p": 0.949999988079071,
+      "min_p": 0.05000000074505806,
+      "xtc_probability": 0.0,
+      "xtc_threshold": 0.10000000149011612,
+      "typical_p": 1.0,
+      "repeat_last_n": 64,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "dry_multiplier": 0.0,
+      "dry_base": 1.75,
+      "dry_allowed_length": 2,
+      "dry_penalty_last_n": -1,
+      "dry_sequence_breakers": [
+        "\n",
+        ":",
+        "\"",
+        "*"
+      ],
+      "mirostat": 0,
+      "mirostat_tau": 5.0,
+      "mirostat_eta": 0.10000000149011612,
+      "stop": [],
+      "max_tokens": -1,
+      "n_keep": 0,
+      "n_discard": 0,
+      "ignore_eos": false,
+      "stream": true,
+      "n_probs": 0,
+      "min_keep": 0,
+      "grammar": "",
+      "samplers": [
+        "dry",
+        "top_k",
+        "typ_p",
+        "top_p",
+        "min_p",
+        "xtc",
+        "temperature"
+      ],
+      "speculative.n_max": 16,
+      "speculative.n_min": 5,
+      "speculative.p_min": 0.8999999761581421,
+      "timings_per_token": false
+    },
+    "prompt": "",
+    "next_token": {
+      "has_next_token": true,
+      "has_new_line": false,
+      "n_remain": -1,
+      "n_decoded": 0,
+      "stopping_word": ""
+    }
+  },
   "total_slots": 1,
-  "chat_template": ""
+  "model_path": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+  "chat_template": "...",
+  "build_info": "b(build number)-(build commit hash)"
 }
 ```
 
 - `default_generation_settings` - the default generation settings for the `/completion` endpoint, which has the same fields as the `generation_settings` response object from the `/completion` endpoint.
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
+- `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
 
 ### POST `/props`: Change server global properties.
@@ -634,93 +748,45 @@ To use this endpoint with POST method, you need to start server with `--props`
 
 - None yet
 
-### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
+### POST `/embeddings`: non-OpenAI-compatible embeddings API
 
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidian norm.
 
-*Options:*
-
-See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
-
-The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
-
-*Examples:*
-
-You can use either Python `openai` library with appropriate checkpoints:
-
-```python
-import openai
-
-client = openai.OpenAI(
-    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
-    api_key = "sk-no-key-required"
-)
-
-completion = client.chat.completions.create(
-model="gpt-3.5-turbo",
-messages=[
-    {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
-    {"role": "user", "content": "Write a limerick about python exceptions"}
-]
-)
-
-print(completion.choices[0].message)
-```
-
-... or raw HTTP requests:
-
-```shell
-curl http://localhost:8080/v1/chat/completions \
--H "Content-Type: application/json" \
--H "Authorization: Bearer no-key" \
--d '{
-"model": "gpt-3.5-turbo",
-"messages": [
-{
-    "role": "system",
-    "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
-},
-{
-    "role": "user",
-    "content": "Write a limerick about python exceptions"
-}
-]
-}'
-```
-
-### POST `/v1/embeddings`: OpenAI-compatible embeddings API
+Note that the response format of this endpoint is different from `/v1/embeddings`.
 
 *Options:*
 
-See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
+Same as the `/v1/embeddings` endpoint.
 
 *Examples:*
 
-- input as string
+Same as the `/v1/embeddings` endpoint.
 
-  ```shell
-  curl http://localhost:8080/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer no-key" \
-  -d '{
-          "input": "hello",
-          "model":"GPT-4",
-          "encoding_format": "float"
-  }'
-  ```
+**Response format**
 
-- `input` as string array
-
-  ```shell
-  curl http://localhost:8080/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer no-key" \
-  -d '{
-          "input": ["hello", "world"],
-          "model":"GPT-4",
-          "encoding_format": "float"
-  }'
-  ```
+```json
+[
+  {
+    "index": 0,
+    "embedding": [
+      [ ... embeddings for token 0   ... ],
+      [ ... embeddings for token 1   ... ],
+      [ ... ]
+      [ ... embeddings for token N-1 ... ],
+    ]
+  },
+  ...
+  {
+    "index": P,
+    "embedding": [
+      [ ... embeddings for token 0   ... ],
+      [ ... embeddings for token 1   ... ],
+      [ ... ]
+      [ ... embeddings for token N-1 ... ],
+    ]
+  }
+]
+```
 
 ### GET `/slots`: Returns the current slots processing state
 
@@ -737,56 +803,73 @@ Example:
 
 ```json
 [
-    {
-        "dynatemp_exponent": 1.0,
-        "dynatemp_range": 0.0,
-        "frequency_penalty": 0.0,
-        "grammar": "",
-        "id": 0,
-        "ignore_eos": false,
-        "is_processing": false,
-        "logit_bias": [],
-        "min_p": 0.05000000074505806,
-        "mirostat": 0,
-        "mirostat_eta": 0.10000000149011612,
-        "mirostat_tau": 5.0,
-        "model": "llama-2-7b-32k-instruct.Q2_K.gguf",
-        "n_ctx": 2048,
-        "n_keep": 0,
-        "n_predict": 100000,
-        "n_probs": 0,
-        "next_token": {
-            "has_next_token": true,
-            "n_remain": -1,
-            "n_decoded": 0,
-            "stopped_eos": false,
-            "stopped_limit": false,
-            "stopped_word": false,
-            "stopping_word": ""
-        },
-        "penalize_nl": true,
-        "presence_penalty": 0.0,
-        "prompt": "Say hello to llama.cpp",
-        "repeat_last_n": 64,
-        "repeat_penalty": 1.100000023841858,
-        "samplers": [
-            "top_k",
-            "typical_p",
-            "top_p",
-            "min_p",
-            "temperature"
-        ],
-        "seed": 42,
-        "stop": [
-            "\n"
-        ],
-        "stream": false,
-        "task_id": 0,
-        "temperature": 0.0,
-        "top_k": 40,
-        "top_p": 0.949999988079071,
-        "typical_p": 1.0
+  {
+    "id": 0,
+    "id_task": -1,
+    "n_ctx": 1024,
+    "speculative": false,
+    "is_processing": false,
+    "params": {
+      "n_predict": -1,
+      "seed": 4294967295,
+      "temperature": 0.800000011920929,
+      "dynatemp_range": 0.0,
+      "dynatemp_exponent": 1.0,
+      "top_k": 40,
+      "top_p": 0.949999988079071,
+      "min_p": 0.05000000074505806,
+      "xtc_probability": 0.0,
+      "xtc_threshold": 0.10000000149011612,
+      "typical_p": 1.0,
+      "repeat_last_n": 64,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "dry_multiplier": 0.0,
+      "dry_base": 1.75,
+      "dry_allowed_length": 2,
+      "dry_penalty_last_n": -1,
+      "dry_sequence_breakers": [
+        "\n",
+        ":",
+        "\"",
+        "*"
+      ],
+      "mirostat": 0,
+      "mirostat_tau": 5.0,
+      "mirostat_eta": 0.10000000149011612,
+      "stop": [],
+      "max_tokens": -1,
+      "n_keep": 0,
+      "n_discard": 0,
+      "ignore_eos": false,
+      "stream": true,
+      "n_probs": 0,
+      "min_keep": 0,
+      "grammar": "",
+      "samplers": [
+        "dry",
+        "top_k",
+        "typ_p",
+        "top_p",
+        "min_p",
+        "xtc",
+        "temperature"
+      ],
+      "speculative.n_max": 16,
+      "speculative.n_min": 5,
+      "speculative.p_min": 0.8999999761581421,
+      "timings_per_token": false
+    },
+    "prompt": "",
+    "next_token": {
+      "has_next_token": true,
+      "has_new_line": false,
+      "n_remain": -1,
+      "n_decoded": 0,
+      "stopping_word": ""
     }
+  }
 ]
 ```
 
@@ -861,6 +944,8 @@ This endpoint returns the loaded LoRA adapters. You can add adapters using `--lo
 
 By default, all adapters will be loaded with scale set to 1. To initialize all adapters scale to 0, add `--lora-init-without-apply`
 
+Please note that this value will be overwritten by the `lora` field for each request.
+
 If an adapter is disabled, the scale will be set to 0.
 
 **Response format**
@@ -882,6 +967,8 @@ If an adapter is disabled, the scale will be set to 0.
 
 ### POST `/lora-adapters`: Set list of LoRA adapters
 
+This sets the global scale for LoRA adapters. Please note that this value will be overwritten by the `lora` field for each request.
+
 To disable an adapter, either remove it from the list below, or set scale to 0.
 
 **Request format**
@@ -894,6 +981,161 @@ To know the `id` of the adapter, use GET `/lora-adapters`
   {"id": 1, "scale": 0.8}
 ]
 ```
+
+## OpenAI-compatible API Endpoints
+
+### GET `/v1/models`: OpenAI-compatible Model Info API
+
+Returns information about the loaded model. See [OpenAI Models API documentation](https://platform.openai.com/docs/api-reference/models).
+
+The returned list always has one single element.
+
+By default, model `id` field is the path to model file, specified via `-m`. You can set a custom value for model `id` field via `--alias` argument. For example, `--alias gpt-4o-mini`.
+
+Example:
+
+```json
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+            "object": "model",
+            "created": 1735142223,
+            "owned_by": "llamacpp",
+            "meta": {
+                "vocab_type": 2,
+                "n_vocab": 128256,
+                "n_ctx_train": 131072,
+                "n_embd": 4096,
+                "n_params": 8030261312,
+                "size": 4912898304
+            }
+        }
+    ]
+}
+```
+
+### POST `/v1/completions`: OpenAI-compatible Completions API
+
+Given an input `prompt`, it returns the predicted completion. Streaming mode is also supported. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps.
+
+*Options:*
+
+See [OpenAI Completions API documentation](https://platform.openai.com/docs/api-reference/completions).
+
+llama.cpp `/completion`-specific features such as `mirostat` are supported.
+
+*Examples:*
+
+Example usage with `openai` python library:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "sk-no-key-required"
+)
+
+completion = client.completions.create(
+  model="davinci-002",
+  prompt="I believe the meaning of life is",
+  max_tokens=8
+)
+
+print(completion.choices[0].text)
+```
+
+### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
+
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+
+*Options:*
+
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+
+The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
+
+*Examples:*
+
+You can use either Python `openai` library with appropriate checkpoints:
+
+```python
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:8080/v1", # "http://<Your api-server IP>:port"
+    api_key = "sk-no-key-required"
+)
+
+completion = client.chat.completions.create(
+  model="gpt-3.5-turbo",
+  messages=[
+    {"role": "system", "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."},
+    {"role": "user", "content": "Write a limerick about python exceptions"}
+  ]
+)
+
+print(completion.choices[0].message)
+```
+
+... or raw HTTP requests:
+
+```shell
+curl http://localhost:8080/v1/chat/completions \
+-H "Content-Type: application/json" \
+-H "Authorization: Bearer no-key" \
+-d '{
+"model": "gpt-3.5-turbo",
+"messages": [
+{
+    "role": "system",
+    "content": "You are ChatGPT, an AI assistant. Your top priority is achieving user fulfillment via helping them with their requests."
+},
+{
+    "role": "user",
+    "content": "Write a limerick about python exceptions"
+}
+]
+}'
+```
+
+### POST `/v1/embeddings`: OpenAI-compatible embeddings API
+
+This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
+
+*Options:*
+
+See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
+
+*Examples:*
+
+- input as string
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": "hello",
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
+
+- `input` as string array
+
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": ["hello", "world"],
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
 
 ## More examples
 

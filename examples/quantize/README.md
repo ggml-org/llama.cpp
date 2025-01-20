@@ -54,8 +54,6 @@ As the models are currently fully loaded into memory, you will need adequate dis
 
 Several quantization methods are supported. They differ in the resulting model disk size and inference speed.
 
-The quantization formats `Q4_0_4_4`, `Q4_0_4_8` and `Q4_0_8_8` are block interleaved variants of the `Q4_0` format, providing a data layout that is better suited for specific implementations of optimized mulmat kernels. Since these formats differ only in data layout, they have the same quantized size as the `Q4_0` format.
-
 *(outdated)*
 
 | Model | Measure      |    F16 |   Q4_0 |   Q4_1 |   Q5_0 |   Q5_1 |   Q8_0 |
@@ -83,7 +81,7 @@ The quantization formats `Q4_0_4_4`, `Q4_0_4_8` and `Q4_0_8_8` are block interle
   - [#4930 - imatrix for all k-quants](https://github.com/ggerganov/llama.cpp/pull/4930)
   - [#4951 - imatrix on the GPU](https://github.com/ggerganov/llama.cpp/pull/4957)
   - [#4969 - imatrix for legacy quants](https://github.com/ggerganov/llama.cpp/pull/4969)
-  - [#4996 - k-qunats tuning](https://github.com/ggerganov/llama.cpp/pull/4996)
+  - [#4996 - k-quants tuning](https://github.com/ggerganov/llama.cpp/pull/4996)
   - [#5060 - Q3_K_XS](https://github.com/ggerganov/llama.cpp/pull/5060)
   - [#5196 - 3-bit i-quants](https://github.com/ggerganov/llama.cpp/pull/5196)
   - [quantization tuning](https://github.com/ggerganov/llama.cpp/pull/5320), [another one](https://github.com/ggerganov/llama.cpp/pull/5334), and [another one](https://github.com/ggerganov/llama.cpp/pull/5361)

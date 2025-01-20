@@ -32,13 +32,10 @@ static bool test_build_grammar_fails(const std::string & grammar_str) {
 static bool match_string(const std::string & input, llama_grammar * grammar) {
     const auto cpts = unicode_cpts_from_utf8(input);
 
-    const llama_grammar_rules  & rules      = llama_grammar_get_rules (grammar);
-          llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
+    auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
     for (const auto & cpt : cpts) {
-        const llama_grammar_stacks stacks_prev = llama_grammar_get_stacks(grammar); // copy
-
-        llama_grammar_accept(rules, stacks_prev, cpt, stacks_cur);
+        llama_grammar_accept(grammar, cpt);
 
         if (stacks_cur.empty()) {
             // no stacks means that the grammar failed to match at this point
@@ -63,7 +60,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
     auto * grammar = build_grammar(grammar_str);
 
     // Save the original grammar stacks so that we can reset after every new string we want to test
-    const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar);
+    const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar); // copy
 
     llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
 

@@ -304,7 +304,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(KQV);
 
     // On AMD the tile kernels perform poorly, use the vec kernel instead:
-    if (cc >= CC_OFFSET_AMD) {
+    if (cc >= GGML_CUDA_CC_OFFSET_AMD) {
         if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
             ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
         } else {

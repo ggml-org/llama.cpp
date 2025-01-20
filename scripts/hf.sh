@@ -26,7 +26,7 @@ function has_cmd {
 }
 
 if has_cmd wget; then
-    cmd="wget -q --show-progress -c -O %s/%s %s"
+    cmd="wget -q -c -O %s/%s %s"
 elif has_cmd curl; then
     cmd="curl -C - -f --output-dir %s -o %s -L %s"
 else

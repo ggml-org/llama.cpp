@@ -12,6 +12,6 @@ void main() {
         return;
     }
 
-    const FLOAT_TYPE val = FLOAT_TYPE(data_a[src0_idx(idx)]);
-    data_d[p.d_offset + dst_idx(idx)] = D_TYPE(val * val);
+    const FLOAT_TYPE val = FLOAT_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(val * val);
 }

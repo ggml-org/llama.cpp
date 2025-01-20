@@ -3,8 +3,6 @@
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11700
 
 #ifdef USE_CUB
-// On Windows CUB uses libraries with variables called CC_PASCAL which conflict with the define in common.cuh.
-// For this reason CUB must be included BEFORE anything else.
 #include <cub/cub.cuh>
 using namespace cub;
 #endif // USE_CUB

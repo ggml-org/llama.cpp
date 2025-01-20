@@ -7,7 +7,7 @@
 #include <memory>
 #include <type_traits>
 
-#if defined(_OPENMP)
+#if defined(GGML_USE_OPENMP)
 #include <omp.h>
 #endif
 
@@ -56,11 +56,11 @@ inline void balance211(T n, T nth, T ith, T& n_start, T& n_end) {
 }
 
 template <typename func_t>
-inline void parallel_for(int nth, int n, const func_t& f) {
-#if defined(_OPENMP)
-#pragma omp parallel num_threads(nth)
+inline void parallel_for(int n, const func_t& f) {
+#if defined(GGML_USE_OPENMP)
+#pragma omp parallel
 {
-    //int nth = omp_get_num_threads();
+    int nth = omp_get_num_threads();
     int ith = omp_get_thread_num();
     int tbegin, tend;
     balance211(n, nth, ith, tbegin, tend);
@@ -68,8 +68,6 @@ inline void parallel_for(int nth, int n, const func_t& f) {
 }
 #else
     f(0, n);
-
-    GGML_UNUSED(nth);
 #endif
 }
 
@@ -91,10 +89,3 @@ inline bool qtype_has_amx_kernels(const enum ggml_type type) {
         (type == GGML_TYPE_Q6_K) ||
         (type == GGML_TYPE_IQ4_XS);
 }
-
-// ggml backend context
-struct ggml_backend_amx_context {
-    int n_threads = GGML_DEFAULT_N_THREADS;
-    std::unique_ptr<char[]> work_data;
-    size_t work_size = 0;
-};
