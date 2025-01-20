@@ -182,7 +182,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         /** TODO: MUSA arch should match CUDA 11.4 */
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         // info.devices[id].cc = 100*prop.major + 10*prop.minor + CC_OFFSET_MT;
-        info.devices[id].cc = CC_AMPERE;
+        info.devices[id].cc = __MUSA_CC__;
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
