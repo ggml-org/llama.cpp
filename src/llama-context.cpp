@@ -463,6 +463,73 @@ void llama_set_inputs(llama_context & lctx, const llama_ubatch & ubatch) {
             }
         }
     }
+
+    if (lctx.inp_slopes) {
+        const int64_t n_head = hparams.n_head();
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_slopes->buffer));
+
+        float * data = (float *) lctx.inp_slopes->data;
+
+        float start = powf(2, -powf(2, -(log2f(n_head) - 3)));
+        float ratio = start;
+
+        for (int h = 0; h < n_head; ++h) {
+            data[h] = start * powf(ratio, h);
+        }
+    }
+
+    if (lctx.inp_q_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_tokens = ubatch.n_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_q_decay->buffer));
+
+        float * slopes = (float *) lctx.inp_slopes->data;
+        float * data = (float *) lctx.inp_q_decay->data;
+
+        for (int i = 0; i < n_tokens; ++i) {
+            for (int h = 0; h < n_head; ++h) {
+                data[i * n_head + h] = -slopes[h] * (i + 1);
+            }
+        }
+    }
+
+    if (lctx.inp_k_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_tokens = ubatch.n_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_k_decay->buffer));
+
+        float * slopes = (float *) lctx.inp_slopes->data;
+        float * data = (float *) lctx.inp_k_decay->data;
+
+        for (int i = 0; i < n_tokens; ++i) {
+            for (int h = 0; h < n_head; ++h) {
+                data[i * n_head + h] = -slopes[h] * (n_tokens - i - 1);
+            }
+        }
+    }
+
+    if (lctx.inp_diag_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_tokens = ubatch.n_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_diag_decay->buffer));
+
+        float * slopes = (float *) lctx.inp_slopes->data;
+        float * data = (float *) lctx.inp_diag_decay->data;
+
+        for (int j = 0; j < n_tokens; ++j) {
+            for (int i = 0; i < n_tokens; ++i) {
+                int index = j - i;
+                for (int h = 0; h < n_head; ++h) {
+                    float s_index = index >= 0 ? -slopes[h] * index : -INFINITY;
+                    data[j * n_head * n_tokens + i * n_head + h] = s_index;
+                }
+            }
+        }
+    }
 }
 
 // llama output

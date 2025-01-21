@@ -64,6 +64,7 @@ enum llm_type {
     LLM_TYPE_70B,
     LLM_TYPE_236B,
     LLM_TYPE_314B,
+    LLM_TYPE_456B,
     LLM_TYPE_671B,
     LLM_TYPE_SMALL,
     LLM_TYPE_MEDIUM,
@@ -157,6 +158,7 @@ struct llama_layer {
     struct ggml_tensor * wv        = nullptr;
     struct ggml_tensor * wo        = nullptr;
     struct ggml_tensor * wqkv      = nullptr;
+    struct ggml_tensor * wg        = nullptr;
     struct ggml_tensor * wq_a      = nullptr;
     struct ggml_tensor * wq_b      = nullptr;
     struct ggml_tensor * wkv_a_mqa = nullptr;
@@ -284,6 +286,9 @@ struct llama_layer {
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
+
+    // minimax-01
+    struct ggml_tensor * kv = nullptr;
 };
 
 struct llama_model {

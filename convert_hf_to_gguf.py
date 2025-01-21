@@ -699,6 +699,9 @@ class Model:
         if chkhsh == "b3f499bb4255f8ca19fccd664443283318f2fd2414d5e0b040fbdd0cc195d6c5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
             res = "deepseek-r1-qwen"
+        if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
+            # ref: https://huggingface.co/MiniMaxAI/MiniMax-Text-01
+            res = "minimax-01"
 
         if res is None:
             logger.warning("\n")
@@ -4904,6 +4907,70 @@ class ChameleonModel(Model):
         data_torch = data_torch[0].view(2, head_dim // 2).t().reshape(1, -1)
         data_torch = data_torch.repeat_interleave(n_heads, 0)
         return data_torch
+
+
+@Model.register("MiniMaxText01ForCausalLM")
+class MiniMaxText01Model(Model):
+    model_arch = gguf.MODEL_ARCH.MINIMAX01
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        layernorm_full_attention_alpha = self.hparams["layernorm_full_attention_alpha"]
+        layernorm_full_attention_beta = self.hparams["layernorm_full_attention_beta"]
+        layernorm_linear_attention_alpha = self.hparams["layernorm_linear_attention_alpha"]
+        layernorm_linear_attention_beta = self.hparams["layernorm_linear_attention_beta"]
+        layernorm_mlp_alpha = self.hparams["layernorm_mlp_alpha"]
+        layernorm_mlp_beta = self.hparams["layernorm_mlp_beta"]
+        assert layernorm_full_attention_alpha == layernorm_linear_attention_alpha == layernorm_mlp_alpha
+        assert layernorm_full_attention_beta == layernorm_linear_attention_beta == layernorm_mlp_beta == 1.0
+        # we do not store the layernorm betas as they are all 1.0
+        # layernorm alphas are stored as single residual_scale hparam
+        self.gguf_writer.add_residual_scale(layernorm_full_attention_alpha)
+
+        self.gguf_writer.add_rope_dimension_count(self.hparams["rotary_dim"])
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        n_head = self.hparams["num_attention_heads"]
+        n_kv_head = self.hparams.get("num_key_value_heads")
+
+        # process the experts separately
+        if name.find("block_sparse_moe.experts") != -1:
+            n_experts = self.hparams["num_local_experts"]
+
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for wid in ["w1", "w2", "w3"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"layers.{bid}.feed_forward.experts.{wid}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 ###### CONVERSION LOGIC ######

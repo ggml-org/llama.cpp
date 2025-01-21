@@ -107,6 +107,10 @@ struct llama_context {
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
+    struct ggml_tensor * inp_slopes;        // F32 [n_head]
+    struct ggml_tensor * inp_q_decay;       // F32 [n_batch, n_head]
+    struct ggml_tensor * inp_k_decay;       // F32 [n_batch, n_head]
+    struct ggml_tensor * inp_diag_decay;    // F32 [n_batch, n_batch, n_head]
 };
 
 // TODO: make these methods of llama_context
