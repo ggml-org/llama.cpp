@@ -27,6 +27,8 @@ bool llama_kv_cache_init(
     const struct llama_hparams & hparams = model.hparams;
 
     const int32_t n_layer = hparams.n_layer;
+    const int n_head = hparams.n_head();
+    const int n_embd_head_k = hparams.n_embd_head_k;
 
     cache.has_shift = false;
 
@@ -53,7 +55,7 @@ bool llama_kv_cache_init(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             struct ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead() + 4u*n_head*n_embd_head_k*n_embd_head_k),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -70,6 +72,7 @@ bool llama_kv_cache_init(
 
     cache.k_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
+    cache.kv_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
@@ -93,10 +96,13 @@ bool llama_kv_cache_init(
 
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
         ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
+        ggml_tensor * kv = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_head_k, n_embd_head_k, n_head);
         ggml_format_name(k, "cache_k_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
+        ggml_format_name(kv, "cache_kv_l%d", i);
         cache.k_l.push_back(k);
         cache.v_l.push_back(v);
+        cache.kv_l.push_back(kv);
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
