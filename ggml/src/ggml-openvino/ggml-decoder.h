@@ -62,6 +62,9 @@ public:
         return m_outputs.at(name);
     }
 
+    virtual bool check_if_continuous() const override {
+        return m_continuous;
+    }
 private:
     void set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs);
 
@@ -75,5 +78,6 @@ private:
     std::vector<std::shared_ptr<GgmlOvDecoder>> m_decoders;
     const std::string m_op_name;
     mutable std::string m_name;
+    bool m_continuous;
 };
 

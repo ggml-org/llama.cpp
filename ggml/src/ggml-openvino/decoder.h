@@ -51,6 +51,8 @@ public:
 
     // virtual size_t output(size_t index) const = 0;
 
+    virtual bool check_if_continuous() const = 0;
+
 };
 
 }  // namespace ggml
