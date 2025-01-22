@@ -163,7 +163,7 @@ int main(int argc, char ** argv) {
             break;
         }
 
-        const char * tmpl = llama_model_chat_template(model);
+        const char * tmpl = llama_model_chat_template(model, /* name */ nullptr);
 
         // add the user input to the message list and format it
         messages.push_back({"user", strdup(user.c_str())});

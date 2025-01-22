@@ -334,6 +334,7 @@ struct common_params {
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
+    bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
 
     std::vector<std::string> api_keys;
@@ -427,6 +428,10 @@ std::string string_format(const char * fmt, ...);
 
 std::string string_strip(const std::string & str);
 std::string string_get_sortable_timestamp();
+
+std::string string_join(const std::vector<std::string> & values, const std::string & separator);
+std::vector<std::string> string_split(const std::string & str, const std::string & delimiter);
+std::string string_repeat(const std::string & str, size_t n);
 
 void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
 
@@ -603,30 +608,43 @@ struct common_chat_msg {
     std::string content;
 };
 
-// Get the built-in chat template for the model. Return empty string if not present.
-std::string common_get_builtin_chat_template(const struct llama_model * model);
-
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool common_chat_verify_template(const std::string & tmpl);
+bool common_chat_verify_template(const std::string & tmpl, bool use_jinja);
+
+namespace minja {
+    class chat_template;
+}
+
+typedef minja::chat_template common_chat_template;
+
+struct common_chat_templates {
+    bool has_explicit_template; // Model had builtin template or template overridde was specified.
+    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
+    std::unique_ptr<common_chat_template> template_tool_use;
+};
 
 // CPP wrapper for llama_chat_apply_template
 // If the built-in template is not supported, we default to chatml
 // If the custom "tmpl" is not supported, we throw an error
-std::string common_chat_apply_template(const struct llama_model * model,
-        const std::string & tmpl,
+std::string common_chat_apply_template(
+        const common_chat_template & tmpl,
         const std::vector<common_chat_msg> & chat,
-        bool add_ass);
+        bool add_ass,
+        bool use_jinja);
 
 // Format single message, while taking into account the position of that message in chat history
-std::string common_chat_format_single(const struct llama_model * model,
-        const std::string & tmpl,
+std::string common_chat_format_single(
+        const common_chat_template & tmpl,
         const std::vector<common_chat_msg> & past_msg,
         const common_chat_msg & new_msg,
-        bool add_ass);
+        bool add_ass,
+        bool use_jinja);
 
 // Returns an example of formatted chat
-std::string common_chat_format_example(const struct llama_model * model,
-        const std::string & tmpl);
+std::string common_chat_format_example(
+    const common_chat_template & tmpl, bool use_jinja);
+
+common_chat_templates common_chat_templates_from_model(const struct llama_model * model, const std::string & chat_template_override);
 
 //
 // KV cache utils

@@ -1361,7 +1361,9 @@ llama-server: \
 	examples/server/httplib.h \
 	examples/server/index.html.hpp \
 	examples/server/loading.html.hpp \
+	common/chat-template.hpp \
 	common/json.hpp \
+	common/minja.hpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h %.hpp $<,$^) -Iexamples/server $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS) $(LWINSOCK2)

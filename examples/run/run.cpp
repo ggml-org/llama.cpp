@@ -28,6 +28,7 @@
 #include "json.hpp"
 #include "linenoise.cpp/linenoise.h"
 #include "llama-cpp.h"
+#include "chat-template.hpp"
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
 [[noreturn]] static void sigint_handler(int) {
@@ -105,6 +106,7 @@ class Opt {
     llama_model_params   model_params;
     std::string model_;
     std::string          user;
+    bool                 use_jinja   = false;
     int                  context_size = -1, ngl = -1;
     float                temperature = -1;
     bool                 verbose     = false;
@@ -156,6 +158,8 @@ class Opt {
             } else if (options_parsing &&
                        (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
                 verbose = true;
+            } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
+                use_jinja = true;
             } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
                 help = true;
                 return 0;
@@ -713,13 +717,31 @@ static void add_message(const char * role, const std::string & text, LlamaData &
 }
 
 // Function to apply the chat template and resize `formatted` if needed
-static int apply_chat_template(LlamaData & llama_data, const bool append) {
+static int apply_chat_template(const common_chat_template & tmpl, LlamaData & llama_data, const bool append, bool use_jinja) {
+    if (use_jinja) {
+        json messages = json::array();
+        for (const auto & msg : llama_data.messages) {
+            messages.push_back({
+                {"role", msg.role},
+                {"content", msg.content},
+            });
+        }
+        try {
+            auto result = tmpl.apply(messages, /* tools= */ json(), append);
+            llama_data.fmtted.resize(result.size() + 1);
+            memcpy(llama_data.fmtted.data(), result.c_str(), result.size() + 1);
+            return result.size();
+        } catch (const std::exception & e) {
+            printe("failed to render the chat template: %s\n", e.what());
+            return -1;
+        }
+    }
     int result = llama_chat_apply_template(
-        llama_model_chat_template(llama_data.model.get()), llama_data.messages.data(), llama_data.messages.size(), append,
+        tmpl.source().c_str(), llama_data.messages.data(), llama_data.messages.size(), append,
         append ? llama_data.fmtted.data() : nullptr, append ? llama_data.fmtted.size() : 0);
     if (append && result > static_cast<int>(llama_data.fmtted.size())) {
         llama_data.fmtted.resize(result);
-        result = llama_chat_apply_template(llama_model_chat_template(llama_data.model.get()), llama_data.messages.data(),
+        result = llama_chat_apply_template(tmpl.source().c_str(), llama_data.messages.data(),
                                            llama_data.messages.size(), append, llama_data.fmtted.data(),
                                            llama_data.fmtted.size());
     }
@@ -871,8 +893,8 @@ static int generate_response(LlamaData & llama_data, const std::string & prompt,
 }
 
 // Helper function to apply the chat template and handle errors
-static int apply_chat_template_with_error_handling(LlamaData & llama_data, const bool append, int & output_length) {
-    const int new_len = apply_chat_template(llama_data, append);
+static int apply_chat_template_with_error_handling(const common_chat_template & tmpl, LlamaData & llama_data, const bool append, int & output_length, bool use_jinja) {
+    const int new_len = apply_chat_template(tmpl, llama_data, append, use_jinja);
     if (new_len < 0) {
         printe("failed to apply the chat template\n");
         return -1;
@@ -931,9 +953,11 @@ static int get_user_input(std::string & user_input, const std::string & user) {
 }
 
 // Main chat loop function
-static int chat_loop(LlamaData & llama_data, const std::string & user) {
+static int chat_loop(LlamaData & llama_data, const std::string & user, bool use_jinja) {
     int prev_len = 0;
     llama_data.fmtted.resize(llama_n_ctx(llama_data.context.get()));
+    auto chat_templates = common_chat_templates_from_model(llama_data.model.get(), "");
+    GGML_ASSERT(chat_templates.template_default);
     static const bool stdout_a_terminal = is_stdout_a_terminal();
     while (true) {
         // Get user input
@@ -944,7 +968,7 @@ static int chat_loop(LlamaData & llama_data, const std::string & user) {
 
         add_message("user", user.empty() ? user_input : user, llama_data);
         int new_len;
-        if (apply_chat_template_with_error_handling(llama_data, true, new_len) < 0) {
+        if (apply_chat_template_with_error_handling(*chat_templates.template_default, llama_data, true, new_len, use_jinja) < 0) {
             return 1;
         }
 
@@ -959,7 +983,7 @@ static int chat_loop(LlamaData & llama_data, const std::string & user) {
         }
 
         add_message("assistant", response, llama_data);
-        if (apply_chat_template_with_error_handling(llama_data, false, prev_len) < 0) {
+        if (apply_chat_template_with_error_handling(*chat_templates.template_default, llama_data, false, prev_len, use_jinja) < 0) {
             return 1;
         }
     }
@@ -1019,7 +1043,7 @@ int main(int argc, const char ** argv) {
         return 1;
     }
 
-    if (chat_loop(llama_data, opt.user)) {
+    if (chat_loop(llama_data, opt.user, opt.use_jinja)) {
         return 1;
     }
 

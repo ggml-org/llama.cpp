@@ -8,7 +8,7 @@ ap.add_argument("-m", "--model", help="Path to MiniCPM-V model")
 args = ap.parse_args()
 
 # find the model part that includes the the multimodal projector weights
-model = AutoModel.from_pretrained(args.model, trust_remote_code=True, local_files_only=True)
+model = AutoModel.from_pretrained(args.model, trust_remote_code=True, local_files_only=True, torch_dtype=torch.bfloat16)
 checkpoint = model.state_dict()
 
 # get a list of mm tensor names

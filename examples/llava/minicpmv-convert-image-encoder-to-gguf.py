@@ -501,7 +501,7 @@ default_image_mean = [0.48145466, 0.4578275, 0.40821073]
 default_image_std = [0.26862954, 0.26130258, 0.27577711]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3', default=2)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -545,12 +545,19 @@ if args.use_f32:
 
 minicpmv_version = args.minicpmv_version
 emb_dim = 4096
+block_count = 26
 if minicpmv_version == 1:
     emb_dim = 2304
+    block_count = 26
 elif minicpmv_version == 2:
     emb_dim = 4096
+    block_count = 27
 elif minicpmv_version == 3:
     emb_dim = 3584
+    block_count = 27
+elif minicpmv_version == 4:
+    emb_dim = 3584
+    block_count = 27
 
 default_vision_config = {
         "hidden_size": 1152,
@@ -565,6 +572,9 @@ default_vision_config = {
 vision_config = Idefics2VisionConfig(**default_vision_config)
 model = Idefics2VisionTransformer(vision_config)
 if minicpmv_version == 3:
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 4:
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 
@@ -587,7 +597,7 @@ elif args.minicpmv_projector is not None:
     fname_middle = "mmproj-"
     has_text_encoder = False
     has_minicpmv_projector = True
-    minicpmv_version = 3
+    minicpmv_version = 4
 elif args.vision_only:
     fname_middle = "vision-"
     has_text_encoder = False
@@ -625,7 +635,6 @@ if has_vision_encoder:
     fout.add_uint32("clip.vision.projection_dim", 0)
     fout.add_uint32(add_key_str(KEY_ATTENTION_HEAD_COUNT, VISION), 16)
     fout.add_float32(add_key_str(KEY_ATTENTION_LAYERNORM_EPS, VISION), 1e-6)
-    block_count = 26
     fout.add_uint32(add_key_str(KEY_BLOCK_COUNT, VISION), block_count)
 
     if processor is not None:

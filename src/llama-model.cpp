@@ -4004,8 +4004,10 @@ uint64_t llama_model_size(const struct llama_model * model) {
     return model->size();
 }
 
-const char * llama_model_chat_template(const struct llama_model * model) {
-    const auto & it = model->gguf_kv.find(LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE));
+const char * llama_model_chat_template(const struct llama_model * model, const char * name) {
+    const auto key = name ? LLM_KV(model->arch, name)(LLM_KV_TOKENIZER_CHAT_TEMPLATE_N)
+        : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
+    const auto & it = model->gguf_kv.find(key);
     if (it == model->gguf_kv.end()) {
         return nullptr;
     }

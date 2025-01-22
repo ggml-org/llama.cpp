@@ -718,6 +718,9 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         else if (ctx->minicpmv_version == 3) {
             pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 3584, pos_w * pos_h, 1);
         }
+        else if (ctx->minicpmv_version == 4) {
+            pos_embed = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 3584, pos_w * pos_h, 1);
+        }
         ggml_set_name(pos_embed, "pos_embed");
         ggml_set_input(pos_embed);
     }
@@ -1049,6 +1052,11 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
                     num_query = 96;
                 }
                 else if (ctx->minicpmv_version == 3) {
+                    hidden_size = 3584;
+                    n_head = hidden_size/d_head;
+                    num_query = 64;
+                }
+                else if (ctx->minicpmv_version == 4) {
                     hidden_size = 3584;
                     n_head = hidden_size/d_head;
                     num_query = 64;
@@ -2041,6 +2049,7 @@ static std::vector<std::vector<clip_image_u8 *>> uhd_slice_image(const clip_imag
                 images[images.size()-1].push_back(patch);
             }
         }
+        clip_image_u8_free(refine_image);
     }
     return images;
 }
@@ -2077,6 +2086,13 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, cli
                 normalize_image_u8_to_f32(imgs[i][j], res, ctx->image_mean, ctx->image_std);
                 res_imgs->data[idx++] = *res;
                 clip_image_f32_free(res);
+            }
+        }
+        for (size_t i = 0; i < imgs.size(); ++i) {
+            for (size_t j = 0; j < imgs[i].size(); ++j) {
+                if (imgs[i][j] != nullptr) {
+                    clip_image_u8_free(imgs[i][j]);
+                }
             }
         }
         return true;
@@ -2335,6 +2351,9 @@ int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * i
         else if (ctx->minicpmv_version == 3) {
             n_patches = 64;
         }
+        else if (ctx->minicpmv_version == 4) {
+            n_patches = 64;
+        }
     } else if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
         int patch_size = params.patch_size * 2;
         int x_patch = img->nx / patch_size + (int)(img->nx % patch_size > 0);
@@ -2514,8 +2533,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
             struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
             int* positions_data = (int*)malloc(ggml_nbytes(positions));
-            int bucket_coords_h[70];
-            int bucket_coords_w[70];
+            int bucket_coords_h[1024];
+            int bucket_coords_w[1024];
             for (int i = 0; i < pos_h; i++){
                 bucket_coords_h[i] = std::floor(70.0*i/pos_h);
             }
@@ -2541,6 +2560,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 embed_dim = 4096;
             }
             else if (ctx->minicpmv_version == 3) {
+                embed_dim = 3584;
+            }
+            else if (ctx->minicpmv_version == 4) {
                 embed_dim = 3584;
             }
             auto pos_embed_t = get_2d_sincos_pos_embed(embed_dim, std::make_pair(pos_w, pos_h));
@@ -2784,6 +2806,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return 4096;
         }
         else if (ctx->minicpmv_version == 3) {
+            return 3584;
+        }
+        else if (ctx->minicpmv_version == 4) {
             return 3584;
         }
     }
