@@ -1,6 +1,7 @@
 #include "ggml-decoder.h"
 #include <ggml.h>
 #include <ggml-impl.h>
+#include <ggml-cpu-impl.h>
 
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
     switch (node->op) {
@@ -9,8 +10,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         case GGML_OP_RESHAPE:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_PERMUTE:
-        case GGML_OP_CONT:
-        case GGML_OP_CPY:
         case GGML_OP_RMS_NORM:
         {
             inputs[node->src[0]->name] = node->src[0];
@@ -18,6 +17,103 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             m_input_names.push_back(node->src[0]->name);
             m_output_names.push_back(node->name);
             break;
+        }
+        case GGML_OP_CONT:
+        {
+            if (ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node)) {
+                inputs[node->src[0]->name] = node->src[0];
+                outputs[node->name] = node;
+                m_input_names.push_back(node->src[0]->name);
+                m_output_names.push_back(node->name);
+                m_continuous = true;
+                break;
+            }
+
+            if (node->src[0]->type == node->type && node->src[0]->ne[0] == node->ne[0] &&
+                node->src[0]->nb[0] == ggml_type_size(node->src[0]->type) && node->nb[0] == ggml_type_size(node->src[0]->type)) {
+
+                for (size_t i01 = 0; i01 < node->src[0]->ne[1]; ++i01) {
+                    const char *src_row = reinterpret_cast<const char *>(node->src[0]->data) + i01 * node->src[0]->nb[1];
+                    char *dst_row = reinterpret_cast<char *>(node->data) + i01 * node->nb[1];
+                    std::memcpy(dst_row, src_row, node->src[0]->ne[0]  * ggml_type_size(node->src[0]->type));
+                }
+
+                inputs[node->name] = node;
+                outputs[node->name] = node;
+                m_input_names.push_back(node->name);
+                m_output_names.push_back(node->name);
+                m_continuous = false;
+                break;
+            }
+
+            // if (ggml_is_contiguous(node)) {
+                const size_t rs = node->src[0]->ne[0] * ggml_type_size(node->src[0]->type); // Row size in bytes for dst
+
+                // Create OpenVINO tensors for source and destination
+                // The tensors are reshaped to a 2D structure (num_rows x ne00) for easier iteration and compatibility with the simplified loop.
+                ov::Tensor src_tensor(ov::element::f32,
+                                      ov::Shape{node->src[0]->ne[3] * node->src[0]->ne[2] * node->src[0]->ne[1], node->src[0]->ne[0]},
+                                      node->src[0]->data);
+                ov::Tensor dst_tensor(ov::element::f32,
+                                      ov::Shape{node->src[0]->ne[3] * node->src[0]->ne[2] * node->src[0]->ne[1], node->src[0]->ne[0]}, 
+                                      node->data);
+
+                // Perform the copy in a single loop
+                const size_t num_rows = node->src[0]->ne[3] * node->src[0]->ne[2] * node->src[0]->ne[1];
+                for (size_t row = 0; row < num_rows; ++row) {
+                    // Calculate the source row pointer based on original strides
+                    // The source row pointer is calculated based on the combined index row and the strides nb03, nb02, and nb01.
+                    const char* src0_ptr = (char*)src_tensor.data() +
+                                            // Calculates which block of the i03 dimension the current row belongs to
+                                           (row / (node->src[0]->ne[2] * node->src[0]->ne[1])) * node->src[0]->nb[3] +   // 0
+                                            // Calculates which block of the i02 dimension the current row belongs to within the current i03 block.
+                                           ((row / node->src[0]->ne[1]) % node->src[0]->ne[2]) * node->src[0]->nb[2] +   // 0,   0,......,    0,384,  384,......,  384,768,......, 2304
+                                            // Calculates the position within the current i02 block in terms of the i01 index.
+                                           (row % node->src[0]->ne[1]) * node->src[0]->nb[1];             // 0,2688,......,83328,  0, 2688,......,83328,  0,......, 83328
+
+                // Destination row pointer is linear
+                // Since dst is contiguous, its rows are accessed linearly using a single stride rs, simplifying the destination pointer calculation.
+                char* dst_ptr = (char*)dst_tensor.data() + row * rs;
+
+                // Copy row
+                std::memcpy(dst_ptr, src0_ptr, rs);
+                }
+
+                inputs[node->name] = node;
+                outputs[node->name] = node;
+                m_input_names.push_back(node->name);
+                m_output_names.push_back(node->name);
+                m_continuous = false;
+                break;
+            //}
+        }
+        case GGML_OP_CPY:
+        {
+            if (ggml_is_contiguous(node)) {
+                inputs[node->src[0]->name] = node->src[0];
+                outputs[node->name] = node;
+                m_input_names.push_back(node->src[0]->name);
+                m_output_names.push_back(node->name);
+                m_continuous = true;
+                break;
+            } else {
+                for (int64_t i1 = 0; i1 < node->ne[1]; ++i1) {       // ne[1] = 3072
+                    for (int64_t i0 = 0; i0 < node->ne[0]; ++i0) {   // ne[0] = 7
+                        int64_t src_index = i0 * node->src[0]->nb[0] / sizeof(float) +  // stride in nb[0]
+                                            i1 * node->src[0]->nb[1] / sizeof(float);   // stride in nb[1]
+                        char *dst_ptr = static_cast<char *>(node->data) +
+                                i0 * node->nb[0] + i1 * node->nb[1];
+                        *(ggml_fp16_t *)dst_ptr = GGML_FP32_TO_FP16(((float*)node->src[0]->data)[src_index]);
+                    }
+                }
+                // inputs[node->src[0]->name] = node->src[0];
+                inputs[node->name] = node;
+                outputs[node->name] = node;
+                m_input_names.push_back(node->name);
+                m_output_names.push_back(node->name);
+                m_continuous = false;
+                break;
+            }
         }
         // For view, input is node itself
         case GGML_OP_VIEW:
