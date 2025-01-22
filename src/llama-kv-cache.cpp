@@ -55,7 +55,7 @@ bool llama_kv_cache_init(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             struct ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead() + 4u*n_head*n_embd_head_k*n_embd_head_k),
+                /*.mem_size   =*/ size_t(3u*n_layer*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
