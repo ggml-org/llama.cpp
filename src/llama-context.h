@@ -111,6 +111,7 @@ struct llama_context {
     struct ggml_tensor * inp_q_decay;       // F32 [n_batch, n_head]
     struct ggml_tensor * inp_k_decay;       // F32 [n_batch, n_head]
     struct ggml_tensor * inp_diag_decay;    // F32 [n_batch, n_batch, n_head]
+    struct ggml_tensor * inp_seq_ids;       // F32 [n_batch, n_batch, n_head]
 };
 
 // TODO: make these methods of llama_context

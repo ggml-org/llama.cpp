@@ -481,14 +481,14 @@ void llama_set_inputs(llama_context & lctx, const llama_ubatch & ubatch) {
 
     if (lctx.inp_q_decay) {
         const int64_t n_head = hparams.n_head();
-        const int64_t n_tokens = ubatch.n_tokens;
+        const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_q_decay->buffer));
 
         float * slopes = (float *) lctx.inp_slopes->data;
         float * data = (float *) lctx.inp_q_decay->data;
 
-        for (int i = 0; i < n_tokens; ++i) {
+        for (int i = 0; i < n_seq_tokens; ++i) {
             for (int h = 0; h < n_head; ++h) {
                 data[i * n_head + h] = -slopes[h] * (i + 1);
             }
@@ -497,37 +497,52 @@ void llama_set_inputs(llama_context & lctx, const llama_ubatch & ubatch) {
 
     if (lctx.inp_k_decay) {
         const int64_t n_head = hparams.n_head();
-        const int64_t n_tokens = ubatch.n_tokens;
+        const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_k_decay->buffer));
 
         float * slopes = (float *) lctx.inp_slopes->data;
         float * data = (float *) lctx.inp_k_decay->data;
 
-        for (int i = 0; i < n_tokens; ++i) {
+        for (int i = 0; i < n_seq_tokens; ++i) {
             for (int h = 0; h < n_head; ++h) {
-                data[i * n_head + h] = -slopes[h] * (n_tokens - i - 1);
+                data[i * n_head + h] = -slopes[h] * (n_seq_tokens - i - 1);
             }
         }
     }
 
     if (lctx.inp_diag_decay) {
         const int64_t n_head = hparams.n_head();
-        const int64_t n_tokens = ubatch.n_tokens;
+        const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_diag_decay->buffer));
 
         float * slopes = (float *) lctx.inp_slopes->data;
         float * data = (float *) lctx.inp_diag_decay->data;
 
-        for (int j = 0; j < n_tokens; ++j) {
-            for (int i = 0; i < n_tokens; ++i) {
+        for (int j = 0; j < n_seq_tokens; ++j) {
+            for (int i = 0; i < n_seq_tokens; ++i) {
                 int index = j - i;
                 for (int h = 0; h < n_head; ++h) {
                     float s_index = index >= 0 ? -slopes[h] * index : -INFINITY;
-                    data[j * n_head * n_tokens + i * n_head + h] = s_index;
+                    data[j * n_head * n_seq_tokens + i * n_head + h] = s_index;
                 }
             }
+        }
+    }
+
+    if (lctx.inp_seq_ids) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_seqs = ubatch.n_seqs;
+
+        GGML_ASSERT(n_seqs != 0);
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(lctx.inp_seq_ids->buffer));
+
+        uint32_t * data = (uint32_t *) lctx.inp_seq_ids->data;
+
+        for (int s = 0; s < n_seqs; ++s) {
+            data[s] = (ubatch.seq_id ? ubatch.seq_id[s][0] : 0);
         }
     }
 }
