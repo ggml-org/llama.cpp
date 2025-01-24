@@ -45,6 +45,7 @@ extern "C" {
 #endif
 
 #include <stddef.h> /* For size_t. */
+#include <stdlib.h>
 
 extern const char *linenoiseEditMore;
 
@@ -69,10 +70,23 @@ struct linenoiseState {
     int history_index;  /* The history index we are currently editing. */
 };
 
-typedef struct linenoiseCompletions {
-  size_t len;
-  char **cvec;
-} linenoiseCompletions;
+struct linenoiseCompletions {
+    size_t  len     = 0;
+    char ** cvec    = nullptr;
+    bool    to_free = true;
+
+    ~linenoiseCompletions() {
+        if (!to_free) {
+            return;
+        }
+
+        for (size_t i = 0; i < len; ++i) {
+            free(cvec[i]);
+        }
+
+        free(cvec);
+    }
+};
 
 /* Non blocking API. */
 int linenoiseEditStart(struct linenoiseState *l, int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt);

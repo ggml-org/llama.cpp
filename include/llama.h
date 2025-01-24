@@ -510,7 +510,8 @@ extern "C" {
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
 
     // Get the default chat template. Returns nullptr if not available
-    LLAMA_API const char * llama_model_chat_template(const struct llama_model * model);
+    // If name is NULL, returns the default chat template
+    LLAMA_API const char * llama_model_chat_template(const struct llama_model * model, const char * name);
 
     // Returns the total number of parameters in the model
     LLAMA_API uint64_t llama_model_n_params(const struct llama_model * model);

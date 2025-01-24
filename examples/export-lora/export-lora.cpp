@@ -345,8 +345,18 @@ struct lora_merge_ctx {
             gf = ggml_new_graph(ctx0);
             struct ggml_tensor * cur = inp_base;
             for (size_t i = 0; i < adapters.size(); ++i) {
-                struct ggml_tensor * a_T = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32)));
-                struct ggml_tensor * delta = ggml_mul_mat(ctx0, a_T, ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32));
+                struct ggml_tensor * delta;
+                bool is_tok_embd = string_starts_with(name_base, "token_embd");
+                if (is_tok_embd) {
+                    printf("%s :     detected token embeddings tensor\n", __func__);
+                    delta = ggml_mul_mat(ctx0,
+                        ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32),
+                        ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32));
+                } else {
+                    delta = ggml_mul_mat(ctx0,
+                        ggml_cont(ctx0, ggml_transpose(ctx0, ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32))),
+                        ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32));
+                }
                 // scale
                 const float alpha = adapters[i]->alpha;
                 const float rank  = (float) inp_b[i]->ne[0];

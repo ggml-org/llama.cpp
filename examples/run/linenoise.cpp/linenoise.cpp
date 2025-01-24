@@ -103,24 +103,26 @@
  *
  */
 
-#include <termios.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-#include <vector>
-#include "linenoise.h"
+#    include "linenoise.h"
 
-#define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
-#define LINENOISE_MAX_LINE 4096
-static std::vector<const char*> unsupported_term = {"dumb","cons25","emacs",nullptr};
+#    include <ctype.h>
+#    include <errno.h>
+#    include <stdio.h>
+#    include <string.h>
+#    include <sys/file.h>
+#    include <sys/ioctl.h>
+#    include <sys/stat.h>
+#    include <sys/types.h>
+#    include <termios.h>
+#    include <unistd.h>
+
+#    include <memory>
+#    include <string>
+#    include <vector>
+
+#    define LINENOISE_DEFAULT_HISTORY_MAX_LEN 100
+#    define LINENOISE_MAX_LINE                4096
+static std::vector<const char *>    unsupported_term   = { "dumb", "cons25", "emacs" };
 static linenoiseCompletionCallback *completionCallback = NULL;
 static linenoiseHintsCallback *hintsCallback = NULL;
 static linenoiseFreeHintsCallback *freeHintsCallback = NULL;
@@ -166,21 +168,58 @@ int linenoiseHistoryAdd(const char *line);
 #define REFRESH_ALL (REFRESH_CLEAN|REFRESH_WRITE) // Do both.
 static void refreshLine(struct linenoiseState *l);
 
+class File {
+  public:
+    FILE * file = nullptr;
+
+    FILE * open(const std::string & filename, const char * mode) {
+        file = fopen(filename.c_str(), mode);
+
+        return file;
+    }
+
+    int lock() {
+        if (file) {
+            fd = fileno(file);
+            if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+                fd = -1;
+
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+
+    ~File() {
+        if (fd >= 0) {
+            flock(fd, LOCK_UN);
+        }
+
+        if (file) {
+            fclose(file);
+        }
+    }
+
+  private:
+    int fd = -1;
+};
+
 __attribute__((format(printf, 1, 2)))
 /* Debugging function. */
 #if 0
 static void lndebug(const char *fmt, ...) {
-    static FILE *lndebug_fp = NULL;
-    if (lndebug_fp == NULL) {
-        lndebug_fp = fopen("/tmp/lndebug.txt", "a");
+    static File file;
+    if (file.file == nullptr) {
+        file.open("/tmp/lndebug.txt", "a");
     }
 
-    if (lndebug_fp != NULL) {
+    if (file.file != nullptr) {
         va_list args;
         va_start(args, fmt);
-        vfprintf(lndebug_fp, fmt, args);
+        vfprintf(file.file, fmt, args);
         va_end(args);
-        fflush(lndebug_fp);
+        fflush(file.file);
     }
 }
 #else
@@ -213,8 +252,11 @@ void linenoiseSetMultiLine(int ml) {
 static int isUnsupportedTerm(void) {
     char *term = getenv("TERM");
     if (term == NULL) return 0;
-    for (int j = 0; unsupported_term[j]; ++j)
-        if (!strcasecmp(term, unsupported_term[j])) return 1;
+    for (size_t j = 0; j < unsupported_term.size(); ++j) {
+        if (!strcasecmp(term, unsupported_term[j])) {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -334,17 +376,6 @@ static void linenoiseBeep(void) {
     fflush(stderr);
 }
 
-/* ============================== Completion ================================ */
-
-/* Free a list of completion option populated by linenoiseAddCompletion(). */
-static void freeCompletions(linenoiseCompletions *lc) {
-    size_t i;
-    for (i = 0; i < lc->len; i++)
-        free(lc->cvec[i]);
-    if (lc->cvec != NULL)
-        free(lc->cvec);
-}
-
 /* Called by completeLine() and linenoiseShow() to render the current
  * edited line with the proposed completion. If the current completion table
  * is already available, it is passed as second argument, otherwise the
@@ -353,9 +384,9 @@ static void freeCompletions(linenoiseCompletions *lc) {
  * Flags are the same as refreshLine*(), that is REFRESH_* macros. */
 static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseCompletions *lc, int flags) {
     /* Obtain the table of completions if the caller didn't provide one. */
-    linenoiseCompletions ctable = { 0, NULL };
+    linenoiseCompletions ctable;
     if (lc == NULL) {
-        completionCallback(ls->buf,&ctable);
+        completionCallback(ls->buf, &ctable);
         lc = &ctable;
     }
 
@@ -364,16 +395,17 @@ static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseComple
         struct linenoiseState saved = *ls;
         ls->len = ls->pos = strlen(lc->cvec[ls->completion_idx]);
         ls->buf = lc->cvec[ls->completion_idx];
-        refreshLineWithFlags(ls,flags);
+        refreshLineWithFlags(ls, flags);
         ls->len = saved.len;
         ls->pos = saved.pos;
         ls->buf = saved.buf;
     } else {
-        refreshLineWithFlags(ls,flags);
+        refreshLineWithFlags(ls, flags);
     }
 
-    /* Free the completions table if needed. */
-    if (lc != &ctable) freeCompletions(&ctable);
+    if (lc == &ctable) {
+        ctable.to_free = false;
+    }
 }
 
 /* This is an helper function for linenoiseEdit*() and is called when the
@@ -391,11 +423,11 @@ static void refreshLineWithCompletion(struct linenoiseState *ls, linenoiseComple
  * possible completions, and the caller should read for the next characters
  * from stdin. */
 static int completeLine(struct linenoiseState *ls, int keypressed) {
-    linenoiseCompletions lc = { 0, NULL };
+    linenoiseCompletions lc;
     int nwritten;
     char c = keypressed;
 
-    completionCallback(ls->buf,&lc);
+    completionCallback(ls->buf, &lc);
     if (lc.len == 0) {
         linenoiseBeep();
         ls->in_completion = 0;
@@ -406,7 +438,7 @@ static int completeLine(struct linenoiseState *ls, int keypressed) {
                     ls->in_completion = 1;
                     ls->completion_idx = 0;
                 } else {
-                    ls->completion_idx = (ls->completion_idx+1) % (lc.len+1);
+                    ls->completion_idx = (ls->completion_idx + 1) % (lc.len + 1);
                     if (ls->completion_idx == lc.len) linenoiseBeep();
                 }
                 c = 0;
@@ -420,8 +452,7 @@ static int completeLine(struct linenoiseState *ls, int keypressed) {
             default:
                 /* Update buffer and return */
                 if (ls->completion_idx < lc.len) {
-                    nwritten = snprintf(ls->buf,ls->buflen,"%s",
-                        lc.cvec[ls->completion_idx]);
+                    nwritten = snprintf(ls->buf, ls->buflen, "%s", lc.cvec[ls->completion_idx]);
                     ls->len = ls->pos = nwritten;
                 }
                 ls->in_completion = 0;
@@ -430,13 +461,12 @@ static int completeLine(struct linenoiseState *ls, int keypressed) {
 
         /* Show completion or original buffer */
         if (ls->in_completion && ls->completion_idx < lc.len) {
-            refreshLineWithCompletion(ls,&lc,REFRESH_ALL);
+            refreshLineWithCompletion(ls, &lc, REFRESH_ALL);
         } else {
             refreshLine(ls);
         }
     }
 
-    freeCompletions(&lc);
     return c; /* Return last read character */
 }
 
@@ -462,53 +492,25 @@ void linenoiseSetFreeHintsCallback(linenoiseFreeHintsCallback *fn) {
  * user typed <tab>. See the example.c source code for a very easy to
  * understand example. */
 void linenoiseAddCompletion(linenoiseCompletions *lc, const char *str) {
-    size_t len = strlen(str);
-    char *copy, **cvec;
-
-    copy = (char*) malloc(len + 1);
-    if (copy == NULL) return;
-    memcpy(copy,str,len+1);
-    cvec = (char**) realloc(lc->cvec,sizeof(char*)*(lc->len+1));
-    if (cvec == NULL) {
-        free(copy);
+    const size_t len  = strlen(str);
+    auto         copy = std::make_unique<char[]>(len + 1);
+    if (!copy) {
         return;
     }
+
+    memcpy(copy.get(), str, len + 1);
+    char ** cvec = static_cast<char **>(std::realloc(lc->cvec, sizeof(char *) * (lc->len + 1)));
+    if (cvec == nullptr) {
+        return;
+    }
+
     lc->cvec = cvec;
-    lc->cvec[lc->len++] = copy;
-}
-
-/* =========================== Line editing ================================= */
-
-/* We define a very simple "append buffer" structure, that is an heap
- * allocated string where we can append to. This is useful in order to
- * write all the escape sequences in a buffer and flush them to the standard
- * output in a single call, to avoid flickering effects. */
-struct abuf {
-    char *b;
-    int len;
-};
-
-static void abInit(struct abuf *ab) {
-    ab->b = NULL;
-    ab->len = 0;
-}
-
-static void abAppend(struct abuf *ab, const char *s, int len) {
-    char *new_ptr = (char*) realloc(ab->b,ab->len+len);
-
-    if (new_ptr == NULL) return;
-    memcpy(new_ptr+ab->len,s,len);
-    ab->b = new_ptr;
-    ab->len += len;
-}
-
-static void abFree(struct abuf *ab) {
-    free(ab->b);
+    lc->cvec[lc->len++] = copy.release();
 }
 
 /* Helper of refreshSingleLine() and refreshMultiLine() to show hints
  * to the right of the prompt. */
-static void refreshShowHints(struct abuf * ab, struct linenoiseState * l, int plen) {
+static void refreshShowHints(std::string & ab, struct linenoiseState * l, int plen) {
     char seq[64];
     if (hintsCallback && plen+l->len < l->cols) {
         int color = -1, bold = 0;
@@ -522,10 +524,11 @@ static void refreshShowHints(struct abuf * ab, struct linenoiseState * l, int pl
                 snprintf(seq,64,"\033[%d;%d;49m",bold,color);
             else
                 seq[0] = '\0';
-            abAppend(ab,seq,strlen(seq));
-            abAppend(ab,hint,hintlen);
+            ab.append(seq);
+            ab.append(hint, hintlen);
             if (color != -1 || bold != 0)
-                abAppend(ab,"\033[0m",4);
+                ab.append("\033[0m");
+
             /* Call the function to free the hint returned. */
             if (freeHintsCallback) freeHintsCallback(hint);
         }
@@ -546,8 +549,7 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
     char *buf = l->buf;
     size_t len = l->len;
     size_t pos = l->pos;
-    struct abuf ab;
-
+    std::string ab;
     while((plen+pos) >= l->cols) {
         buf++;
         len--;
@@ -557,35 +559,34 @@ static void refreshSingleLine(struct linenoiseState *l, int flags) {
         len--;
     }
 
-    abInit(&ab);
     /* Cursor to left edge */
     snprintf(seq,sizeof(seq),"\r");
-    abAppend(&ab,seq,strlen(seq));
+    ab.append(seq);
 
     if (flags & REFRESH_WRITE) {
         /* Write the prompt and the current buffer content */
-        abAppend(&ab,l->prompt,strlen(l->prompt));
+        ab.append(l->prompt);
         if (maskmode == 1) {
-            while (len--) abAppend(&ab,"*",1);
+            while (len--) {
+                ab.append("*");
+            }
         } else {
-            abAppend(&ab,buf,len);
+            ab.append(buf, len);
         }
         /* Show hits if any. */
-        refreshShowHints(&ab,l,plen);
+        refreshShowHints(ab, l, plen);
     }
 
     /* Erase to right */
     snprintf(seq,sizeof(seq),"\x1b[0K");
-    abAppend(&ab,seq,strlen(seq));
-
+    ab.append(seq);
     if (flags & REFRESH_WRITE) {
         /* Move cursor to original position. */
         snprintf(seq,sizeof(seq),"\r\x1b[%dC", (int)(pos+plen));
-        abAppend(&ab,seq,strlen(seq));
+        ab.append(seq);
     }
 
-    if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
-    abFree(&ab);
+    (void) !write(fd, ab.c_str(), ab.size()); /* Can't recover from write error. */
 }
 
 /* Multi line low level line refresh.
@@ -604,26 +605,23 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
     int col; /* colum position, zero-based. */
     int old_rows = l->oldrows;
     int fd = l->ofd, j;
-    struct abuf ab;
-
+    std::string ab;
     l->oldrows = rows;
 
     /* First step: clear all the lines used before. To do so start by
      * going to the last row. */
-    abInit(&ab);
-
     if (flags & REFRESH_CLEAN) {
         if (old_rows-rpos > 0) {
             lndebug("go down %d", old_rows-rpos);
             snprintf(seq,64,"\x1b[%dB", old_rows-rpos);
-            abAppend(&ab,seq,strlen(seq));
+            ab.append(seq);
         }
 
         /* Now for every row clear it, go up. */
         for (j = 0; j < old_rows-1; j++) {
             lndebug("clear+up");
             snprintf(seq,64,"\r\x1b[0K\x1b[1A");
-            abAppend(&ab,seq,strlen(seq));
+            ab.append(seq);
         }
     }
 
@@ -631,21 +629,22 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
         /* Clean the top line. */
         lndebug("clear");
         snprintf(seq,64,"\r\x1b[0K");
-        abAppend(&ab,seq,strlen(seq));
+        ab.append(seq);
     }
 
     if (flags & REFRESH_WRITE) {
         /* Write the prompt and the current buffer content */
-        abAppend(&ab,l->prompt,strlen(l->prompt));
+        ab.append(l->prompt);
         if (maskmode == 1) {
-            unsigned int i;
-            for (i = 0; i < l->len; i++) abAppend(&ab,"*",1);
+            for (unsigned int i = 0; i < l->len; ++i) {
+                ab.append("*");
+            }
         } else {
-            abAppend(&ab,l->buf,l->len);
+            ab.append(l->buf, l->len);
         }
 
         /* Show hits if any. */
-        refreshShowHints(&ab,l,plen);
+        refreshShowHints(ab, l, plen);
 
         /* If we are at the very end of the screen with our prompt, we need to
          * emit a newline and move the prompt to the first column. */
@@ -654,9 +653,9 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
             (l->pos+plen) % l->cols == 0)
         {
             lndebug("<newline>");
-            abAppend(&ab,"\n",1);
+            ab.append("\n");
             snprintf(seq,64,"\r");
-            abAppend(&ab,seq,strlen(seq));
+            ab.append(seq);
             rows++;
             if (rows > (int)l->oldrows) l->oldrows = rows;
         }
@@ -669,7 +668,7 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
         if (rows-rpos2 > 0) {
             lndebug("go-up %d", rows-rpos2);
             snprintf(seq,64,"\x1b[%dA", rows-rpos2);
-            abAppend(&ab,seq,strlen(seq));
+            ab.append(seq);
         }
 
         /* Set column. */
@@ -679,14 +678,12 @@ static void refreshMultiLine(struct linenoiseState *l, int flags) {
             snprintf(seq,64,"\r\x1b[%dC", col);
         else
             snprintf(seq,64,"\r");
-        abAppend(&ab,seq,strlen(seq));
+        ab.append(seq);
     }
 
     lndebug("\n");
     l->oldpos = l->pos;
-
-    if (write(fd,ab.b,ab.len) == -1) {} /* Can't recover from write error. */
-    abFree(&ab);
+    (void) !write(fd, ab.c_str(), ab.size()); /* Can't recover from write error. */
 }
 
 /* Calls the two low level functions refreshSingleLine() or
@@ -1313,16 +1310,17 @@ int linenoiseHistorySetMaxLen(int len) {
  * otherwise -1 is returned. */
 int linenoiseHistorySave(const char *filename) {
     mode_t old_umask = umask(S_IXUSR|S_IRWXG|S_IRWXO);
-    FILE *fp;
-    int j;
-
-    fp = fopen(filename,"w");
+    File   file;
+    file.open(filename, "w");
     umask(old_umask);
-    if (fp == NULL) return -1;
+    if (file.file == NULL) {
+        return -1;
+    }
     chmod(filename,S_IRUSR|S_IWUSR);
-    for (j = 0; j < history_len; j++)
-        fprintf(fp,"%s\n",history[j]);
-    fclose(fp);
+    for (int j = 0; j < history_len; ++j) {
+        fprintf(file.file, "%s\n", history[j]);
+    }
+
     return 0;
 }
 
@@ -1332,12 +1330,14 @@ int linenoiseHistorySave(const char *filename) {
  * If the file exists and the operation succeeded 0 is returned, otherwise
  * on error -1 is returned. */
 int linenoiseHistoryLoad(const char *filename) {
-    FILE *fp = fopen(filename,"r");
+    File file;
+    file.open(filename, "r");
     char buf[LINENOISE_MAX_LINE];
+    if (file.file == NULL) {
+        return -1;
+    }
 
-    if (fp == NULL) return -1;
-
-    while (fgets(buf,LINENOISE_MAX_LINE,fp) != NULL) {
+    while (fgets(buf, LINENOISE_MAX_LINE, file.file) != NULL) {
         char *p;
 
         p = strchr(buf,'\r');
@@ -1345,7 +1345,6 @@ int linenoiseHistoryLoad(const char *filename) {
         if (p) *p = '\0';
         linenoiseHistoryAdd(buf);
     }
-    fclose(fp);
     return 0;
 }
 #endif
