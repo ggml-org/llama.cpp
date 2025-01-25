@@ -247,10 +247,6 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // MLA projection matrices for Q
             new_type = GGML_TYPE_Q4_K;
         }
-        else if (name.find("ffn_gate_inp.weight") != std::string::npos) {
-            // MoE Router left as 8bit
-            new_type = GGML_TYPE_Q8_0;
-        }
         else if (name.find("attn_output.weight") != std::string::npos) {
             // Leave as 4bit
             new_type = GGML_TYPE_Q4_K;
@@ -449,10 +445,6 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     else if (name.find("attn_q_b.weight") != std::string::npos) {
         // MLA projection matrices for Q
         new_type = GGML_TYPE_Q4_K;
-    }
-    else if (name.find("ffn_gate_inp.weight") != std::string::npos) {
-        // MoE Router left as 8bit
-        new_type = GGML_TYPE_Q8_0;
     }
 
     //    if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) new_type = GGML_TYPE_Q3_K;
