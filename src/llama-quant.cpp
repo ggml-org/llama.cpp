@@ -202,7 +202,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (name.find("ffn_down_shexp.weight") != std::string::npos) {
             // Shared experts
-            new_type = GGML_TYPE_Q5_K;
+            new_type = GGML_TYPE_Q6_K;
             ++qs.i_ffn_down;
         }
         else if (name.find("ffn_down") != std::string::npos) {
@@ -320,7 +320,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         ++qs.i_ffn_down;
     } else if (name.find("ffn_down_shexp.weight") != std::string::npos) {
         // Shared experts
-        new_type = GGML_TYPE_Q5_K;
+        new_type = GGML_TYPE_Q6_K;
         ++qs.i_ffn_down;
     } else if (name.find("ffn_down") != std::string::npos) {
         auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
