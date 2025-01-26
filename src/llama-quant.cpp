@@ -215,12 +215,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             if (is_one_bit) {
                 // Layers 0, 1, 2 are Dense so Q4_K
                 // 3, 4, 5 left as Q2_K
-                if   (i_layer < 6) new_type = GGML_TYPE_IQ2_M;
+                if   (i_layer < 6) new_type = GGML_TYPE_IQ2_S;
             }
             else {
                 // Layers 0, 1, 2 are Dense so Q4_K
                 // 3, 4, 5 left as Q3_K
-                if   (i_layer < 6) new_type = GGML_TYPE_IQ3_M;
+                if   (i_layer < 6) new_type = GGML_TYPE_IQ3_S;
             }
             // else if (qs.i_ffn_down < qs.n_ffn_down/8) {
             //     new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
