@@ -198,33 +198,21 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (name.find("ffn_down.weight") != std::string::npos) {
             // First 3 Layers
-            if (is_one_bit) new_type = GGML_TYPE_Q6_K;
-            else            new_type = GGML_TYPE_Q6_K;
+            new_type = GGML_TYPE_Q6_K;
             ++qs.i_ffn_down;
         }
         else if (name.find("ffn_down_shexp.weight") != std::string::npos) {
             // Shared experts
-            if (is_one_bit) new_type = GGML_TYPE_Q5_K;
-            else            new_type = GGML_TYPE_Q6_K;
+            new_type = GGML_TYPE_Q6_K;
             ++qs.i_ffn_down;
         }
         else if (name.find("ffn_down") != std::string::npos) {
             auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
             int i_layer = info.first, n_layer = info.second;
-
-            if (is_one_bit) {
-                // Layers 0, 1, 2 are Dense so Q4_K
-                // 3, 4, 5 left as Q2_K
-                if   (i_layer < 6) new_type = GGML_TYPE_IQ2_S;
-            }
-            else {
-                // Layers 0, 1, 2 are Dense so Q4_K
-                // 3, 4, 5 left as Q3_K
-                if   (i_layer < 6) new_type = GGML_TYPE_IQ3_S;
-            }
-            // else if (qs.i_ffn_down < qs.n_ffn_down/8) {
-            //     new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
-            // }
+            // Layers 0, 1, 2 are Dense so Q4_K
+            // 3, 4, 5 left as Q2_K
+            if   (i_layer < 6) new_type = GGML_TYPE_Q3_K;
+            else  new_type = GGML_TYPE_Q2_K;
             ++qs.i_ffn_down;
         }
         else if (name.find("ffn_gate.weight") != std::string::npos) {
@@ -234,8 +222,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (name.find("ffn_gate_shexp.weight") != std::string::npos) {
             // Shared experts
-            if (is_one_bit) new_type = GGML_TYPE_Q4_K;
-            else            new_type = GGML_TYPE_Q5_K;
+            new_type = GGML_TYPE_Q5_K;
             ++qs.i_ffn_gate;
         }
         else if (name.find("ffn_up.weight") != std::string::npos) {
@@ -245,34 +232,28 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (name.find("ffn_up_shexp.weight") != std::string::npos) {
             // Shared experts
-            if (is_one_bit) new_type = GGML_TYPE_Q3_K;
-            else            new_type = GGML_TYPE_Q4_K;
+            new_type = GGML_TYPE_Q5_K;
             ++qs.i_ffn_up;
         }
         else if (name.find("attn_kv_a_mqa.weight") != std::string::npos) {
             // MLA projection matrices for KV
-            if (is_one_bit) new_type = GGML_TYPE_Q5_K;
-            else            new_type = GGML_TYPE_Q6_K;
+            new_type = GGML_TYPE_Q6_K;
         }
         else if (name.find("attn_kv_b.weight") != std::string::npos) {
             // MLA projection matrices for KV
-            if (is_one_bit) new_type = GGML_TYPE_Q5_K;
-            else            new_type = GGML_TYPE_Q6_K;
+            new_type = GGML_TYPE_Q6_K;
         }
         else if (name.find("attn_q_a.weight") != std::string::npos) {
             // MLA projection matrices for Q
-            if (is_one_bit) new_type = GGML_TYPE_Q3_K;
-            else            new_type = GGML_TYPE_Q4_K;
+            new_type = GGML_TYPE_Q4_K;
         }
         else if (name.find("attn_q_b.weight") != std::string::npos) {
             // MLA projection matrices for Q
-            if (is_one_bit) new_type = GGML_TYPE_Q3_K;
-            else            new_type = GGML_TYPE_Q4_K;
+            new_type = GGML_TYPE_Q4_K;
         }
         else if (name.find("attn_output.weight") != std::string::npos) {
             // Leave as 4bit
-            if (is_one_bit) new_type = GGML_TYPE_Q3_K;
-            else            new_type = GGML_TYPE_Q4_K;
+            new_type = GGML_TYPE_Q4_K;
             // if (qs.model.hparams.n_expert == 8) {
             //     new_type = GGML_TYPE_Q5_K;
             // } else {
