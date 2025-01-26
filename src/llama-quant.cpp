@@ -211,8 +211,13 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
             // Layers 0, 1, 2 are Dense so Q4_K
             // 3, 4, 5 left as Q2_K
-            if   (i_layer < 6) new_type = GGML_TYPE_Q3_K;
-            else  new_type = GGML_TYPE_Q2_K;
+            if (is_one_bit) {
+                if (i_layer < 9) new_type = GGML_TYPE_IQ2_XXS; // 2.06 bpw
+            }
+            else {
+                if  (i_layer < 6) new_type = GGML_TYPE_Q3_K;
+                else new_type = GGML_TYPE_Q2_K;
+            }
             ++qs.i_ffn_down;
         }
         else if (name.find("ffn_gate.weight") != std::string::npos) {
