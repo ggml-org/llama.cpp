@@ -212,6 +212,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // Layers 0, 1, 2 are Dense so Q4_K
             // 3, 4, 5 left as Q2_K
             if (is_one_bit) {
+                // 3, 4, 5, 6, 7, 8 left as 2.06 bpw
                 if (i_layer < 9) new_type = GGML_TYPE_IQ2_XXS; // 2.06 bpw
             }
             else {
