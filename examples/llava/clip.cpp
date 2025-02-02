@@ -166,6 +166,7 @@ struct clip_hparams {
     std::vector<int32_t> image_grid_pinpoints;
     int32_t image_crop_resolution;
     std::unordered_set<int32_t> vision_feature_layer;
+    int32_t attn_window_size;
     std::vector<int32_t> full_attn_layers;
 };
 
@@ -1274,6 +1275,7 @@ struct clip_model_loader {
             get_u32(KEY_IMAGE_SIZE, hparams.image_size);
             get_u32(KEY_PATCH_SIZE, hparams.patch_size);
             get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
+            get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, false);
             get_arr_int(KEY_IMAGE_GRID_PINPOINTS, hparams.image_grid_pinpoints, false);
             get_arr_int(KEY_FULLATTN_BLK_IDX, hparams.full_attn_layers, false);
 
@@ -2590,6 +2592,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         ggml_backend_tensor_set(inp_raw, data, 0, ggml_nbytes(inp_raw));
         free(data);
     }
+
     if (ctx->has_minicpmv_projector) {
         {
             // inspired from siglip:
@@ -2706,6 +2709,64 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 free(patches_data);
             }
         }
+    }
+
+    if (hparams.attn_window_size > 0 && ctx->has_qwen2vl_merger) { // TODO: add use_window_attn?
+        struct ggml_tensor * window_idx = ggml_graph_get_tensor(gf, "window_idx");
+        struct ggml_tensor * inv_window_idx = ggml_graph_get_tensor(gf, "inv_window_idx");
+        struct ggml_tensor * window_mask = ggml_graph_get_tensor(gf, "window_mask");
+
+        const int merge_ratio = 2;
+        const int pw = image_size_width / patch_size / merge_ratio;
+        const int ph = image_size_height / patch_size / merge_ratio;
+        const int grid_window = hparams.attn_window_size / hparams.patch_size / merge_ratio;
+        const int ipw = image_size_width / patch_size;
+        const int iph = image_size_height / patch_size;
+        /*
+        pw * ph = number of tokens output by ViT after apply patch merger
+        ipw * ipw = number of vision token been processed inside ViT
+        */
+
+        std::vector<int> idx(ph * pw);
+        std::vector<int> inv_idx(ph * pw);
+        int dst = 0;
+        // [num_vision_tokens, num_vision_tokens] attention mask tensor
+        std::vector<float> mask(pow(ipw * iph, 2), std::numeric_limits<float>::lowest());
+        int mask_row = 0;
+
+        for (int y = 0; y < ph; y+=grid_window)
+        {
+            for (int x = 0; x < pw; x+=grid_window)
+            {
+                const int win_h = std::min(grid_window, ph - y);
+                const int win_w = std::min(grid_window, pw - x);
+                const int dst_0 = dst;
+                // group all tokens belong to the same window togather (to a continue range)
+                for (int dy = 0; dy < win_h; dy++) {
+                    for (int dx = 0; dx < win_w; dx++) {
+                        const int src = (y + dy) * pw + (x + dx);
+                        assert(src < (int)idx.size());
+                        assert(dst < (int)inv_idx.size());
+                        idx[src] = dst;
+                        inv_idx[dst] = src;
+                        dst++;
+                    }
+                }
+
+                for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
+                    int row_offset = mask_row * (ipw * iph);
+                    std::fill(
+                        mask.begin() + row_offset + (dst_0 * merge_ratio * merge_ratio),
+                        mask.begin() + row_offset + (dst   * merge_ratio * merge_ratio),
+                        0.0);
+                    mask_row++;
+                }
+            }
+        }
+
+        ggml_backend_tensor_set(window_idx, idx.data(), 0, ggml_nbytes(window_idx));
+        ggml_backend_tensor_set(inv_window_idx, inv_idx.data(), 0, ggml_nbytes(inv_window_idx));
+        ggml_backend_tensor_set(window_mask, mask.data(), 0, ggml_nbytes(window_mask));
     }
 
     ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
