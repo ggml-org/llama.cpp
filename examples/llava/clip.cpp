@@ -166,6 +166,7 @@ struct clip_hparams {
     std::vector<int32_t> image_grid_pinpoints;
     int32_t image_crop_resolution;
     std::unordered_set<int32_t> vision_feature_layer;
+    std::vector<int32_t> full_attn_layers;
 };
 
 struct clip_layer {
@@ -190,6 +191,9 @@ struct clip_layer {
 
     struct ggml_tensor * ff_o_w = nullptr;
     struct ggml_tensor * ff_o_b = nullptr;
+
+    struct ggml_tensor * ff_g_w = NULL;
+    struct ggml_tensor * ff_g_b = NULL;
 
     // layernorm 2
     struct ggml_tensor * ln_2_w = nullptr;
@@ -314,6 +318,9 @@ struct clip_ctx {
     float image_std[3];
     bool use_gelu = false;
     bool use_silu = false;
+    bool use_glu_mlp = false;
+    bool use_rms_norm = false;
+    int32_t ftype = 1;
 
     gguf_context_ptr ctx_gguf;
     ggml_context_ptr ctx_data;
@@ -552,6 +559,7 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
     const int n_head               = hparams.n_head;
     const int d_head               = hidden_size / n_head;
     const float eps                = hparams.eps;
+    const bool use_window_attn     = hparams.full_attn_layers.size() > 0;
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
     const int batch_size = imgs.entries.size();
@@ -604,8 +612,10 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         // inp = ggml_add(ctx0, inp, ggml_repeat(ctx0, model.patch_bias, inp));
         inp = ggml_add(ctx0, inp, model.patch_bias);
     }
-    struct ggml_tensor * embeddings = inp;
-    struct ggml_tensor * pos_embed = nullptr;
+    struct ggml_tensor * embeddings  = inp;
+    struct ggml_tensor * pos_embed   = nullptr;
+    struct ggml_tensor * window_mask = nullptr;
+    struct ggml_tensor * window_idx  = nullptr;
 
     if (ctx->has_llava_projector) {
         // concat class_embeddings and patch_embeddings
@@ -657,6 +667,28 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
     const auto & vision_feature_layer = hparams.vision_feature_layer;
 
     // loop over layers
+
+    if (use_window_attn) {
+        window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
+        ggml_set_name(window_idx, "window_idx");
+        ggml_set_input(window_idx);
+
+        // mask for window attention
+        window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, num_positions, num_positions);
+        ggml_set_name(window_mask, "window_mask");
+        ggml_set_input(window_mask);
+
+        // embeddings shape: [hidden_size, patches_w * patches_h, batch_size]
+        GGML_ASSERT(batch_size == 1);
+        embeddings = ggml_reshape_2d(ctx0, embeddings, hidden_size * 4, patches_w * patches_h * batch_size / 4);
+        embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
+        embeddings = ggml_reshape_3d(ctx0, embeddings, hidden_size, patches_w * patches_h, batch_size);
+
+        positions = ggml_reshape_2d(ctx0, positions, 16, num_position_ids / 4 / 4);
+        positions = ggml_get_rows(ctx0, positions, window_idx);
+        positions = ggml_reshape_1d(ctx0, positions, num_position_ids);
+    }
+
     for (int il = 0; il < ctx->max_feature_layer; il++) {
         struct ggml_tensor * cur = embeddings; // embeddings = residual, cur = hidden_states
 
@@ -669,9 +701,12 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         //const size_t nb_q_w = model.layers[il].q_w->nb[0];
 
         // layernorm1
-        {
+        if (ctx->use_rms_norm) {
+            cur = ggml_rms_norm(ctx0, cur, eps);
+            cur = ggml_mul(ctx0, cur, model.layers[il].ln_1_w);
+        }
+        else {
             cur = ggml_norm(ctx0, cur, eps);
-
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, model.layers[il].ln_1_w),
                            model.layers[il].ln_1_b);
         }
@@ -711,7 +746,14 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
             V = ggml_reshape_3d(ctx0, V, num_positions, d_head, n_head * batch_size);
 
             struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-            KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
+            const bool inlist = std::find(hparams.full_attn_layers.begin(), hparams.full_attn_layers.end(), il) != hparams.full_attn_layers.end();
+            const bool full_attn = use_window_attn ? inlist : true;
+            if (full_attn) {
+                KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
+            } else {
+                KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f, 0.0f);
+            }
+
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
             KQV = ggml_reshape_4d(ctx0, KQV, d_head, num_positions, n_head, batch_size);
             KQV = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
@@ -728,25 +770,50 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         embeddings = cur; // embeddings = residual, cur = hidden_states
 
         // layernorm2
-        {
+        if (ctx->use_rms_norm) {
+            cur = ggml_rms_norm(ctx0, cur, eps);
+            cur = ggml_mul(ctx0, cur, model.layers[il].ln_2_w);
+        } else {
             cur = ggml_norm(ctx0, cur, eps);
-
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, model.layers[il].ln_2_w), model.layers[il].ln_2_b);
         }
 
-        cur = ggml_mul_mat(ctx0, model.layers[il].ff_i_w, cur);
-        cur = ggml_add(ctx0, cur, model.layers[il].ff_i_b);
+        // mlp
+        if (ctx->use_glu_mlp) {
+            // ffn_up
+            auto cur_up = ggml_mul_mat(ctx0, model.layers[il].ff_o_w, cur);
+            cur_up = ggml_add(ctx0, cur_up, model.layers[il].ff_o_b);
 
-        if (ctx->use_gelu) {
-            cur = ggml_gelu_inplace(ctx0, cur);
-        } else if (ctx->use_silu) {
-            cur = ggml_silu_inplace(ctx0, cur);
-        } else {
-            cur = ggml_gelu_quick_inplace(ctx0, cur);
+            auto cur_gate = ggml_mul_mat(ctx0, model.layers[il].ff_g_w, cur);
+            cur_gate = ggml_add(ctx0, cur_gate, model.layers[il].ff_g_b);
+            if (ctx->use_gelu) {
+                cur_gate = ggml_gelu_inplace(ctx0, cur_gate);
+            } else if (ctx->use_silu) {
+                cur_gate = ggml_silu_inplace(ctx0, cur_gate);
+            } else {
+                cur_gate = ggml_gelu_quick_inplace(ctx0, cur_gate);
+            }
+            cur = ggml_mul(ctx0, cur_gate, cur_up);
+
+            // ffn_down
+            cur = ggml_mul_mat(ctx0, model.layers[il].ff_i_w, cur);
+            cur = ggml_add(ctx0, cur, model.layers[il].ff_i_b);
         }
+        else {
+            cur = ggml_mul_mat(ctx0, model.layers[il].ff_i_w, cur);
+            cur = ggml_add(ctx0, cur, model.layers[il].ff_i_b);
 
-        cur = ggml_mul_mat(ctx0, model.layers[il].ff_o_w, cur);
-        cur = ggml_add(ctx0, cur, model.layers[il].ff_o_b);
+            if (ctx->use_gelu) {
+                cur = ggml_gelu_inplace(ctx0, cur);
+            } else if (ctx->use_silu) {
+                cur = ggml_silu_inplace(ctx0, cur);
+            } else {
+                cur = ggml_gelu_quick_inplace(ctx0, cur);
+            }
+
+            cur = ggml_mul_mat(ctx0, model.layers[il].ff_o_w, cur);
+            cur = ggml_add(ctx0, cur, model.layers[il].ff_o_b);
+        }
 
         // residual 2
         cur = ggml_add(ctx0, embeddings, cur);
@@ -756,10 +823,17 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
 
     // post-layernorm
     if (model.post_ln_w) {
-        embeddings = ggml_norm(ctx0, embeddings, eps);
-        ggml_set_name(embeddings, "post_ln");
+        if (ctx->use_rms_norm) {
+            embeddings = ggml_rms_norm(ctx0, embeddings, eps);
+            ggml_set_name(embeddings, "post_ln");
 
-        embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.post_ln_w), model.post_ln_b);
+            embeddings = ggml_mul(ctx0, embeddings, model.post_ln_w);
+        } else {
+            embeddings = ggml_norm(ctx0, embeddings, eps);
+            ggml_set_name(embeddings, "post_ln");
+
+            embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.post_ln_w), model.post_ln_b);
+        }
     }
 
     // final layer is a vision feature layer
@@ -1073,6 +1147,18 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
     }
 
+    if (use_window_attn) {
+        struct ggml_tensor * inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
+        ggml_set_name(inv_window_idx, "inv_window_idx");
+        ggml_set_input(inv_window_idx);
+
+        // embeddings shape: [hidden_size, patches_w * patches_h, batch_size]
+        GGML_ASSERT(batch_size == 1);
+        embeddings = ggml_reshape_2d(ctx0, embeddings, hparams.projection_dim, patches_w * patches_h / 4);
+        embeddings = ggml_get_rows(ctx0, embeddings, inv_window_idx);
+        embeddings = ggml_reshape_3d(ctx0, embeddings, hparams.projection_dim, patches_w * patches_h / 4, batch_size);
+    }
+
     // build the graph
     ggml_build_forward_expand(gf, embeddings);
 
@@ -1175,6 +1261,8 @@ struct clip_model_loader {
 
             get_bool(KEY_USE_GELU, ctx_clip.use_gelu, false);
             get_bool(KEY_USE_SILU, ctx_clip.use_silu, false);
+            get_bool(KEY_USE_GLU_MLP, ctx_clip.use_glu_mlp, false);
+            get_bool(KEY_USE_RMS_NORM, ctx_clip.use_rms_norm, false);
 
             auto & hparams = ctx_clip.vision_model.hparams;
             get_u32(string_format(KEY_N_EMBD,         "vision"), hparams.hidden_size);
@@ -1187,6 +1275,7 @@ struct clip_model_loader {
             get_u32(KEY_PATCH_SIZE, hparams.patch_size);
             get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
             get_arr_int(KEY_IMAGE_GRID_PINPOINTS, hparams.image_grid_pinpoints, false);
+            get_arr_int(KEY_FULLATTN_BLK_IDX, hparams.full_attn_layers, false);
 
             {
                 std::string mm_patch_merge_type;
@@ -1302,14 +1391,16 @@ struct clip_model_loader {
             layer.ln_2_w = get_tensor(string_format(TN_LN_2,        "v", il, "weight"), false);
             layer.ff_i_w = get_tensor(string_format(TN_FFN_DOWN,    "v", il, "weight"));
             layer.ff_o_w = get_tensor(string_format(TN_FFN_UP,      "v", il, "weight"));
+            layer.ff_g_w = get_tensor(string_format(TN_FFN_GATE,    "v", il, "weight"), ctx_clip.use_glu_mlp);
             layer.k_b    = get_tensor(string_format(TN_ATTN_K,      "v", il, "bias"), false);
             layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      "v", il, "bias"), false);
             layer.v_b    = get_tensor(string_format(TN_ATTN_V,      "v", il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, "v", il, "bias"), false);
-            layer.ln_1_b = get_tensor(string_format(TN_LN_1,        "v", il, "bias"), false);
-            layer.ln_2_b = get_tensor(string_format(TN_LN_2,        "v", il, "bias"), false);
+            layer.ln_1_b = get_tensor(string_format(TN_LN_1,        "v", il, "bias"), !ctx_clip.use_rms_norm);
+            layer.ln_2_b = get_tensor(string_format(TN_LN_2,        "v", il, "bias"), !ctx_clip.use_rms_norm);
             layer.ff_i_b = get_tensor(string_format(TN_FFN_DOWN,    "v", il, "bias"), false);
             layer.ff_o_b = get_tensor(string_format(TN_FFN_UP,      "v", il, "bias"), false);
+            layer.ff_g_b = get_tensor(string_format(TN_FFN_GATE,    "v", il, "bias"), ctx_clip.use_glu_mlp);
         }
 
         switch (ctx_clip.proj_type) {
