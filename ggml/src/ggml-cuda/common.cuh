@@ -183,6 +183,8 @@ static constexpr bool new_mma_available(const int cc) {
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     return __AMDGCN_WAVEFRONT_SIZE;
+#elif defined(GGML_USE_MUSA)
+    return 128;
 #else
     return 32;
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
