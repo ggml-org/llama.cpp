@@ -5,9 +5,10 @@ template <typename T, typename type_acc, int block_size>
 static __global__ void mul_mat_vec(
         const T * __restrict__ x, const float * __restrict__ y, float * __restrict__ dst, const int64_t ncols2, const int64_t stride_row,
         const int64_t channel_ratio, const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst) {
-    const int64_t row     = blockIdx.x;
-    const int64_t channel = blockIdx.z;
-    const int     tid     = threadIdx.x;
+    const int64_t row       = blockIdx.x;
+    const int64_t channel   = blockIdx.z;
+    const int     tid       = threadIdx.x;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     x   += (channel/channel_ratio)*stride_channel_x + row*stride_row;
     y   +=  channel               *stride_channel_y;
@@ -18,8 +19,8 @@ static __global__ void mul_mat_vec(
     extern __shared__ char data_mmv[];
     float * buf_iw = (float *) data_mmv;
 
-    if (block_size > WARP_SIZE) {
-        if (tid < WARP_SIZE) {
+    if (block_size > warp_size) {
+        if (tid < warp_size) {
             buf_iw[tid] = 0.0f;
         }
         __syncthreads();
@@ -67,16 +68,16 @@ static __global__ void mul_mat_vec(
         static_assert(std::is_same<T, void>::value, "unsupported type");
     }
 
-    sumf = warp_reduce_sum(sumf);
+    sumf = warp_reduce_sum<warp_size>(sumf);
 
-    if (block_size > WARP_SIZE) {
-        buf_iw[tid/WARP_SIZE] = sumf;
+    if (block_size > warp_size) {
+        buf_iw[tid/warp_size] = sumf;
         __syncthreads();
-        if (tid >= WARP_SIZE) {
+        if (tid >= warp_size) {
             return;
         }
         sumf = buf_iw[tid];
-        sumf = warp_reduce_sum(sumf);
+        sumf = warp_reduce_sum<warp_size>(sumf);
     }
 
     if (tid != 0) {
@@ -96,10 +97,19 @@ static void launch_mul_mat_vec_cuda(
     GGML_ASSERT(stride_row % 2 == 0);
     GGML_ASSERT(nchannels_y % nchannels_x == 0);
     const int64_t channel_ratio = nchannels_y / nchannels_x;
+    int device;
+    int warp_size;
 
-    int64_t block_size_best = WARP_SIZE;
-    int64_t niter_best      = (ncols + 2*WARP_SIZE - 1) / (2*WARP_SIZE);
-    for (int64_t block_size = 2*WARP_SIZE; block_size <= 256; block_size += WARP_SIZE) {
+    CUDA_CHECK(cudaGetDevice(&device));
+    warp_size = ggml_cuda_info().devices[device].warp_size;
+
+    int64_t block_size_best = warp_size;
+    int64_t niter_best      = (ncols + 2*warp_size - 1) / (2*warp_size);
+    int64_t max_block_size  = 256;
+    if(ggml_cuda_info().devices[device].cc > GGML_CUDA_CC_OFFSET_AMD && ggml_cuda_info().devices[device].cc < GGML_CUDA_CC_RDNA1) {
+        max_block_size = 128;
+    }
+    for (int64_t block_size = 2*warp_size; block_size <= max_block_size; block_size += warp_size) {
         const int64_t niter = (ncols + 2*block_size - 1) / (2*block_size);
         if (niter < niter_best) {
             niter_best      = niter;
@@ -107,7 +117,7 @@ static void launch_mul_mat_vec_cuda(
         }
     }
 
-    const int smem = WARP_SIZE*sizeof(float);
+    const int smem = warp_size*sizeof(float);
     const dim3 block_nums(nrows, 1, nchannels_y);
     const dim3 block_dims(block_size_best, 1, 1);
     switch (block_size_best) {

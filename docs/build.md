@@ -286,7 +286,7 @@ You don't need to install Vulkan SDK. It will be installed inside the container.
 
 ```sh
 # Build the image
-docker build -t llama-cpp-vulkan -f .devops/llama-cli-vulkan.Dockerfile .
+docker build -t llama-cpp-vulkan --target light -f .devops/vulkan.Dockerfile .
 
 # Then, use it:
 docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card1:/dev/dri/card1 llama-cpp-vulkan -m "/app/models/YOUR_MODEL_FILE" -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33

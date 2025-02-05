@@ -2,6 +2,10 @@ ARG UBUNTU_VERSION=22.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
+ARG TARGETARCH
+
+ARG GGML_CPU_ARM_ARCH=armv8-a
+
 RUN apt-get update && \
     apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
@@ -9,7 +13,14 @@ WORKDIR /app
 
 COPY . .
 
-RUN cmake -S . -B build -DGGML_BACKEND_DL=ON -DGGML_NATIVE=OFF -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_CURL=ON -DCMAKE_BUILD_TYPE=Release && \
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON; \
+    elif [ "$TARGETARCH" = "arm64" ]; then \
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=${GGML_CPU_ARM_ARCH}; \
+    else \
+        echo "Unsupported architecture"; \
+        exit 1; \
+    fi && \
     cmake --build build -j $(nproc)
 
 RUN mkdir -p /app/lib && \

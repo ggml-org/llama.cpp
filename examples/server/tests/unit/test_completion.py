@@ -87,7 +87,7 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
-def test_completion_stream_with_openai_library():
+def test_completion_with_openai_library():
     global server
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
@@ -102,7 +102,7 @@ def test_completion_stream_with_openai_library():
     assert match_regex("(going|bed)+", res.choices[0].text)
 
 
-def test_completion_with_openai_library():
+def test_completion_stream_with_openai_library():
     global server
     server.start()
     client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")

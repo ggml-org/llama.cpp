@@ -17,6 +17,11 @@ import { asyncIterator } from '@sec-ant/readable-stream/ponyfill/asyncIterator';
 
 const isDev = import.meta.env.MODE === 'development';
 
+// types
+/** @typedef {{ id: number, role: 'user' | 'assistant', content: string, timings: any }} Message */
+/** @typedef {{ role: 'user' | 'assistant', content: string }} APIMessage */
+/** @typedef {{ id: string, lastModified: number, messages: Array<Message> }} Conversation */
+
 // utility functions
 const isString = (x) => !!x.toLowerCase;
 const isBoolean = (x) => x === true || x === false;
@@ -50,6 +55,8 @@ const CONFIG_DEFAULT = {
   apiKey: '',
   systemMessage: 'You are a helpful assistant.',
   showTokensPerSecond: false,
+  showThoughtInProgress: false,
+  excludeThoughtOnReq: true,
   // make sure these default values are in sync with `common.h`
   samplers: 'edkypmxt',
   temperature: 0.8,
@@ -172,6 +179,7 @@ const MessageBubble = defineComponent({
     config: Object,
     msg: Object,
     isGenerating: Boolean,
+    showThoughtInProgress: Boolean,
     editUserMsgAndRegenerate: Function,
     regenerateMsg: Function,
   },
@@ -188,7 +196,31 @@ const MessageBubble = defineComponent({
         prompt_per_second: this.msg.timings.prompt_n / (this.msg.timings.prompt_ms / 1000),
         predicted_per_second: this.msg.timings.predicted_n / (this.msg.timings.predicted_ms / 1000),
       };
-    }
+    },
+    splitMsgContent() {
+      const content = this.msg.content;
+      if (this.msg.role !== 'assistant') {
+        return { content };
+      }
+      let actualContent = '';
+      let cot = '';
+      let isThinking = false;
+      let thinkSplit = content.split('<think>', 2);
+      actualContent += thinkSplit[0];
+      while (thinkSplit[1] !== undefined) {
+        // <think> tag found
+        thinkSplit = thinkSplit[1].split('</think>', 2);
+        cot += thinkSplit[0];
+        isThinking = true;
+        if (thinkSplit[1] !== undefined) {
+          // </think> closing tag found
+          isThinking = false;
+          thinkSplit = thinkSplit[1].split('<think>', 2);
+          actualContent += thinkSplit[0];
+        }
+      }
+      return { content: actualContent, cot, isThinking };
+    },
   },
   methods: {
     copyMsg() {
@@ -208,7 +240,10 @@ const MessageBubble = defineComponent({
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 // convId is a string prefixed with 'conv-'
 const StorageUtils = {
-  // manage conversations
+  /**
+   * manage conversations
+   * @returns {Array<Conversation>}
+   */
   getAllConversations() {
     const res = [];
     for (const key in localStorage) {
@@ -219,11 +254,19 @@ const StorageUtils = {
     res.sort((a, b) => b.lastModified - a.lastModified);
     return res;
   },
-  // can return null if convId does not exist
+  /**
+   * can return null if convId does not exist
+   * @param {string} convId
+   * @returns {Conversation | null}
+   */
   getOneConversation(convId) {
     return JSON.parse(localStorage.getItem(convId) || 'null');
   },
-  // if convId does not exist, create one
+  /**
+   * if convId does not exist, create one
+   * @param {string} convId
+   * @param {Message} msg
+   */
   appendMsg(convId, msg) {
     if (msg.content === null) return;
     const conv = StorageUtils.getOneConversation(convId) || {
@@ -235,12 +278,24 @@ const StorageUtils = {
     conv.lastModified = Date.now();
     localStorage.setItem(convId, JSON.stringify(conv));
   },
+  /**
+   * Get new conversation id
+   * @returns {string}
+   */
   getNewConvId() {
     return `conv-${Date.now()}`;
   },
+  /**
+   * remove conversation by id
+   * @param {string} convId
+   */
   remove(convId) {
     localStorage.removeItem(convId);
   },
+  /**
+   * remove all conversations
+   * @param {string} convId
+   */
   filterAndKeepMsgs(convId, predicate) {
     const conv = StorageUtils.getOneConversation(convId);
     if (!conv) return;
@@ -248,6 +303,11 @@ const StorageUtils = {
     conv.lastModified = Date.now();
     localStorage.setItem(convId, JSON.stringify(conv));
   },
+  /**
+   * remove last message from conversation
+   * @param {string} convId
+   * @returns {Message | undefined}
+   */
   popMsg(convId) {
     const conv = StorageUtils.getOneConversation(convId);
     if (!conv) return;
@@ -322,10 +382,12 @@ const mainApp = createApp({
   data() {
     return {
       conversations: StorageUtils.getAllConversations(),
-      messages: [], // { id: number, role: 'user' | 'assistant', content: string }
+      /** @type {Array<Message>} */
+      messages: [],
       viewingConvId: StorageUtils.getNewConvId(),
       inputMsg: '',
       isGenerating: false,
+      /** @type {Array<Message> | null} */
       pendingMsg: null, // the on-going message from assistant
       stopGeneration: () => {},
       selectedTheme: StorageUtils.getTheme(),
@@ -333,6 +395,7 @@ const mainApp = createApp({
       showConfigDialog: false,
       // const
       themes: THEMES,
+      /** @type {CONFIG_DEFAULT} */
       configDefault: {...CONFIG_DEFAULT},
       configInfo: {...CONFIG_INFO},
       isDev,
@@ -405,7 +468,10 @@ const mainApp = createApp({
       URL.revokeObjectURL(url);
     },
     async sendMessage() {
-      if (!this.inputMsg) return;
+      // prevent sending empty message
+      // also allow typing the message while generating, but does not allow sending it (to match UX/UI behavior of other chat apps)
+      if (!this.inputMsg || this.isGenerating) return;
+
       const currConvId = this.viewingConvId;
 
       StorageUtils.appendMsg(currConvId, {
@@ -425,42 +491,50 @@ const mainApp = createApp({
       this.isGenerating = true;
 
       try {
+        /** @type {CONFIG_DEFAULT} */
+        const config = this.config;
         const abortController = new AbortController();
         this.stopGeneration = () => abortController.abort();
+        /** @type {Array<APIMessage>} */
+        let messages = [
+          { role: 'system', content: config.systemMessage },
+          ...normalizeMsgsForAPI(this.messages),
+        ];
+        if (config.excludeThoughtOnReq) {
+          messages = filterThoughtFromMsgs(messages);
+        }
+        if (isDev) console.log({messages});
         const params = {
-          messages: [
-            { role: 'system', content: this.config.systemMessage },
-            ...this.messages,
-          ],
+          messages,
           stream: true,
           cache_prompt: true,
-          samplers: this.config.samplers,
-          temperature: this.config.temperature,
-          dynatemp_range: this.config.dynatemp_range,
-          dynatemp_exponent: this.config.dynatemp_exponent,
-          top_k: this.config.top_k,
-          top_p: this.config.top_p,
-          min_p: this.config.min_p,
-          typical_p: this.config.typical_p,
-          xtc_probability: this.config.xtc_probability,
-          xtc_threshold: this.config.xtc_threshold,
-          repeat_last_n: this.config.repeat_last_n,
-          repeat_penalty: this.config.repeat_penalty,
-          presence_penalty: this.config.presence_penalty,
-          frequency_penalty: this.config.frequency_penalty,
-          dry_multiplier: this.config.dry_multiplier,
-          dry_base: this.config.dry_base,
-          dry_allowed_length: this.config.dry_allowed_length,
-          dry_penalty_last_n: this.config.dry_penalty_last_n,
-          max_tokens: this.config.max_tokens,
-          timings_per_token: !!this.config.showTokensPerSecond,
-          ...(this.config.custom.length ? JSON.parse(this.config.custom) : {}),
+          samplers: config.samplers,
+          temperature: config.temperature,
+          dynatemp_range: config.dynatemp_range,
+          dynatemp_exponent: config.dynatemp_exponent,
+          top_k: config.top_k,
+          top_p: config.top_p,
+          min_p: config.min_p,
+          typical_p: config.typical_p,
+          xtc_probability: config.xtc_probability,
+          xtc_threshold: config.xtc_threshold,
+          repeat_last_n: config.repeat_last_n,
+          repeat_penalty: config.repeat_penalty,
+          presence_penalty: config.presence_penalty,
+          frequency_penalty: config.frequency_penalty,
+          dry_multiplier: config.dry_multiplier,
+          dry_base: config.dry_base,
+          dry_allowed_length: config.dry_allowed_length,
+          dry_penalty_last_n: config.dry_penalty_last_n,
+          max_tokens: config.max_tokens,
+          timings_per_token: !!config.showTokensPerSecond,
+          ...(config.custom.length ? JSON.parse(config.custom) : {}),
         };
         const chunks = sendSSEPostRequest(`${BASE_URL}/v1/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(this.config.apiKey ? {'Authorization': `Bearer ${this.config.apiKey}`} : {})
+            ...(config.apiKey ? {'Authorization': `Bearer ${config.apiKey}`} : {})
           },
           body: JSON.stringify(params),
           signal: abortController.signal,
@@ -477,7 +551,7 @@ const mainApp = createApp({
             };
           }
           const timings = chunk.timings;
-          if (timings && this.config.showTokensPerSecond) {
+          if (timings && config.showTokensPerSecond) {
             // only extract what's really needed, to save some space
             this.pendingMsg.timings = {
               prompt_n: timings.prompt_n,
@@ -597,4 +671,34 @@ try {
     <br/>
     <button class="btn" onClick="localStorage.clear(); window.location.reload();">Clear localStorage</button>
   </div>`;
+}
+
+/**
+ * filter out redundant fields upon sending to API
+ * @param {Array<APIMessage>} messages
+ * @returns {Array<APIMessage>}
+ */
+function normalizeMsgsForAPI(messages) {
+  return messages.map((msg) => {
+    return {
+      role: msg.role,
+      content: msg.content,
+    };
+  });
+}
+
+/**
+ * recommended for DeepsSeek-R1, filter out content between <think> and </think> tags
+ * @param {Array<APIMessage>} messages
+ * @returns {Array<APIMessage>}
+ */
+function filterThoughtFromMsgs(messages) {
+  return messages.map((msg) => {
+    return {
+      role: msg.role,
+      content: msg.role === 'assistant'
+        ? msg.content.split('</think>').at(-1).trim()
+        : msg.content,
+    };
+  });
 }

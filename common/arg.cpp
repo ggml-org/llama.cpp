@@ -877,7 +877,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -1465,14 +1465,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
-            printf("Available devices:\n");
+            std::vector<ggml_backend_dev_t> rpc_devices;
+            std::vector<ggml_backend_dev_t> all_devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
                 if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                    size_t free, total;
-                    ggml_backend_dev_memory(dev, &free, &total);
-                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
+                        rpc_devices.push_back(dev);
+                    } else {
+                        all_devices.push_back(dev);
+                    }
                 }
+            }
+            // insert RPC devices in front
+            all_devices.insert(all_devices.begin(), rpc_devices.begin(), rpc_devices.end());
+            printf("Available devices:\n");
+            for (size_t i = 0; i < all_devices.size(); ++i) {
+                auto * dev = all_devices[i];
+                size_t free, total;
+                ggml_backend_dev_memory(dev, &free, &total);
+                printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
             }
             exit(0);
         }

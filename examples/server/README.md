@@ -126,7 +126,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '') |
 | `--grammar-file FNAME` | file to read grammar from |
 | `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `--jinja` | Enable experimental Jinja templating engine (needed for tool use) |
+| `--jinja` | Enable experimental Jinja templating engine (required for tool use) |
 
 **Example-specific params**
 
@@ -236,9 +236,13 @@ npm i
 # to run the dev server
 npm run dev
 
-# to build the public/index.html
+# to build the public/index.html.gz
 npm run build
 ```
+After `public/index.html.gz` has been generated we need to generate the c++
+headers (like build/examples/server/index.html.gz.hpp) that will be included
+by server.cpp. This is done by building `llama-server` as described in the
+[build](#build) section above.
 
 NOTE: if you are using the vite dev server, you can change the API base URL to llama.cpp. To do that, run this code snippet in browser's console:
 
@@ -456,7 +460,7 @@ These words will not be included in the completion, so make sure to add them to 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
 - `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
-  ```json
+  ```
   {
     "content": "<the generated completion text>",
     "tokens": [ generated token ids if requested ],
@@ -557,7 +561,7 @@ If `with_pieces` is `true`:
 ```
 
 With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
-```json
+```
 {
   "tokens": [
     {"id": 198, "piece": [195]}, // hex C3
@@ -571,6 +575,18 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 *Options:*
 
 `tokens`: Set the tokens to detokenize.
+
+### POST `/apply-template`: Apply chat template to a conversation
+
+Uses the server's prompt template formatting functionality to convert chat messages to a single string expected by a chat model as input, but does not perform inference. Instead, the prompt string is returned in the `prompt` field of the JSON response. The prompt can then be modified as desired (for example, to insert "Sure!" at the beginning of the model's response) before sending to `/completion` to generate the chat response.
+
+*Options:*
+
+`messages`: (Required) Chat turns in the same format as `/v1/chat/completions`.
+
+**Response format**
+
+Returns a JSON object with a field `prompt` containing a string of the input messages formatted according to the model's chat template format.
 
 ### POST `/embedding`: Generate embedding of a given text
 
@@ -764,7 +780,7 @@ Same as the `/v1/embeddings` endpoint.
 
 **Response format**
 
-```json
+```
 [
   {
     "index": 0,
@@ -1053,7 +1069,7 @@ Given a ChatML-formatted json description in `messages`, it returns the predicte
 
 *Options:*
 
-See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
@@ -1100,6 +1116,184 @@ curl http://localhost:8080/v1/chat/completions \
 ]
 }'
 ```
+
+*Tool call support*
+
+[Function calling](https://platform.openai.com/docs/guides/function-calling) is supported for all models (see https://github.com/ggerganov/llama.cpp/pull/9639):
+
+- Requires `--jinja` flag
+- Native tool call formats supported:
+  - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
+  - Functionary v3.1 / v3.2
+  - Hermes 2/3, Qwen 2.5
+  - Mistral Nemo
+  - Firefunction v2
+  - Command R7B
+  - DeepSeek R1 (WIP / seems reluctant to call any tools?)
+
+  <details>
+  <summary>Show some common templates and which format handler they use</summary>
+
+  | Template | Format |
+  |----------|--------|
+  | CohereForAI-c4ai-command-r-plus-default.jinja | generic tool calls |
+  | CohereForAI-c4ai-command-r-plus-rag.jinja | generic tool calls |
+  | CohereForAI-c4ai-command-r-plus-tool_use.jinja | generic tool calls |
+  | MiniMaxAI-MiniMax-Text-01.jinja | generic tool calls |
+  | NexaAIDev-Octopus-v2.jinja | generic tool calls |
+  | NousResearch-Hermes-2-Pro-Llama-3-8B-default.jinja | generic tool calls |
+  | NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja | hermes 2 pro tool calls |
+  | NousResearch-Hermes-2-Pro-Mistral-7B-default.jinja | generic tool calls |
+  | NousResearch-Hermes-2-Pro-Mistral-7B-tool_use.jinja | hermes 2 pro tool calls |
+  | NousResearch-Hermes-3-Llama-3.1-70B-default.jinja | generic tool calls |
+  | NousResearch-Hermes-3-Llama-3.1-70B-tool_use.jinja | hermes 2 pro tool calls |
+  | OrionStarAI-Orion-14B-Chat.jinja | generic tool calls |
+  | Qwen-QwQ-32B-Preview.jinja | hermes 2 pro tool calls |
+  | Qwen-Qwen2-7B-Instruct.jinja | generic tool calls |
+  | Qwen-Qwen2-VL-7B-Instruct.jinja | generic tool calls |
+  | Qwen-Qwen2.5-7B-Instruct.jinja | hermes 2 pro tool calls |
+  | Qwen-Qwen2.5-Math-7B-Instruct.jinja | hermes 2 pro tool calls |
+  | TheBloke-FusionNet_34Bx2_MoE-AWQ.jinja | generic tool calls |
+  | abacusai-Fewshot-Metamath-OrcaVicuna-Mistral.jinja | generic tool calls |
+  | bofenghuang-vigogne-2-70b-chat.jinja | generic tool calls |
+  | databricks-dbrx-instruct.jinja | generic tool calls |
+  | deepseek-ai-DeepSeek-Coder-V2-Instruct.jinja | generic tool calls |
+  | deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja | deepseek r1 tool calls |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja | deepseek r1 tool calls |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-7B.jinja | deepseek r1 tool calls |
+  | deepseek-ai-DeepSeek-V2.5.jinja | deepseek r1 tool calls |
+  | deepseek-ai-deepseek-coder-33b-instruct.jinja | generic tool calls |
+  | google-gemma-2-2b-it.jinja | generic tool calls |
+  | google-gemma-7b-it.jinja | generic tool calls |
+  | indischepartij-MiniCPM-3B-OpenHermes-2.5-v2.jinja | generic tool calls |
+  | mattshumer-Reflection-Llama-3.1-70B.jinja | generic tool calls |
+  | meetkai-functionary-medium-v3.2.jinja | functionary v3.2 tool calls |
+  | meta-llama-Llama-3.1-8B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
+  | meta-llama-Llama-3.2-3B-Instruct.jinja | llama 3.x tool calls |
+  | meta-llama-Llama-3.3-70B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
+  | meta-llama-Meta-Llama-3.1-8B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
+  | microsoft-Phi-3-medium-4k-instruct.jinja | generic tool calls |
+  | microsoft-Phi-3-mini-4k-instruct.jinja | generic tool calls |
+  | microsoft-Phi-3-small-8k-instruct.jinja | generic tool calls |
+  | microsoft-Phi-3.5-mini-instruct.jinja | generic tool calls |
+  | microsoft-Phi-3.5-vision-instruct.jinja | generic tool calls |
+  | mistralai-Mistral-7B-Instruct-v0.2.jinja | generic tool calls |
+  | mistralai-Mistral-Large-Instruct-2407.jinja | mistral nemo tool calls |
+  | mistralai-Mistral-Large-Instruct-2411.jinja | generic tool calls |
+  | mistralai-Mistral-Nemo-Instruct-2407.jinja | mistral nemo tool calls |
+  | mistralai-Mixtral-8x7B-Instruct-v0.1.jinja | generic tool calls |
+  | mlabonne-AlphaMonarch-7B.jinja | generic tool calls |
+  | nvidia-Llama-3.1-Nemotron-70B-Instruct-HF.jinja | llama 3.x tool calls (w/ builtin tools) |
+  | openchat-openchat-3.5-0106.jinja | generic tool calls |
+  | teknium-OpenHermes-2.5-Mistral-7B.jinja | generic tool calls |
+
+  This table can be generated with:
+
+  ```bash
+  ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
+
+  </details>
+
+- Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
+  - Use `--chat-template-file` to override the template when appropriate (see examples below)
+  - Generic support may consume more tokens and be less efficient than a model's native format.
+
+- Run with:
+
+  ```shell
+  # Native support:
+  llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
+  llama-server --jinja -fa -hf bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q6_K_L
+  llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M
+  llama-server --jinja -fa -hf bartowski/Llama-3.3-70B-Instruct-GGUF:Q4_K_M
+
+  # Native support requires the right template for these GGUFs:
+
+  llama-server --jinja -fa -hf bartowski/Hermes-2-Pro-Llama-3-8B-GGUF:Q4_K_M \
+    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-2-Pro-Llama-3-8B tool_use )
+
+  llama-server --jinja -fa -hf bartowski/Hermes-3-Llama-3.1-8B-GGUF:Q4_K_M \
+    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-3-Llama-3.1-8B tool_use )
+
+  llama-server --jinja -fa -hf bartowski/firefunction-v2-GGUF -hff firefunction-v2-IQ1_M.gguf \
+    --chat-template-file <( python scripts/get_chat_template.py fireworks-ai/llama-3-firefunction-v2 tool_use )
+
+  llama-server --jinja -fa -hf bartowski/c4ai-command-r7b-12-2024-GGUF:Q6_K_L \
+    --chat-template-file <( python scripts/get_chat_template.py CohereForAI/c4ai-command-r7b-12-2024 tool_use )
+
+  # Generic format support
+  llama-server --jinja -fa -hf bartowski/phi-4-GGUF:Q4_0
+  llama-server --jinja -fa -hf bartowski/gemma-2-2b-it-GGUF:Q8_0
+  llama-server --jinja -fa -hf bartowski/c4ai-command-r-v01-GGUF:Q2_K
+  ```
+
+- Test in CLI:
+
+  ```bash
+  curl http://localhost:8080/v1/chat/completions -d '{
+    "model": "gpt-3.5-turbo",
+    "tools": [
+      {
+        "type":"function",
+        "function":{
+          "name":"get_current_weather",
+          "description":"Get the current weather in a given location",
+          "parameters":{
+            "type":"object",
+            "properties":{
+              "location":{
+                "type":"string",
+                "description":"The city and state, e.g. San Francisco, CA"
+              }
+            },
+            "required":["location"]
+          }
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is the weather like in Istanbul?."
+      }
+    ]
+  }'
+  ```
+
+  <details>
+  <summary>Show output</summary>
+
+  ```json
+  {
+    "choices": [
+      {
+        "finish_reason": "tool",
+        "index": 0,
+        "message": {
+          "content": null,
+          "tool_calls": [
+            {
+              "name": "python",
+              "arguments": "{\"code\":\" \\nprint(\\\"Hello, World!\\\")\"}"
+            }
+          ],
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1727287211,
+    "model": "gpt-3.5-turbo",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 16,
+      "prompt_tokens": 44,
+      "total_tokens": 60
+    },
+    "id": "chatcmpl-Htbgh9feMmGM0LEH2hmQvwsCxq3c6Ni8"
+  }
+  ```
+
+  </details>
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 

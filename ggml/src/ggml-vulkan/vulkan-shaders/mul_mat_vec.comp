@@ -133,8 +133,8 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 void main() {
     const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
 
-#if defined(DATA_A_IQ4_NL)
-    init_iq4nl_shmem();
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_NL)
+    init_iq_shmem(gl_WorkGroupSize);
 #endif
 
     // do NUM_ROWS at a time, unless there aren't enough remaining rows

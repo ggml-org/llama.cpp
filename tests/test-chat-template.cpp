@@ -176,6 +176,14 @@ int main(void) {
             /* .eos_token= */ "",
         },
         {
+            /* .name= */ "GLMEdge",
+            /* .template_str= */ "{% for item in messages %}{% if item['role'] == 'system' %}<|system|>\n{{ item['content'] }}{% elif item['role'] == 'user' %}<|user|>\n{{ item['content'] }}{% elif item['role'] == 'assistant' %}<|assistant|>\n{{ item['content'] }}{% endif %}{% endfor %}<|assistant|>",
+            /* .expected_output= */ "<|system|>\nYou are a helpful assistant<|user|>\nHello<|assistant|>\nHi there<|user|>\nWho are you<|assistant|>\n   I am an assistant   <|user|>\nAnother question<|assistant|>",
+            /* .expected_output_jinja= */ "<|system|>\nYou are a helpful assistant<|user|>\nHello<|assistant|>\nHi there<|user|>\nWho are you<|assistant|>\n   I am an assistant   <|user|>\nAnother question<|assistant|>",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+        },
+        {
             /* .name= */ "MiniCPM-3B-OpenHermes-2.5-v2-GGUF",
             /* .template_str= */ u8"{% for message in messages %}{% if message['role'] == 'user' %}{{'<用户>' + message['content'].strip() + '<AI>'}}{% else %}{{message['content'].strip()}}{% endif %}{% endfor %}",
             /* .expected_output= */ u8"You are a helpful assistant<用户>Hello<AI>Hi there<用户>Who are you<AI>I am an assistant<用户>Another question<AI>",
@@ -328,7 +336,7 @@ int main(void) {
     // test llama_chat_format_single for system message
     printf("\n\n=== llama_chat_format_single (system message) ===\n\n");
     std::vector<common_chat_msg> chat2;
-    common_chat_msg sys_msg{"system", "You are a helpful assistant"};
+    common_chat_msg sys_msg{"system", "You are a helpful assistant", {}};
 
     auto fmt_sys = [&](std::string tmpl_str) {
         minja::chat_template tmpl(tmpl_str, "", "");
@@ -352,10 +360,10 @@ int main(void) {
 
     // test llama_chat_format_single for user message
     printf("\n\n=== llama_chat_format_single (user message) ===\n\n");
-    chat2.push_back({"system", "You are a helpful assistant"});
-    chat2.push_back({"user", "Hello"});
-    chat2.push_back({"assistant", "I am assistant"});
-    common_chat_msg new_msg{"user", "How are you"};
+    chat2.push_back({"system", "You are a helpful assistant", {}});
+    chat2.push_back({"user", "Hello", {}});
+    chat2.push_back({"assistant", "I am assistant", {}});
+    common_chat_msg new_msg{"user", "How are you", {}};
 
     auto fmt_single = [&](std::string tmpl_str) {
         minja::chat_template tmpl(tmpl_str, "", "");

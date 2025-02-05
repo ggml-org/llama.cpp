@@ -133,7 +133,7 @@ The docker build option is currently limited to *intel GPU* targets.
 ### Build image
 ```sh
 # Using FP16
-docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" -f .devops/llama-cli-intel.Dockerfile .
+docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
 ```
 
 *Notes*:

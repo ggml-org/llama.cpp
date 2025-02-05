@@ -52,6 +52,7 @@ TEST_TARGETS = \
 	tests/test-arg-parser \
 	tests/test-autorelease \
 	tests/test-backend-ops \
+	tests/test-chat \
 	tests/test-chat-template \
 	tests/test-double-float \
 	tests/test-grammar-integration \
@@ -595,7 +596,7 @@ ifdef GGML_RPC
 	OBJ_GGML_EXT += ggml/src/ggml-rpc.o
 endif # GGML_RPC
 
-OBJ_CUDA_TMPL      = $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-wmma*.cu))
+OBJ_CUDA_TMPL      = $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/fattn-mma*.cu))
 OBJ_CUDA_TMPL     += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/template-instances/mmq*.cu))
 
 ifdef GGML_CUDA_FA_ALL_QUANTS
@@ -983,6 +984,7 @@ OBJ_COMMON = \
 	$(DIR_COMMON)/ngram-cache.o \
 	$(DIR_COMMON)/sampling.o \
 	$(DIR_COMMON)/speculative.o \
+	$(DIR_COMMON)/chat.o \
 	$(DIR_COMMON)/build-info.o \
 	$(DIR_COMMON)/json-schema-to-grammar.o
 
@@ -1361,6 +1363,8 @@ llama-server: \
 	examples/server/httplib.h \
 	examples/server/index.html.hpp \
 	examples/server/loading.html.hpp \
+	common/chat.cpp \
+	common/chat.hpp \
 	common/chat-template.hpp \
 	common/json.hpp \
 	common/minja.hpp \
@@ -1467,6 +1471,11 @@ tests/test-double-float: tests/test-double-float.cpp
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 tests/test-json-schema-to-grammar: tests/test-json-schema-to-grammar.cpp \
+	$(OBJ_ALL)
+	$(CXX) $(CXXFLAGS) -Iexamples/server -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+
+tests/test-chat: tests/test-chat.cpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -Iexamples/server -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)

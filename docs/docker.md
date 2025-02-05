@@ -60,9 +60,9 @@ Assuming one has the [nvidia-container-toolkit](https://github.com/NVIDIA/nvidia
 ## Building Docker locally
 
 ```bash
-docker build -t local/llama.cpp:full-cuda -f .devops/full-cuda.Dockerfile .
-docker build -t local/llama.cpp:light-cuda -f .devops/llama-cli-cuda.Dockerfile .
-docker build -t local/llama.cpp:server-cuda -f .devops/llama-server-cuda.Dockerfile .
+docker build -t local/llama.cpp:full-cuda --target full -f .devops/cuda.Dockerfile .
+docker build -t local/llama.cpp:light-cuda --target light -f .devops/cuda.Dockerfile .
+docker build -t local/llama.cpp:server-cuda --target server -f .devops/cuda.Dockerfile .
 ```
 
 You may want to pass in some different `ARGS`, depending on the CUDA environment supported by your container host, as well as the GPU architecture.
@@ -95,9 +95,9 @@ Assuming one has the [mt-container-toolkit](https://developer.mthreads.com/musa/
 ## Building Docker locally
 
 ```bash
-docker build -t local/llama.cpp:full-musa -f .devops/full-musa.Dockerfile .
-docker build -t local/llama.cpp:light-musa -f .devops/llama-cli-musa.Dockerfile .
-docker build -t local/llama.cpp:server-musa -f .devops/llama-server-musa.Dockerfile .
+docker build -t local/llama.cpp:full-musa --target full -f .devops/musa.Dockerfile .
+docker build -t local/llama.cpp:light-musa --target light -f .devops/musa.Dockerfile .
+docker build -t local/llama.cpp:server-musa --target server -f .devops/musa.Dockerfile .
 ```
 
 You may want to pass in some different `ARGS`, depending on the MUSA environment supported by your container host, as well as the GPU architecture.

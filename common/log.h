@@ -2,6 +2,16 @@
 
 #include "ggml.h" // for ggml_log_level
 
+#define LOG_COL_DEFAULT "\033[0m"
+#define LOG_COL_BOLD    "\033[1m"
+#define LOG_COL_RED     "\033[31m"
+#define LOG_COL_GREEN   "\033[32m"
+#define LOG_COL_YELLOW  "\033[33m"
+#define LOG_COL_BLUE    "\033[34m"
+#define LOG_COL_MAGENTA "\033[35m"
+#define LOG_COL_CYAN    "\033[36m"
+#define LOG_COL_WHITE   "\033[37m"
+
 #ifndef __GNUC__
 #    define LOG_ATTRIBUTE_FORMAT(...)
 #elif defined(__MINGW32__)

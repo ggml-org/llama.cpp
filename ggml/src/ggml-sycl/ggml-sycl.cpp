@@ -3878,10 +3878,6 @@ static void ggml_sycl_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_diag_mask_inf);
 }
 
-static void ggml_sycl_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_soft_max);
-}
-
 static void ggml_sycl_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(dst->src[0])); // TODO: this restriction is temporary until non-cont support is implemented
     ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_rope);
@@ -4090,7 +4086,7 @@ bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tens
             ggml_sycl_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
-            ggml_sycl_soft_max(ctx, dst);
+            ggml_sycl_op_soft_max(ctx, dst);
             break;
         case GGML_OP_ROPE:
             ggml_sycl_rope(ctx, dst);

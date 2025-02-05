@@ -254,7 +254,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    const bool add_bos = llama_vocab_get_add_bos(vocab);
+    const bool add_bos = llama_vocab_get_add_bos(vocab) && !params.use_jinja;
     if (!llama_model_has_encoder(model)) {
         GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
     }
@@ -264,9 +264,9 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
-        common_chat_msg new_msg{role, content};
+        common_chat_msg new_msg{role, content, {}};
         auto formatted = common_chat_format_single(*chat_templates.template_default, chat_msgs, new_msg, role == "user", g_params->use_jinja);
-        chat_msgs.push_back({role, content});
+        chat_msgs.push_back({role, content, {}});
         LOG_DBG("formatted: '%s'\n", formatted.c_str());
         return formatted;
     };
@@ -503,12 +503,14 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd;
 
-    // tokenized antiprompts
-    std::vector<std::vector<llama_token>> antiprompt_ids;
+    // single-token antiprompts
+    std::vector<llama_token> antiprompt_token;
 
-    antiprompt_ids.reserve(params.antiprompt.size());
     for (const std::string & antiprompt : params.antiprompt) {
-        antiprompt_ids.emplace_back(::common_tokenize(ctx, antiprompt, false, true));
+        auto ids = ::common_tokenize(ctx, antiprompt, false, true);
+        if (ids.size() == 1) {
+            antiprompt_token.push_back(ids[0]);
+        }
     }
 
     if (llama_model_has_encoder(model)) {
@@ -753,14 +755,11 @@ int main(int argc, char ** argv) {
 
                 // check for reverse prompt using special tokens
                 llama_token last_token = common_sampler_last(smpl);
-                for (std::vector<llama_token> ids : antiprompt_ids) {
-                    if (ids.size() == 1 && last_token == ids[0]) {
-                        if (params.interactive) {
-                            is_interacting = true;
-                        }
-                        is_antiprompt = true;
-                        break;
+                if (std::find(antiprompt_token.begin(), antiprompt_token.end(), last_token) != antiprompt_token.end()) {
+                    if (params.interactive) {
+                        is_interacting = true;
                     }
+                    is_antiprompt = true;
                 }
 
                 if (is_antiprompt) {

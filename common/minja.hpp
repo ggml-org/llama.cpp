@@ -628,7 +628,7 @@ class Context : public std::enable_shared_from_this<Context> {
         if (parent_) return parent_->contains(key);
         return false;
     }
-    virtual void set(const Value & key, Value & value) {
+    virtual void set(const Value & key, const Value & value) {
         values_.set(key, value);
     }
 };
@@ -693,7 +693,7 @@ enum SpaceHandling { Keep, Strip, StripSpaces, StripNewline };
 
 class TemplateToken {
 public:
-    enum class Type { Text, Expression, If, Else, Elif, EndIf, For, EndFor, Generation, EndGeneration, Set, EndSet, Comment, Macro, EndMacro, Filter, EndFilter };
+    enum class Type { Text, Expression, If, Else, Elif, EndIf, For, EndFor, Generation, EndGeneration, Set, EndSet, Comment, Macro, EndMacro, Filter, EndFilter, Break, Continue };
 
     static std::string typeToString(Type t) {
         switch (t) {
@@ -714,6 +714,8 @@ public:
             case Type::EndFilter: return "endfilter";
             case Type::Generation: return "generation";
             case Type::EndGeneration: return "endgeneration";
+            case Type::Break: return "break";
+            case Type::Continue: return "continue";
         }
         return "Unknown";
     }
@@ -815,6 +817,22 @@ struct CommentTemplateToken : public TemplateToken {
     CommentTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, const std::string& t) : TemplateToken(Type::Comment, location, pre, post), text(t) {}
 };
 
+enum class LoopControlType { Break, Continue };
+
+class LoopControlException : public std::runtime_error {
+public:
+    LoopControlType control_type;
+    LoopControlException(const std::string & message, LoopControlType control_type) : std::runtime_error(message), control_type(control_type) {}
+    LoopControlException(LoopControlType control_type)
+      : std::runtime_error((control_type == LoopControlType::Continue ? "continue" : "break") + std::string(" outside of a loop")),
+        control_type(control_type) {}
+};
+
+struct LoopControlTemplateToken : public TemplateToken {
+    LoopControlType control_type;
+    LoopControlTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, LoopControlType control_type) : TemplateToken(Type::Break, location, pre, post), control_type(control_type) {}
+};
+
 class TemplateNode {
     Location location_;
 protected:
@@ -825,6 +843,12 @@ public:
     void render(std::ostringstream & out, const std::shared_ptr<Context> & context) const {
         try {
             do_render(out, context);
+        } catch (const LoopControlException & e) {
+            // TODO: make stack creation lazy. Only needed if it was thrown outside of a loop.
+            std::ostringstream err;
+            err << e.what();
+            if (location_.source) err << error_location_suffix(*location_.source, location_.pos);
+            throw LoopControlException(err.str(), e.control_type);
         } catch (const std::exception & e) {
             std::ostringstream err;
             err << e.what();
@@ -897,6 +921,15 @@ public:
     }
 };
 
+class LoopControlNode : public TemplateNode {
+    LoopControlType control_type_;
+  public:
+    LoopControlNode(const Location & location, LoopControlType control_type) : TemplateNode(location), control_type_(control_type) {}
+    void do_render(std::ostringstream &, const std::shared_ptr<Context> &) const override {
+      throw LoopControlException(control_type_);
+    }
+};
+
 class ForNode : public TemplateNode {
     std::vector<std::string> var_names;
     std::shared_ptr<Expression> iterable;
@@ -961,7 +994,12 @@ public:
                   loop.set("last", i == (n - 1));
                   loop.set("previtem", i > 0 ? filtered_items.at(i - 1) : Value());
                   loop.set("nextitem", i < n - 1 ? filtered_items.at(i + 1) : Value());
-                  body->render(out, loop_context);
+                  try {
+                      body->render(out, loop_context);
+                  } catch (const LoopControlException & e) {
+                      if (e.control_type == LoopControlType::Break) break;
+                      if (e.control_type == LoopControlType::Continue) continue;
+                  }
               }
           }
       };
@@ -2156,10 +2194,10 @@ private:
     }
 
     TemplateTokenVector tokenize() {
-      static std::regex comment_tok(R"(\{#([-~]?)(.*?)([-~]?)#\})");
+      static std::regex comment_tok(R"(\{#([-~]?)([\s\S\r\n]*?)([-~]?)#\})");
       static std::regex expr_open_regex(R"(\{\{([-~])?)");
       static std::regex block_open_regex(R"(^\{%([-~])?[\s\n\r]*)");
-      static std::regex block_keyword_tok(R"((if|else|elif|endif|for|endfor|generation|endgeneration|set|endset|block|endblock|macro|endmacro|filter|endfilter)\b)");
+      static std::regex block_keyword_tok(R"((if|else|elif|endif|for|endfor|generation|endgeneration|set|endset|block|endblock|macro|endmacro|filter|endfilter|break|continue)\b)");
       static std::regex non_text_open_regex(R"(\{\{|\{%|\{#)");
       static std::regex expr_close_regex(R"([\s\n\r]*([-~])?\}\})");
       static std::regex block_close_regex(R"([\s\n\r]*([-~])?%\})");
@@ -2291,6 +2329,9 @@ private:
             } else if (keyword == "endfilter") {
               auto post_space = parseBlockClose();
               tokens.push_back(std::make_unique<EndFilterTemplateToken>(location, pre_space, post_space));
+            } else if (keyword == "break" || keyword == "continue") {
+              auto post_space = parseBlockClose();
+              tokens.push_back(std::make_unique<LoopControlTemplateToken>(location, pre_space, post_space, keyword == "break" ? LoopControlType::Break : LoopControlType::Continue));
             } else {
               throw std::runtime_error("Unexpected block: " + keyword);
             }
@@ -2414,6 +2455,8 @@ private:
               children.emplace_back(std::make_shared<FilterNode>(token->location, std::move(filter_token->filter), std::move(body)));
           } else if (dynamic_cast<CommentTemplateToken*>(token.get())) {
               // Ignore comments
+          } else if (auto ctrl_token = dynamic_cast<LoopControlTemplateToken*>(token.get())) {
+              children.emplace_back(std::make_shared<LoopControlNode>(token->location, ctrl_token->control_type));
           } else if (dynamic_cast<EndForTemplateToken*>(token.get())
                   || dynamic_cast<EndSetTemplateToken*>(token.get())
                   || dynamic_cast<EndMacroTemplateToken*>(token.get())
@@ -2572,6 +2615,7 @@ inline std::shared_ptr<Context> Context::builtins() {
   }));
   globals.set("join", simple_function("join", { "items", "d" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto do_join = [](Value & items, const std::string & sep) {
+      if (!items.is_array()) throw std::runtime_error("object is not iterable: " + items.dump());
       std::ostringstream oss;
       auto first = true;
       for (size_t i = 0, n = items.size(); i < n; ++i) {
@@ -2648,31 +2692,38 @@ inline std::shared_ptr<Context> Context::builtins() {
       return filter.call(context, actual_args);
     });
   };
-  // https://jinja.palletsprojects.com/en/3.0.x/templates/#jinja-filters.reject
-  globals.set("reject", Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
-    args.expectArgs("reject", {2, (std::numeric_limits<size_t>::max)()}, {0, 0});
-    auto & items = args.args[0];
-    auto filter_fn = context->get(args.args[1]);
-    if (filter_fn.is_null()) throw std::runtime_error("Undefined filter: " + args.args[1].dump());
+  auto select_or_reject = [make_filter](bool is_select) {
+    return Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
+      args.expectArgs(is_select ? "select" : "reject", {2, (std::numeric_limits<size_t>::max)()}, {0, 0});
+      auto & items = args.args[0];
+      if (items.is_null())
+        return Value::array();
+      if (!items.is_array()) throw std::runtime_error("object is not iterable: " + items.dump());
 
-    auto filter_args = Value::array();
-    for (size_t i = 2, n = args.args.size(); i < n; i++) {
-      filter_args.push_back(args.args[i]);
-    }
-    auto filter = make_filter(filter_fn, filter_args);
+      auto filter_fn = context->get(args.args[1]);
+      if (filter_fn.is_null()) throw std::runtime_error("Undefined filter: " + args.args[1].dump());
 
-    auto res = Value::array();
-    for (size_t i = 0, n = items.size(); i < n; i++) {
-      auto & item = items.at(i);
-      ArgumentsValue filter_args;
-      filter_args.args.emplace_back(item);
-      auto pred_res = filter.call(context, filter_args);
-      if (!pred_res.to_bool()) {
-        res.push_back(item);
+      auto filter_args = Value::array();
+      for (size_t i = 2, n = args.args.size(); i < n; i++) {
+        filter_args.push_back(args.args[i]);
       }
-    }
-    return res;
-  }));
+      auto filter = make_filter(filter_fn, filter_args);
+
+      auto res = Value::array();
+      for (size_t i = 0, n = items.size(); i < n; i++) {
+        auto & item = items.at(i);
+        ArgumentsValue filter_args;
+        filter_args.args.emplace_back(item);
+        auto pred_res = filter.call(context, filter_args);
+        if (pred_res.to_bool() == (is_select ? true : false)) {
+          res.push_back(item);
+        }
+      }
+      return res;
+    });
+  };
+  globals.set("select", select_or_reject(/* is_select= */ true));
+  globals.set("reject", select_or_reject(/* is_select= */ false));
   globals.set("map", Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
     auto res = Value::array();
     if (args.args.size() == 1 &&
@@ -2720,41 +2771,46 @@ inline std::shared_ptr<Context> Context::builtins() {
     if (!text.empty() && text.back() == '\n') out += "\n";
     return out;
   }));
-  globals.set("selectattr", Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
-    args.expectArgs("selectattr", {2, (std::numeric_limits<size_t>::max)()}, {0, 0});
-    auto & items = args.args[0];
-    if (items.is_null())
-      return Value::array();
-    auto attr_name = args.args[1].get<std::string>();
+  auto select_or_reject_attr = [](bool is_select) {
+    return Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
+      args.expectArgs(is_select ? "selectattr" : "rejectattr", {2, (std::numeric_limits<size_t>::max)()}, {0, 0});
+      auto & items = args.args[0];
+      if (items.is_null())
+        return Value::array();
+      if (!items.is_array()) throw std::runtime_error("object is not iterable: " + items.dump());
+      auto attr_name = args.args[1].get<std::string>();
 
-    bool has_test = false;
-    Value test_fn;
-    ArgumentsValue test_args {{Value()}, {}};
-    if (args.args.size() >= 3) {
-      has_test = true;
-      test_fn = context->get(args.args[2]);
-      if (test_fn.is_null()) throw std::runtime_error("Undefined test: " + args.args[2].dump());
-      for (size_t i = 3, n = args.args.size(); i < n; i++) {
-        test_args.args.emplace_back(args.args[i]);
-      }
-      test_args.kwargs = args.kwargs;
-    }
-
-    auto res = Value::array();
-    for (size_t i = 0, n = items.size(); i < n; i++) {
-      auto & item = items.at(i);
-      auto attr = item.get(attr_name);
-      if (has_test) {
-        test_args.args[0] = attr;
-        if (test_fn.call(context, test_args).to_bool()) {
-          res.push_back(item);
+      bool has_test = false;
+      Value test_fn;
+      ArgumentsValue test_args {{Value()}, {}};
+      if (args.args.size() >= 3) {
+        has_test = true;
+        test_fn = context->get(args.args[2]);
+        if (test_fn.is_null()) throw std::runtime_error("Undefined test: " + args.args[2].dump());
+        for (size_t i = 3, n = args.args.size(); i < n; i++) {
+          test_args.args.emplace_back(args.args[i]);
         }
-      } else {
-        res.push_back(attr);
+        test_args.kwargs = args.kwargs;
       }
-    }
-    return res;
-  }));
+
+      auto res = Value::array();
+      for (size_t i = 0, n = items.size(); i < n; i++) {
+        auto & item = items.at(i);
+        auto attr = item.get(attr_name);
+        if (has_test) {
+          test_args.args[0] = attr;
+          if (test_fn.call(context, test_args).to_bool() == (is_select ? true : false)) {
+            res.push_back(item);
+          }
+        } else {
+          res.push_back(attr);
+        }
+      }
+      return res;
+    });
+  };
+  globals.set("selectattr", select_or_reject_attr(/* is_select= */ true));
+  globals.set("rejectattr", select_or_reject_attr(/* is_select= */ false));
   globals.set("range", Value::callable([=](const std::shared_ptr<Context> &, ArgumentsValue & args) {
     std::vector<int64_t> startEndStep(3);
     std::vector<bool> param_set(3);

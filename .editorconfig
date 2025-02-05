@@ -40,3 +40,11 @@ indent_style = tab
 [examples/cvector-generator/*.txt]
 trim_trailing_whitespace = unset
 insert_final_newline = unset
+
+[models/templates/*.jinja]
+indent_style = unset
+indent_size = unset
+end_of_line = unset
+charset = unset
+trim_trailing_whitespace = unset
+insert_final_newline = unset

@@ -141,6 +141,7 @@
               :msg="pendingMsg"
               :key="pendingMsg.id"
               :is-generating="isGenerating"
+              :show-thought-in-progress="config.showThoughtInProgress"
               :edit-user-msg-and-regenerate="() => {}"
               :regenerate-msg="() => {}"></message-bubble>
           </div>
@@ -153,8 +154,6 @@
             placeholder="Type a message (Shift+Enter to add a new line)"
             v-model="inputMsg"
             @keydown.enter.exact.prevent="sendMessage"
-            @keydown.enter.shift.exact.prevent="inputMsg += '\n'"
-            :disabled="isGenerating"
             id="msg-input"
             dir="auto"
           ></textarea>
@@ -200,6 +199,20 @@
               <template v-for="configKey in ['repeat_last_n', 'repeat_penalty', 'presence_penalty', 'frequency_penalty', 'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n']">
                 <settings-modal-short-input :config-key="configKey" :config-default="configDefault" :config-info="configInfo" v-model="config[configKey]"></settings-modal-short-input>
               </template>
+            </div>
+          </details>
+          <!-- Section: Reasoning models -->
+          <details class="collapse collapse-arrow bg-base-200 mb-2 overflow-visible">
+            <summary class="collapse-title font-bold">Reasoning models</summary>
+            <div class="collapse-content">
+              <div class="flex flex-row items-center mb-2">
+                <input type="checkbox" class="checkbox" v-model="config.showThoughtInProgress" />
+                <span class="ml-4">Expand though process by default for generating message</span>
+              </div>
+              <div class="flex flex-row items-center mb-2">
+                <input type="checkbox" class="checkbox" v-model="config.excludeThoughtOnReq" />
+                <span class="ml-4">Exclude thought process when sending request to API (Recommended for DeepSeek-R1)</span>
+              </div>
             </div>
           </details>
           <!-- Section: Advanced config -->
@@ -261,7 +274,17 @@
           <span v-if="msg.content === null" class="loading loading-dots loading-md"></span>
           <!-- render message as markdown -->
           <div v-else dir="auto">
-            <vue-markdown :source="msg.content"></vue-markdown>
+            <details v-if="msg.role === 'assistant' && splitMsgContent.cot" class="collapse bg-base-200 collapse-arrow mb-4" :open="splitMsgContent.isThinking && showThoughtInProgress">
+              <summary class="collapse-title">
+                <span v-if="splitMsgContent.isThinking">
+                  <span v-if="isGenerating" class="loading loading-spinner loading-md mr-2" style="vertical-align: middle;"></span>
+                  <b>Thinking</b>
+                </span>
+                <b v-else>Thought Process</b>
+              </summary>
+              <vue-markdown :source="splitMsgContent.cot" dir="auto" class="collapse-content"></vue-markdown>
+            </details>
+            <vue-markdown :source="splitMsgContent.content"></vue-markdown>
           </div>
           <!-- render timings if enabled -->
           <div class="dropdown dropdown-hover dropdown-top mt-2" v-if="timings && config.showTokensPerSecond">

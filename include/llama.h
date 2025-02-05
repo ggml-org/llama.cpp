@@ -1199,6 +1199,18 @@ extern "C" {
                           const char * grammar_str,
                           const char * grammar_root);
 
+    /// @details Lazy grammar sampler, introduced in https://github.com/ggerganov/llama.cpp/pull/9639
+    /// @param trigger_words A list of words that will trigger the grammar sampler. This may be updated to a loose regex syntax (w/ ^) in a near future.
+    /// @param trigger_tokens A list of tokens that will trigger the grammar sampler.
+    LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy(
+            const struct llama_vocab * vocab,
+                          const char * grammar_str,
+                          const char * grammar_root,
+                         const char ** trigger_words,
+                                size_t num_trigger_words,
+                   const llama_token * trigger_tokens,
+                                size_t num_trigger_tokens);
+
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
                              int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)

@@ -2,7 +2,7 @@ import pytest
 from openai import OpenAI
 from utils import *
 
-server = ServerPreset.tinyllama2()
+server: ServerProcess
 
 @pytest.fixture(autouse=True)
 def create_server():
@@ -13,9 +13,12 @@ def create_server():
 @pytest.mark.parametrize(
     "model,system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason,jinja,chat_template",
     [
-        (None, "Book", "What is the best book", 8, "(Suddenly)+", 77, 8, "length", False, None),
-        (None, "Book", "What is the best book", 8, "(Suddenly)+", 77, 8, "length", True, None),
-        (None, "Book", "What is the best book", 8, "^ blue", 23, 8, "length", True, "This is not a chat template, it is"),
+        (None, "Book", "Hey", 8, "But she couldn't", 69, 8, "length", False, None),
+        (None, "Book", "Hey", 8, "But she couldn't", 69, 8, "length", True, None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", False, None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True,  None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True, 'chatml'),
+        (None, "Book", "What is the best book", 8, "^ blue",                    23, 8, "length", True, "This is not a chat template, it is"),
         ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", False, None),
         ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", True, None),
     ]
@@ -119,6 +122,21 @@ def test_chat_template():
     assert res.status_code == 200
     assert "__verbose" in res.body
     assert res.body["__verbose"]["prompt"] == "<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+
+
+def test_apply_chat_template():
+    global server
+    server.chat_template = "command-r"
+    server.start()
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [
+            {"role": "system", "content": "You are a test."},
+            {"role": "user", "content":"Hi there"},
+        ]
+    })
+    assert res.status_code == 200
+    assert "prompt" in res.body
+    assert res.body["prompt"] == "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>You are a test.<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|USER_TOKEN|>Hi there<|END_OF_TURN_TOKEN|><|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>"
 
 
 @pytest.mark.parametrize("response_format,n_predicted,re_content", [

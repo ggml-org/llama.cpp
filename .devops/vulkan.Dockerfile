@@ -1,4 +1,4 @@
-ARG UBUNTU_VERSION=jammy
+ARG UBUNTU_VERSION=24.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
@@ -7,7 +7,7 @@ RUN apt update && apt install -y git build-essential cmake wget
 
 # Install Vulkan SDK and cURL
 RUN wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add - && \
-    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list && \
+    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list && \
     apt update -y && \
     apt-get install -y vulkan-sdk libcurl4-openssl-dev curl
 
@@ -34,7 +34,7 @@ RUN mkdir -p /app/full \
 FROM ubuntu:$UBUNTU_VERSION AS base
 
 RUN apt-get update \
-    && apt-get install -y libgomp1 curl\
+    && apt-get install -y libgomp1 curl libvulkan-dev \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
@@ -55,8 +55,9 @@ RUN apt-get update \
     git \
     python3 \
     python3-pip \
-    && pip install --upgrade pip setuptools wheel \
-    && pip install -r requirements.txt \
+    python3-wheel \
+    && pip install --break-system-packages --upgrade setuptools \
+    && pip install --break-system-packages -r requirements.txt \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

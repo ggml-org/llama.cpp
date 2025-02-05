@@ -4,6 +4,7 @@
 
 #include "llama-cpp.h"
 
+#include <set>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -109,6 +110,11 @@ enum common_conversation_mode {
     COMMON_CONVERSATION_MODE_AUTO     = 2,
 };
 
+struct common_grammar_trigger {
+    std::string word;
+    bool at_start;
+};
+
 // sampling parameters
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
@@ -154,7 +160,11 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_TEMPERATURE,
     };
 
-    std::string grammar; // optional BNF-like grammar to constrain sampling
+    std::string                         grammar; // optional BNF-like grammar to constrain sampling
+    bool                                grammar_lazy = false;
+    std::vector<common_grammar_trigger> grammar_trigger_words;  // optional trigger words to trigger lazy grammar
+    std::vector<llama_token>            grammar_trigger_tokens; // optional trigger tokens to trigger lazy grammar and print trigger special tokens.
+    std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias; // logit biases to apply
 
@@ -602,10 +612,18 @@ std::string common_detokenize(
 // Chat template utils
 //
 
+struct common_tool_call {
+    std::string name;
+    std::string arguments;
+    std::string id;
+};
+
 // same with llama_chat_message, but uses std::string
 struct common_chat_msg {
     std::string role;
     std::string content;
+    std::vector<common_tool_call> tool_calls;
+    std::string tool_plan = "";
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid

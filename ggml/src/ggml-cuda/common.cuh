@@ -50,20 +50,27 @@
 #define GGML_CUDA_CC_VOLTA      700
 #define GGML_CUDA_CC_TURING     750
 #define GGML_CUDA_CC_AMPERE     800
-#define GGML_CUDA_CC_OFFSET_AMD 1000000
+#define GGML_CUDA_CC_OFFSET_AMD 0x1000000
 
 // GCN/CNDA, wave size is 64
-#define GGML_CUDA_CC_GCN4       (GGML_CUDA_CC_OFFSET_AMD + 803)  // Tonga, Fiji, Polaris, minimum for fast fp16
-#define GGML_CUDA_CC_VEGA       (GGML_CUDA_CC_OFFSET_AMD + 900)  // Vega56/64, minimum for fp16 dual issue
-#define GGML_CUDA_CC_VEGA20     (GGML_CUDA_CC_OFFSET_AMD + 906)  // MI50/Radeon VII, minimum for dp4a
-#define GGML_CUDA_CC_CDNA       (GGML_CUDA_CC_OFFSET_AMD + 908)  // MI100, minimum for MFMA, acc registers
-#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 910)  // MI210, minimum acc register renameing
-#define GGML_CUDA_CC_CDNA3      (GGML_CUDA_CC_OFFSET_AMD + 942)  // MI300
+#define GGML_CUDA_CC_GCN4       (GGML_CUDA_CC_OFFSET_AMD + 0x803)  // Tonga, Fiji, Polaris, minimum for fast fp16
+#define GGML_CUDA_CC_VEGA       (GGML_CUDA_CC_OFFSET_AMD + 0x900)  // Vega56/64, minimum for fp16 dual issue
+#define GGML_CUDA_CC_VEGA20     (GGML_CUDA_CC_OFFSET_AMD + 0x906)  // MI50/Radeon VII, minimum for dp4a
+#define GGML_CUDA_CC_CDNA       (GGML_CUDA_CC_OFFSET_AMD + 0x908)  // MI100, minimum for MFMA, acc registers
+#define GGML_CUDA_CC_CDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x910)  // MI210, minimum acc register renameing
+#define GGML_CUDA_CC_CDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x942)  // MI300
 
 // RNDA removes MFMA, dp4a, xnack, acc registers, wave size is 32
-#define GGML_CUDA_CC_RDNA1      (GGML_CUDA_CC_OFFSET_AMD + 1010) // RX 5000
-#define GGML_CUDA_CC_RDNA2      (GGML_CUDA_CC_OFFSET_AMD + 1030) // RX 6000, minimum for dp4a
-#define GGML_CUDA_CC_RDNA3      (GGML_CUDA_CC_OFFSET_AMD + 1100) // RX 7000, minimum for WMMA
+#define GGML_CUDA_CC_RDNA1      (GGML_CUDA_CC_OFFSET_AMD + 0x1010) // RX 5000
+#define GGML_CUDA_CC_RDNA2      (GGML_CUDA_CC_OFFSET_AMD + 0x1030) // RX 6000, minimum for dp4a
+#define GGML_CUDA_CC_RDNA3      (GGML_CUDA_CC_OFFSET_AMD + 0x1100) // RX 7000, minimum for WMMA
+
+#define GGML_CUDA_CC_IS_RDNA(cc)  (cc >= GGML_CUDA_CC_RDNA1)
+#define GGML_CUDA_CC_IS_RDNA1(cc) (cc >= GGML_CUDA_CC_RDNA1 && cc < GGML_CUDA_CC_RDNA2)
+#define GGML_CUDA_CC_IS_RDNA2(cc) (cc >= GGML_CUDA_CC_RDNA2 && cc < GGML_CUDA_CC_RDNA3)
+#define GGML_CUDA_CC_IS_RDNA3(cc) (cc >= GGML_CUDA_CC_RDNA3)
+#define GGML_CUDA_CC_IS_GCN(cc)   (cc > GGML_CUDA_CC_OFFSET_AMD && cc < GGML_CUDA_CC_CDNA)
+#define GGML_CUDA_CC_IS_CDNA(cc)  (cc >= GGML_CUDA_CC_CDNA && cc < GGML_CUDA_CC_RDNA1)
 
 #define GGML_CUDA_CC_QY1        210
 #define GGML_CUDA_CC_QY2        220
@@ -135,6 +142,10 @@ typedef float dfloat; // dequantize float
 typedef float2 dfloat2;
 #endif // GGML_CUDA_F16
 
+#if (!defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)) || (defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_VMM))
+#define GGML_USE_VMM
+#endif // (!defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)) || (defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_VMM))
+
 #if (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 #define FP16_AVAILABLE
 #endif // (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
@@ -159,20 +170,22 @@ static constexpr bool fast_fp16_available(const int cc) {
     return cc >= GGML_CUDA_CC_PASCAL && cc != 610;
 }
 
+// Any FP16 tensor cores are available.
 static constexpr bool fp16_mma_available(const int cc) {
-#ifndef FP16_MMA_AVAILABLE
-    return false;
-#else
     return cc < GGML_CUDA_CC_OFFSET_AMD && cc >= GGML_CUDA_CC_VOLTA;
-#endif
 }
 
-static constexpr bool int8_mma_available(const int cc) {
-#ifndef INT8_MMA_AVAILABLE
-    return false;
-#else
+// Volta technically had FP16 tensor cores but they work very differently compared to Turing and later.
+static constexpr bool new_mma_available(const int cc) {
     return cc < GGML_CUDA_CC_OFFSET_AMD && cc >= GGML_CUDA_CC_TURING;
-#endif
+}
+
+static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+    return __AMDGCN_WAVEFRONT_SIZE;
+#else
+    return 32;
+#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 }
 
 [[noreturn]]
@@ -198,53 +211,46 @@ static __device__ void no_device_code(
 #define NO_DEVICE_CODE //GGML_ABORT("NO_DEVICE_CODE not valid in host code.")
 #endif // __CUDA_ARCH__
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(0xffffffff, x);
 #else
 #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, 32);
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, offset, width);
     }
     return x;
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, 32);
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x += __shfl_xor_sync(0xffffffff, x, offset, width);
     }
     return x;
 }
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, 32);
-        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, 32);
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
+        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
     }
     return a;
 }
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #ifdef FP16_AVAILABLE
-
-#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        const half2 a_other = __shfl_xor_sync(0xffffffff, a, offset, 32);
-        reinterpret_cast<half&>(a.x) +=  __low2half(a_other);
-        reinterpret_cast<half&>(a.y) += __high2half(a_other);
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
     }
     return a;
-#else
-#pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, 32));
-    }
-    return a;
-#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 
 #else
     NO_DEVICE_CODE;
@@ -252,10 +258,11 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #endif // FP16_AVAILABLE
 }
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, 32));
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
     }
     return x;
 }
@@ -277,35 +284,34 @@ static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b
 }
 
 static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const half2 b) {
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
-
-#if CUDART_VERSION >= CUDART_HMAX
+#if defined(GGML_USE_HIP) && HIP_VERSION >= 50700000
+    return half2(__hmax(a.x, b.x), __hmax(a.y, b.y));
+#elif !defined(GGML_USE_HIP) && CUDART_VERSION >= CUDART_HMAX
     return __hmax2(a, b);
-#else
+#elif !defined(GGML_USE_HIP)
     half2 ret;
     reinterpret_cast<half&>(ret.x) = __float2half(fmaxf( __low2float(a),  __low2float(b)));
     reinterpret_cast<half&>(ret.y) = __float2half(fmaxf(__high2float(a), __high2float(b)));
     return ret;
-#endif // CUDART_VERSION >= CUDART_HMAX
-
 #else
     GGML_UNUSED(a);
     GGML_UNUSED(b);
     NO_DEVICE_CODE;
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
+#endif
 }
 
+template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000)
 #pragma unroll
-   for (int offset = 16; offset > 0; offset >>= 1) {
-       x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, 32));
+   for (int offset = width/2; offset > 0; offset >>= 1) {
+       x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, width));
    }
    return x;
 #else
    GGML_UNUSED(x);
    NO_DEVICE_CODE;
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000)
 }
 
 #if CUDART_VERSION < CUDART_HMASK
@@ -528,6 +534,7 @@ struct ggml_cuda_device_info {
         bool    vmm;                // virtual memory support
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
+        int     warp_size;          // Number of threads in a dispatch
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
@@ -600,7 +607,7 @@ struct ggml_tensor_extra_gpu {
 };
 
 
-#if (CUDART_VERSION >= 12000) && defined(GGML_CUDA_USE_GRAPHS)
+#if ((CUDART_VERSION >= 12000) && defined(GGML_CUDA_USE_GRAPHS)) || defined(GGML_HIP_GRAPHS)
 #define USE_CUDA_GRAPH
 #endif
 

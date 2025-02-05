@@ -43,6 +43,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -53,15 +59,14 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake .. \
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_CURL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -107,6 +112,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-x64
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -120,6 +131,7 @@ jobs:
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
           # https://github.com/ggerganov/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
           cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_CURL=ON \
             -DGGML_METAL=OFF \
@@ -160,8 +172,8 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip
           name: llama-bin-macos-x64.zip
 
-  ubuntu-latest-cmake:
-    runs-on: ubuntu-latest
+  ubuntu-cpu-cmake:
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Clone
@@ -169,6 +181,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-cpu-cmake
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -179,10 +197,11 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_CURL=ON -DGGML_RPC=ON
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=ON \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -244,6 +263,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         run: |
@@ -254,19 +279,52 @@ jobs:
         id: cmake_build
         if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-          cmake --build . --config ${{ matrix.build_type }} -j $(nproc)
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
 
       - name: Build (no OpenMP)
         id: cmake_build_no_openmp
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=OFF
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+  ubuntu-latest-llguidance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential
+
+      - name: Build
+        id: cmake_build
+        run: |
           mkdir build
           cd build
-          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} -DGGML_OPENMP=OFF
-          cmake --build . --config ${{ matrix.build_type }} -j $(nproc)
+          cmake .. \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_LLGUIDANCE=ON
+          cmake --build . --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -284,6 +342,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-cmake-rpc
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         run: |
@@ -293,10 +357,9 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake -DGGML_RPC=ON ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -312,6 +375,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-vulkan
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         run: |
@@ -323,16 +392,16 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake -DGGML_VULKAN=ON ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_VULKAN=ON
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 1800
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
@@ -349,16 +418,27 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-hip
+          evict-old-files: 1d
+
       - name: Build with native CMake HIP support
         id: cmake_build
         run: |
-          cmake -B build -S . -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" -DGGML_HIP=ON
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
       - name: Build with legacy HIP support
         id: cmake_build_legacy_hip
         run: |
-          cmake -B build2 -S . -DCMAKE_C_COMPILER=hipcc -DCMAKE_CXX_COMPILER=hipcc -DGGML_HIP=ON
+          cmake -B build2 -S . \
+            -DCMAKE_C_COMPILER=hipcc \
+            -DCMAKE_CXX_COMPILER=hipcc \
+            -DGGML_HIP=ON
           cmake --build build2 --config Release -j $(nproc)
 
   ubuntu-22-cmake-musa:
@@ -376,10 +456,17 @@ jobs:
           apt-get update
           apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-musa
+          evict-old-files: 1d
+
       - name: Build with native CMake MUSA support
         id: cmake_build
         run: |
-          cmake -B build -S . -DGGML_MUSA=ON
+          cmake -B build -S . \
+            -DGGML_MUSA=ON
           cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl:
@@ -414,14 +501,21 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-sycl
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
           source /opt/intel/oneapi/setvars.sh
-          mkdir build
-          cd build
-          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx
+          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
     runs-on: ubuntu-22.04
@@ -455,47 +549,22 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-sycl-fp16
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
           source /opt/intel/oneapi/setvars.sh
-          mkdir build
-          cd build
-          cmake -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON ..
-          cmake --build . --config Release -j $(nproc)
-
-  # TODO: build with GGML_METAL=OFF because test-backend-ops fail on "Apple Paravirtual device" and I don't know
-  #       how to debug it.
-  #       ref: https://github.com/ggerganov/llama.cpp/actions/runs/7132125951/job/19422043567?pr=4359#step:5:6584
-  #       would be great if we fix these
-  macOS-latest-cmake:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          mkdir build
-          cd build
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DGGML_METAL=OFF ..
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
+          cmake -B build \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DGGML_SYCL_F16=ON
+          cmake --build build --config Release -j $(nproc)
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest
@@ -505,6 +574,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-ios
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -515,9 +590,7 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
+          cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -526,7 +599,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-cmake-tvos:
     runs-on: macos-latest
@@ -536,6 +609,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-tvos
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -546,9 +625,7 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
+          cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -557,7 +634,7 @@ jobs:
             -DCMAKE_SYSTEM_NAME=tvOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-swift:
     runs-on: macos-latest
@@ -571,6 +648,12 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-swift
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -581,17 +664,15 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
+          cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
-          sudo cmake --install . --config Release
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+          sudo cmake --install build --config Release
 
       - name: xcodebuild for swift package
         id: xcodebuild
@@ -612,6 +693,13 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-msys2
+          variant: sccache
+          evict-old-files: 1d
+
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
         with:
@@ -619,6 +707,7 @@ jobs:
           msystem: ${{matrix.sys}}
           install: >-
             base-devel
+            git
             mingw-w64-${{matrix.env}}-toolchain
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-openblas
@@ -679,6 +768,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-${{ matrix.build }}
+          variant: sccache
+          evict-old-files: 1d
+
       - name: Clone Kompute submodule
         id: clone_kompute
         if: ${{ matrix.build == 'kompute-x64' }}
@@ -718,21 +814,19 @@ jobs:
         run: |
           git clone https://github.com/KhronosGroup/OpenCL-Headers
           cd OpenCL-Headers
-          mkdir build && cd build
-          cmake .. `
+          cmake -B build `
             -DBUILD_TESTING=OFF `
             -DOPENCL_HEADERS_BUILD_TESTING=OFF `
             -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
-          cmake --build . --target install
+          cmake --build build --target install
           git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
           cd OpenCL-ICD-Loader
-          mkdir build-arm64-release && cd build-arm64-release
-          cmake .. `
+          cmake -B build-arm64-release `
             -A arm64 `
             -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
-          cmake --build . --target install --config release
+          cmake --build build-arm64-release --target install --config release
 
       - name: Build
         id: cmake_build
@@ -817,6 +911,8 @@ jobs:
         - name: Clone
           id: checkout
           uses: actions/checkout@v4
+          with:
+            fetch-depth: 0
 
         - name: Install dependencies
           env:
@@ -825,9 +921,21 @@ jobs:
               apt update
               apt install -y cmake build-essential ninja-build libgomp1 git
 
+        - name: ccache
+          uses: hendrikmuhs/ccache-action@v1.2.16
+          with:
+            key: ubuntu-latest-cmake-cuda
+            evict-old-files: 1d
+
         - name: Build with CMake
           run: |
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89-real -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined -DLLAMA_FATAL_WARNINGS=ON
+            cmake -S . -B build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CUDA_ARCHITECTURES=89-real \
+              -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
+              -DLLAMA_FATAL_WARNINGS=ON \
+              -DGGML_NATIVE=OFF \
+              -DGGML_CUDA=ON
             cmake --build build
 
   windows-2019-cmake-cuda:
@@ -844,6 +952,13 @@ jobs:
         uses: actions/checkout@v4
         with:
             fetch-depth: 0
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ${{ github.job }}-${{ matrix.cuda }}-${{ matrix.build }}
+          variant: sccache
+          evict-old-files: 1d
 
       - name: Install Cuda Toolkit 11.7
         if: ${{ matrix.cuda == '11.7' }}
@@ -901,11 +1016,6 @@ jobs:
           echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "CUDA_PATH_V12_4=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ github.job }}-${{ matrix.cuda }}-${{ matrix.build }}
-
       - name: Install Ninja
         id: install_ninja
         run: |
@@ -916,7 +1026,11 @@ jobs:
         shell: cmd
         run: |
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -S . -B build -G "Ninja Multi-Config" -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_CUDA=ON -DGGML_RPC=ON
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_RPC=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
@@ -980,6 +1094,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-sycl
+          variant: sccache
+          evict-old-files: 1d
 
       - name: Install
         run:  |
@@ -1060,16 +1181,22 @@ jobs:
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake -G "Unix Makefiles" -B build -S . -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" -DGGML_HIP=ON -DCMAKE_BUILD_TYPE=Release -DGGML_RPC=ON
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_HIP=ON `
+            -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
   windows-latest-cmake-hip-release:
@@ -1086,6 +1213,12 @@ jobs:
         uses: actions/checkout@v4
         with:
             fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-hip-release
+          evict-old-files: 1d
 
       - name: Install
         id: depends
@@ -1107,7 +1240,13 @@ jobs:
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
-          cmake -G "Unix Makefiles" -B build -S . -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" -DGGML_HIP=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=${{ matrix.gpu_target }} -DGGML_RPC=ON
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DAMDGPU_TARGETS=${{ matrix.gpu_target }} `
+            -DGGML_HIP=ON `
+            -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
@@ -1149,9 +1288,7 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
+          cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_EXAMPLES=OFF \
@@ -1160,8 +1297,8 @@ jobs:
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
-          sudo cmake --install . --config Release
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+          sudo cmake --install build --config Release
 
       - name: xcodebuild for swift package
         id: xcodebuild
@@ -1177,6 +1314,12 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: android-build
+          evict-old-files: 1d
 
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -1201,8 +1344,7 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
-      - ubuntu-latest-cmake
-      - macOS-latest-cmake
+      - ubuntu-cpu-cmake
       - windows-latest-cmake
       - windows-2019-cmake-cuda
       - windows-latest-cmake-hip-release
@@ -1215,6 +1357,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: release
+          evict-old-files: 1d
 
       - name: Determine tag name
         id: tag
@@ -1461,3 +1609,37 @@ jobs:
 #          popd
 #          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
 #          make
+
+  openEuler-latest-cmake-cann:
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
+    defaults:
+      run:
+       shell: bash -el {0}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        cann:
+          - '8.0.rc3.beta1-910b-openeuler22.03-py3.10'
+        device:
+          - 'ascend910b3'
+        build:
+          - 'Release'
+    container: ascendai/cann:${{ matrix.cann }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          yum update -y
+          yum install -y git gcc gcc-c++ make cmake
+
+      - name: Build
+        run: |
+          export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+
+          cmake -S . -B build \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_CANN=on \
+              -DSOC_TYPE=${{ matrix.device }}
+          cmake --build build -j $(nproc)

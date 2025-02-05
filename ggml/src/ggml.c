@@ -128,6 +128,10 @@ static void ggml_print_backtrace_symbols(void) {
 #endif
 
 static void ggml_print_backtrace(void) {
+    const char * GGML_NO_BACKTRACE = getenv("GGML_NO_BACKTRACE");
+    if (GGML_NO_BACKTRACE) {
+        return;
+    }
     char attach[32];
     snprintf(attach, sizeof(attach), "attach %d", getpid());
     int pid = fork();
@@ -5339,7 +5343,7 @@ static void ggml_compute_backward(
         } break;
         case GGML_OP_MUL: {
             if (src0_needs_grads) {
-                ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, src1, grad));
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_mul(ctx, grad, src1));
             }
             if (src1_needs_grads) {
                 struct ggml_tensor * tmp = ggml_mul(ctx, src0, grad);
@@ -5431,21 +5435,25 @@ static void ggml_compute_backward(
             // src1.shape   [n,p,qq,rr]
 
             if (src0_needs_grads) {
-                struct ggml_tensor * s1_tg =
+                GGML_ASSERT(grad->ne[2] == src1->ne[2]);
+                GGML_ASSERT(grad->ne[3] == src1->ne[3]);
+                struct ggml_tensor * tmp =
                     ggml_out_prod(ctx, // [n,m,qq,rr]
                         src1,          // [n,p,qq,rr]
                         grad);         // [m,p,qq,rr]
-                const int64_t qq = s1_tg->ne[2];
-                const int64_t rr = s1_tg->ne[3];
-                const int64_t q1 = src0->ne[2];
-                const int64_t r1 = src0->ne[3];
-                const bool ne2_broadcasted = qq > q1;
-                const bool ne3_broadcasted = rr > r1;
-                if (ne2_broadcasted || ne3_broadcasted) {
-                    // sum broadcast repetitions of s1_tg into shape of src0
-                    s1_tg = ggml_repeat_back(ctx, s1_tg, src0);
+                if (!ggml_are_same_shape(tmp, src0)) {
+                    GGML_ASSERT(tmp->ne[0] == src0->ne[0]);
+                    GGML_ASSERT(tmp->ne[1] == src0->ne[1]);
+                    GGML_ASSERT(tmp->ne[3] == 1);
+
+                    const int64_t nr2 = tmp->ne[2] / src0->ne[2];
+                    const size_t nb2 = tmp->nb[2] * nr2;
+                    const size_t nb3 = tmp->nb[2];
+
+                    tmp = ggml_view_4d(ctx, tmp, src0->ne[0], src0->ne[1], src0->ne[2], nr2, tmp->nb[1], nb2, nb3, 0);
+                    tmp = ggml_repeat_back(ctx, tmp, src0);
                 }
-                ggml_add_or_set(ctx, cgraph, isrc0, s1_tg /*= [n,m,q1,r1]*/);
+                ggml_add_or_set(ctx, cgraph, isrc0, tmp);
             }
             if (src1_needs_grads) {
                 ggml_add_or_set(ctx, cgraph, isrc1,
@@ -5514,7 +5522,9 @@ static void ggml_compute_backward(
             if (src0_needs_grads) {
                 GGML_ASSERT(!cgraph->grads[isrc0] || ggml_is_contiguous(cgraph->grads[isrc0]));
                 GGML_ASSERT(ggml_is_contiguous(grad));
-                ggml_add_or_set(ctx, cgraph, isrc0, grad);
+                GGML_ASSERT(ggml_nelements(tensor) == ggml_nelements(src0));
+                ggml_add_or_set(ctx, cgraph, isrc0,
+                    ggml_are_same_shape(tensor, src0) ? grad : ggml_reshape(ctx, grad, src0));
             }
         } break;
         case GGML_OP_RESHAPE: {

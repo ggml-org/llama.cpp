@@ -343,7 +343,7 @@ static std::string format_literal(const std::string & literal) {
 
 class SchemaConverter {
 private:
-    friend std::string build_grammar(const std::function<void(const llama_grammar_builder &)> & cb);
+    friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
     std::function<json(const std::string &)> _fetch_json;
     bool _dotall;
     std::map<std::string, std::string> _rules;
@@ -764,10 +764,11 @@ private:
 public:
     SchemaConverter(
         const std::function<json(const std::string &)> & fetch_json,
-        bool dotall)
+        bool dotall,
+        bool compact_spaces)
           : _fetch_json(fetch_json), _dotall(dotall)
     {
-        _rules["space"] = SPACE_RULE;
+        _rules["space"] = compact_spaces ? "\" \"?" : SPACE_RULE;
     }
 
     void resolve_refs(json & schema, const std::string & url) {
@@ -990,17 +991,24 @@ public:
     }
 };
 
-std::string json_schema_to_grammar(const json & schema) {
-    return build_grammar([&](const llama_grammar_builder & callbacks) {
+std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
+#ifdef LLAMA_USE_LLGUIDANCE
+    if (!force_gbnf) {
+        return "%llguidance {}\nstart: %json " + schema.dump();
+    }
+#else
+    (void)force_gbnf;
+#endif // LLAMA_USE_LLGUIDANCE
+    return build_grammar([&](const common_grammar_builder & callbacks) {
         auto copy = schema;
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
     });
 }
 
-std::string build_grammar(const std::function<void(const llama_grammar_builder &)> & cb) {
-    SchemaConverter converter([&](const std::string &) { return json(); }, /* dotall= */ false);
-    llama_grammar_builder builder {
+std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
+    SchemaConverter converter([&](const std::string &) { return json(); }, options.dotall, options.compact_spaces);
+    common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
         },
