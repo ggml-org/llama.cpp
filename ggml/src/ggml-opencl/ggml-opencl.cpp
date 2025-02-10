@@ -241,6 +241,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_soft_max_f16, kernel_soft_max_4_f16;
     cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0;
     cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
+    cl_kernel kernel_rope_multi_f32, kernel_rope_multi_f16;
     cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32;
     cl_kernel kernel_mul_mat_f32_f32;
     cl_kernel kernel_mul_mat_f16_f16;
@@ -727,6 +728,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->kernel_rope_norm_f16      = clCreateKernel(backend_ctx->program, "kernel_rope_norm_f16", &err), err));
     CL_CHECK((backend_ctx->kernel_rope_neox_f32      = clCreateKernel(backend_ctx->program, "kernel_rope_neox_f32", &err), err));
     CL_CHECK((backend_ctx->kernel_rope_neox_f16      = clCreateKernel(backend_ctx->program, "kernel_rope_neox_f16", &err), err));
+    CL_CHECK((backend_ctx->kernel_rope_multi_f32     = clCreateKernel(backend_ctx->program, "kernel_rope_multi_f32", &err), err));
+    CL_CHECK((backend_ctx->kernel_rope_multi_f16     = clCreateKernel(backend_ctx->program, "kernel_rope_multi_f16", &err), err));
     CL_CHECK((backend_ctx->kernel_cpy_f16_f16        = clCreateKernel(backend_ctx->program, "kernel_cpy_f16_f16", &err), err));
     CL_CHECK((backend_ctx->kernel_cpy_f16_f32        = clCreateKernel(backend_ctx->program, "kernel_cpy_f16_f32", &err), err));
     CL_CHECK((backend_ctx->kernel_cpy_f32_f16        = clCreateKernel(backend_ctx->program, "kernel_cpy_f32_f16", &err), err));
@@ -1235,10 +1238,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->ne[3] == 1;
         case GGML_OP_ROPE: {
             const int mode = ((const int32_t *) op->op_params)[2];
-            if (mode & GGML_ROPE_TYPE_MROPE) {
+            const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
+            const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+            if (is_mrope && !is_vision) {
+                if (op->src[0]->type == GGML_TYPE_F32 ||
+                    op->src[0]->type == GGML_TYPE_F16) {
+                    return true;
+                }
                 return false;
             }
-            if (mode & GGML_ROPE_TYPE_VISION) {
+            if (is_vision) {
                 return false;
             }
             return true;
@@ -4048,6 +4057,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     float attn_factor;
     float beta_fast;
     float beta_slow;
+    int32_t sections[4];
 
     memcpy(&freq_base,   (int32_t *) dst->op_params + 5, sizeof(float));
     memcpy(&freq_scale,  (int32_t *) dst->op_params + 6, sizeof(float));
@@ -4055,29 +4065,58 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
     memcpy(&beta_fast,   (int32_t *) dst->op_params + 9, sizeof(float));
     memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&sections,    (int32_t *) dst->op_params + 11, sizeof(int32_t)*4);
 
     const bool is_neox = mode & 2;
+    const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
+    const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+
+    if (is_mrope) {
+        GGML_ASSERT(sections[0] > 0 || sections[1] > 0 || sections[2] > 0);
+    }
+
+    if (is_vision) {
+        GGML_ASSERT(n_dims == ne00/2);
+    }
 
     cl_kernel kernel;
 
-    if (!is_neox) {
-        switch (src0->type) {
-            case GGML_TYPE_F32:
-                kernel = backend_ctx->kernel_rope_norm_f32;
-                break;
-            case GGML_TYPE_F16:
-                kernel = backend_ctx->kernel_rope_norm_f16;
-                break;
-            default:
-                GGML_ASSERT(false);
-        };
-    } else {
+    if (is_neox) {
         switch (src0->type) {
             case GGML_TYPE_F32:
                 kernel = backend_ctx->kernel_rope_neox_f32;
                 break;
             case GGML_TYPE_F16:
                 kernel = backend_ctx->kernel_rope_neox_f16;
+                break;
+            default:
+                GGML_ASSERT(false);
+        };
+    } else if (is_mrope && !is_vision) {
+        switch (src0->type) {
+            case GGML_TYPE_F32:
+                kernel = backend_ctx->kernel_rope_multi_f32;
+                break;
+            case GGML_TYPE_F16:
+                kernel = backend_ctx->kernel_rope_multi_f16;
+                break;
+            default:
+                GGML_ASSERT(false);
+        };
+    } else if (is_vision) {
+        switch (src0->type) {
+            case GGML_TYPE_F32:
+            case GGML_TYPE_F16:
+            default:
+                GGML_ASSERT(false);
+        }
+    } else {
+        switch (src0->type) {
+            case GGML_TYPE_F32:
+                kernel = backend_ctx->kernel_rope_norm_f32;
+                break;
+            case GGML_TYPE_F16:
+                kernel = backend_ctx->kernel_rope_norm_f16;
                 break;
             default:
                 GGML_ASSERT(false);
@@ -4117,6 +4156,9 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     CL_CHECK(clSetKernelArg(kernel, 30, sizeof(float),    &attn_factor));
     CL_CHECK(clSetKernelArg(kernel, 31, sizeof(float),    &beta_fast));
     CL_CHECK(clSetKernelArg(kernel, 32, sizeof(float),    &beta_slow));
+    if (is_mrope) {
+        CL_CHECK(clSetKernelArg(kernel, 33, sizeof(int32_t)*4, &sections));
+    }
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
