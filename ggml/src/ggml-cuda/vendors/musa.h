@@ -137,32 +137,35 @@
 typedef mt_bfloat16 nv_bfloat16;
 
 /** FIXME: MUSA arch should match CUDA 11.4 */
-// #define CC_OFFSET_MT  99999 // should < CC_OFFSET_AMD
-// #define __CUDA_ARCH__ CC_OFFSET_MT
-// #define __CUDA_ARCH__ 800 // AMPERE
+// #define GGML_CUDA_CC_PASCAL     600
+// #define GGML_CUDA_CC_DP4A       610
+// #define GGML_CUDA_CC_VOLTA      700
+// #define GGML_CUDA_CC_TURING     750
+// #define GGML_CUDA_CC_AMPERE     800
 
-#define __MUSA_CC__   800
+#define __MUSA_CC__   610
+// #define __CUDA_ARCH__ __MUSA_CC__
 
 
-/** TODO: following apis not supported yet by musa sdk: ***********
+/** TODO: following apis not supported yet by musa sdk: ***********/
 
-__device__ __half hexp(const __half a) {
-    float f_a = __half2float(a);
-    float f_result = expf(f_a);
-    return __float2half(f_result);
-}
+// __device__ __half hexp(const __half a) {
+//     float f_a = __half2float(a);
+//     float f_result = expf(f_a);
+//     return __float2half(f_result);
+// }
 
-__host__ __device__ __half2 h2exp(const __half2 a) {
-    // Extract lower and upper halves
-    __half lower = __low2half(a);
-    __half upper = __high2half(a);
+// __host__ __device__ __half2 h2exp(const __half2 a) {
+//     // Extract lower and upper halves
+//     __half lower = __low2half(a);
+//     __half upper = __high2half(a);
 
-    // Compute exp for each half
-    __half exp_lower = hexp(lower);
-    __half exp_upper = hexp(upper);
+//     // Compute exp for each half
+//     __half exp_lower = hexp(lower);
+//     __half exp_upper = hexp(upper);
 
-    // Combine back into __half2
-    return __halves2half2(exp_lower, exp_upper);
-}
+//     // Combine back into __half2
+//     return __halves2half2(exp_lower, exp_upper);
+// }
 
-******************************************************************/
+/******************************************************************/
