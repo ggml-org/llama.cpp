@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>

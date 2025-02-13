@@ -2745,10 +2745,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 }
 
 bool clip_model_quantize(const char * fname_inp, const char * fname_out, const int itype) {
-    ggml_type type = GGML_TYPE_Q4_1;
-
     assert(itype < GGML_TYPE_COUNT);
-    type = static_cast<ggml_type>(itype);
+    ggml_type type = static_cast<ggml_type>(itype);
 
     auto * ctx_clip = clip_model_load(fname_inp, 2);
 
@@ -2801,8 +2799,8 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
             }
         }
 
-        // quantize only 2D tensors
-        quantize &= (ggml_n_dims(cur) == 2);
+        // quantize only 2D tensors and bigger than block size
+        quantize &= (ggml_n_dims(cur) == 2) && cur->ne[0] > ggml_blck_size(type);
 
         if (quantize) {
             new_type = type;

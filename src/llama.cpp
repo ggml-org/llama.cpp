@@ -7217,7 +7217,7 @@ struct llm_build_context {
                 struct ggml_tensor * Qcur = nullptr;
                 struct ggml_tensor * Kcur = nullptr;
                 struct ggml_tensor * Vcur = nullptr;
-                if (model.type == LLM_TYPE_1_5B || model.type == LLM_TYPE_4B || model.type == LLM_TYPE_9B) {
+                if (model.layers[il].wqkv == nullptr) {
                     Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
                     if (model.layers[il].bq) {
                         Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
@@ -8801,12 +8801,14 @@ static int llama_decode_impl(
     //llama_synchronize(&lctx);
 
     // decide if we need to defrag the kv cache
-    if (cparams.causal_attn && cparams.defrag_thold >= 0.0f) {
-        const float fragmentation = kv_self.n >= 128 ? 1.0f - float(kv_self.used)/float(kv_self.n) : 0.0f;
+    if (cparams.causal_attn && cparams.defrag_thold > 0.0f) {
+        // - do not defrag small contexts (i.e. < 2048 tokens)
+        // - count the padding towards the number of used tokens
+        const float fragmentation = kv_self.n >= 2048 ? std::max(0.0f, 1.0f - float(kv_self.used + llama_kv_cache_get_padding(cparams))/float(kv_self.n)) : 0.0f;
 
         // queue defragmentation for next llama_kv_cache_update
         if (fragmentation > cparams.defrag_thold) {
-            //LLAMA_LOG_INFO("fragmentation: %.2f\n", fragmentation);
+            LLAMA_LOG_DEBUG("%s: fragmentation: %.2f - requesting defrag\n", __func__, fragmentation);
 
             llama_kv_cache_defrag(kv_self);
         }
@@ -9428,8 +9430,6 @@ static struct llama_model * llama_model_load_from_file_impl(
         struct llama_model_params params) {
     ggml_time_init();
 
-    llama_model * model = new llama_model(params);
-
     unsigned cur_percentage = 0;
     if (params.progress_callback == NULL) {
         params.progress_callback_user_data = &cur_percentage;
@@ -9446,6 +9446,8 @@ static struct llama_model * llama_model_load_from_file_impl(
             return true;
         };
     }
+
+    llama_model * model = new llama_model(params);
 
     // create list of devices to use with this model
     if (params.devices) {

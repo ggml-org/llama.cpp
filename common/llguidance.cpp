@@ -254,10 +254,10 @@ llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab, const char * g
         };
     }
 
-    return new llama_sampler{
+    return llama_sampler_init(
         /* .iface = */ &llama_sampler_llg_i,
-        /* .ctx   = */ ctx,
-    };
+        /* .ctx   = */ ctx
+    );
 }
 
 #else

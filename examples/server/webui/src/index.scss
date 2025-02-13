@@ -1,14 +1,27 @@
-@use "sass:meta";
+@use 'sass:meta';
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 .markdown {
-  h1, h2, h3, h4, h5, h6, ul, ol, li { all: revert; }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  ul,
+  ol,
+  li {
+    all: revert;
+  }
   pre {
     @apply whitespace-pre-wrap rounded-lg p-2;
     border: 1px solid currentColor;
+  }
+  p {
+    @apply mb-2;
   }
   /* TODO: fix markdown table */
 }
@@ -19,7 +32,9 @@
 .btn-mini {
   @apply cursor-pointer hover:shadow-md;
 }
-.chat-screen { max-width: 900px; }
+.chat-screen {
+  max-width: 900px;
+}
 
 .chat-bubble-base-300 {
   --tw-bg-opacity: 1;
@@ -30,6 +45,9 @@
 /* Highlight.js */
 [data-color-scheme='light'] {
   @include meta.load-css('highlight.js/styles/stackoverflow-light');
+  .dark-color {
+    @apply bg-base-content text-base-100;
+  }
 }
 [data-color-scheme='dark'] {
   @include meta.load-css('highlight.js/styles/stackoverflow-dark');
@@ -37,6 +55,9 @@
 [data-color-scheme='auto'] {
   @media (prefers-color-scheme: light) {
     @include meta.load-css('highlight.js/styles/stackoverflow-light');
+    .dark-color {
+      @apply bg-base-content text-base-100;
+    }
   }
   @media (prefers-color-scheme: dark) {
     @include meta.load-css('highlight.js/styles/stackoverflow-dark');
@@ -45,4 +66,8 @@
 .hljs {
   background: transparent !important;
   padding: 0.5em !important;
+}
+
+.katex-display {
+  margin: 0 0 !important;
 }

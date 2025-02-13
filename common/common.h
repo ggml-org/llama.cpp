@@ -140,6 +140,7 @@ struct common_params_sampling {
     int32_t dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
     int32_t dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
     int32_t mirostat           = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+    float   top_n_sigma        = -1.00f;// -1.0 = disabled
     float   mirostat_tau       = 5.00f; // target entropy
     float   mirostat_eta       = 0.10f; // learning rate
     bool    ignore_eos         = false;
@@ -424,13 +425,13 @@ bool set_process_priority(enum ggml_sched_priority prio);
 //
 
 #ifdef __GNUC__
-#ifdef __MINGW32__
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
+#    if defined(__MINGW32__) && !defined(__clang__)
+#        define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
+#    else
+#        define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
+#    endif
 #else
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
-#endif
-#else
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...)
+#    define LLAMA_COMMON_ATTRIBUTE_FORMAT(...)
 #endif
 
 LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)

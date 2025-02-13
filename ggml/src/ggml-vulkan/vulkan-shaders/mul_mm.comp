@@ -95,7 +95,7 @@ shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
 #endif
 
 void main() {
-#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
     init_iq_shmem(gl_WorkGroupSize);
 #endif
 
@@ -546,6 +546,25 @@ void main() {
             const float db = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
             const uint32_t grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)] >> (16 * (idx % 2));
             const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
+
+            buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
+            buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
+#elif defined(DATA_A_IQ4_XS)
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * SHMEM_STRIDE + loadr_a * LOAD_VEC_A;
+
+            const uint ib = idx / 128;                  // 2 values per idx
+            const uint ib32 = (idx % 128) / 16;         // 0..7
+            const uint iq = 16 * ib32 + 2 * (idx % 8);
+
+            const uint sl = (data_a[ib].scales_l[ib32/2] >> (4 * (ib32 & 1))) & 0xF;
+            const uint sh = ((data_a[ib].scales_h) >> (2 * ib32)) & 3;
+            const uint qshift = (idx & 8) >> 1;
+            u8vec2 qs = u8vec2(data_a[ib].qs[iq], data_a[ib].qs[iq + 1]);
+            qs = (qs >> qshift) & uint8_t(0xF);
+
+            const float d = float(data_a[ib].d);
+            const vec2 v = d * float(int(sl | (sh << 4)) - 32) * vec2(kvalues_iq4nl[qs.x], kvalues_iq4nl[qs.y]);
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);

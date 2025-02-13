@@ -116,7 +116,7 @@ struct llama_grammar {
     llama_partial_utf8 partial_utf8;
 
     // lazy grammars wait for trigger words or tokens before constraining the sampling.
-    // we still ahve trigger_tokens for non-lazy grammars to force printing of special trigger tokens.
+    // we still have trigger_tokens for non-lazy grammars to force printing of special trigger tokens.
     // (useful e.g. for tool_choice=required)
     bool                     lazy             = false;
     bool                     awaiting_trigger = false; // Initialized to true for lazy grammars only

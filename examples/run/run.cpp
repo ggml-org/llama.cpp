@@ -346,7 +346,7 @@ class HttpClient {
         if (!output_file.empty()) {
             output_file_partial = output_file + ".partial";
             if (!out.open(output_file_partial, "ab")) {
-                printe("Failed to open file\n");
+                printe("Failed to open file for writing\n");
 
                 return 1;
             }
@@ -535,8 +535,7 @@ class HttpClient {
 
     static void print_progress(const std::string & progress_prefix, const std::string & progress_bar,
                                const std::string & progress_suffix) {
-        printe("\r%*s\r%s%s| %s", get_terminal_width(), " ", progress_prefix.c_str(), progress_bar.c_str(),
-               progress_suffix.c_str());
+        printe("\r" LOG_CLR_TO_EOL "%s%s| %s", progress_prefix.c_str(), progress_bar.c_str(), progress_suffix.c_str());
     }
     // Function to write data to a file
     static size_t write_data(void * ptr, size_t size, size_t nmemb, void * stream) {
@@ -797,16 +796,13 @@ class LlamaData {
     llama_model_ptr initialize_model(Opt & opt) {
         ggml_backend_load_all();
         resolve_model(opt.model_);
-        printe(
-            "\r%*s"
-            "\rLoading model",
-            get_terminal_width(), " ");
+        printe("\r" LOG_CLR_TO_EOL "Loading model");
         llama_model_ptr model(llama_model_load_from_file(opt.model_.c_str(), opt.model_params));
         if (!model) {
             printe("%s: error: unable to load model from file: %s\n", __func__, opt.model_.c_str());
         }
 
-        printe("\r%*s\r", static_cast<int>(sizeof("Loading model")), " ");
+        printe("\r" LOG_CLR_TO_EOL);
         return model;
     }
 
@@ -969,10 +965,7 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
 static int read_user_input(std::string & user_input) {
     static const char * prompt_prefix = "> ";
 #ifdef WIN32
-    printf(
-        "\r%*s"
-        "\r" LOG_COL_DEFAULT "%s",
-        get_terminal_width(), " ", prompt_prefix);
+    printf("\r" LOG_CLR_TO_EOL LOG_COL_DEFAULT "%s", prompt_prefix);
 
     std::getline(std::cin, user_input);
     if (std::cin.eof()) {

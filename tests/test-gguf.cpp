@@ -697,8 +697,8 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
 
 #ifdef _WIN32
         if (!file) {
-            printf("%s: failed to create tmpfile(), needs elevated privileges on Windows");
-            printf("%s: skipping tests");
+            printf("failed to create tmpfile(), needs elevated privileges on Windows");
+            printf("skipping tests");
             continue;
         }
 #else
@@ -1086,8 +1086,8 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
 
 #ifdef _WIN32
     if (!file) {
-        printf("%s: failed to create tmpfile(), needs elevated privileges on Windows");
-        printf("%s: skipping tests");
+        printf("failed to create tmpfile(), needs elevated privileges on Windows");
+        printf("skipping tests");
         return std::make_pair(0, 0);
     }
 #else

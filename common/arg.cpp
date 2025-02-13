@@ -674,7 +674,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--no-context-shift"},
-        string_format("disables context shift on inifinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
+        string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {
             params.ctx_shift = false;
         }
@@ -946,6 +946,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.min_p = std::stof(value);
         }
     ).set_sparam());
+    add_opt(common_arg(
+        {"--top-nsigma"}, "N",
+        string_format("top-n-sigma sampling (default: %.1f, -1.0 = disabled)", params.sampling.top_n_sigma),
+        [](common_params & params, const std::string & value) {
+            params.sampling.top_n_sigma = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}).set_sparam());
     add_opt(common_arg(
         {"--xtc-probability"}, "N",
         string_format("xtc probability (default: %.1f, 0.0 = disabled)", (double)params.sampling.xtc_probability),
@@ -2323,6 +2330,48 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.vocoder.hf_file = "WavTokenizer-Large-75-F16.gguf";
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
+
+    add_opt(common_arg(
+        {"--embd-bge-small-en-default"},
+        string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
+            params.hf_file = "bge-small-en-v1.5-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--embd-e5-small-en-default"},
+        string_format("use default e5-small-v2 model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
+            params.hf_file = "e5-small-v2-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--embd-gte-small-default"},
+        string_format("use default gte-small model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
+            params.hf_file = "gte-small-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
 
     return ctx_arg;
 }

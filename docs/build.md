@@ -125,20 +125,65 @@ For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
 
 ## CUDA
 
-This provides GPU acceleration using an NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from the [NVIDIA developer site](https://developer.nvidia.com/cuda-downloads).
+This provides GPU acceleration using an NVIDIA GPU. Make sure to have the [CUDA toolkit](https://developer.nvidia.com/cuda-toolkit) installed.
 
-If you are using Fedora (using Fedora Workstation, or an 'Atomic' variant such as Silverblue), or would like to set up CUDA in a toolbox, please consider our [Fedora CUDA guide](./cuda-fedora.md). Unfortunately, the process is not as simple as one might expect.
+#### Download directly from NVIDIA
+You may find the official downloads here: [NVIDIA developer site](https://developer.nvidia.com/cuda-downloads).
 
-- Using `CMake`:
 
-  ```bash
-  cmake -B build -DGGML_CUDA=ON
-  cmake --build build --config Release
-  ```
+#### Compile and run inside a Fedora Toolbox Container
+We also have a [guide](./cuda-fedora.md) for setting up CUDA toolkit in a Fedora [toolbox container](https://containertoolbx.org/).
 
-The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars) can be used to specify which GPU(s) will be used.
+**Recommended for:**
+
+- ***Particularly*** *convenient* for users of [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/); such as: [Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/) and [Kinoite](https://fedoraproject.org/atomic-desktops/kinoite/).
+- Toolbox is installed by default: [Fedora Workstation](https://fedoraproject.org/workstation/) or [Fedora KDE Plasma Desktop](https://fedoraproject.org/spins/kde).
+- *Optionally* toolbox packages are available: [Arch Linux](https://archlinux.org/), [Red Hat Enterprise Linux >= 8.5](https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux), or [Ubuntu](https://ubuntu.com/download)
+
+
+### Compilation
+```bash
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release
+```
+
+### Override Compute Capability Specifications
+
+If `nvcc` cannot detect your gpu, you may get compile-warnings such as:
+ ```text
+nvcc warning : Cannot find valid GPU for '-arch=native', default arch is used
+```
+
+To override the `native` GPU detection:
+
+#### 1. Take note of the `Compute Capability` of your NVIDIA devices: ["CUDA: Your GPU Compute > Capability"](https://developer.nvidia.com/cuda-gpus).
+
+```text
+GeForce RTX 4090      8.9
+GeForce RTX 3080 Ti   8.6
+GeForce RTX 3070      8.6
+```
+
+#### 2. Manually list each varying `Compute Capability` in the `CMAKE_CUDA_ARCHITECTURES` list.
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="86;89"
+```
+
+### Runtime CUDA environmental variables
+
+You may set the [cuda environmental variables](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars) at runtime.
+
+```bash
+# Use `CUDA_VISIBLE_DEVICES` to hide the first compute device.
+CUDA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
+```
+
+### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
+
+### Performance Tuning
 
 The following compilation options are also available to tweak performance:
 

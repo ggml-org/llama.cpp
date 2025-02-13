@@ -220,7 +220,7 @@ services:
 The project includes a web-based user interface that enables interaction with the model through the `/chat/completions` endpoint.
 
 The web UI is developed using:
-- `vue` framework for frontend development
+- `react` framework for frontend development
 - `tailwindcss` and `daisyui` for styling
 - `vite` for build tooling
 

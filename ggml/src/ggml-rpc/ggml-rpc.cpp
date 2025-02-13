@@ -1045,7 +1045,28 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
         ggml_free(ctx);
         return false;
     }
-    GGML_PRINT_DEBUG("[%s] src->buffer: %p, dst->buffer: %p\n", __func__, (void*)src->buffer, (void*)dst->buffer);
+
+    uint64_t src_size   = (uint64_t) ggml_nbytes(src);
+    uint64_t dst_data   = (uint64_t) dst->data;
+    uint64_t dst_base   = (uint64_t) ggml_backend_buffer_get_base(dst->buffer);
+    uint64_t dst_buf_sz = (uint64_t) ggml_backend_buffer_get_size(dst->buffer);
+
+    if (dst_data + src_size > dst_base + dst_buf_sz) {
+        GGML_PRINT_DEBUG("[%s] out-of-bounds write in rpc_server::copy_tensor:\n"
+                         "    write range : [0x%" PRIx64 ", 0x%" PRIx64 "]\n"
+                         "    buffer base: [0x%" PRIx64 ", 0x%" PRIx64 "]\n",
+                         __func__,
+                         dst_data,
+                         dst_data + src_size,
+                         dst_base,
+                         dst_base + dst_buf_sz);
+        ggml_free(ctx);
+        return false;
+    }
+
+    GGML_PRINT_DEBUG("[%s] src->buffer: %p, dst->buffer: %p\n",
+                     __func__, (void*) src->buffer, (void*) dst->buffer);
+
     response.result = ggml_backend_buffer_copy_tensor(src, dst);
     ggml_free(ctx);
     return true;

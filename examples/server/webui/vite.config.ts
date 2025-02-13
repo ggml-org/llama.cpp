@@ -1,8 +1,11 @@
-
+import { defineConfig, PluginOption } from 'vite';
+import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
-import path from 'path';
-import fs from 'fs';
-import zlib from 'zlib';
+import path from 'node:path';
+import fs from 'node:fs';
+import zlib from 'node:zlib';
+
+/* eslint-disable */
 
 const MAX_BUNDLE_SIZE = 1.5 * 1024 * 1024; // only increase when absolutely necessary
 
@@ -15,20 +18,26 @@ const GUIDE_FOR_FRONTEND = `
 -->
 `.trim();
 
+const FRONTEND_PLUGINS = [react()];
+
 const BUILD_PLUGINS = [
+  ...FRONTEND_PLUGINS,
   viteSingleFile(),
   (function llamaCppPlugin() {
-    let config;
+    let config: any;
     return {
       name: 'llamacpp:build',
       apply: 'build',
-      async configResolved(_config) {
+      async configResolved(_config: any) {
         config = _config;
       },
       writeBundle() {
         const outputIndexHtml = path.join(config.build.outDir, 'index.html');
-        const content = GUIDE_FOR_FRONTEND + '\n' + fs.readFileSync(outputIndexHtml, 'utf-8');
-        const compressed = zlib.gzipSync(Buffer.from(content, 'utf-8'), { level: 9 });
+        const content =
+          GUIDE_FOR_FRONTEND + '\n' + fs.readFileSync(outputIndexHtml, 'utf-8');
+        const compressed = zlib.gzipSync(Buffer.from(content, 'utf-8'), {
+          level: 9,
+        });
 
         // because gzip header contains machine-specific info, we must remove these data from the header
         // timestamp
@@ -42,18 +51,30 @@ const BUILD_PLUGINS = [
         if (compressed.byteLength > MAX_BUNDLE_SIZE) {
           throw new Error(
             `Bundle size is too large (${Math.ceil(compressed.byteLength / 1024)} KB).\n` +
-            `Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.js.\n`,
+              `Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.js.\n`
           );
         }
 
-        const targetOutputFile = path.join(config.build.outDir, '../../public/index.html.gz');
+        const targetOutputFile = path.join(
+          config.build.outDir,
+          '../../public/index.html.gz'
+        );
         fs.writeFileSync(targetOutputFile, compressed);
-      }
-    }
+      },
+    } satisfies PluginOption;
   })(),
 ];
 
-/** @type {import('vite').UserConfig} */
-export default {
-  plugins: process.env.ANALYZE ? [] : BUILD_PLUGINS,
-};
+export default defineConfig({
+  // @ts-ignore
+  plugins: process.env.ANALYZE ? FRONTEND_PLUGINS : BUILD_PLUGINS,
+  server: {
+    proxy: {
+      '/v1': 'http://localhost:8080',
+    },
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
+  },
+});

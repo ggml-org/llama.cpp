@@ -1026,6 +1026,23 @@ void init_iq_shmem(uvec3 wgsize)
 #define A_TYPE_PACKED16 block_iq3_s_packed16
 #endif
 
+#define QUANT_K_IQ4_XS 256
+#define QUANT_R_IQ4_XS 1
+
+struct block_iq4_xs
+{
+    float16_t d;
+    uint16_t scales_h;
+    uint8_t scales_l[QUANT_K_IQ4_XS/64];
+    uint8_t qs[QUANT_K_IQ4_XS/2];
+};
+
+#if defined(DATA_A_IQ4_XS)
+#define QUANT_K QUANT_K_IQ4_XS
+#define QUANT_R QUANT_R_IQ4_XS
+#define A_TYPE block_iq4_xs
+#endif
+
 #define QUANT_K_IQ4_NL 32
 #define QUANT_R_IQ4_NL 2
 
@@ -1042,7 +1059,13 @@ struct block_iq4_nl_packed16
 };
 
 #if defined(DATA_A_IQ4_NL)
+#define QUANT_K QUANT_K_IQ4_NL
+#define QUANT_R QUANT_R_IQ4_NL
+#define A_TYPE block_iq4_nl
+#define A_TYPE_PACKED16 block_iq4_nl_packed16
+#endif
 
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
     int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113)
@@ -1058,11 +1081,6 @@ void init_iq_shmem(uvec3 wgsize)
     }
     barrier();
 }
-
-#define QUANT_K QUANT_K_IQ4_NL
-#define QUANT_R QUANT_R_IQ4_NL
-#define A_TYPE block_iq4_nl
-#define A_TYPE_PACKED16 block_iq4_nl_packed16
 #endif
 
 #endif // !defined(GGML_TYPES_COMP)
