@@ -263,9 +263,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       device_vmm ? "yes" : "no", prop.warpSize);
 #elif defined(GGML_USE_MUSA)
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
-        /** FIXME: MUSA arch should match CUDA 11.4 */
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
-        // info.devices[id].cc = __MUSA_CC__;
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
