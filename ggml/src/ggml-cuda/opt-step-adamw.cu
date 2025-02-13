@@ -1,7 +1,3 @@
-#ifdef GGML_USE_MUSA
-#undef __ARM_NEON
-#endif
-
 #include "ggml-impl.h"
 #include "opt-step-adamw.cuh"
 
