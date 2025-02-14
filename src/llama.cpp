@@ -157,6 +157,14 @@ static struct ggml_tensor * llm_build_inp_embd(
     return inpL;
 }
 
+static struct ggml_tensor * llm_build_cross_embd(
+    const llama_ubatch & ubatch
+) {
+    struct ggml_tensor * cross_embd = ubatch.cross_embd;
+    ggml_set_input(cross_embd);
+    return cross_embd;
+}
+
 static void llm_build_kv_store(
         struct ggml_context * ctx,
         const llama_hparams & hparams,
@@ -698,6 +706,64 @@ static struct ggml_tensor * llm_build_kv(
     cb(cur, "kqv_out", il);
 
     return cur;
+}
+
+// Function that computes the cross attention score
+// and stores / retrieves K and V values in the
+// cross attention KV cache
+static struct ggml_tensor * llm_build_cross_kv(
+    struct ggml_context * ctx,
+    struct llama_context * lctx,
+    struct ggml_tensor * qcur,
+    struct ggml_tensor * kcur,
+    struct ggml_tensor * vcur,
+    struct ggml_cgraph * graph,
+    int64_t il
+) {
+    llama_cross_kv_cache & kv = lctx->kv_cross;
+
+    // Q has dimensions K, H, L, B
+    // K = hidden dimension per head
+    // H = number of heads
+    // L = number of tokens
+    // B = batch size
+    const int64_t num_heads = qcur->ne[1];
+    const float cross_attn_scale = 1.0f / sqrtf(float(qcur->ne[0]));
+    // Only add the computation of K and V if
+    // the cache doesn't already have the data
+    if (!kv.cache_filled) {
+        // Add computation of K, V to the graph
+        ggml_build_forward_expand(graph, kcur);
+        ggml_build_forward_expand(graph, vcur);
+        // Copy K and V to the cross KV cache
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, kcur, kv.k_l[il]));
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, vcur, kv.v_l[il]));
+    }
+    struct ggml_tensor * k = kv.k_l[il];
+    struct ggml_tensor * v = kv.v_l[il];
+    // Compute cross attention score
+    struct ggml_tensor * q = ggml_reshape_4d(ctx, qcur, qcur->ne[0] / num_heads,
+        num_heads, qcur->ne[1], qcur->ne[2]);
+    k = ggml_reshape_4d(ctx, k, kcur->ne[0] / num_heads, num_heads,
+        kcur->ne[1], kcur->ne[2]);
+    v = ggml_reshape_4d(ctx, v, vcur->ne[0] / num_heads, num_heads,
+        vcur->ne[1], vcur->ne[2]);
+    q = ggml_permute(ctx, q, 0, 2, 1, 3);
+    k = ggml_permute(ctx, k, 0, 2, 1, 3);
+    v = ggml_permute(ctx, v, 1, 2, 0, 3);
+    q = ggml_cont(ctx, q);
+    k = ggml_cont(ctx, k);
+    v = ggml_cont(ctx, v);
+
+    q = ggml_scale(ctx, q, cross_attn_scale);
+    struct ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
+    kq = ggml_soft_max(ctx, kq);
+    struct ggml_tensor * kqv = ggml_mul_mat(ctx, v, kq);
+    kqv = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+    kqv = ggml_cont(ctx, kqv);
+    kqv = ggml_reshape_3d(ctx, kqv, kqv->ne[0] * kqv->ne[1],
+        kqv->ne[2], kqv->ne[3]);
+    return kqv;
 }
 
 static struct ggml_tensor * llm_build_copy_mask_state(
@@ -8111,6 +8177,150 @@ struct llm_build_context {
 
         return gf;
     }
+
+    struct ggml_cgraph * build_cogvlm() {
+        struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, model.max_nodes(), false);
+
+        // Hidden dimension per head and number of heads
+        const int64_t n_embd_head = hparams.n_embd_head_k;
+        const int64_t num_heads = hparams.n_head();
+
+        // Multiplied directly to Q
+        const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+        const float cross_attn_scale = 1.0f / sqrtf(float(hparams.n_embd_cross / hparams.n_head()));
+
+        struct ggml_tensor * inpL;
+        inpL = llm_build_inp_embd(ctx0, lctx, hparams, ubatch, model.tok_embd, cb);
+
+        // Get the cross vision encoder embedded picture
+        struct ggml_tensor * cross_embd;
+        cross_embd = llm_build_cross_embd(ubatch);
+
+        // Assuming text tokens are in ubatch.token, and image tokens are in ubatch.embd_tensor
+        bool batch_is_text;
+        if (ubatch.token) {
+            batch_is_text = true;
+        } else {
+            batch_is_text = false;
+        }
+
+        // inp_pos - contains the positions
+        struct ggml_tensor * inp_pos = build_inp_pos();
+
+        // KQ mask is given values in llama_set_inputs
+        struct ggml_tensor * KQ_mask = build_inp_KQ_mask();
+
+        struct ggml_tensor * inpSA = inpL;
+        for (int il = 0; il < n_layer; ++il) {
+            const llama_layer &cur_layer = model.layers[il];
+
+            struct ggml_tensor * self_attn_in = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
+            self_attn_in = ggml_mul(ctx0, self_attn_in, cur_layer.attn_norm);
+
+            struct ggml_tensor * self_attn_qkv;
+            struct ggml_tensor * self_attn_dense;
+            // CogVLM uses different weights depending on
+            // whether tokens are text or image
+            if (batch_is_text) {
+                self_attn_qkv = cur_layer.wqkv_txt;
+                self_attn_dense = cur_layer.wdense_txt;
+            } else {
+                self_attn_qkv = cur_layer.wqkv_img;
+                self_attn_dense = cur_layer.wdense_img;
+            }
+
+            // Calculate the Q, K, V values for self attention
+            struct ggml_tensor * qkv = ggml_mul_mat(ctx0, self_attn_qkv, self_attn_in);
+            struct ggml_tensor * qt = ggml_view_3d(ctx0, qkv, qkv->ne[0] / 3, qkv->ne[1],
+                qkv->ne[2], qkv->nb[1], qkv->nb[2], 0);
+            struct ggml_tensor * kt = ggml_view_3d(ctx0, qkv, qkv->ne[0] / 3, qkv->ne[1],
+                qkv->ne[2], qkv->nb[1], qkv->nb[2], qkv->ne[0] / 3 * qkv->nb[0]);
+            struct ggml_tensor * vt = ggml_view_3d(ctx0, qkv, qkv->ne[0] / 3, qkv->ne[1],
+                qkv->ne[2], qkv->nb[1], qkv->nb[2], 2 * qkv->ne[0] / 3 * qkv->nb[0]);
+            qt = ggml_cont(ctx0, qt);
+            kt = ggml_cont(ctx0, kt);
+            vt = ggml_cont(ctx0, vt);
+
+            // Separate into heads
+            // K x H x L x B
+            qt = ggml_view_4d(ctx0, qt, qt->ne[0] / num_heads, num_heads, qt->ne[1], qt->ne[2],
+                qt->ne[0] / num_heads * qt->nb[0], qt->nb[1], qt->nb[2], 0);
+            kt = ggml_view_4d(ctx0, kt, kt->ne[0] / num_heads, num_heads, kt->ne[1], kt->ne[2],
+                kt->ne[0] / num_heads * kt->nb[0], kt->nb[1], kt->nb[2], 0);
+            qt = ggml_cont(ctx0, qt);
+            kt = ggml_cont(ctx0, kt);
+
+            // Mode=2 for NEOX
+            qt = ggml_rope(ctx0, qt, inp_pos, n_embd_head, 2);
+            kt = ggml_rope(ctx0, kt, inp_pos, n_embd_head, 2);
+
+            // The logic for the variables given to llm_build_kv is not ready yet
+            cur = llm_build_kv(ctx0, lctx, lctx.kv_self, gf, nullptr, nullptr,
+                kt, vt, qt, KQ_mask, this->n_tokens, kv_head, n_kv, kq_scale, cb, il);
+            cur = ggml_mul_mat(ctx0, self_attn_dense, cur);
+
+            // Enter cross attention
+            inpSA = ggml_add(ctx0, inpSA, cur);
+
+            struct ggml_tensor * cross_attn_in = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
+            cross_attn_in = ggml_mul(ctx0, cross_attn_in, cur_layer.attn_norm_2);
+
+            qt = ggml_mul_mat(ctx0, cur_layer.wq_cross, cross_attn_in);
+            struct ggml_tensor * kvt = ggml_mul_mat(ctx0, cur_layer.wkv_cross, cross_embd);
+            kt = ggml_view_3d(ctx0, kvt, kvt->ne[0] / 2, kvt->ne[1], kvt->ne[2],
+                kvt->nb[1], kvt->nb[2], 0);
+            vt = ggml_view_3d(ctx0, kvt, kvt->ne[0] / 2, kvt->ne[1], kvt->ne[2],
+                kvt->nb[1], kvt->nb[2], kvt->nb[0] * kvt->ne[0] / 2);
+            kt = ggml_cont(ctx0, kt);
+            vt = ggml_cont(ctx0, vt);
+
+            // Calculate cross attention score
+            struct ggml_tensor * cross_attn = llm_build_cross_kv(ctx0, lctx,
+                qt, kt, vt, gf, il);
+
+            inpSA = ggml_add(ctx0, inpSA, cross_attn);
+
+            if (il == n_layer - 1) {
+                // skip computing output for unused tokens
+                struct ggml_tensor * inp_out_ids = build_inp_out_ids();
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            struct ggml_tensor * mlp_input = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
+            mlp_input = ggml_mul(ctx0, mlp_input, cur_layer.ffn_norm);
+
+            struct ggml_tensor * up;
+            struct ggml_tensor * gate;
+            struct ggml_tensor * down;
+            if (batch_is_text) {
+                up = cur_layer.ffn_up_txt;
+                gate = cur_layer.ffn_gate_txt;
+                down = cur_layer.ffn_down_txt;
+            } else {
+                up = cur_layer.ffn_up_img;
+                gate = cur_layer.ffn_gate_img;
+                down = cur_layer.ffn_down_img;
+            }
+
+            struct ggml_tensor * gate_result = ggml_mul_mat(ctx0, gate, mlp_input);
+            struct ggml_tensor * up_result = ggml_mul_mat(ctx0, up, mlp_input);
+            gate_result = ggml_silu(ctx0, gate_result);
+            struct ggml_tensor * mlp_inter = ggml_mul(ctx0, gate_result, up_result);
+            cur = ggml_mul_mat(ctx0, down, mlp_inter);
+
+            inpSA = ggml_add(ctx0, inpSA, cur);
+        }
+
+        cur = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
+        cur = ggml_mul(ctx0, cur, model.output_norm);
+
+        cur = ggml_mul_mat(ctx0, model.output, cur);
+
+        cb(cur, "result_output", -1);
+
+        ggml_build_forward_expand(gf, cur);
+        return gf;
+    }
 };
 
 static struct ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids) {
@@ -8402,6 +8612,10 @@ static struct ggml_cgraph * llama_build_graph(
         case LLM_ARCH_WAVTOKENIZER_DEC:
             {
                 result = llm.build_wavtokenizer_dec();
+            } break;
+        case LLM_ARCH_COGVLM:
+            {
+                result = llm.build_cogvlm();
             } break;
         default:
             GGML_ABORT("fatal error");

@@ -23,6 +23,7 @@ struct llama_ubatch {
     int8_t       *  output;   // [n_tokens]
 
     struct ggml_tensor * embd_tensor;
+    struct ggml_tensor * cross_embd;
 };
 
 struct llama_sbatch_seq {

@@ -27,6 +27,7 @@ struct llama_context {
     struct llama_sbatch       sbatch;  // TODO: revisit if needed
     struct llama_kv_cache     kv_self;
     struct llama_adapter_cvec cvec;
+    struct llama_cross_kv_cache kv_cross;
 
     std::unordered_map<struct llama_adapter_lora *, float> lora;
 

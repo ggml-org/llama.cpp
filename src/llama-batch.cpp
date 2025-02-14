@@ -32,6 +32,7 @@ llama_ubatch llama_sbatch::reserve_ubatch(size_t n_ubatch, bool has_embd) {
         /*seq_id       =*/ ubatch_seq_id.data(),
         /*output       =*/ ubatch_output.data(),
         /*embd_tensor  =*/ nullptr,
+        /*cross_embd   =*/ nullptr,
     };
     return ubatch;
 }
@@ -73,6 +74,9 @@ void llama_sbatch::add_seq_to_ubatch(llama_ubatch & ubatch, llama_sbatch_seq & s
         }
     } else {
         ubatch.embd = nullptr;
+    }
+    if (batch->cross_embd) {
+        ubatch.cross_embd = batch->cross_embd;
     }
     if (ubatch.equal_seqs) {
         for (size_t i = 0; i < length; ++i) {
@@ -324,6 +328,7 @@ struct llama_batch llama_batch_get_one(
         /*seq_id         =*/ nullptr,
         /*logits         =*/ nullptr,
         /*embd_tensor    =*/ nullptr,
+        /*cross_embd     =*/ nullptr,
     };
 }
 
@@ -337,6 +342,7 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         /*seq_id         =*/ nullptr,
         /*logits         =*/ nullptr,
         /*embd_tensor    =*/ nullptr,
+        /*cross_embd     =*/ nullptr,
     };
 
     if (embd) {
@@ -370,6 +376,7 @@ struct llama_batch llama_batch_get_one_from_tensor(struct ggml_tensor * tensor, 
         /*seq_id         =*/ nullptr,
         /*logits         =*/ nullptr,
         /*embd_tensor    =*/ tensor,
+        /*cross_embd     =*/ nullptr,
     };
     batch.pos      = (llama_pos *)     malloc(sizeof(llama_pos) * n_tokens);
     batch.n_seq_id = (int32_t *)       malloc(sizeof(int32_t)   * n_tokens);

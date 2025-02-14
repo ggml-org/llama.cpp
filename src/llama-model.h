@@ -165,11 +165,18 @@ struct llama_layer {
     struct ggml_tensor * wq_cross  = nullptr;
     struct ggml_tensor * wk_cross  = nullptr;
     struct ggml_tensor * wv_cross  = nullptr;
+    // Added this here to reuse the T5 variables
+    struct ggml_tensor * wkv_cross;
     struct ggml_tensor * wo_cross  = nullptr;
     struct ggml_tensor * wq_enc    = nullptr;
     struct ggml_tensor * wk_enc    = nullptr;
     struct ggml_tensor * wv_enc    = nullptr;
     struct ggml_tensor * wo_enc    = nullptr;
+    struct ggml_tensor * wqkv_txt;
+    struct ggml_tensor * wqkv_img;
+    struct ggml_tensor * wdense_txt;
+    struct ggml_tensor * wdense_img;
+    struct ggml_tensor * wdense_cross;
 
     // attention bias
     struct ggml_tensor * bq   = nullptr;
@@ -199,6 +206,12 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_enc = nullptr;
     struct ggml_tensor * ffn_down_enc = nullptr;
     struct ggml_tensor * ffn_up_enc   = nullptr;
+    struct ggml_tensor * ffn_gate_txt;
+    struct ggml_tensor * ffn_down_txt;
+    struct ggml_tensor * ffn_up_txt;
+    struct ggml_tensor * ffn_gate_img;
+    struct ggml_tensor * ffn_down_img;
+    struct ggml_tensor * ffn_up_img;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp  = nullptr;

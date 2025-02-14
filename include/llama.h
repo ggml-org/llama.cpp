@@ -267,6 +267,7 @@ extern "C" {
         int8_t       *  logits; // TODO: rename this to "output"
 
         struct ggml_tensor *  embd_tensor;
+        struct ggml_tensor *  cross_embd_tensor;
     } llama_batch;
 
     enum llama_model_kv_override_type {

@@ -41,6 +41,7 @@ struct llama_hparams {
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_embd_cross = 1024; // For cross attention with different hidden size
 
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;

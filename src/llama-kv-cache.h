@@ -216,3 +216,21 @@ struct llama_kv_slot_restorer {
     }
 };
 
+// Simple cache that holds the computed K and V tensors
+// for each layer's cross attention calculation
+struct llama_cross_kv_cache {
+    std::vector<struct ggml_tensor *> k_l;
+    std::vector<struct ggml_tensor *> v_l;
+
+    std::vector<ggml_context_ptr> ctxs;
+    std::vector<ggml_backend_buffer_ptr> bufs;
+
+    bool cache_filled;
+};
+
+bool llama_cross_kv_cache_init(struct llama_cross_kv_cache & cache,
+                                         const llama_model & model,
+                                                 ggml_type   type_k,
+                                                 ggml_type   type_v,
+                                                  uint32_t   n_elements,
+                                                      bool   offload);

@@ -716,3 +716,74 @@ void llama_kv_cache_view_update(struct llama_kv_cache_view * view, const struct 
             __func__, kv.used, used_cells);
     }
 }
+
+// Cross attention KV cache
+bool llama_cross_kv_cache_init(struct llama_cross_kv_cache & cache,
+                                         const llama_model & model,
+                                                 ggml_type   type_k,
+                                                 ggml_type   type_v,
+                                                  uint32_t   n_elements,
+                                                      bool   offload) {
+    const struct llama_hparams & hparams = model.hparams;
+    const int32_t n_layer = hparams.n_layer;
+
+    // create a context for each buffer type
+    std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
+    auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
+        auto it = ctx_map.find(buft);
+        if (it == ctx_map.end()) {
+            struct ggml_init_params params = {
+                /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead()),
+                /*.mem_buffer =*/ NULL,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context * ctx = ggml_init(params);
+            if (!ctx) {
+                return nullptr;
+            }
+            ctx_map[buft] = ctx;
+            cache.ctxs.emplace_back(ctx);
+            return ctx;
+        }
+        return it->second;
+    };
+
+    for (int i = 0; i < n_layer; i++) {
+        ggml_backend_buffer_type_t buft;
+        if (offload) {
+            auto * dev = model.dev_layer(i);
+            buft = ggml_backend_dev_buffer_type(dev);
+        } else {
+            buft = ggml_backend_cpu_buffer_type();
+        }
+        ggml_context * ctx = ctx_for_buft(buft);
+
+        if (!ctx) {
+            LLAMA_LOG_ERROR("%s: failed to initialize cross KV cache", __func__);
+            return false;
+        }
+
+        ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_elements);
+        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_elements);
+        ggml_format_name(k, "cross_cache_k_l%d", i);
+        ggml_format_name(v, "cross_cache_v_l%d", i);
+        cache.k_l.push_back(k);
+        cache.v_l.push_back(v);
+    }
+
+    for (auto it : ctx_map) {
+        auto * buft = it.first;
+        auto * ctx = it.second;
+        
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+        if (!buf) {
+            LLAMA_LOG_ERROR("%s: failed to allocate buffer for cross kv cache\n", __func__);
+            return false;
+        }
+        ggml_backend_buffer_clear(buf, 0);
+        LLAMA_LOG_INFO("%s: %10s cross KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+        cache.bufs.emplace_back(buf);
+    }
+
+    return true;
+}
