@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 find_package(CUDAToolkit)
 
 if (CUDAToolkit_FOUND)
-    message(STATUS "CUDA Toolkit found")
+    message(STATUS "CUDA Toolkit found: ${CUDAToolkit_VERSION}")
 
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         # native == GPUs available at build time

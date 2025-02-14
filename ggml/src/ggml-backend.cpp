@@ -126,11 +126,13 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     return base;
 }
 
-void ggml_backend_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+// Check with reviewers: any cons for that method to return a ggml_status?
+enum ggml_status ggml_backend_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
     // init_tensor is optional
     if (buffer->iface.init_tensor) {
-        buffer->iface.init_tensor(buffer, tensor);
+        return buffer->iface.init_tensor(buffer, tensor);
     }
+    return GGML_STATUS_SUCCESS; // check with reviewers. Should we add a GGML_STATUS_SKIP ...
 }
 
 void ggml_backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -1641,6 +1643,7 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
 
 // utils
 
+// Check with reviewers: should we return a ggml_status?
 void ggml_backend_view_init(struct ggml_tensor * tensor) {
     GGML_ASSERT(tensor->buffer == NULL);
     GGML_ASSERT(tensor->view_src != NULL);
@@ -1649,10 +1652,13 @@ void ggml_backend_view_init(struct ggml_tensor * tensor) {
 
     tensor->buffer = tensor->view_src->buffer;
     tensor->data = (char *)tensor->view_src->data + tensor->view_offs;
-    ggml_backend_buffer_init_tensor(tensor->buffer, tensor);
+    ggml_status status = ggml_backend_buffer_init_tensor(tensor->buffer, tensor);
+    if (status != GGML_STATUS_SUCCESS) {
+        GGML_LOG_WARN("init tensor failed: status = %s\n", ggml_status_to_string(status));
+    }
 }
 
-void ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr) {
+enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr) {
     GGML_ASSERT(tensor->buffer == NULL);
     GGML_ASSERT(tensor->data == NULL);
     GGML_ASSERT(tensor->view_src == NULL);
@@ -1662,7 +1668,7 @@ void ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor 
 
     tensor->buffer = buffer;
     tensor->data = addr;
-    ggml_backend_buffer_init_tensor(buffer, tensor);
+    return ggml_backend_buffer_init_tensor(buffer, tensor);
 }
 
 static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set, struct ggml_tensor ** node_copies,
