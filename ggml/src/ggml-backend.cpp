@@ -126,6 +126,7 @@ void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     return base;
 }
 
+// Check with reviewers: any cons for that method to return a ggml_status?
 void ggml_backend_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
     // init_tensor is optional
     if (buffer->iface.init_tensor) {

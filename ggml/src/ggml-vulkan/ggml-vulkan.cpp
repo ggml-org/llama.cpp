@@ -7510,11 +7510,12 @@ static void * ggml_backend_vk_buffer_get_base(ggml_backend_buffer_t buffer) {
     UNUSED(buffer);
 }
 
-static void ggml_backend_vk_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+static enum ggml_status ggml_backend_vk_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     VK_LOG_DEBUG("ggml_backend_vk_buffer_init_tensor(" << buffer << " (" << buffer->context << "), " << tensor << ")");
     if (tensor->view_src != nullptr) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
     }
+    return GGML_STATUS_SUCCESS;
 }
 
 static void ggml_backend_vk_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {

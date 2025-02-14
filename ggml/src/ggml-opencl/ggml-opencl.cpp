@@ -1211,7 +1211,7 @@ static void * ggml_backend_opencl_buffer_get_base(ggml_backend_buffer_t buffer) 
     GGML_UNUSED(buffer);
 }
 
-static void ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     ggml_backend_opencl_buffer_context * ctx = (ggml_backend_opencl_buffer_context *) buffer->context;
 
     ggml_cl2_init(buffer->buft->device);
@@ -1251,6 +1251,7 @@ static void ggml_backend_opencl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             tensor->extra = extra;
         }
     }
+    return GGML_STATUS_SUCCESS;
 }
 
 // The optimized gemm and gemv kernels are used for large matrices without batch.

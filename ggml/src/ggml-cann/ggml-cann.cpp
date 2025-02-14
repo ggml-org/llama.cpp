@@ -796,11 +796,11 @@ static bool need_transform(ggml_type type) {
  * @param buffer The CANN buffer from which to initialize the tensor.
  * @param tensor Pointer to the tensor to be initialized.
  */
-static void ggml_backend_cann_buffer_init_tensor(
+static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     ggml_backend_buffer_t buffer, ggml_tensor* tensor) {
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
-        return;
+        return GGML_STATUS_SUCCESS;
     }
 
     // TODO: can backend doesn't support quantized yet. Just leave the code
@@ -817,6 +817,7 @@ static void ggml_backend_cann_buffer_init_tensor(
                                   memset_size, 0, memset_size));
         }
     }
+    return GGML_STATUS_SUCCESS;
 }
 
 // TODO: need handle tensor which has paddings.
