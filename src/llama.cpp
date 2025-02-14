@@ -9711,7 +9711,11 @@ struct llama_context * llama_init_from_model(
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+#ifndef GGML_USE_QNN
                 ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+#else
+                ggml_backend_t backend = ggml_backend_dev_init(dev, reinterpret_cast<const char *>(model->params.main_gpu));
+#endif
                 if (backend == nullptr) {
                     LLAMA_LOG_ERROR("%s: failed to initialize %s backend\n", __func__, ggml_backend_dev_name(dev));
                     llama_free(ctx);
