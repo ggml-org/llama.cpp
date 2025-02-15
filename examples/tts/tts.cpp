@@ -3,6 +3,7 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#include "anyascii.h"
 
 #define _USE_MATH_DEFINES // For M_PI on MSVC
 
@@ -15,6 +16,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <codecvt>
 
 //
 // Terminal utils
@@ -370,15 +372,36 @@ static std::string replace_numbers_with_words(const std::string & input_text) {
     return result;
 }
 
+static std::string convert_to_ascii(const std::string& utf8_str) {
+    std::string result;
+    std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+    std::basic_string<char32_t> utf32_str = converter.from_bytes(utf8_str);
+    
+    for (char32_t c : utf32_str) {
+        const char* ascii_result;
+        size_t length = anyascii(c, &ascii_result);
+        if (length > 0) {
+            result.append(ascii_result, length);
+        }
+    }
+    
+    return result;
+}
+
 // Based on: https://github.com/edwko/OuteTTS/blob/a613e79c489d8256dd657ea9168d78de75895d82/outetts/version/v1/prompt_processor.py#L39
 static std::string process_text(const std::string & text) {
+    /*
+        For languages written without word boundaries (like Japanese, Chinese),
+        proper morphological analysis is still required but not implemented here.
+        While this function can romanize such text, it doesn't handle word segmentation.
+        To properly handle these languages, integration with morphological analyzers like MeCab 
+        or similar tools would be needed before this preprocessing step.
+    */
 
-    // For now I skipped text romanization as I am unsure how to handle
-    // uroman and MeCab implementations in C++
-    // maybe something like https://github.com/anyascii/anyascii/ could work.
-    // currently only English would be supported in this function
+    // Converts text to ASCII/romanized form (e.g., "こんにちは" -> "konnichiha")
+    std::string processed_text = convert_to_ascii(text);
 
-    std::string processed_text = replace_numbers_with_words(text);
+    processed_text = replace_numbers_with_words(processed_text);
 
     std::transform(processed_text.begin(), processed_text.end(),
                   processed_text.begin(), ::tolower);
@@ -394,13 +417,6 @@ static std::string process_text(const std::string & text) {
 
     processed_text = std::regex_replace(processed_text, std::regex(R"(^\s+|\s+$)"), "");
 
-    /*
-        Replace spaces with the separator token same as in line 365
-
-        for (auto & c : prompt_user) {
-        if (c == ' ') {
-            prompt_clean += "<|text_sep|>";
-    */
     processed_text = std::regex_replace(processed_text, std::regex(R"(\s)"), "<|text_sep|>");
 
     return processed_text;
