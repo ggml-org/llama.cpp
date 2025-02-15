@@ -153,6 +153,8 @@ static std::string format(const char * fmt, ...) {
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
 #define TN_IMAGE_NEWLINE   "model.image_newline"
+#define TN_SUB_GN          "v.sub_gn"
+#define TN_GLB_GN          "v.glb_gn"
 
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
 #define TN_MINICPMV_QUERY "resampler.query"
@@ -571,6 +573,9 @@ struct clip_vision_model {
     struct ggml_tensor * mm_model_ln_kv_b;
     struct ggml_tensor * mm_model_ln_post_w;
     struct ggml_tensor * mm_model_ln_post_b;
+
+    struct ggml_tensor * sub_gn;
+    struct ggml_tensor * glb_gn;
 };
 
 struct clip_ctx {
@@ -870,6 +875,138 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         embeddings = ggml_get_rows(ctx0, embeddings, patches);
 
         // print_tensor_info(embeddings, "embeddings");
+
+        // phi-3.5-vision-instruct
+        if (model.sub_gn && model.glb_gn) {
+            // Phi3VisionEmbedding.hd_transform()
+            ggml_tensor * x = embeddings;
+
+            int num_images = batch_size;
+            int h_crop = 1, w_crop = 1;
+
+            int C = x->ne[0];
+            int L = x->ne[1];
+            int N = x->ne[2];
+
+            int H = (int)sqrt((float)L);
+
+            GGML_ASSERT(H * H == L);
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            // Phi3ImageEmbedding.reshape_hd_patches_2x2merge()
+            x = ggml_reshape_4d(ctx0, x, N, H, H, C);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 0, 1, 2));
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 2, 3, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 2, H / 2, 2, H / 2 * C * N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 1, 3, 2));
+            x = ggml_reshape_3d(ctx0, x, N * C * (H / 2), (H / 2), 4);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4, H / 2, H / 2, N * C);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4, (H / 2) * (H / 2), C, N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 3, 1, 2));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4 * C, H / 2, H / 2, N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, (H / 2) * 4 * C, (H / 2), w_crop, num_images * h_crop);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4 * C, w_crop * (H / 2), h_crop * (H / 2), num_images);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            ggml_tensor * global_image_features_hd = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            // Phi3ImageEmbedding.add_image_newline()
+            ggml_tensor * newline_embedding = model.sub_gn;
+            for (int i = 0; i < H/2-1; i++) {
+                newline_embedding = ggml_concat(ctx0, newline_embedding, model.sub_gn, 2);
+            }
+            ggml_tensor * global_image_features_hd_newline = ggml_concat(ctx0, global_image_features_hd, newline_embedding, 1);
+
+            global_image_features_hd_newline = ggml_cont(ctx0, ggml_permute(ctx0, global_image_features_hd_newline, 3, 2, 1, 0));
+            global_image_features_hd_newline = ggml_reshape_4d(ctx0, global_image_features_hd_newline, 1, 1, (w_crop*(H/2)+1) * h_crop*(H/2), 4*C);
+            global_image_features_hd_newline = ggml_cont(ctx0, ggml_permute(ctx0, global_image_features_hd_newline, 3, 2, 1, 0));
+
+            h_crop = image_size / 336;
+            w_crop = image_size / 336;
+
+            // sub_image_features_hd
+            x = embeddings;
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            // Phi3ImageEmbedding.reshape_hd_patches_2x2merge()
+            x = ggml_reshape_4d(ctx0, x, N, H, H, C);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 0, 1, 2));
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 2, 3, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 2, H / 2, 2, H / 2 * C * N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 1, 3, 2));
+            x = ggml_reshape_3d(ctx0, x, N * C * (H / 2), (H / 2), 4);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4, H / 2, H / 2, N * C);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4, (H / 2) * (H / 2), C, N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 3, 1, 2));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4 * C, H / 2, H / 2, N);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, (H / 2) * 4 * C, (H / 2), w_crop, num_images * h_crop);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 0, 2, 1, 3));
+
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+            x = ggml_reshape_4d(ctx0, x, 4 * C, w_crop * (H / 2), h_crop * (H / 2), num_images);
+            x = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            ggml_tensor * sub_image_features_hd = ggml_cont(ctx0, ggml_permute(ctx0, x, 3, 2, 1, 0));
+
+            // Phi3ImageEmbedding.add_image_newline()
+            newline_embedding = model.sub_gn;
+            for (int i = 0; i < (H/2-1); i++) {
+                newline_embedding = ggml_concat(ctx0, newline_embedding, model.sub_gn, 2);
+            }
+            ggml_tensor * sub_image_features_hd_newline = ggml_concat(ctx0, sub_image_features_hd, newline_embedding, 1);
+
+            sub_image_features_hd_newline = ggml_cont(ctx0, ggml_permute(ctx0, sub_image_features_hd_newline, 3, 2, 1, 0));
+            sub_image_features_hd_newline = ggml_reshape_4d(ctx0, sub_image_features_hd_newline, 1, 1, (w_crop*(H/2)+1) * h_crop*(H/2), 4*C);
+            sub_image_features_hd_newline = ggml_cont(ctx0, ggml_permute(ctx0, sub_image_features_hd_newline, 3, 2, 1, 0));
+
+            embeddings = ggml_concat(ctx0, sub_image_features_hd_newline, model.glb_gn, 1);
+            embeddings = ggml_concat(ctx0, embeddings, global_image_features_hd_newline, 1);
+        }
 
         // llava projector
         if (ctx->proj_type == PROJECTOR_TYPE_MLP) {
@@ -1566,6 +1703,10 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             try {
                 vision_model.image_newline = get_tensor(new_clip->ctx_data, TN_IMAGE_NEWLINE);
                 // LOG_INF("%s: image_newline tensor (llava-1.6) found\n", __func__);
+            } catch (std::runtime_error & /*e*/) { }
+            try {
+                vision_model.sub_gn = get_tensor(new_clip->ctx_data, TN_SUB_GN);
+                vision_model.glb_gn = get_tensor(new_clip->ctx_data, TN_GLB_GN);
             } catch (std::runtime_error & /*e*/) { }
         } else if (new_clip->proj_type == PROJECTOR_TYPE_LDP) {
             // MobileVLM projection
