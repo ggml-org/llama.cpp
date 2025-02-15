@@ -1,13 +1,13 @@
 #include "llama-mmap.h"
 
-#include "llama-impl.h"
+#include <cerrno>
+#include <climits>
+#include <cstring>
+#include <stdexcept>
+#include <thread>
 
 #include "ggml.h"
-
-#include <cstring>
-#include <climits>
-#include <stdexcept>
-#include <cerrno>
+#include "llama-impl.h"
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -274,11 +274,20 @@ struct llama_mmap::impl {
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
-        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
-            LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
-                    strerror(errno));
+        if (file->size() > 1024 * 1024 * 1024) { // 1GB+
+            if (posix_fadvise(fd, 0, 0, POSIX_FADV_WILLNEED | POSIX_FADV_SEQUENTIAL)) {
+                LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_WILLNEED, POSIX_FADV_SEQUENTIAL) failed: %s\n",
+                        strerror(errno));
+            }
+        } else {
+            if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+                LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
+                        strerror(errno));
+            }
         }
-        if (prefetch) { flags |= MAP_POPULATE; }
+        if (prefetch && file->size() <= 1024 * 1024 * 512) { // 512 MB threshold
+            flags |= MAP_POPULATE;
+        }
 #endif
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
@@ -286,10 +295,16 @@ struct llama_mmap::impl {
         }
 
         if (prefetch > 0) {
-            if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
-                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
-                        strerror(errno));
-            }
+#ifdef __linux__
+            std::thread([addr=addr, size = file->size(), prefetch] {
+                posix_madvise(addr, std::min(size, prefetch), POSIX_MADV_WILLNEED);
+            }).detach();
+#elif defined(_WIN32)
+            std::thread([](void* addr, SIZE_T size) {
+                WIN32_MEMORY_RANGE_ENTRY range = { addr, size };
+                PrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0);
+            }, addr, std::min(file->size(), prefetch)).detach();
+#endif
         }
         if (numa) {
             if (posix_madvise(addr, file->size(), POSIX_MADV_RANDOM)) {
