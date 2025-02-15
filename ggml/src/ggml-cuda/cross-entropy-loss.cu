@@ -126,7 +126,7 @@ void ggml_cuda_cross_entropy_loss(ggml_backend_cuda_context & ctx, ggml_tensor *
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
         static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
         if (!shared_memory_limit_raised[id]) {
-            CUDA_CHECK(cudaFuncSetAttribute(cross_entropy_loss_back_f32<true>, cudaFuncAttributeMaxDynamicSharedMemorySize, smpbo));
+            CUDA_CHECK(cudaFuncSetAttribute(cross_entropy_loss_f32<true>, cudaFuncAttributeMaxDynamicSharedMemorySize, smpbo));
             shared_memory_limit_raised[id] = true;
         }
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))

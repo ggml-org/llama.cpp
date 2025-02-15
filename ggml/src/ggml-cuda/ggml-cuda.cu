@@ -262,7 +262,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       id, prop.name, prop.gcnArchName, info.devices[id].cc & 0xffff,
                       device_vmm ? "yes" : "no", prop.warpSize);
 #elif defined(GGML_USE_MUSA)
-        info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+        // NOTE: MUSA will reserve some shared mem, and 24B should be enough,
+        // we can remove the **24** when MUSA no longer reserves shared mem.
+        info.devices[id].smpbo = prop.sharedMemPerBlockOptin - 24;
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
 #else
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
