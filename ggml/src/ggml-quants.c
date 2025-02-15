@@ -494,7 +494,7 @@ static float make_q3_quants(int n, int nmax, const float * restrict x, int8_t * 
         for (int i = 0; i < n; ++i) {
             L[i] += nmax;
         }
-        return sumlx / suml2;
+        return suml2 ? sumlx / suml2 : 0.0f;
     }
     for (int i = 0; i < n; ++i) {
         int l = nearest_int(iscale * x[i]);
@@ -894,7 +894,7 @@ static float make_qp_quants(int n, int nmax, const float * restrict x, uint8_t *
             break;
         }
     }
-    return sumlx/suml2;
+    return suml2 ? sumlx/suml2 : 0.0f;
 }
 
 static void quantize_row_q2_K_impl(const float * restrict x, block_q2_K * restrict y, int k, const float * restrict quant_weights) {
