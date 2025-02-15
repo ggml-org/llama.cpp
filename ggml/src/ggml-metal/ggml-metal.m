@@ -8,6 +8,12 @@
 
 #import <Metal/Metal.h>
 
+#include <TargetConditionals.h>
+#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
+// VisionOS lacks some legacy types definitions, stdint.h did not help either
+typedef unsigned int uint;
+#endif
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
