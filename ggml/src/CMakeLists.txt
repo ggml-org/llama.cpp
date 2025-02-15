@@ -339,7 +339,7 @@ target_link_libraries(ggml-base PRIVATE Threads::Threads)
 
 find_library(MATH_LIBRARY m)
 if (MATH_LIBRARY)
-    if (NOT WIN32 OR NOT DEFINED ENV{ONEAPI_ROOT})
+    if (NOT (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC" OR CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC" OR DEFINED ENV{ONEAPI_ROOT}))
         target_link_libraries(ggml-base PRIVATE m)
     endif()
 endif()
