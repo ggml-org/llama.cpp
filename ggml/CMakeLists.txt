@@ -209,6 +209,8 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 find_package(Threads REQUIRED)
 
+include(GNUInstallDirs)
+
 #
 # build the library
 #
@@ -232,7 +234,6 @@ endif ()
 # install
 #
 
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # all public headers
