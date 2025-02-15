@@ -445,7 +445,8 @@ llama_model_loader::llama_model_loader(
         std::vector<std::string> & splits,
         bool use_mmap,
         bool check_tensors,
-        const struct llama_model_kv_override * param_overrides_p) {
+        const struct llama_model_kv_override * param_overrides_p,
+        bool no_byteswap) {
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -460,8 +461,9 @@ llama_model_loader::llama_model_loader(
     // Load the main GGUF
     struct ggml_context * ctx = NULL;
     struct gguf_init_params params = {
-        /*.no_alloc = */ true,
-        /*.ctx      = */ &ctx,
+        /*.no_alloc    = */ true,
+        /*.ctx         = */ &ctx,
+        /*.no_byteswap = */ no_byteswap,
     };
 
     meta.reset(gguf_init_from_file(fname.c_str(), params));
@@ -520,8 +522,9 @@ llama_model_loader::llama_model_loader(
             const char * fname_split = splits[idx].c_str();
 
             struct gguf_init_params split_params = {
-                /*.no_alloc = */ true,
-                /*.ctx      = */ &ctx,
+                /*.no_alloc    = */ true,
+                /*.ctx         = */ &ctx,
+                /*.no_byteswap = */ no_byteswap,
             };
             gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
             if (!ctx_gguf) {
@@ -681,8 +684,9 @@ llama_model_loader::llama_model_loader(
         use_mmap = false;
     }
 
-    this->use_mmap = use_mmap;
+    this->use_mmap      = use_mmap;
     this->check_tensors = check_tensors;
+    this->no_byteswap   = no_byteswap;
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1024,6 +1028,14 @@ bool llama_model_loader::load_all_data(
             if (ggml_backend_buffer_is_host(cur->buffer)) {
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+                if (byteswap != nullptr && !no_byteswap) {
+                    byteswap(cur->data, ggml_nelements(cur) / ggml_blck_size(cur->type));
+                }
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
@@ -1052,6 +1064,14 @@ bool llama_model_loader::load_all_data(
                     read_buf.resize(n_size);
                     file->seek(weight->offs, SEEK_SET);
                     file->read_raw(read_buf.data(), n_size);
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                    auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+                    if (byteswap != nullptr && !no_byteswap) {
+                        byteswap(read_buf.data(), read_buf.size() / ggml_blck_size(cur->type));
+                    }
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));

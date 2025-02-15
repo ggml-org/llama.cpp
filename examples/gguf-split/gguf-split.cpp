@@ -361,8 +361,9 @@ static void gguf_split(const split_params & split_params) {
     struct ggml_context * ctx_meta = NULL;
 
     struct gguf_init_params params = {
-        /*.no_alloc = */ true,
-        /*.ctx      = */ &ctx_meta,
+        /*.no_alloc    = */ true,
+        /*.ctx         = */ &ctx_meta,
+        /*.no_byteswap = */ false,
     };
 
     std::ifstream f_input(split_params.input.c_str(), std::ios::binary);
@@ -426,8 +427,9 @@ static void gguf_merge(const split_params & split_params) {
         struct ggml_context * ctx_meta = NULL;
 
         struct gguf_init_params params = {
-            /*.no_alloc = */ true,
-            /*.ctx      = */ &ctx_meta,
+            /*.no_alloc    = */ true,
+            /*.ctx         = */ &ctx_meta,
+            /*.no_byteswap = */ false,
         };
 
         if (i_split > 0) {

@@ -146,13 +146,14 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(struct ggml_tensor * 
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(struct llama_model & model, const char * path_lora, struct llama_adapter_lora & adapter) {
+static void llama_adapter_lora_init_impl(struct llama_model & model, const char * path_lora, struct llama_adapter_lora & adapter, bool no_byteswap) {
     LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
 
     ggml_context * ctx_init;
     struct gguf_init_params meta_gguf_params = {
-        /* .no_alloc = */ true,
-        /* .ctx      = */ &ctx_init,
+        /* .no_alloc    = */ true,
+        /* .ctx         = */ &ctx_init,
+        /* .no_byteswap = */ no_byteswap,
     };
 
     gguf_context_ptr ctx_gguf { gguf_init_from_file(path_lora, meta_gguf_params) };
@@ -327,11 +328,11 @@ static void llama_adapter_lora_init_impl(struct llama_model & model, const char 
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
 
-struct llama_adapter_lora * llama_adapter_lora_init(struct llama_model * model, const char * path_lora) {
+struct llama_adapter_lora * llama_adapter_lora_init(struct llama_model * model, const char * path_lora, bool no_byteswap) {
     struct llama_adapter_lora * adapter = new llama_adapter_lora();
 
     try {
-        llama_adapter_lora_init_impl(*model, path_lora, *adapter);
+        llama_adapter_lora_init_impl(*model, path_lora, *adapter, no_byteswap);
         return adapter;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());

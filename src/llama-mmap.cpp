@@ -441,11 +441,12 @@ void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
 
-#if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
+// disable mmap on s390x while it usually loads little-endian models
+#if (defined(_POSIX_MEMLOCK_RANGE) && !defined(__s390x__)) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;
-#else
+#else // (defined(_POSIX_MEMLOCK_RANGE) && !defined(__s390x__)) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = false;
-#endif
+#endif // (defined(_POSIX_MEMLOCK_RANGE) && !defined(__s390x__)) || defined(_WIN32)
 
 // llama_mlock
 

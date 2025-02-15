@@ -48,8 +48,9 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
 
 static struct gguf_context * load_gguf(std::string & fname, struct ggml_context ** ctx_ggml) {
     struct gguf_init_params params = {
-        /*.no_alloc = */ true,
-        /*.ctx      = */ ctx_ggml,
+        /*.no_alloc    = */ true,
+        /*.ctx         = */ ctx_ggml,
+        /*.no_byteswap = */ false,
     };
     struct gguf_context * ctx_gguf = gguf_init_from_file(fname.c_str(), params);
     if (!ctx_gguf) {

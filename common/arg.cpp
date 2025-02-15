@@ -1563,6 +1563,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_MMAP"));
     add_opt(common_arg(
+        {"--no-byteswap"},
+        "don't byteswap model data on big endian systems (use if model is byteswapped to big endian in advance)",
+        [](common_params & params) {
+            params.no_byteswap = true;
+        }
+    ).set_env("LLAMA_NO_BYTESWAP"));
+    add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
         "- distribute: spread execution evenly over all nodes\n"

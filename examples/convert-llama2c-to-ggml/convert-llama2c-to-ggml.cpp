@@ -533,8 +533,9 @@ static void load_vocab(const char * filename, const Config * config, struct my_l
         struct ggml_context * ctx_data = NULL;
 
         struct gguf_init_params params = {
-            /*.no_alloc = */ false,
-            /*.ctx      = */ &ctx_data,
+            /*.no_alloc    = */ false,
+            /*.ctx         = */ &ctx_data,
+            /*.no_byteswap = */ false,
         };
 
         struct gguf_context * ctx = gguf_init_from_file(filename, params);

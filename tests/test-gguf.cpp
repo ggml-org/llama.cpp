@@ -146,7 +146,8 @@ static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::
 }
 
 template <typename T>
-static void helper_write(FILE * file, const T & val) {
+static void helper_write(FILE * file, T val) {
+    ggml_convert_to_le(&val);
     GGML_ASSERT(fwrite(&val, 1, sizeof(val), file) == sizeof(val));
 }
 
@@ -363,7 +364,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
                 helper_write(file, big_dim);
             }
         } else {
-            helper_write(file, shape.data(), n_dims*sizeof(int64_t));
+            for (uint32_t j = 0; j < n_dims; ++j) {
+                helper_write(file, shape[j]);
+            }
         }
 
         {
@@ -533,6 +536,33 @@ static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned i
                 continue;
             }
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+            switch (type_arr) {
+                case GGUF_TYPE_UINT16:
+                case GGUF_TYPE_INT16:
+                    for (size_t j = 0; j < arr_n; ++j) {
+                        ggml_convert_to_le((uint16_t*)(data8 + j * 2));
+                    }
+                    break;
+
+                case GGUF_TYPE_UINT32:
+                case GGUF_TYPE_INT32:
+                case GGUF_TYPE_FLOAT32:
+                    for (size_t j = 0; j < arr_n; ++j) {
+                        ggml_convert_to_le((uint32_t*)(data8 + j * 4));
+                    }
+                    break;
+
+                case GGUF_TYPE_UINT64:
+                case GGUF_TYPE_INT64:
+                case GGUF_TYPE_FLOAT64:
+                    for (size_t j = 0; j < arr_n; ++j) {
+                        ggml_convert_to_le((uint64_t*)(data8 + j * 8));
+                    }
+                    break;
+            }
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
             if (!std::equal(data8, data8 + arr_n*type_size, data_gguf)) {
                 ok = false;
             }
@@ -547,6 +577,27 @@ static bool handcrafted_check_kv(const gguf_context * gguf_ctx, const unsigned i
             }
             continue;
         }
+
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+        switch (type) {
+            case GGUF_TYPE_UINT16:
+            case GGUF_TYPE_INT16:
+                ggml_convert_to_le((uint16_t*)(data8));
+                break;
+
+            case GGUF_TYPE_UINT32:
+            case GGUF_TYPE_INT32:
+            case GGUF_TYPE_FLOAT32:
+                ggml_convert_to_le((uint32_t*)(data8));
+                break;
+
+            case GGUF_TYPE_UINT64:
+            case GGUF_TYPE_INT64:
+            case GGUF_TYPE_FLOAT64:
+                ggml_convert_to_le((uint64_t*)(data8));
+                break;
+        }
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 
         if (!std::equal(data8, data8 + gguf_type_size(type), data_gguf)) {
             ok = false;
@@ -707,8 +758,9 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
 
         struct ggml_context * ctx = nullptr;
         struct gguf_init_params gguf_params = {
-            /*no_alloc =*/ false,
-            /*ctx      =*/ hft >= offset_has_data ? &ctx : nullptr,
+            /*no_alloc    =*/ false,
+            /*ctx         =*/ hft >= offset_has_data ? &ctx : nullptr,
+            /*no_byteswap =*/ false,
         };
 
         struct gguf_context * gguf_ctx = gguf_init_from_file_impl(file, gguf_params);
@@ -1103,8 +1155,9 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
 
     struct ggml_context * ctx_1 = nullptr;
     struct gguf_init_params gguf_params = {
-        /*no_alloc =*/ false,
-        /*ctx      =*/ only_meta ? nullptr : &ctx_1,
+        /*no_alloc    =*/ false,
+        /*ctx         =*/ only_meta ? nullptr : &ctx_1,
+        /*no_byteswap =*/ false,
     };
     struct gguf_context * gguf_ctx_1 = gguf_init_from_file_impl(file, gguf_params);
 

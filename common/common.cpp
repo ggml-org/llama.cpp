@@ -988,7 +988,7 @@ struct common_init_result common_init_from_params(common_params & params) {
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
         llama_adapter_lora_ptr lora;
-        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
+        lora.reset(llama_adapter_lora_init(model, la.path.c_str(), mparams.no_byteswap));
         if (lora == nullptr) {
             LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
             llama_free(lctx);
@@ -1093,6 +1093,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
+    mparams.no_byteswap     = params.no_byteswap;
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
@@ -1419,8 +1420,9 @@ struct llama_model * common_load_model_from_url(
     int n_split = 0;
     {
         struct gguf_init_params gguf_params = {
-            /*.no_alloc = */ true,
-            /*.ctx      = */ NULL,
+            /*.no_alloc    = */ true,
+            /*.ctx         = */ NULL,
+            /*.no_byteswap = */ false,
         };
         auto * ctx_gguf = gguf_init_from_file(local_path.c_str(), gguf_params);
         if (!ctx_gguf) {
@@ -2082,8 +2084,9 @@ static common_control_vector_data common_control_vector_load_one(const common_co
 
     ggml_context * ctx = nullptr;
     struct gguf_init_params meta_gguf_params = {
-        /* .no_alloc = */ false,
-        /* .ctx      = */ &ctx,
+        /* .no_alloc    = */ false,
+        /* .ctx         = */ &ctx,
+        /* .no_byteswap = */ false,
     };
     struct gguf_context * ctx_gguf = gguf_init_from_file(load_info.fname.c_str(), meta_gguf_params);
     if (!ctx_gguf) {

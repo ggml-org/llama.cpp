@@ -28,6 +28,14 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__gnu_linux__)
+#include <endian.h>
+#else // defined(__gnu_linux__)
+#define le64toh(x) (x)
+#define le32toh(x) (x)
+#define le16toh(x) (x)
+#endif // defined(__gnu_linux__)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -553,12 +561,69 @@ static inline ggml_bf16_t ggml_compute_fp32_to_bf16(float s) {
 #define GGML_FP32_TO_BF16(x) ggml_compute_fp32_to_bf16(x)
 #define GGML_BF16_TO_FP32(x) ggml_compute_bf16_to_fp32(x)
 
+// endianness conversion
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define ggml_convert_from_le16(x) GGML_UNUSED(x)
+#define ggml_convert_from_le32(x) GGML_UNUSED(x)
+#define ggml_convert_from_le64(x) GGML_UNUSED(x)
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+static inline void ggml_convert_from_le16(void * value) {
+    *((uint16_t*)value) = le16toh(*((uint16_t*)value));
+}
+
+static inline void ggml_convert_from_le32(void * value) {
+    *((uint32_t*)value) = le32toh(*((uint32_t*)value));
+}
+
+static inline void ggml_convert_from_le64(void * value) {
+    *((uint64_t*)value) = le64toh(*((uint64_t*)value));
+}
+#else // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error Unexpected or undefined __BYTE_ORDER__
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
+#define ggml_convert_to_le16(x) ggml_convert_from_le16(x)
+#define ggml_convert_to_le32(x) ggml_convert_from_le32(x)
+#define ggml_convert_to_le64(x) ggml_convert_from_le64(x)
+
 #ifdef __cplusplus
 }
 #endif
 
 #ifdef __cplusplus
 #include <vector>
+
+// endianness conversion
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define ggml_convert_from_le(x) GGML_UNUSED(x)
+#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#include <type_traits>
+
+template <typename T, std::enable_if_t<sizeof(T) == 1, int> = 0>
+static inline void ggml_convert_from_le(T * value)
+{
+    GGML_UNUSED(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 2, int> = 0>
+static inline void ggml_convert_from_le(T * value) {
+    ggml_convert_from_le16(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 4, int> = 0>
+static inline void ggml_convert_from_le(T * value) {
+    ggml_convert_from_le32(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 8, int> = 0>
+static inline void ggml_convert_from_le(T * value) {
+    ggml_convert_from_le64(value);
+}
+#else // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#error Unexpected or undefined __BYTE_ORDER__
+#endif // __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+
+#define ggml_convert_to_le(x) ggml_convert_from_le(x)
 
 // expose GGUF internals for test code
 GGML_API size_t gguf_type_size(enum gguf_type type);

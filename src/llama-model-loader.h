@@ -70,6 +70,7 @@ struct llama_model_loader {
 
     bool use_mmap = false;
     bool check_tensors;
+    bool no_byteswap = false;
 
     llama_files files;
     llama_ftype ftype;
@@ -95,7 +96,8 @@ struct llama_model_loader {
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         bool use_mmap,
         bool check_tensors,
-        const struct llama_model_kv_override * param_overrides_p);
+        const struct llama_model_kv_override * param_overrides_p,
+        bool no_byteswap);
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

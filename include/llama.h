@@ -304,6 +304,7 @@ extern "C" {
         bool use_mmap;      // use mmap if possible
         bool use_mlock;     // force system to keep model in RAM
         bool check_tensors; // validate model tensor data
+        bool no_byteswap;   // don't do byteswap, load pre-byteswapped big endian model on big endian system
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -542,7 +543,8 @@ extern "C" {
     // Load a LoRA adapter from file
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
-            const char * path_lora);
+            const char * path_lora,
+            bool no_byteswap);
 
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted

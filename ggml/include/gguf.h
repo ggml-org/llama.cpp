@@ -74,6 +74,8 @@ extern "C" {
 
         // if not NULL, create a ggml_context and allocate the tensor data in it
         struct ggml_context ** ctx;
+
+        bool no_byteswap;
     };
 
     GGML_API struct gguf_context * gguf_init_empty(void);
