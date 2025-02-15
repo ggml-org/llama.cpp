@@ -1,0 +1,47 @@
+[project]
+name = "mcp-simple-tool-prompt-resource"
+version = "0.1.0"
+description = "A simple MCP server exposing a website fetching tool, prompts and resources"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Anthropic, PBC." }]
+maintainers = [
+    { name = "David Soria Parra", email = "davidsp@anthropic.com" },
+    { name = "Justin Spahr-Summers", email = "justin@anthropic.com" },
+]
+keywords = ["mcp", "llm", "automation", "web", "fetch"]
+license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+]
+dependencies = ["anyio>=4.5", "click>=8.1.0", "httpx>=0.27", "mcp"]
+
+[project.scripts]
+mcp-simple-tool-prompt-resource = "simple_tool_prompt_resource.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["simple_tool_prompt_resource"]
+
+[tool.pyright]
+include = ["simple_tool_prompt_resource"]
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.uv]
+dev-dependencies = ["pyright>=1.1.378", "pytest>=8.3.3", "ruff>=0.6.9"]
