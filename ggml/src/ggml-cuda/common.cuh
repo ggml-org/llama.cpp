@@ -196,7 +196,7 @@ typedef float2 dfloat2;
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 
 #if !(defined(GGML_USE_MUSA) || (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
-#define INT8_MMA_AVAILABLE
+#define NEW_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
 #if !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ <= GGML_CUDA_CC_QY1)
