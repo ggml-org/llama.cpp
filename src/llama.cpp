@@ -8623,6 +8623,12 @@ static int llama_decode_impl(
     }
 
     while (lctx.sbatch.n_tokens > 0) {
+        // If aborted, break out
+        if (lctx.abort_callback != nullptr && lctx.abort_callback(lctx.abort_callback_data)) {
+            LLAMA_LOG_ERROR("%s: token decode aborted\n", __func__);
+            return -1;
+        }
+
         llama_ubatch ubatch;
         {
             const int ret = llama_prepare_ubatch(lctx, kv_slot_restorer, ubatch, n_outputs, batch.n_tokens);
