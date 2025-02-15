@@ -47,7 +47,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -116,7 +117,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -186,7 +188,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -267,7 +270,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -346,7 +350,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-rpc
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -379,7 +384,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -450,7 +456,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-hip
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake HIP support
         id: cmake_build
@@ -488,7 +495,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-musa
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake MUSA support
         id: cmake_build
@@ -533,7 +541,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -581,7 +590,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl-fp16
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -606,7 +616,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-ios
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -641,7 +652,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-tvos
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -680,7 +692,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: macOS-latest-swift
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -726,7 +739,8 @@ jobs:
         with:
           key: windows-msys2
           variant: sccache
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -801,7 +815,8 @@ jobs:
         with:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: sccache
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Clone Kompute submodule
         id: clone_kompute
@@ -953,7 +968,8 @@ jobs:
           uses: hendrikmuhs/ccache-action@v1.2.16
           with:
             key: ubuntu-latest-cmake-cuda
-            evict-old-files: 1d
+            evict-old-files: 12h
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
         - name: Build with CMake
           run: |
@@ -986,7 +1002,8 @@ jobs:
         with:
           key: ${{ github.job }}-${{ matrix.cuda }}-${{ matrix.build }}
           variant: sccache
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Cuda Toolkit 11.7
         if: ${{ matrix.cuda == '11.7' }}
@@ -1128,7 +1145,8 @@ jobs:
         with:
           key: windows-latest-cmake-sycl
           variant: sccache
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install
         run:  |
@@ -1212,7 +1230,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -1246,7 +1265,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-hip-release
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install
         id: depends
@@ -1347,7 +1367,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: android-build
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -1390,7 +1411,8 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: release
-          evict-old-files: 1d
+          evict-old-files: 12h
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Determine tag name
         id: tag
