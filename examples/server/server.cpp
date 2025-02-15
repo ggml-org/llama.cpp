@@ -2015,10 +2015,10 @@ struct server_context {
                     continue;
                 }
 
-                // length of the Longest Common Subsequence between the current slot's prompt and the input prompt
+                // length of the Longest Common Substring between the current slot's prompt and the input prompt
                 int cur_lcs_len = common_lcs(slot.cache_tokens, task.prompt_tokens);
 
-                // fraction of the common subsequence length compared to the current slot's prompt length
+                // fraction of the common substring length compared to the current slot's prompt length
                 float cur_similarity = static_cast<float>(cur_lcs_len) / static_cast<int>(slot.cache_tokens.size());
 
                 // select the current slot if the criteria match

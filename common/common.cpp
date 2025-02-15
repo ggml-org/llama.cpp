@@ -1652,7 +1652,7 @@ size_t common_lcs(const llama_tokens & a, const llama_tokens & b) {
     size_t a_len = a.size();
     size_t b_len = b.size();
 
-    // initialize the maximum length of the longest common subsequence (LCS)
+    // initialize the maximum length of the longest common substring (LCS)
     size_t max_length = 0;
 
     // use two rows instead of a 2D matrix to optimize space
