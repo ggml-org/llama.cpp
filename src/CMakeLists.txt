@@ -39,3 +39,5 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
     target_compile_definitions(llama PUBLIC  LLAMA_SHARED)
 endif()
+
+set_source_files_properties(unicode-data.cpp PROPERTIES COMPILE_FLAGS -O1)
