@@ -14,6 +14,10 @@
 #include "ggml-cpu-hbm.h"
 #endif
 
+#ifdef GGML_USE_CPU_KLEIDIAI
+#include "kleidiai/kleidiai.h"
+#endif
+
 #if defined(__APPLE__)
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -36,6 +40,12 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
         if (ggml_backend_amx_buffer_type()) {
             bufts.push_back(ggml_backend_amx_buffer_type());
+        }
+#endif
+
+#ifdef GGML_USE_CPU_KLEIDIAI
+        if (ggml_backend_cpu_kleidiai_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_kleidiai_buffer_type());
         }
 #endif
 
@@ -538,6 +548,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
             static std::string sve_cnt = std::to_string(ggml_cpu_get_sve_cnt());
             features.push_back({ "SVE_CNT", sve_cnt.c_str() });
         }
+        if (ggml_cpu_has_sme()) {
+            features.push_back({ "SME", "1" });
+        }
         if (ggml_cpu_has_riscv_v()) {
             features.push_back({ "RISCV_V", "1" });
         }
@@ -558,6 +571,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
     #endif
     #ifdef GGML_USE_OPENMP
         features.push_back({ "OPENMP", "1" });
+    #endif
+    #ifdef GGML_USE_CPU_KLEIDIAI
+        features.push_back({ "KLEIDIAI", "1" });
     #endif
     #ifdef GGML_USE_CPU_AARCH64
         features.push_back({ "AARCH64_REPACK", "1" });

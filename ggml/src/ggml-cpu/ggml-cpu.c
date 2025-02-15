@@ -112,7 +112,8 @@ struct ggml_arm_arch_features_type {
     int has_i8mm;
     int has_sve;
     int sve_cnt;
-} ggml_arm_arch_features = {-1, -1, -1, -1, 0};
+    int has_sme;
+} ggml_arm_arch_features = {-1, -1, -1, -1, 0, -1};
 #endif
 
 
@@ -2381,15 +2382,20 @@ bool ggml_is_numa(void) {
 #define HWCAP2_I8MM (1 << 13)
 #endif
 
+#if !defined(HWCAP2_SME)
+#define HWCAP2_SME (1 << 23)
+#endif
+
 static void ggml_init_arm_arch_features(void) {
 #if defined(__linux__) && defined(__aarch64__)
     uint32_t hwcap = getauxval(AT_HWCAP);
     uint32_t hwcap2 = getauxval(AT_HWCAP2);
 
-    ggml_arm_arch_features.has_neon = !!(hwcap & HWCAP_ASIMD);
+    ggml_arm_arch_features.has_neon    = !!(hwcap & HWCAP_ASIMD);
     ggml_arm_arch_features.has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
-    ggml_arm_arch_features.has_i8mm = !!(hwcap2 & HWCAP2_I8MM);
-    ggml_arm_arch_features.has_sve  = !!(hwcap & HWCAP_SVE);
+    ggml_arm_arch_features.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
+    ggml_arm_arch_features.has_sve     = !!(hwcap & HWCAP_SVE);
+    ggml_arm_arch_features.has_sme     = !!(hwcap2 & HWCAP2_SME);
 
 #if defined(__ARM_FEATURE_SVE)
     ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
@@ -2411,6 +2417,11 @@ static void ggml_init_arm_arch_features(void) {
         oldp = 0;
     }
     ggml_arm_arch_features.has_i8mm = oldp;
+
+    if (sysctlbyname("hw.optional.arm.FEAT_SME", &oldp, &size, NULL, 0) != 0) {
+        oldp = 0;
+    }
+    ggml_arm_arch_features.has_sme = oldp;
 
     ggml_arm_arch_features.has_sve = 0;
     ggml_arm_arch_features.sve_cnt = 0;
@@ -2434,6 +2445,12 @@ static void ggml_init_arm_arch_features(void) {
 #else
     ggml_arm_arch_features.has_sve = 0;
     ggml_arm_arch_features.sve_cnt = 0;
+#endif
+
+#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_SME2)
+    ggml_arm_arch_features.has_sme = 1;
+#else
+    ggml_arm_arch_features.has_sme = 0;
 #endif
 #endif
 }
@@ -14437,6 +14454,14 @@ int ggml_cpu_has_matmul_int8(void) {
 int ggml_cpu_get_sve_cnt(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
     return ggml_arm_arch_features.sve_cnt;
+#else
+    return 0;
+#endif
+}
+
+int ggml_cpu_has_sme(void) {
+#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SME)
+    return ggml_arm_arch_features.has_sme;
 #else
     return 0;
 #endif
