@@ -1,9 +1,6 @@
 /*
  * Copyright (c) 2023-2024 The ggml authors
  *
- * this is implementation of ggml-qnn(ggml-qnn backend of Qualcomm QNN(Qualcomm Neural Network,
- * aka Qualcomm AI Engine Direct)
- *
  * Qualcomm QNN SDK and reference tech guides could be found at:
  * https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
  * https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
@@ -17,7 +14,7 @@
  * section-6 does implementation of ggml-qnn backend according to ggml's backend subsystem
  *
  * currently only provide GGML_OP_ADD's QNN backend implementation:
- *    - GGML_OP_ADD:  this is skeleton, can expand other ggml ops as expertise
+ *    - GGML_OP_ADD: this is skeleton, can expand other ggml ops according to expertise
  *
  * of course, can porting ggml-qnn to Windows on ARM as need.
  *
@@ -105,10 +102,6 @@ class qnn_instance;
 struct ggml_backend_qnn_context;
 static int free_qnn_tensor(Qnn_Tensor_t * tensor);
 static enum ggml_status ggml_backend_qnn_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
-
-#if (defined __ANDROID__) || (defined ANDROID)
-extern "C" int __android_log_print(int prio, const char * tag, const char * fmt, ...) __attribute__((__format__(printf, 3, 4)));
-#endif
 static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
 
 // =================================================================================================
@@ -142,13 +135,13 @@ static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const 
         int len = vsnprintf(s_ggmlqnn_log_internal_buf + len_prefix, GGML_QNN_LOGBUF_LEN - len_prefix, format, args);
         if (len < (GGML_QNN_LOGBUF_LEN - len_prefix)) {
 #if (defined __ANDROID__) || (defined ANDROID)
-            //for Android APK
+            //for Android application(standard APP or command line tool)
             __android_log_print(ANDROID_LOG_INFO, "ggml-qnn", "%s\n", s_ggmlqnn_log_internal_buf);
 #endif
 #if (defined __ANDROID__) || (defined ANDROID)
-            //do nothing when running on Android phone
+            //do nothing when running on Snapdragon based Android device
 #else
-            //for Windows on ARM
+            //for Snapdragon based WoA(Windows on ARM) device
             printf("%s\n", s_ggmlqnn_log_internal_buf);
 #endif
         }
@@ -851,7 +844,6 @@ static int free_qnn_tensor(Qnn_Tensor_t * tensor) {
             free(src_qparam.bwAxisScaleOffsetEncoding.offsets);
         }
     }
-    //GGMLQNN_LOG_DEBUG("tensor dims %p", QNN_TENSOR_GET_DIMENSIONS(*tensor));
     free(QNN_TENSOR_GET_DIMENSIONS(*tensor));
     free(tensor);
 
@@ -1367,8 +1359,8 @@ static struct qcom_socinfo * qnn_get_socinfo_from_socmodel(uint32_t soc_model) {
     return nullptr;
 }
 
-static bool qnn_is_valid_params(ggml_backend_qnn_context * ctx, const ggml_tensor * src0,
-                                const ggml_tensor * src1, ggml_tensor * dst) {
+static bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const ggml_tensor * src0,
+                                    const ggml_tensor * src1, ggml_tensor * dst) {
     if ((nullptr == ctx) || (nullptr == src0) || (nullptr == src1) || (nullptr == dst)) {
         GGMLQNN_LOG_WARN("invalid params\n");
         return false;
@@ -1383,9 +1375,9 @@ static bool qnn_is_valid_params(ggml_backend_qnn_context * ctx, const ggml_tenso
     return true;
 }
 
-#define CHECK_PARAMS(ctx, src0, src1, dst)                          \
+#define GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst)                          \
     do {                                                            \
-        if (!qnn_is_valid_params((ctx), (src0), (src1), (dst))) {   \
+        if (!ggmlqnn_is_valid_params((ctx), (src0), (src1), (dst))) {   \
             return;                                                 \
         }                                                           \
     } while (0)
@@ -1516,7 +1508,7 @@ static ggml_type ggml_datatype_from_qnn_datatype(Qnn_DataType_t qnn_type) {
     return GGML_TYPE_COUNT;
 }
 
-//TODO:
+//TODO: add more ops
 static const char * qnn_opname_from_ggmlop(enum ggml_op ggmlop) {
     switch (ggmlop) {
         case GGML_OP_ADD:
@@ -1540,7 +1532,7 @@ static void append_tensor_dimensions(const ggml_tensor * tensor, std::string & o
     int len = 0;
     switch (ggml_n_dims(tensor)) {
         case 1:
-            len = snprintf(buffer, sizeof(buffer), "%ld%s", (long)tensor->ne[0], type_name);
+            len = snprintf(buffer, sizeof(buffer), "%ldx1%s", (long)tensor->ne[0], type_name);
             break;
         case 2:
             len = snprintf(buffer, sizeof(buffer), "%ldx%ld%s", (long)tensor->ne[0], (long)tensor->ne[1], type_name);
@@ -1913,7 +1905,7 @@ public:
     void unregister_rpcmem();
     void unregister_rpcmem(Qnn_MemHandle_t mem_handle);
 
-    void *alloc_rpcmem(size_t bytes, size_t alignment);
+    void * alloc_rpcmem(size_t bytes, size_t alignment);
 
     void free_rpcmem(void * buf);
 
@@ -2252,7 +2244,7 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
     _loaded_lib_handle[backend_id] = lib_handle;
     _backend_id = backend_id;
 
-#if 0 //not used in PR, keep them here for further use
+#if 0 // keep them here for further use
     QnnSaver_Config_t outputdir_cfg;
     outputdir_cfg.option = QNN_SAVER_CONFIG_OPTION_OUTPUT_DIRECTORY;
     outputdir_cfg.outputDirectory = "/data/local/tmp/";
@@ -2307,8 +2299,8 @@ int qnn_instance::load_system() {
     _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (nullptr == _system_lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
-        //re-try with Android APK's internal QNN runtime lib path
-        _lib_path = "/data/data/com.cdeos.kantv/qnnlib/";
+        //re-try with default path of QNN binary runtime lib
+        _lib_path = "/data/local/tmp/";
         system_lib_path = _lib_path + "libQnnSystem.so";
         _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (nullptr == _system_lib_handle) {
@@ -2604,7 +2596,6 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         }
         _qnn_raw_interface.deviceFreePlatformInfo(nullptr, p_info);
 
-        //TODO: faster approach to probe the accurate capacity of QNN RPC ion memory
         size_t candidate_size = 0;
         uint8_t * rpc_buffer = nullptr;
         const int SIZE_IN_MB = (1 << 20);
@@ -2648,7 +2639,7 @@ int qnn_instance::qnn_finalize() {
     //FIXME:should be removed in the future
     reset_idx();
 
-    if (nullptr != _pfn_rpc_mem_deinit) // make Qualcomm's mobile SoC equipped low-end phone happy
+    if (nullptr != _pfn_rpc_mem_deinit)
         _pfn_rpc_mem_deinit();
 
     if (dlclose(_rpc_lib_handle) != 0) {
@@ -2922,8 +2913,8 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor, bool b_dum
         }
 #if 0
         //TODO: offload mul_mat to QNN backend
-        //we need to process type traint in func ggml_qnn_mul_mat(...) with following case:
-        //src0: q4_0, q6_k
+        //need to process type trait in func ggml_qnn_mul_mat(...):
+        //src0: q4_0, q6_k, ...
         //src1: f32
         //dst : f32
         return (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16)
@@ -2959,13 +2950,15 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
     Qnn_DataType_t src0_qnn_type                = QNN_DATATYPE_FLOAT_32;
     Qnn_DataType_t src1_qnn_type                = QNN_DATATYPE_FLOAT_32;
     Qnn_DataType_t dst_qnn_type                 = QNN_DATATYPE_FLOAT_32;
+    const ggml_tensor * src0                    = op->src[0];
+    const ggml_tensor * src1                    = op->src[1];
+    ggml_tensor * dst                           = op;
+
+    GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst);
 
     instance                                    = ctx->instance;
     QNN_INTERFACE_VER_TYPE qnn_raw_interface    = ctx->raw_interface;
 
-    const ggml_tensor * src0 = op->src[0];
-    const ggml_tensor * src1 = op->src[1];
-    ggml_tensor * dst        = op;
     op_perf.start();
 
     std::string map_entry;
@@ -3174,17 +3167,17 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
 #endif
 }
 
-//TODO: type trait with op->src[0]
+//TODO:
 /*
- * the procedure of ggml_qnn_mul_mat is similar to ggml_qnn_add,but there are type trait process
- * for ggml_qnn_mul_mat, so it's a standalone function.
+ * the logic of ggml_qnn_mul_mat is similar to ggml_qnn_add,but type trait and matrix transpose are required
+ * for offload mulmat to QNN backend, so it's a standalone function.
  *
  * MUL_MAT take most of the compute time (about 95%).so to speed up llama inference, we should focus on MUL_MAT.
  *
  * we have three kinds of MUL_MAT to compute:
  * mul_mat_f32:     both src0 and src1 are F32, this will be naturally handled in QNN backend
  * mul_mat_f16_f32: src0 is F16 and src1 is F32, f16 in src0 -> f32 in src0', then src0' * src1
- * mul_mat_q_f32:   src0 is quantized (Q4_0, Q4_1, ...) and src1 is F32, quantize in src0 -> f32 in src0', then src0' * src1
+ * mul_mat_q_f32:   src0 is quantized (Q4_0, Q4_1, ...) and src1 is F32, src0 -> f32 in src0', then src0' * src1
 */
 static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
     Qnn_ErrorHandle_t error                     = QNN_SUCCESS;
@@ -3205,13 +3198,15 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
     Qnn_DataType_t src0_qnn_type                = QNN_DATATYPE_FLOAT_32;
     Qnn_DataType_t src1_qnn_type                = QNN_DATATYPE_FLOAT_32;
     Qnn_DataType_t dst_qnn_type                 = QNN_DATATYPE_FLOAT_32;
+    const ggml_tensor * src0                    = op->src[0];
+    const ggml_tensor * src1                    = op->src[1];
+    ggml_tensor * dst                           = op;
+
+    GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst);
 
     instance                                    = ctx->instance;
     QNN_INTERFACE_VER_TYPE qnn_raw_interface    = ctx->raw_interface;
 
-    const ggml_tensor * src0 = op->src[0];
-    const ggml_tensor * src1 = op->src[1];
-    ggml_tensor * dst        = op;
     op_perf.start();
 
     std::string map_entry;
