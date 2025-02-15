@@ -391,7 +391,7 @@ struct common_params {
     int32_t i_pos  = -1;  // position of the passkey in the junk text
 
     // imatrix params
-    std::string out_file = "imatrix.dat"; // save the resulting imatrix to this file
+    std::string out_file = "imatrix.gguf"; // save the resulting imatrix to this file
 
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
