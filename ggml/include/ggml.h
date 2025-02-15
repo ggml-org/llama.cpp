@@ -698,7 +698,7 @@ extern "C" {
 
     GGML_API size_t  ggml_used_mem(const struct ggml_context * ctx);
 
-    GGML_API bool    ggml_get_no_alloc(struct ggml_context * ctx);
+    GGML_API bool    ggml_get_no_alloc(const struct ggml_context * ctx);
     GGML_API void    ggml_set_no_alloc(struct ggml_context * ctx, bool no_alloc);
 
     GGML_API void *  ggml_get_mem_buffer     (const struct ggml_context * ctx);
@@ -745,7 +745,7 @@ extern "C" {
     // Context tensor enumeration and lookup
     GGML_API struct ggml_tensor * ggml_get_first_tensor(const struct ggml_context * ctx);
     GGML_API struct ggml_tensor * ggml_get_next_tensor (const struct ggml_context * ctx, struct ggml_tensor * tensor);
-    GGML_API struct ggml_tensor * ggml_get_tensor(struct ggml_context * ctx, const char * name);
+    GGML_API struct ggml_tensor * ggml_get_tensor(const struct ggml_context * ctx, const char * name);
 
     // Converts a flat index into coordinates
     GGML_API void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * i0, int64_t * i1, int64_t * i2, int64_t * i3);
@@ -763,7 +763,7 @@ extern "C" {
     // Tensor flags
     GGML_API void ggml_set_input(struct ggml_tensor * tensor);
     GGML_API void ggml_set_output(struct ggml_tensor * tensor);
-    GGML_API void ggml_set_param(struct ggml_context * ctx, struct ggml_tensor * tensor);
+    GGML_API void ggml_set_param(const struct ggml_context * ctx, struct ggml_tensor * tensor);
     GGML_API void ggml_set_loss(struct ggml_tensor * tensor);
 
     //
@@ -927,13 +927,13 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_repeat(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+                                              const struct ggml_tensor  * b);
 
     // sums repetitions in a into shape of b
     GGML_API struct ggml_tensor * ggml_repeat_back(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+                                                   const struct ggml_tensor  * b);
 
     // concat a and b along dim
     // used in stable-diffusion
@@ -1243,7 +1243,7 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_reshape(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+                                               const struct ggml_tensor  * b);
 
     // return view(a)
     // TODO: when we start computing gradient, make a copy instead of view
@@ -1335,7 +1335,7 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
             struct ggml_tensor  * b,  // row indices
-            struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
+        const struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,
@@ -1563,7 +1563,7 @@ extern "C" {
         struct ggml_context * ctx,
         struct ggml_tensor  * a,  // convolution kernel
         struct ggml_tensor  * b,  // gradient of im2col output
-        int64_t             * ne, // shape of im2col input
+                                                   const int64_t             * ne, // shape of im2col input
         int                   s0, // stride dimension 0
         int                   s1, // stride dimension 1
         int                   p0, // padding dimension 0
@@ -2062,15 +2062,16 @@ extern "C" {
     // graph allocation in a context
     GGML_API struct ggml_cgraph * ggml_new_graph       (struct ggml_context * ctx); // size = GGML_DEFAULT_GRAPH_SIZE, grads = false
     GGML_API struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t size, bool grads);
-    GGML_API struct ggml_cgraph * ggml_graph_dup       (struct ggml_context * ctx, struct ggml_cgraph * cgraph);
-    GGML_API void                 ggml_graph_cpy       (struct ggml_cgraph * src, struct ggml_cgraph * dst);
-    GGML_API void                 ggml_graph_reset     (struct ggml_cgraph * cgraph); // set regular grads + optimizer momenta to 0, set loss grad to 1
+    GGML_API struct ggml_cgraph * ggml_graph_dup       (struct ggml_context * ctx, const struct ggml_cgraph * cgraph);
+    GGML_API void                 ggml_graph_cpy       (const struct ggml_cgraph * src, struct ggml_cgraph * dst);
+    GGML_API void                 ggml_graph_reset     (
+                        const struct ggml_cgraph * cgraph); // set regular grads + optimizer momenta to 0, set loss grad to 1
     GGML_API void                 ggml_graph_clear     (struct ggml_cgraph * cgraph);
 
-    GGML_API int                   ggml_graph_size   (struct ggml_cgraph * cgraph);
-    GGML_API struct ggml_tensor *  ggml_graph_node   (struct ggml_cgraph * cgraph, int i); // if i < 0, returns nodes[n_nodes + i]
-    GGML_API struct ggml_tensor ** ggml_graph_nodes  (struct ggml_cgraph * cgraph);
-    GGML_API int                   ggml_graph_n_nodes(struct ggml_cgraph * cgraph);
+    GGML_API int                   ggml_graph_size   (const struct ggml_cgraph * cgraph);
+    GGML_API struct ggml_tensor *  ggml_graph_node   (const struct ggml_cgraph * cgraph, int i); // if i < 0, returns nodes[n_nodes + i]
+    GGML_API struct ggml_tensor ** ggml_graph_nodes  (const struct ggml_cgraph * cgraph);
+    GGML_API int                   ggml_graph_n_nodes(const struct ggml_cgraph * cgraph);
 
     GGML_API void   ggml_graph_add_node(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor);
 

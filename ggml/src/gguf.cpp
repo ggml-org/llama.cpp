@@ -1144,6 +1144,7 @@ struct gguf_writer {
 
     template <typename T>
     void write(const T & val) const {
+        buf.reserve(sizeof(val));
         for (size_t i = 0; i < sizeof(val); ++i) {
             buf.push_back(reinterpret_cast<const int8_t *>(&val)[i]);
         }
@@ -1163,6 +1164,7 @@ struct gguf_writer {
             const uint64_t n = val.length();
             write(n);
         }
+        buf.reserve(val.length());
         for (size_t i = 0; i < val.length(); ++i) {
             buf.push_back(reinterpret_cast<const int8_t *>(val.data())[i]);
         }

@@ -124,7 +124,7 @@ static void * dl_get_sym(dl_handle * handle, const char * name) {
 using dl_handle = void;
 
 struct dl_handle_deleter {
-    void operator()(void * handle) {
+    void operator()(void * handle) const {
         dlclose(handle);
     }
 };

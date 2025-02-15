@@ -46,17 +46,17 @@ GGML_API void                ggml_tallocr_alloc(struct ggml_tallocr * talloc, st
 typedef struct ggml_gallocr * ggml_gallocr_t;
 
 GGML_API ggml_gallocr_t ggml_gallocr_new(ggml_backend_buffer_type_t buft);
-GGML_API ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs);
+GGML_API ggml_gallocr_t ggml_gallocr_new_n(const ggml_backend_buffer_type_t * bufts, int n_bufs);
 GGML_API void           ggml_gallocr_free(ggml_gallocr_t galloc);
 
 // pre-allocate buffers from a measure graph - does not allocate or modify the graph
 // call with a worst-case graph to avoid buffer reallocations
 // not strictly required for single buffer usage: ggml_gallocr_alloc_graph will reallocate the buffers automatically if needed
 // returns false if the buffer allocation failed
-GGML_API bool ggml_gallocr_reserve(ggml_gallocr_t galloc, struct ggml_cgraph * graph);
+GGML_API bool ggml_gallocr_reserve(ggml_gallocr_t galloc, const struct ggml_cgraph * graph);
 GGML_API bool ggml_gallocr_reserve_n(
     ggml_gallocr_t galloc,
-    struct ggml_cgraph * graph,
+    const struct ggml_cgraph * graph,
     const int * node_buffer_ids,
     const int * leaf_buffer_ids);
 
