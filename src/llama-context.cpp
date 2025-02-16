@@ -1235,6 +1235,13 @@ struct llama_data_read {
         return true;
     }
 
+// other preprocessor macros for which in-memory precomposition speeds up KV cache loading can be added
+#if defined(GGML_VULKAN_COMPUTE)
+#define COMPOSE_MEM_FIRST 1
+#else
+#define COMPOSE_MEM_FIRST 0
+#endif
+
     bool read_kv_cache_data(struct llama_context * ctx, uint32_t cell_count) {
         const struct llama_hparams & hparams = ctx->model.hparams;
         struct llama_kv_cache & kv_self = ctx->kv_self;
@@ -1312,6 +1319,9 @@ struct llama_data_read {
                 }
             }
         } else {
+#if COMPOSE_MEM_FIRST
+            std::vector<uint8_t> tmp_buf;
+#endif
             // For each layer, read the values for each cell (transposed)
             for (uint32_t il = 0; il < n_layer; ++il) {
                 const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
@@ -1343,11 +1353,24 @@ struct llama_data_read {
                 }
 
                 if (cell_count) {
+#if COMPOSE_MEM_FIRST
+                    const size_t buf_size = kv_self.size * v_size_el * n_embd_v_gqa;
+                    if (tmp_buf.size() < buf_size) {
+                        tmp_buf.resize(buf_size, 0);
+                    }
+                    // For each row in the transposed matrix, read the values for the whole cell range
+                    for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+                        const size_t dst_offset = (kv_self.head + j * kv_self.size) * v_size_el;
+                        memcpy(tmp_buf.data() + dst_offset, read(cell_count * v_size_el), cell_count * v_size_el); // read(cell_count * v_size_el);
+                    }
+                    ggml_backend_tensor_set(kv_self.v_l[il], tmp_buf.data(), 0, buf_size);
+#else
                     // For each row in the transposed matrix, read the values for the whole cell range
                     for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
                         const size_t dst_offset = (kv_self.head + j * kv_self.size) * v_size_el;
                         ggml_backend_tensor_set(kv_self.v_l[il], read(cell_count * v_size_el), dst_offset, cell_count * v_size_el);
                     }
+#endif
                 }
             }
         }
