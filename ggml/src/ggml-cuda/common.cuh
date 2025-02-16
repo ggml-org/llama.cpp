@@ -191,11 +191,11 @@ typedef float2 dfloat2;
 #define FAST_FP16_AVAILABLE
 #endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
 
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
+#if !(defined(GGML_USE_MUSA) || (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 #define FP16_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
+#if !(defined(GGML_USE_MUSA) || (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define NEW_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 
@@ -234,6 +234,8 @@ static bool new_mma_available(const int cc) {
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     return __AMDGCN_WAVEFRONT_SIZE;
+#elif defined(GGML_USE_MUSA)
+    return 128;
 #else
     return 32;
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
@@ -402,7 +404,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 
 #else // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     return __dp4a(a, b, c);
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A
     const int8_t * a8 = (const int8_t *) &a;

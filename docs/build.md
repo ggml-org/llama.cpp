@@ -205,12 +205,20 @@ This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GP
   cmake -B build -DGGML_MUSA=ON
   cmake --build build --config Release
   ```
+- For static build:
+
+  ```bash
+  cmake -B build -DGGML_MUSA=ON \
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+  cmake --build build --config Release
+  ```
 
 The environment variable [`MUSA_VISIBLE_DEVICES`](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) can be used to specify which GPU(s) will be used.
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted.
 
 Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
+
 
 ## HIP
 

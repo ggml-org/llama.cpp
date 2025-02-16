@@ -253,6 +253,14 @@ class Model:
             self.gguf_writer.add_expert_used_count(n_experts_used)
             logger.info(f"gguf: experts used count = {n_experts_used}")
 
+        if (sliding_window := self.hparams.get("sliding_window")) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+            logger.info(f"gguf: sliding_window = {sliding_window}")
+
+        if (expert_weights_scale := self.find_hparam(["routed_scaling_factor", "scale_factor"], optional=True)) is not None:
+            self.gguf_writer.add_expert_weights_scale(expert_weights_scale)
+            logger.info(f"gguf: expert_weights_scale = {expert_weights_scale}")
+
         if (head_dim := self.hparams.get("head_dim")) is not None:
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
