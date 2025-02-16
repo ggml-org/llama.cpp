@@ -25,6 +25,7 @@ enum llm_type {
     LLM_TYPE_109M,
     LLM_TYPE_137M,
     LLM_TYPE_160M,
+    LLM_TYPE_190M,
     LLM_TYPE_220M,
     LLM_TYPE_250M,
     LLM_TYPE_270M,
@@ -255,6 +256,20 @@ struct llama_layer {
     struct ggml_tensor * time_mix_receptance   = nullptr;
     struct ggml_tensor * time_mix_receptance_b = nullptr;
     struct ggml_tensor * time_mix_gate         = nullptr;
+
+    // rwkv v7
+    struct ggml_tensor * time_mix_w0         = nullptr;
+    struct ggml_tensor * time_mix_a0         = nullptr;
+    struct ggml_tensor * time_mix_a1         = nullptr;
+    struct ggml_tensor * time_mix_a2         = nullptr;
+    struct ggml_tensor * time_mix_v0         = nullptr;
+    struct ggml_tensor * time_mix_v1         = nullptr;
+    struct ggml_tensor * time_mix_v2         = nullptr;
+    struct ggml_tensor * time_mix_g1         = nullptr;
+    struct ggml_tensor * time_mix_g2         = nullptr;
+    struct ggml_tensor * time_mix_k_k        = nullptr;
+    struct ggml_tensor * time_mix_k_a        = nullptr;
+    struct ggml_tensor * time_mix_r_k        = nullptr;
 
     struct ggml_tensor * time_mix_ln     = nullptr;
     struct ggml_tensor * time_mix_ln_b   = nullptr;

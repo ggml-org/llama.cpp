@@ -767,6 +767,18 @@ class GGUFWriter:
     def add_kv_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KV_LORA_RANK.format(arch=self.arch), length)
 
+    def add_decay_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.DECAY_LORA_RANK.format(arch=self.arch), length)
+
+    def add_iclr_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.ICLR_LORA_RANK.format(arch=self.arch), length)
+
+    def add_value_residual_mix_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.VALUE_RESIDUAL_MIX_LORA_RANK.format(arch=self.arch), length)
+
+    def add_gate_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.GATE_LORA_RANK.format(arch=self.arch), length)
+
     def add_relative_attn_buckets_count(self, value: int) -> None:
         self.add_uint32(Keys.Attention.REL_BUCKETS_COUNT.format(arch=self.arch), value)
 

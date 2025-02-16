@@ -756,10 +756,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
 
-        // do not quantize RWKV's time_mix_first tensors
+        // do not quantize RWKV's small yet 2D weights
         quantize &= name.find("time_mix_first.weight") == std::string::npos;
+        quantize &= name.find("time_mix_w0.weight") == std::string::npos;
         quantize &= name.find("time_mix_w1.weight") == std::string::npos;
         quantize &= name.find("time_mix_w2.weight") == std::string::npos;
+        quantize &= name.find("time_mix_v0.weight") == std::string::npos;
+        quantize &= name.find("time_mix_v1.weight") == std::string::npos;
+        quantize &= name.find("time_mix_v2.weight") == std::string::npos;
+        quantize &= name.find("time_mix_a0.weight") == std::string::npos;
+        quantize &= name.find("time_mix_a1.weight") == std::string::npos;
+        quantize &= name.find("time_mix_a2.weight") == std::string::npos;
+        quantize &= name.find("time_mix_g1.weight") == std::string::npos;
+        quantize &= name.find("time_mix_g2.weight") == std::string::npos;
         quantize &= name.find("time_mix_decay_w1.weight") == std::string::npos;
         quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
         quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
