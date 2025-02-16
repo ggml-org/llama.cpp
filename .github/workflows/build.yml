@@ -374,6 +374,8 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -1373,8 +1375,10 @@ jobs:
 
     needs:
       - ubuntu-cpu-cmake
+      - ubuntu-22-cmake-vulkan
       - windows-latest-cmake
       - windows-2019-cmake-cuda
+      - windows-latest-cmake-sycl
       - windows-latest-cmake-hip-release
       - macOS-latest-cmake-arm64
       - macOS-latest-cmake-x64
