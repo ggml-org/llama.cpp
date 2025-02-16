@@ -190,8 +190,9 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
     if (params.mirostat == 0) {
         if (params.top_n_sigma >= 0) {
             llama_sampler_chain_add(result->chain, llama_sampler_init_top_k        (params.top_k));
-            llama_sampler_chain_add(result->chain, llama_sampler_init_temp         (params.temp));
+            llama_sampler_chain_add(result->chain, llama_sampler_init_temp_ext     (params.temp, params.dynatemp_range, params.dynatemp_exponent));
             llama_sampler_chain_add(result->chain, llama_sampler_init_top_n_sigma  (params.top_n_sigma));
+            llama_sampler_chain_add(result->chain, llama_sampler_init_xtc          (params.xtc_probability, params.xtc_threshold, params.min_keep, params.seed));
         } else {
             for (const auto & cnstr : params.samplers) {
                 switch (cnstr) {
@@ -435,6 +436,7 @@ char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_TYPICAL_P:   return 'y';
         case COMMON_SAMPLER_TYPE_TOP_P:       return 'p';
         case COMMON_SAMPLER_TYPE_MIN_P:       return 'm';
+        case COMMON_SAMPLER_TYPE_N_SIGMA:     return 'n';
         case COMMON_SAMPLER_TYPE_TEMPERATURE: return 't';
         case COMMON_SAMPLER_TYPE_XTC:         return 'x';
         case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
@@ -450,6 +452,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_TYPICAL_P:   return "typ_p";
         case COMMON_SAMPLER_TYPE_TOP_P:       return "top_p";
         case COMMON_SAMPLER_TYPE_MIN_P:       return "min_p";
+        case COMMON_SAMPLER_TYPE_N_SIGMA:     return "top_n_sigma";
         case COMMON_SAMPLER_TYPE_TEMPERATURE: return "temperature";
         case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
         case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
@@ -465,6 +468,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "top_p",       COMMON_SAMPLER_TYPE_TOP_P },
         { "typ_p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "min_p",       COMMON_SAMPLER_TYPE_MIN_P },
+        { "top_n_sigma", COMMON_SAMPLER_TYPE_N_SIGMA },
         { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "xtc",         COMMON_SAMPLER_TYPE_XTC },
         { "infill",      COMMON_SAMPLER_TYPE_INFILL },
@@ -482,6 +486,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
+        { "nsigma",      COMMON_SAMPLER_TYPE_N_SIGMA },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
     };
 
@@ -512,6 +517,7 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TYPICAL_P),   COMMON_SAMPLER_TYPE_TYPICAL_P },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TOP_P),       COMMON_SAMPLER_TYPE_TOP_P },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_MIN_P),       COMMON_SAMPLER_TYPE_MIN_P },
+        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_N_SIGMA),     COMMON_SAMPLER_TYPE_N_SIGMA },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TEMPERATURE), COMMON_SAMPLER_TYPE_TEMPERATURE },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_XTC),         COMMON_SAMPLER_TYPE_XTC },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
