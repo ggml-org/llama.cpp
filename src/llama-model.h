@@ -5,11 +5,16 @@
 #include "llama-hparams.h"
 #include "llama-vocab.h"
 
+#include "ggml-cpp.h"
+
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+class  llama_graph_i;
+struct llama_cparams;
+struct llama_ubatch;
 struct llama_model_loader;
 
 // available models
@@ -361,6 +366,15 @@ struct llama_model {
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    // TODO: add encode/decode graphs
+    // TODO: return a struct containing the graph and the output tensors, such as logits, embeddings, etc.
+    ggml_cgraph * build_graph(
+             llama_graph_i &  lgf,
+       const llama_cparams &  cparams,
+       const llama_ubatch  &  ubatch,
+          ggml_context_ptr && ctx,
+                      bool    worst_case) const;
 
 private:
     struct impl;

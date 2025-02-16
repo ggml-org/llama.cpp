@@ -19,7 +19,7 @@ struct llama_adapter_cvec {
 
     struct ggml_tensor * apply_to(struct ggml_context * ctx, struct ggml_tensor * cur, int  il) const;
 
-    int32_t apply(
+    bool apply(
             const llama_model & model,
             const float * data,
             size_t len,
