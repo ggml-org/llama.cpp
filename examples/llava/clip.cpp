@@ -103,6 +103,7 @@ static std::string format(const char * fmt, ...) {
 #define KEY_HAS_LLAVA_PROJ      "clip.has_llava_projector"
 #define KEY_HAS_MINICPMV_PROJ   "clip.has_minicpmv_projector"
 #define KEY_HAS_GLM_PROJ        "clip.has_glm_projector"
+#define KEY_HAS_JANUS_ATTN_POOL "clip.has_janus_attn_pool"
 #define KEY_MINICPMV_VERSION    "clip.minicpmv_version"
 #define KEY_HAS_QWEN2VL_MERGER  "clip.has_qwen2vl_merger"
 #define KEY_USE_GELU            "clip.use_gelu"
@@ -170,6 +171,15 @@ static std::string format(const char * fmt, ...) {
 #define TN_GLM_BOI_W "adapter.boi"
 #define TN_GLM_EOI_W "adapter.eoi"
 
+#define TN_JANUS_ATTN_POOL_LATENT "attn_pool_latent"
+#define TN_JANUS_ATTN_POOL_Q "attn_pool_q.%s"
+#define TN_JANUS_ATTN_POOL_K "attn_pool_k.%s"
+#define TN_JANUS_ATTN_POOL_V "attn_pool_v.%s"
+#define TN_JANUS_ATTN_POOL_PROJ "attn_pool_proj.%s"
+#define TN_JANUS_ATTN_POOL_FFN_DOWN "attn_pool_ffn_down.%s"
+#define TN_JANUS_ATTN_POOL_NORM "attn_pool_norm.%s"
+#define TN_JANUS_ATTN_POOL_FFN_UP "attn_pool_ffn_up.%s"
+
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,
@@ -179,6 +189,7 @@ enum projector_type {
     PROJECTOR_TYPE_RESAMPLER,
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_MERGER,
+    PROJECTOR_TYPE_ATTN_POOL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -189,6 +200,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_RESAMPLER, "resampler"},
     { PROJECTOR_TYPE_GLM_EDGE, "adapter"},
     { PROJECTOR_TYPE_MERGER, "qwen2vl_merger"},
+    { PROJECTOR_TYPE_ATTN_POOL, "janus_attn_pool"},
 };
 
 
@@ -571,6 +583,23 @@ struct clip_vision_model {
     struct ggml_tensor * mm_model_ln_kv_b;
     struct ggml_tensor * mm_model_ln_post_w;
     struct ggml_tensor * mm_model_ln_post_b;
+
+    // Janus Attention Pool with Latent Query
+    struct ggml_tensor * attn_pool_latent;
+    struct ggml_tensor * attn_pool_q_w;
+    struct ggml_tensor * attn_pool_q_b;
+    struct ggml_tensor * attn_pool_k_w;
+    struct ggml_tensor * attn_pool_k_b;
+    struct ggml_tensor * attn_pool_v_w;
+    struct ggml_tensor * attn_pool_v_b;
+    struct ggml_tensor * attn_pool_proj_w;
+    struct ggml_tensor * attn_pool_proj_b;
+    struct ggml_tensor * attn_pool_norm_w; 
+    struct ggml_tensor * attn_pool_norm_b;
+    struct ggml_tensor * attn_pool_ffn_up_w;
+    struct ggml_tensor * attn_pool_ffn_up_b;
+    struct ggml_tensor * attn_pool_ffn_down_w;
+    struct ggml_tensor * attn_pool_ffn_down_b;
 };
 
 struct clip_ctx {
@@ -580,6 +609,7 @@ struct clip_ctx {
     bool has_minicpmv_projector = false;
     bool has_glm_projector = false;
     bool has_qwen2vl_merger = false;
+    bool has_janus_attn_pool = false;
     int minicpmv_version = 2;
 
     struct clip_vision_model vision_model;
@@ -1153,6 +1183,78 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         embeddings = ggml_add(ctx0, embeddings, model.mm_1_b);
     }
 
+    // janus attn pool with latent query
+    // TODO: Check the ctx0 and memory usage
+    else if (ctx->has_janus_attn_pool){
+        if (ctx->proj_type == PROJECTOR_TYPE_ATTN_POOL) {
+            struct ggml_tensor* latent = model.attn_pool_latent; // Should be [D, 1, 1]
+            struct ggml_tensor* latent_expanded = ggml_repeat(ctx0, latent,
+                ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, hidden_size, 1, batch_size)); // [D, 1, B]
+
+            struct ggml_tensor* Q = ggml_add(ctx0,
+                ggml_mul_mat(ctx0, model.attn_pool_q_w, latent_expanded),
+                model.attn_pool_q_b
+            ); 
+            Q = ggml_reshape_4d(ctx0, Q, d_head, n_head, 1, batch_size);
+            Q = ggml_scale_inplace(ctx0, Q, 1.0f / sqrt((float)d_head));
+            Q = ggml_cont(ggml_permute(ctx0, Q, 0, 2, 1, 3)); 
+            Q = ggml_reshape_3d(ctx0, Q, d_head, 1, n_head * batch_size);
+
+            struct ggml_tensor* K = ggml_add(ctx0,
+                ggml_mul_mat(ctx0, model.attn_pool_k_w, embeddings),
+                model.attn_pool_k_b
+            );
+            K = ggml_reshape_4d(ctx0, K, d_head, n_head, num_positions, batch_size);
+            K = ggml_cont(ggml_permute(ctx0, K, 0, 2, 1, 3)); 
+            K = ggml_reshape_3d(ctx0, K, d_head, num_positions, n_head * batch_size);
+
+            struct ggml_tensor* V = ggml_add(ctx0,
+                ggml_mul_mat(ctx0, model.attn_pool_v_w, embeddings),
+                model.attn_pool_v_b
+            );
+            V = ggml_reshape_4d(ctx0, V, d_head, n_head, num_positions, batch_size);
+            V = ggml_cont(ggml_permute(ctx0, V, 1, 2, 0, 3)); 
+            V = ggml_reshape_3d(ctx0, V, num_positions, d_head, n_head * batch_size);
+
+            struct ggml_tensor* attn_scores = ggml_mul_mat(ctx0, K, Q); 
+            attn_scores = ggml_soft_max_inplace(ctx0, attn_scores);
+
+            struct ggml_tensor* attn_output = ggml_mul_mat(ctx0, V, attn_scores);
+            attn_output = ggml_reshape_4d(ctx0, attn_output, d_head, 1, n_head, batch_size);
+            attn_output = ggml_cont(ggml_permute(ctx0, attn_output, 0, 2, 1, 3));
+            attn_output = ggml_cont_3d(ctx0, attn_output, hidden_size, 1, batch_size);
+
+            attn_output = ggml_add(ctx0,
+                        ggml_mul_mat(ctx0, model.attn_pool_proj_w, attn_output),
+                        model.attn_pool_proj_b
+                    );
+
+            // MLP: fc1 -> gelu -> norm -> fc2
+            // References: 
+            // https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/mlp.py#L13
+            struct ggml_tensor * cur = attn_output;
+            cur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.attn_pool_norm_w, cur), model.attn_pool_norm_b);
+            cur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.attn_pool_ffn_down_w, cur), model.attn_pool_ffn_down_b);
+            cur = ggml_gelu_inplace(ctx0, cur);
+            cur = ggml_norm(ctx0, cur, eps);
+            cur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.attn_pool_norm_w, cur), model.attn_pool_norm_b);
+            cur = ggml_add(ctx0, ggml_mul_mat(ctx0, model.attn_pool_ffn_up_w, cur), model.attn_pool_ffn_up_b);
+            // Residual connection
+            // https://github.com/huggingface/pytorch-image-models/blob/main/timm/layers/attention_pool.py#L98
+            attn_output = ggml_add(ctx0, attn_output, cur); // [D, 1, B]
+
+            // Pooling, select first token
+            embeddings = ggml_view_2d(ctx0,
+                                    attn_output,
+                                    attn_output->ne[0], 
+                                    attn_output->ne[2], 
+                                    attn_output->nb[2],
+                                    0);
+        } else {
+            GGML_ABORT("fatal error");
+        }
+    } 
+    
     // build the graph
     ggml_build_forward_expand(gf, embeddings);
 
@@ -1337,6 +1439,10 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
         if (idx != -1) {
             new_clip->has_qwen2vl_merger = gguf_get_val_bool(ctx, idx);
         }
+        idx = gguf_find_key(ctx, KEY_HAS_JANUS_ATTN_POOL);
+        if (idx != -1) {
+            new_clip->has_janus_attn_pool = gguf_get_val_bool(ctx, idx);
+        }
         // GGML_ASSERT(new_clip->has_llava_projector); // see monatis/clip.cpp for image and/or text encoding for semantic search
 
         GGML_ASSERT(new_clip->has_vision_encoder);
@@ -1358,6 +1464,8 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             LOG_INF("%s: llava_projector:  %d\n", __func__, new_clip->has_llava_projector);
             LOG_INF("%s: minicpmv_projector:  %d\n", __func__, new_clip->has_minicpmv_projector);
             LOG_INF("%s: glm_projector:  %d\n", __func__, new_clip->has_glm_projector);
+            LOG_INF("%s: qwen2vl_merger:  %d\n", __func__, new_clip->has_qwen2vl_merger);
+            LOG_INF("%s: janus_attn_pool:  %d\n", __func__, new_clip->has_janus_attn_pool);
             LOG_INF("%s: model size:     %.2f MB\n", __func__, model_size / 1024.0 / 1024.0);
             LOG_INF("%s: metadata size:  %.2f MB\n", __func__, ggml_get_mem_size(meta) / 1024.0 / 1024.0);
         }
@@ -1642,6 +1750,24 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             vision_model.mm_0_b = get_tensor(new_clip->ctx_data, format(TN_LLAVA_PROJ, 0, "bias"));
             vision_model.mm_1_w = get_tensor(new_clip->ctx_data, format(TN_LLAVA_PROJ, 2, "weight"));
             vision_model.mm_1_b = get_tensor(new_clip->ctx_data, format(TN_LLAVA_PROJ, 2, "bias"));
+        }
+        else if (new_clip->proj_type == KEY_HAS_JANUS_ATTN_POOL) {
+            vision_model.attn_pool_latent = get_tensor(new_clip->ctx_data, TN_JANUS_ATTN_POOL_LATENT);
+            vision_model.attn_pool_q_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_Q, "weight"));
+            vision_model.attn_pool_q_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_Q, "bias"));
+            vision_model.attn_pool_k_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_K, "weight"));
+            vision_model.attn_pool_k_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_K, "bias"));
+            vision_model.attn_pool_v_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_V, "weight"));
+            vision_model.attn_pool_v_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_V, "bias"));
+            vision_model.attn_pool_proj_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_PROJ, "weight"));
+            vision_model.attn_pool_proj_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_PROJ, "bias"));
+            vision_model.attn_pool_ffn_down_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_FFN_DOWN, "weight"));
+            vision_model.attn_pool_ffn_down_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_FFN_DOWN, "bias"));
+            vision_model.attn_pool_norm_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_NORM, "weight"));
+            vision_model.attn_pool_norm_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_NORM, "bias"));
+            vision_model.attn_pool_ffn_up_w = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_FFN_UP, "weight"));
+            vision_model.attn_pool_ffn_up_b = get_tensor(new_clip->ctx_data, format(TN_JANUS_ATTN_POOL_FFN_UP, "bias"));
+
         }
         else {
             std::string proj_type = PROJECTOR_TYPE_NAMES[new_clip->proj_type];
