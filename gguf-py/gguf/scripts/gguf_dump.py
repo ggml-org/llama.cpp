@@ -9,8 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 # Necessary to load the local gguf package
 if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -21,11 +19,11 @@ logger = logging.getLogger("gguf-dump")
 
 
 def get_file_host_endian(reader: GGUFReader) -> tuple[str, str]:
-    host_endian = 'LITTLE' if np.uint32(1) == np.uint32(1).newbyteorder("<") else 'BIG'
+    file_endian = reader.endianess.name
     if reader.byte_order == 'S':
-        file_endian = 'BIG' if host_endian == 'LITTLE' else 'LITTLE'
+        host_endian = 'BIG' if file_endian == 'LITTLE' else 'LITTLE'
     else:
-        file_endian = host_endian
+        host_endian = file_endian
     return (host_endian, file_endian)
 
 
@@ -45,12 +43,20 @@ def dump_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
             pretty_type = str(field.types[-1].name)
 
         log_message = f'  {n:5}: {pretty_type:10} | {len(field.data):8} | {field.name}'
-        if len(field.types) == 1:
+        if field.types:
             curr_type = field.types[0]
             if curr_type == GGUFValueType.STRING:
-                log_message += ' = {0}'.format(repr(str(bytes(field.parts[-1]), encoding='utf-8')[:60]))
-            elif field.types[0] in reader.gguf_scalar_to_np:
-                log_message += ' = {0}'.format(field.parts[-1][0])
+                content = field.contents()
+                if len(content) > 60:
+                    content = content[:57] + '...'
+                log_message += ' = {0}'.format(repr(content))
+            elif curr_type in reader.gguf_scalar_to_np:
+                log_message += ' = {0}'.format(field.contents())
+            else:
+                content = repr(field.contents(slice(6)))
+                if len(field.data) > 6:
+                    content = content[:-1] + ', ...]'
+                log_message += ' = {0}'.format(content)
         print(log_message)  # noqa: NP100
     if args.no_tensors:
         return
@@ -82,15 +88,9 @@ def dump_metadata_json(reader: GGUFReader, args: argparse.Namespace) -> None:
             curr["array_types"] = [t.name for t in field.types][1:]
             if not args.json_array:
                 continue
-            itype = field.types[-1]
-            if itype == GGUFValueType.STRING:
-                curr["value"] = [str(bytes(field.parts[idx]), encoding="utf-8") for idx in field.data]
-            else:
-                curr["value"] = [pv for idx in field.data for pv in field.parts[idx].tolist()]
-        elif field.types[0] == GGUFValueType.STRING:
-            curr["value"] = str(bytes(field.parts[-1]), encoding="utf-8")
+            curr["value"] = field.contents()
         else:
-            curr["value"] = field.parts[-1].tolist()[0]
+            curr["value"] = field.contents()
     if not args.no_tensors:
         for idx, tensor in enumerate(reader.tensors):
             tensors[tensor.name] = {
