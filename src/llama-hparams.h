@@ -96,7 +96,7 @@ struct llama_hparams {
     float f_max_alibi_bias = 0.0f;
     float f_logit_scale    = 0.0f;
 
-    // Additional scale factors (Granite/Granite MoE)
+    // Additional scale factors (Granite/Granite MoE/MiniCPM)
     float f_residual_scale  = 0.0f;
     float f_embedding_scale = 0.0f;
     float f_attention_scale = 0.0f;

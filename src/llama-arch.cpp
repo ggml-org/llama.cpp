@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 
 #include <map>
+#include <exception>
 
 static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA,            "llama"            },
@@ -62,6 +63,10 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE_MOE,      "granitemoe"       },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
+    { LLM_ARCH_VISION_LLAVA,     "llava"            },
+    { LLM_ARCH_VISION_MOBILEVLM, "mobilevlm"        },
+    { LLM_ARCH_VISION_MINICPMV,  "minicpmv"         },
+    { LLM_ARCH_VISION_IDEFICS3,  "idefics3"         },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -189,6 +194,28 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_ADAPTER_TYPE,       "adapter.type"       },
     { LLM_KV_ADAPTER_LORA_ALPHA, "adapter.lora.alpha" },
+
+    { LLM_KV_VISION_TYPE,                     "vision.type"                              },
+    { LLM_KV_VISION_IMAGE_SIZE,               "vision.image_size"                        },
+    { LLM_KV_VISION_PATCH_SIZE,               "vision.patch_size"                        },
+    { LLM_KV_VISION_IMAGE_MEAN,               "vision.image_mean"                        },
+    { LLM_KV_VISION_IMAGE_STD,                "vision.image_std"                         },
+    { LLM_KV_VISION_VIT_ARCHITECTURE,         "vision.vit.architecture"                 },
+    { LLM_KV_VISION_VIT_CONTEXT_LENGTH,       "vision.vit.context_length"               },
+    { LLM_KV_VISION_VIT_EMBEDDING_LENGTH,     "vision.vit.embedding_length"             },
+    { LLM_KV_VISION_VIT_BLOCK_COUNT,          "vision.vit.block_count"                  },
+    { LLM_KV_VISION_VIT_FEED_FORWARD_LENGTH,  "vision.vit.feed_forward_length"          },
+    { LLM_KV_VISION_VIT_PROJECTION_TYPE,      "vision.vit.projection_type"              },
+    { LLM_KV_VISION_VIT_PROJECTION_DIM,       "vision.vit.projection_dim"               },
+    { LLM_KV_VISION_VIT_USE_GELU,             "vision.vit.use_gelu"                     },
+    { LLM_KV_VISION_VIT_MAX_POS_EMBD,         "vision.vit.max_position_embeddings"      },
+    { LLM_KV_VISION_VIT_MAX_SLICES,           "vision.vit.max_slices"                   },
+    { LLM_KV_VISION_VIT_PROJECTOR_TYPE,       "vision.vit.projector_type"               },
+    { LLM_KV_VISION_VIT_SELECT_LAYER,         "vision.vit.select_layer"                 },
+    { LLM_KV_VISION_VIT_PATCH_MERGE_TYPE,     "vision.vit.patch_merge_type"             },
+    { LLM_KV_VISION_VIT_HEAD_COUNT,           "vision.vit.attention.head_count"         },
+    { LLM_KV_VISION_VIT_LAYERNORM_EPS,        "vision.vit.attention.layer_norm_epsilon" },
+    { LLM_KV_VISION_VIT_SCALE_FACTOR,         "vision.vit.scale_factor"                 },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
@@ -1296,6 +1323,95 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_POS_NET_ATTN_OUT,  "posnet.%d.attn_output" },
         },
     },
+    // vision
+    {
+        LLM_ARCH_VISION_LLAVA,
+        {
+            { LLM_TENSOR_V_MMPROJ,                  "v.mmproj_%d"                 },
+            { LLM_TENSOR_V_ENC_EMBD_CLS,            "v.enc.embd.cls"              },
+            { LLM_TENSOR_V_ENC_EMBD_PATCH,          "v.enc.embd.patch"            },
+            { LLM_TENSOR_V_ENC_EMBD_POS,            "v.enc.embd.pos"              },
+            { LLM_TENSOR_V_ENC_ATTN_Q,              "v.enc.blk.%d.attn_q"         },
+            { LLM_TENSOR_V_ENC_ATTN_K,              "v.enc.blk.%d.attn_k"         },
+            { LLM_TENSOR_V_ENC_ATTN_V,              "v.enc.blk.%d.attn_v"         },
+            { LLM_TENSOR_V_ENC_INPUT_NORM,          "v.enc.blk.%d.input_norm"     },
+            { LLM_TENSOR_V_ENC_OUTPUT,              "v.enc.blk.%d.output"         },
+            { LLM_TENSOR_V_ENC_OUTPUT_NORM,         "v.enc.blk.%d.output_norm"    },
+            { LLM_TENSOR_V_ENC_FFN_UP,              "v.enc.blk.%d.ffn_up"         },
+            { LLM_TENSOR_V_ENC_FFN_DOWN,            "v.enc.blk.%d.ffn_down"       },
+            { LLM_TENSOR_V_PRE_NORM,                "v.pre_norm"                  },
+            { LLM_TENSOR_V_POST_NORM,               "v.post_norm"                 },
+        }
+    },
+    {
+        LLM_ARCH_VISION_MOBILEVLM,
+        {
+            { LLM_TENSOR_V_MMPROJ_MLP,              "v.mmproj.mlp.%d"             },
+            { LLM_TENSOR_V_MMPROJ_PEG,              "v.mmproj.peg.%d"             },
+            { LLM_TENSOR_V_ENC_EMBD_CLS,            "v.enc.embd.cls"              },
+            { LLM_TENSOR_V_ENC_EMBD_PATCH,          "v.enc.embd.patch"            },
+            { LLM_TENSOR_V_ENC_EMBD_POS,            "v.enc.embd.pos"              },
+            { LLM_TENSOR_V_ENC_ATTN_Q,              "v.enc.blk.%d.attn_q"         },
+            { LLM_TENSOR_V_ENC_ATTN_K,              "v.enc.blk.%d.attn_k"         },
+            { LLM_TENSOR_V_ENC_ATTN_V,              "v.enc.blk.%d.attn_v"         },
+            { LLM_TENSOR_V_ENC_INPUT_NORM,          "v.enc.blk.%d.input_norm"     },
+            { LLM_TENSOR_V_ENC_OUTPUT,              "v.enc.blk.%d.output"         },
+            { LLM_TENSOR_V_ENC_OUTPUT_NORM,         "v.enc.blk.%d.output_norm"    },
+            { LLM_TENSOR_V_ENC_FFN_UP,              "v.enc.blk.%d.ffn_up"         },
+            { LLM_TENSOR_V_ENC_FFN_DOWN,            "v.enc.blk.%d.ffn_down"       },
+            { LLM_TENSOR_V_PRE_NORM,                "v.pre_norm"                  },
+            { LLM_TENSOR_V_POST_NORM,               "v.post_norm"                 },
+        }
+    },
+    {
+        LLM_ARCH_VISION_MINICPMV,
+        {
+            { LLM_TENSOR_V_ENC_EMBD_PATCH,          "v.enc.embd.patch"            },
+            { LLM_TENSOR_V_ENC_EMBD_POS,            "v.enc.embd.pos"              },
+            { LLM_TENSOR_V_ENC_ATTN_Q,              "v.enc.blk.%d.attn_q"         },
+            { LLM_TENSOR_V_ENC_ATTN_K,              "v.enc.blk.%d.attn_k"         },
+            { LLM_TENSOR_V_ENC_ATTN_V,              "v.enc.blk.%d.attn_v"         },
+            { LLM_TENSOR_V_ENC_INPUT_NORM,          "v.enc.blk.%d.input_norm"     },
+            { LLM_TENSOR_V_ENC_OUTPUT,              "v.enc.blk.%d.output"         },
+            { LLM_TENSOR_V_ENC_OUTPUT_NORM,         "v.enc.blk.%d.output_norm"    },
+            { LLM_TENSOR_V_ENC_FFN_UP,              "v.enc.blk.%d.ffn_up"         },
+            { LLM_TENSOR_V_ENC_FFN_DOWN,            "v.enc.blk.%d.ffn_down"       },
+            { LLM_TENSOR_V_RESMPL_POS_EMBD_K,       "v.resmpl.pos_embd_k"         },
+            { LLM_TENSOR_V_RESMPL_ATTN_Q,           "v.resmpl.attn_q"             },
+            { LLM_TENSOR_V_RESMPL_ATTN_K,           "v.resmpl.attn_k"             },
+            { LLM_TENSOR_V_RESMPL_ATTN_V,           "v.resmpl.attn_v"             },
+            { LLM_TENSOR_V_RESMPL_ATTN_OUT,         "v.resmpl.attn_out"           },
+            { LLM_TENSOR_V_RESMPL_KV,               "v.resmpl.kv"                 },
+            { LLM_TENSOR_V_RESMPL_KV_NORM,          "v.resmpl.kv_norm"            },
+            { LLM_TENSOR_V_RESMPL_POST_NORM,        "v.resmpl.post_norm"          },
+            { LLM_TENSOR_V_RESMPL_Q_NORM,           "v.resmpl.q_norm"             },
+            { LLM_TENSOR_V_RESMPL_PROJ,             "v.resmpl.proj"               },
+            { LLM_TENSOR_V_RESMPL_QUERY,            "v.resmpl.query"              },
+            { LLM_TENSOR_V_TOK_EMBD_IMAGE,          "v.tok_embd.image"            },
+            { LLM_TENSOR_V_TOK_EMBD_END_IMAGE,      "v.tok_embd.end_image"        },
+            { LLM_TENSOR_V_TOK_EMBD_SLICE,          "v.tok_embd.slice"            },
+            { LLM_TENSOR_V_TOK_EMBD_END_SLICE,      "v.tok_embd.end_slice"        },
+        }
+    },
+    {
+        LLM_ARCH_VISION_IDEFICS3,
+        {
+            { LLM_TENSOR_V_MMPROJ_FC,               "v.mmproj.fc"                 },
+            { LLM_TENSOR_V_ENC_EMBD_CLS,            "v.enc.embd.cls"              },
+            { LLM_TENSOR_V_ENC_EMBD_PATCH,          "v.enc.embd.patch"            },
+            { LLM_TENSOR_V_ENC_EMBD_POS,            "v.enc.embd.pos"              },
+            { LLM_TENSOR_V_ENC_ATTN_Q,              "v.enc.blk.%d.attn_q"         },
+            { LLM_TENSOR_V_ENC_ATTN_K,              "v.enc.blk.%d.attn_k"         },
+            { LLM_TENSOR_V_ENC_ATTN_V,              "v.enc.blk.%d.attn_v"         },
+            { LLM_TENSOR_V_ENC_INPUT_NORM,          "v.enc.blk.%d.input_norm"     },
+            { LLM_TENSOR_V_ENC_OUTPUT,              "v.enc.blk.%d.output"         },
+            { LLM_TENSOR_V_ENC_OUTPUT_NORM,         "v.enc.blk.%d.output_norm"    },
+            { LLM_TENSOR_V_ENC_FFN_UP,              "v.enc.blk.%d.ffn_up"         },
+            { LLM_TENSOR_V_ENC_FFN_DOWN,            "v.enc.blk.%d.ffn_down"       },
+            { LLM_TENSOR_V_PRE_NORM,                "v.pre_norm"                  },
+            { LLM_TENSOR_V_POST_NORM,               "v.post_norm"                 },
+        }
+    },
     {
         LLM_ARCH_UNKNOWN,
         {
@@ -1445,6 +1561,39 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CONVNEXT_PW1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_PW2,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_GAMMA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // vision
+    {LLM_TENSOR_V_MMPROJ,                  {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_MMPROJ_MLP,              {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_MMPROJ_PEG,              {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_EMBD_CLS,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_ADD}},
+    {LLM_TENSOR_V_ENC_EMBD_PATCH,          {LLM_TENSOR_LAYER_INPUT,     GGML_OP_ADD}},
+    {LLM_TENSOR_V_ENC_EMBD_POS,            {LLM_TENSOR_LAYER_INPUT,     GGML_OP_ADD}},
+    {LLM_TENSOR_V_ENC_ATTN_Q,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_K,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_V,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_INPUT_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_OUTPUT,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_OUTPUT_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_FFN_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_FFN_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_PRE_NORM,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_MUL}},
+    {LLM_TENSOR_V_POST_NORM,               {LLM_TENSOR_LAYER_OUTPUT,     GGML_OP_MUL}},
+    {LLM_TENSOR_V_RESMPL_POS_EMBD_K,       {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_ADD}},
+    {LLM_TENSOR_V_RESMPL_ATTN_Q,           {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_ATTN_K,           {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_ATTN_V,           {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_ATTN_OUT,         {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_KV,               {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_KV_NORM,          {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL}},
+    {LLM_TENSOR_V_RESMPL_POST_NORM,        {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL}},
+    {LLM_TENSOR_V_RESMPL_Q_NORM,           {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL}},
+    {LLM_TENSOR_V_RESMPL_PROJ,             {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_RESMPL_QUERY,            {LLM_TENSOR_LAYER_PROJECTION, GGML_OP_MUL_MAT}},
+    // special token embeddings for image
+    {LLM_TENSOR_V_TOK_EMBD_IMAGE,          {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_CONCAT}},
+    {LLM_TENSOR_V_TOK_EMBD_END_IMAGE,      {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_CONCAT}},
+    {LLM_TENSOR_V_TOK_EMBD_SLICE,          {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_CONCAT}},
+    {LLM_TENSOR_V_TOK_EMBD_END_SLICE,      {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_CONCAT}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

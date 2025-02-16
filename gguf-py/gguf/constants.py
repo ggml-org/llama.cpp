@@ -202,6 +202,9 @@ class Keys:
         FIM_PAD_ID           = "tokenizer.ggml.fim_pad_token_id"
         FIM_REP_ID           = "tokenizer.ggml.fim_rep_token_id"
         FIM_SEP_ID           = "tokenizer.ggml.fim_sep_token_id"
+        # Vision models
+        IMAGE_START_ID       = "tokenizer.ggml.image_start_token_id"
+        IMAGE_END_ID         = "tokenizer.ggml.image_end_token_id"
         # deprecated:
         PREFIX_ID            = "tokenizer.ggml.prefix_token_id"
         SUFFIX_ID            = "tokenizer.ggml.suffix_token_id"
@@ -210,6 +213,32 @@ class Keys:
     class Adapter:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
+
+    class Vision:
+        # only support vision.type = "vit" for now
+        TYPE                = "vision.type"
+        IMAGE_SIZE          = "vision.image_size"
+        PATCH_SIZE          = "vision.patch_size"
+        IMAGE_MEAN          = "vision.image_mean"
+        IMAGE_STD           = "vision.image_std"
+
+        class Vit:
+            ARCHITECTURE        = "vision.vit.architecture"
+            CONTEXT_LENGTH      = "vision.vit.context_length"
+            EMBEDDING_LENGTH    = "vision.vit.embedding_length"
+            BLOCK_COUNT         = "vision.vit.block_count"
+            FEED_FORWARD_LENGTH = "vision.vit.feed_forward_length"
+            PROJECTION_TYPE     = "vision.vit.projection_type"
+            PROJECTION_DIM      = "vision.vit.projection_dim"
+            USE_GELU            = "vision.vit.use_gelu"
+            MAX_POS_EMBEDDING   = "vision.vit.max_position_embeddings"
+            MAX_SLICES          = "vision.vit.max_slices"
+            PROJECTOR_TYPE      = "vision.vit.projector_type"
+            SELECT_LAYER        = "vision.vit.select_layer"
+            PATCH_MERGE_TYPE    = "vision.vit.patch_merge_type"
+            HEAD_COUNT          = "vision.vit.attention.head_count"
+            LAYERNORM_EPS       = "vision.vit.attention.layer_norm_epsilon"
+            SCALE_FACTOR        = "vision.vit.scale_factor" # only used by idefics3 for now
 
 #
 # recommended mapping of model tensor names for storage in gguf
@@ -279,6 +308,11 @@ class MODEL_ARCH(IntEnum):
     GRANITE_MOE      = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
+    # vision models
+    VISION_LLAVA     = auto()
+    VISION_MOBILEVLM = auto()
+    VISION_MINICPMV  = auto()
+    VISION_IDEFICS3  = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -390,6 +424,7 @@ class MODEL_TENSOR(IntEnum):
     ENC_OUTPUT_NORM      = auto()
     CLS                  = auto() # classifier
     CLS_OUT              = auto() # classifier output projection
+    # wavtokenizer
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
     CONVNEXT_NORM        = auto()
@@ -406,6 +441,39 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    # vision
+    V_MMPROJ             = auto()
+    V_MMPROJ_FC          = auto()
+    V_MMPROJ_MLP         = auto()
+    V_MMPROJ_PEG         = auto()
+    V_ENC_EMBD_CLS       = auto()
+    V_ENC_EMBD_PATCH     = auto()
+    V_ENC_EMBD_POS       = auto()
+    V_ENC_ATTN_Q         = auto()
+    V_ENC_ATTN_K         = auto()
+    V_ENC_ATTN_V         = auto()
+    V_ENC_INPUT_NORM     = auto()
+    V_ENC_OUTPUT         = auto()
+    V_ENC_OUTPUT_NORM    = auto()
+    V_ENC_FFN_UP         = auto()
+    V_ENC_FFN_DOWN       = auto()
+    V_PRE_NORM           = auto()
+    V_POST_NORM          = auto()
+    V_RESMPL_POS_EMBD_K  = auto() # minicpmv
+    V_RESMPL_ATTN_Q      = auto() # minicpmv
+    V_RESMPL_ATTN_K      = auto() # minicpmv
+    V_RESMPL_ATTN_V      = auto() # minicpmv
+    V_RESMPL_ATTN_OUT    = auto() # minicpmv
+    V_RESMPL_KV          = auto() # minicpmv
+    V_RESMPL_KV_NORM     = auto() # minicpmv
+    V_RESMPL_POST_NORM   = auto() # minicpmv
+    V_RESMPL_Q_NORM      = auto() # minicpmv
+    V_RESMPL_PROJ        = auto() # minicpmv
+    V_RESMPL_QUERY       = auto() # minicpmv
+    V_TOK_EMBD_IMAGE     = auto() # embedding for <image> token
+    V_TOK_EMBD_END_IMAGE = auto() # embedding for </image> token
+    V_TOK_EMBD_SLICE     = auto() # embedding for <slice> token
+    V_TOK_EMBD_END_SLICE = auto() # embedding for </slice> token
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -466,6 +534,11 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
+    # vision
+    MODEL_ARCH.VISION_LLAVA:     "llava",
+    MODEL_ARCH.VISION_MOBILEVLM: "mobilevlm",
+    MODEL_ARCH.VISION_MINICPMV:  "minicpmv",
+    MODEL_ARCH.VISION_IDEFICS3:  "idefics3",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -593,6 +666,39 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    # vision
+    MODEL_TENSOR.V_MMPROJ:                  "v.mmproj_{bid}",
+    MODEL_TENSOR.V_MMPROJ_FC:               "v.mmproj.fc",
+    MODEL_TENSOR.V_MMPROJ_MLP:              "v.mmproj.mlp.{bid}",
+    MODEL_TENSOR.V_MMPROJ_PEG:              "v.mmproj.peg.{bid}",
+    MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.enc.embd.cls",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.enc.embd.patch",
+    MODEL_TENSOR.V_ENC_EMBD_POS:            "v.enc.embd.pos",
+    MODEL_TENSOR.V_ENC_ATTN_Q:              "v.enc.blk.{bid}.attn_q",
+    MODEL_TENSOR.V_ENC_ATTN_K:              "v.enc.blk.{bid}.attn_k",
+    MODEL_TENSOR.V_ENC_ATTN_V:              "v.enc.blk.{bid}.attn_v",
+    MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.enc.blk.{bid}.input_norm",
+    MODEL_TENSOR.V_ENC_OUTPUT:              "v.enc.blk.{bid}.output",
+    MODEL_TENSOR.V_ENC_OUTPUT_NORM:         "v.enc.blk.{bid}.output_norm",
+    MODEL_TENSOR.V_ENC_FFN_UP:              "v.enc.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.enc.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_PRE_NORM:                "v.pre_norm",
+    MODEL_TENSOR.V_POST_NORM:               "v.post_norm",
+    MODEL_TENSOR.V_RESMPL_POS_EMBD_K:       "v.resmpl.pos_embd_k",
+    MODEL_TENSOR.V_RESMPL_ATTN_Q:           "v.resmpl.attn_q",
+    MODEL_TENSOR.V_RESMPL_ATTN_K:           "v.resmpl.attn_k",
+    MODEL_TENSOR.V_RESMPL_ATTN_V:           "v.resmpl.attn_v",
+    MODEL_TENSOR.V_RESMPL_ATTN_OUT:         "v.resmpl.attn_out",
+    MODEL_TENSOR.V_RESMPL_KV:               "v.resmpl.kv",
+    MODEL_TENSOR.V_RESMPL_KV_NORM:          "v.resmpl.kv_norm",
+    MODEL_TENSOR.V_RESMPL_POST_NORM:        "v.resmpl.post_norm",
+    MODEL_TENSOR.V_RESMPL_Q_NORM:           "v.resmpl.q_norm",
+    MODEL_TENSOR.V_RESMPL_PROJ:             "v.resmpl.proj",
+    MODEL_TENSOR.V_RESMPL_QUERY:            "v.resmpl.query",
+    MODEL_TENSOR.V_TOK_EMBD_IMAGE:          "v.tok_embd.image",
+    MODEL_TENSOR.V_TOK_EMBD_END_IMAGE:      "v.tok_embd.end_image",
+    MODEL_TENSOR.V_TOK_EMBD_SLICE:          "v.tok_embd.slice",
+    MODEL_TENSOR.V_TOK_EMBD_END_SLICE:      "v.tok_embd.end_slice",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1537,6 +1643,80 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.POSNET_ATTN_V,
         MODEL_TENSOR.POSNET_ATTN_OUT,
     ],
+    MODEL_ARCH.VISION_LLAVA: [
+        MODEL_TENSOR.V_MMPROJ,
+        MODEL_TENSOR.V_ENC_EMBD_CLS,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_V,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_OUTPUT,
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_PRE_NORM,
+        MODEL_TENSOR.V_POST_NORM,
+    ],
+    MODEL_ARCH.VISION_MOBILEVLM: [
+        MODEL_TENSOR.V_MMPROJ_MLP,
+        MODEL_TENSOR.V_MMPROJ_PEG,
+        MODEL_TENSOR.V_ENC_EMBD_CLS,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_V,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_OUTPUT,
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_PRE_NORM,
+        MODEL_TENSOR.V_POST_NORM,
+    ],
+    MODEL_ARCH.VISION_MINICPMV: [
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_V,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_OUTPUT,
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_RESMPL_POS_EMBD_K,
+        MODEL_TENSOR.V_RESMPL_ATTN_Q,
+        MODEL_TENSOR.V_RESMPL_ATTN_K,
+        MODEL_TENSOR.V_RESMPL_ATTN_V,
+        MODEL_TENSOR.V_RESMPL_ATTN_OUT,
+        MODEL_TENSOR.V_RESMPL_KV,
+        MODEL_TENSOR.V_RESMPL_KV_NORM,
+        MODEL_TENSOR.V_RESMPL_POST_NORM,
+        MODEL_TENSOR.V_RESMPL_Q_NORM,
+        MODEL_TENSOR.V_RESMPL_PROJ,
+        MODEL_TENSOR.V_RESMPL_QUERY,
+        MODEL_TENSOR.V_TOK_EMBD_IMAGE,
+        MODEL_TENSOR.V_TOK_EMBD_END_IMAGE,
+        MODEL_TENSOR.V_TOK_EMBD_SLICE,
+        MODEL_TENSOR.V_TOK_EMBD_END_SLICE,
+    ],
+    MODEL_ARCH.VISION_IDEFICS3: [
+        MODEL_TENSOR.V_MMPROJ_FC,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_V,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_OUTPUT,
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_POST_NORM,
+    ],
     # TODO
 }
 
@@ -1616,6 +1796,18 @@ class PoolingType(IntEnum):
     NONE = 0
     MEAN = 1
     CLS  = 2
+
+
+class CLIPProjectorType(Enum):
+    MLP          = 'mlp'
+    LDPV2        = 'ldpv2'
+    MINICPMV_2_5 = 'minicpmv-2.5' # resampler
+    MINICPMV_2_6 = 'minicpmv-2.6' # resampler
+
+
+class CLIPPatchMergeType(Enum):
+    FLAT          = 'flat'
+    SPATIAL_UNPAD = 'spatial_unpad'
 
 
 class GGMLQuantizationType(IntEnum):
