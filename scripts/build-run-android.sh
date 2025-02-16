@@ -7,12 +7,16 @@ ANDROID_PLATFORM=android-34
 ANDROID_NDK=${PWD}/android-ndk-r26c
 REMOTE_PATH=/data/local/tmp/
 GGUF_MODEL_NAME=/sdcard/deepseek-r1-distill-qwen-1.5b-q4_0.gguf
+GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 
 #QNN SDK could be found at:
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 #https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
 QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 QNN_SDK_PATH=/opt/qcom/aistack/qairt/2.31.0.250130/
+
+#default is QNN NPU
+qnnbackend=2
 
 function dump_vars()
 {
@@ -137,9 +141,27 @@ function run_llamacli()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-cli -mg 2 -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
+               && ${REMOTE_PATH}/llama-cli -mg ${qnnbackend} -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
 
 }
+
+
+function run_llamabench()
+{
+    check_qnn_libs
+
+    if [ -f ./out/android/bin/libggml-qnn.so ]; then
+        adb push ./out/android/bin/*.so ${REMOTE_PATH}/
+    fi
+    adb push ./out/android/bin/llama-bench ${REMOTE_PATH}/
+    adb shell chmod +x ${REMOTE_PATH}/llama-bench
+
+    adb shell "cd ${REMOTE_PATH} \
+               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
+               && ${REMOTE_PATH}/llama-bench -mg ${qnnbackend} -m ${GGUF_MODEL_NAME}"
+
+}
+
 
 function run_test-backend-ops()
 {
@@ -163,8 +185,9 @@ function show_usage()
     echo "Usage:"
     echo "  $0 build"
     echo "  $0 updateqnnlib"
-    echo "  $0 run_llamacli"
     echo "  $0 run_testop"
+    echo "  $0 run_llamacli     0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_llamabench   0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
     echo -e "\n\n\n"
 }
 
@@ -186,14 +209,29 @@ elif [ $# == 1 ]; then
     elif [ "$1" == "build" ]; then
         build_ggml_qnn
         exit 0
-    elif [ "$1" == "run_llamacli" ]; then
-        run_llamacli
-        exit 0
+
     elif [ "$1" == "run_testop" ]; then
         run_test-backend-ops
         exit 0
     elif [ "$1" == "updateqnnlib" ]; then
         update_qnn_libs
+        exit 0
+    else
+        show_usage
+        exit 1
+    fi
+elif [ $# == 2 ]; then
+    qnnbackend=$2
+    if [ ${qnnbackend} -gt 3 ]; then
+        show_usage
+        exit 1
+    fi
+
+    if [ "$1" == "run_llamacli" ]; then
+        run_llamacli
+        exit 0
+    elif [ "$1" == "run_llamabench" ]; then
+        run_llamabench
         exit 0
     fi
 else
