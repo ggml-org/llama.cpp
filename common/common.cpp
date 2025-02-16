@@ -580,6 +580,7 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
     return buf.str();
 }
 
+/*
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch) {
     std::stringstream buf;
 
@@ -614,6 +615,7 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
 
     return buf.str();
 }
+*/
 
 void string_process_escapes(std::string & input) {
     std::size_t input_len = input.length();
@@ -1608,10 +1610,12 @@ std::pair<std::string, std::string> common_get_hf_file(const std::string &, cons
 // Batch utils
 //
 
+// DEPRECATED
 void common_batch_clear(struct llama_batch & batch) {
     batch.n_tokens = 0;
 }
 
+// DEPRECATED
 void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,

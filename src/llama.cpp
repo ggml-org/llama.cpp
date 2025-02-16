@@ -8445,7 +8445,7 @@ static enum ggml_status llama_graph_compute(
 
 static int llama_prepare_sbatch(
         llama_context     & lctx,
-        const llama_batch & batch,
+    const llama_batch_ext & batch,
         uint32_t          & n_outputs) {
     const auto & model   = lctx.model;
     const auto & hparams = model.hparams;
@@ -8585,7 +8585,7 @@ static int llama_prepare_ubatch(
 //
 static int llama_decode_impl(
          llama_context & lctx,
-           llama_batch   inp_batch) {
+       llama_batch_ext & inp_batch) {
 
     lctx.is_encoding = false;
 
@@ -8593,10 +8593,6 @@ static int llama_decode_impl(
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
-
-    // temporarily allocate memory for the input batch if needed
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : lctx.kv_self.max_pos() + 1);
-    const llama_batch & batch = batch_allocr.batch;
 
     const auto & model   = lctx.model;
     const auto & vocab   = model.vocab;
@@ -8616,7 +8612,7 @@ static int llama_decode_impl(
     uint32_t n_outputs_prev = 0;
 
     {
-        const int ret = llama_prepare_sbatch(lctx, batch, n_outputs);
+        const int ret = llama_prepare_sbatch(lctx, inp_batch, n_outputs);
         if (ret != 0) {
             return ret;
         }
@@ -8625,7 +8621,7 @@ static int llama_decode_impl(
     while (lctx.sbatch.n_tokens > 0) {
         llama_ubatch ubatch;
         {
-            const int ret = llama_prepare_ubatch(lctx, kv_slot_restorer, ubatch, n_outputs, batch.n_tokens);
+            const int ret = llama_prepare_ubatch(lctx, kv_slot_restorer, ubatch, n_outputs, inp_batch.n_tokens);
             if (ret != 0) {
                 return ret;
             }
@@ -8832,7 +8828,7 @@ static int llama_decode_impl(
 //
 static int llama_encode_impl(
          llama_context & lctx,
-           llama_batch   inp_batch) {
+       llama_batch_ext & inp_batch) {
 
     lctx.is_encoding = true;
 
@@ -8841,22 +8837,18 @@ static int llama_encode_impl(
         return -1;
     }
 
-    // temporary allocate memory for the input batch if needed
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : lctx.kv_self.max_pos() + 1);
-
-    const llama_batch & batch = batch_allocr.batch;
-    const uint32_t n_tokens = batch.n_tokens;
+    const uint32_t n_tokens = inp_batch.n_tokens;
 
     const auto & model   = lctx.model;
     const auto & hparams = model.hparams;
     const auto & cparams = lctx.cparams;
 
-    GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
+    GGML_ASSERT((!inp_batch.token && inp_batch.embd) || (inp_batch.token && !inp_batch.embd)); // NOLINT
 
-    if (batch.token) {
+    if (inp_batch.token) {
         for (uint32_t i = 0; i < n_tokens; ++i) {
-            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.vocab.n_tokens()) {
-                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
+            if (inp_batch.token[i] < 0 || (uint32_t) inp_batch.token[i] >= model.vocab.n_tokens()) {
+                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, inp_batch.token[i]);
                 return -1;
             }
         }
@@ -8873,7 +8865,7 @@ static int llama_encode_impl(
 
     const int64_t n_embd = hparams.n_embd;
 
-    lctx.sbatch.from_batch(batch, n_embd, /* simple_split */ true, /* logits_all */ true);
+    lctx.sbatch.from_batch(inp_batch, n_embd, /* simple_split */ true, /* logits_all */ true);
 
     const llama_ubatch ubatch = lctx.sbatch.split_simple(n_tokens);
 
@@ -9976,10 +9968,33 @@ bool llama_kv_cache_can_shift(struct llama_context * ctx) {
 
 ///
 
+
+// DEPRECATED
 int32_t llama_encode(
         struct llama_context * ctx,
-          struct llama_batch   batch) {
-    const int ret = llama_encode_impl(*ctx, batch);
+          struct llama_batch batch) {
+    // temporarily allocate memory for the input batch if needed
+    // also convert llama_batch to llama_batch_ext
+    llama_batch_allocr batch_allocr(batch, batch.pos ? -1 : ctx->kv_self.max_pos() + 1);
+    llama_batch_ext * batch_ext = batch_allocr.batch;
+    return llama_text_encode(ctx, batch_ext);
+}
+
+// DEPRECATED
+int32_t llama_decode(
+        struct llama_context * ctx,
+          struct llama_batch batch) {
+    // temporarily allocate memory for the input batch if needed
+    // also convert llama_batch to llama_batch_ext
+    llama_batch_allocr batch_allocr(batch, batch.pos ? -1 : ctx->kv_self.max_pos() + 1);
+    llama_batch_ext * batch_ext = batch_allocr.batch;
+    return llama_text_decode(ctx, batch_ext);
+}
+
+int32_t llama_text_encode(
+        struct llama_context * ctx,
+      struct llama_batch_ext * batch) {
+    const int ret = llama_encode_impl(*ctx, *batch);
     if (ret != 0) {
         LLAMA_LOG_ERROR("%s: failed to encode, ret = %d\n", __func__, ret);
     }
@@ -9987,10 +10002,10 @@ int32_t llama_encode(
     return ret;
 }
 
-int32_t llama_decode(
+int32_t llama_text_decode(
         struct llama_context * ctx,
-          struct llama_batch   batch) {
-    const int ret = llama_decode_impl(*ctx, batch);
+      struct llama_batch_ext * batch) {
+    const int ret = llama_decode_impl(*ctx, *batch);
     if (ret != 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
     }

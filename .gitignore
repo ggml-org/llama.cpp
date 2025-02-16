@@ -98,6 +98,7 @@ examples/server/*.css.hpp
 examples/server/*.html.hpp
 examples/server/*.js.hpp
 examples/server/*.mjs.hpp
+examples/server/*.gz.hpp
 !build_64.sh
 !examples/*.bat
 !examples/*/*.kts
