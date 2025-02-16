@@ -8037,6 +8037,16 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
 
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
 
+    char name[48];
+    snprintf(name, sizeof(name), "GGML_VK_DEVICE%d_MEMORY", device);
+    const char* GGML_VK_DEVICE_MEMORY = getenv(name);
+
+    if(GGML_VK_DEVICE_MEMORY != nullptr){
+        *total = strtoll(GGML_VK_DEVICE_MEMORY, NULL, 10);
+        *free = *total;
+        return;
+    }
+
     vk::PhysicalDeviceMemoryProperties memprops = vkdev.getMemoryProperties();
 
     for (const vk::MemoryHeap& heap : memprops.memoryHeaps) {
