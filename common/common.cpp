@@ -1768,6 +1768,46 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
     return text;
 }
 
+void common_chat_grammar_to_sampler(const common_chat_params * src,
+                                    const llama_vocab * vocab,
+                                    common_params_sampling * sparams)
+{
+    GGML_ASSERT(src && vocab && sparams);
+
+    auto & dst = *sparams;
+
+    dst.grammar      = src->grammar;
+    dst.grammar_lazy = src->grammar_lazy;
+
+    for (const auto & trigger : src->grammar_triggers) {
+        auto ids = common_tokenize(vocab, trigger.word, false, true);
+
+        if (ids.size() == 1) {
+            LOG_DBG("Grammar trigger token: %d (`%s`)\n", ids[0], trigger.word.c_str());
+            dst.grammar_trigger_tokens.push_back(ids[0]);
+            dst.preserved_tokens.insert(ids[0]);
+            continue;
+        }
+        LOG_DBG("Grammar trigger word: `%s`\n", trigger.word.c_str());
+        dst.grammar_trigger_words.push_back(trigger);
+    }
+
+    for (const auto & preserved : src->preserved_tokens) {
+        auto ids = common_tokenize(vocab, preserved, false, true);
+        if (ids.size() == 1) {
+            LOG_DBG("Preserved token: %d\n", ids[0]);
+            dst.preserved_tokens.insert(ids[0]);
+
+        } else {
+            // This may happen when using a tool call style meant for a model
+            // with special tokens to preserve on a model without said tokens.
+            LOG_WRN("Not preserved because more than 1 token (wrong chat template override?): %s\n",
+                    preserved.c_str());
+        }
+    }
+}
+
+
 //
 // Chat template utils
 //
@@ -1794,19 +1834,31 @@ bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
 }
 
 std::string common_chat_apply_template(
-        const common_chat_template & tmpl,
+        const common_chat_templates & tmpl,
         const std::vector<common_chat_msg> & msgs,
         bool add_ass,
-        bool use_jinja) {
+        bool use_jinja,
+        const common_chat_inputs * inputs_,
+        common_chat_params * out_params)
+{
+    bool use_tool_template = use_jinja && tmpl.template_tool_use;
+    const auto & tmpl_selected = use_tool_template ? *tmpl.template_tool_use : *tmpl.template_default;
+
     if (use_jinja) {
+        common_chat_inputs inputs = inputs_ ? *inputs_ : common_chat_inputs();
+
         auto messages = json::array();
         for (const auto & msg : msgs) {
             messages.push_back({{"role", msg.role}, {"content", msg.content}});
         }
-        common_chat_inputs inputs;
         inputs.messages = messages;
         inputs.add_generation_prompt = add_ass;
-        return common_chat_params_init(tmpl, inputs).prompt;
+
+        auto chat_params = common_chat_params_init(tmpl_selected, inputs);
+        if (out_params != nullptr) {
+            *out_params = chat_params;
+        }
+        return chat_params.prompt;
     }
 
     int alloc_size = 0;
@@ -1819,7 +1871,7 @@ std::string common_chat_apply_template(
     std::vector<char> buf(alloc_size);
 
     // run the first time to get the total output length
-    int32_t res = llama_chat_apply_template(tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
+    int32_t res = llama_chat_apply_template(tmpl_selected.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
 
     // error: chat template is not supported
     if (res < 0) {
@@ -1831,7 +1883,7 @@ std::string common_chat_apply_template(
     // if it turns out that our buffer is too small, we resize it
     if ((size_t) res > buf.size()) {
         buf.resize(res);
-        res = llama_chat_apply_template(tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
+        res = llama_chat_apply_template(tmpl_selected.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
     }
 
     std::string formatted_chat(buf.data(), res);
@@ -1839,13 +1891,18 @@ std::string common_chat_apply_template(
 }
 
 std::string common_chat_format_single(
-        const common_chat_template & tmpl,
+        const common_chat_templates & tmpl,
         const std::vector<common_chat_msg> & past_msg,
         const common_chat_msg & new_msg,
         bool add_ass,
-        bool use_jinja) {
+        bool use_jinja,
+        const common_chat_inputs * inputs,
+        common_chat_params * out_params)
+{
     std::ostringstream ss;
-    auto fmt_past_msg = past_msg.empty() ? "" : common_chat_apply_template(tmpl, past_msg, false, use_jinja);
+    auto fmt_past_msg = past_msg.empty() ? ""
+        : common_chat_apply_template(tmpl, past_msg, false, use_jinja, inputs);
+
     std::vector<common_chat_msg> chat_new(past_msg);
     // if the past_msg ends with a newline, we must preserve it in the formatted version
     if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
@@ -1853,13 +1910,13 @@ std::string common_chat_format_single(
     };
     // format chat with new_msg
     chat_new.push_back(new_msg);
-    auto fmt_new_msg = common_chat_apply_template(tmpl, chat_new, add_ass, use_jinja);
+    auto fmt_new_msg = common_chat_apply_template(tmpl, chat_new, add_ass, use_jinja, inputs, out_params);
     // get the diff part
     ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
     return ss.str();
 }
 
-std::string common_chat_format_example(const common_chat_template & tmpl, bool use_jinja) {
+std::string common_chat_format_example(const common_chat_templates & tmpl, bool use_jinja) {
     std::vector<common_chat_msg> msgs = {
         {"system",    "You are a helpful assistant", {}},
         {"user",      "Hello", {}},
@@ -2195,4 +2252,3 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
 
     return result;
 }
-
