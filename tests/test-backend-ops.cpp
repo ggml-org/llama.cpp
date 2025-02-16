@@ -684,7 +684,11 @@ struct test_case {
         int total_runs = 0;
         do {
             int64_t start_time = ggml_time_us();
-            ggml_backend_graph_compute(backend, gf);
+            ggml_status status = ggml_backend_graph_compute(backend, gf);
+            if (status != GGML_STATUS_SUCCESS) {
+                fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%d \n", __func__, status);
+                return false;
+            }
             int64_t end_time = ggml_time_us();
 
             total_time_us += end_time - start_time;

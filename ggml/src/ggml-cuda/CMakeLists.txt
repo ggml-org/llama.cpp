@@ -1,9 +1,13 @@
 cmake_minimum_required(VERSION 3.18)  # for CMAKE_CUDA_ARCHITECTURES
 
+unset(${CMAKE_CUDA_HOST_COMPILER} CACHE)
+message(DEBUG "CUDAHOSTCXX= $ENV{CUDAHOSTCXX}")
+message(DEBUG "CMAKE_CUDA_HOST_COMPILER= ${CMAKE_CUDA_HOST_COMPILER}") # reminder: must be a C++ compiler, not just C
+
 find_package(CUDAToolkit)
 
 if (CUDAToolkit_FOUND)
-    message(STATUS "CUDA Toolkit found")
+    message(STATUS "CUDA Toolkit found: ${CUDAToolkit_VERSION}")
 
     if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
         # native == GPUs available at build time
@@ -23,6 +27,9 @@ if (CUDAToolkit_FOUND)
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     enable_language(CUDA)
+
+    message(DEBUG "CMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}")
+    message(DEBUG "CMAKE_CUDA_HOST_COMPILER= ${CMAKE_CUDA_HOST_COMPILER}")
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
