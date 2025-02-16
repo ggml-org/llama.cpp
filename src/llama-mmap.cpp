@@ -271,7 +271,7 @@ struct llama_mmap::impl {
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         size = file->size();
         int fd = file->file_id();
-        int flags = MAP_SHARED;
+        int flags = MAP_PRIVATE;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
         if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
