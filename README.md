@@ -214,6 +214,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Infrastructure</summary>
 
+- [llmaz](https://github.com/InftyAI/llmaz) - ☸️ Effortlessly serve state-of-the-art LLMs on Kubernetes, see [llama.cpp example](https://github.com/InftyAI/llmaz/tree/main/docs/examples/llamacpp) here.
 - [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
 - [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
 - [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
