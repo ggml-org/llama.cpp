@@ -570,7 +570,7 @@ void common_batch_add(
 // longest common prefix
 size_t common_lcp(const llama_tokens & a, const llama_tokens & b);
 
-// longet common subsequence
+// longest common substring
 size_t common_lcs(const llama_tokens & a, const llama_tokens & b);
 
 //
