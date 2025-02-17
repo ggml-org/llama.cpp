@@ -267,7 +267,7 @@ extern "C" {
         int8_t       *  logits; // TODO: rename this to "output"
 
         struct ggml_tensor *  embd_tensor;
-        struct ggml_tensor *  cross_embd_tensor;
+        struct ggml_tensor *  cross_embd;
     } llama_batch;
 
     enum llama_model_kv_override_type {
@@ -543,6 +543,9 @@ extern "C" {
 
     // Returns true if the model is recurrent (like Mamba, RWKV, etc.)
     LLAMA_API bool llama_model_is_recurrent(const struct llama_model * model);
+
+    // Returns true if the model has a image attention KV cache
+    LLAMA_API bool llama_model_has_cross_kv(const struct llama_model * model);
 
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(

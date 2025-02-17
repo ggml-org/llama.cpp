@@ -713,14 +713,14 @@ static struct ggml_tensor * llm_build_kv(
 // cross attention KV cache
 static struct ggml_tensor * llm_build_cross_kv(
     struct ggml_context * ctx,
-    struct llama_context * lctx,
+    struct llama_context & lctx,
     struct ggml_tensor * qcur,
     struct ggml_tensor * kcur,
     struct ggml_tensor * vcur,
     struct ggml_cgraph * graph,
     int64_t il
 ) {
-    llama_cross_kv_cache & kv = lctx->kv_cross;
+    llama_cross_kv_cache & kv = lctx.kv_cross;
 
     // Q has dimensions K, H, L, B
     // K = hidden dimension per head
@@ -8187,8 +8187,8 @@ struct llm_build_context {
 
         // Multiplied directly to Q
         const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
-        const float cross_attn_scale = 1.0f / sqrtf(float(hparams.n_embd_cross / hparams.n_head()));
 
+        struct ggml_tensor * cur;
         struct ggml_tensor * inpL;
         inpL = llm_build_inp_embd(ctx0, lctx, hparams, ubatch, model.tok_embd, cb);
 
@@ -9495,7 +9495,7 @@ static void llama_kv_cache_update_impl(struct llama_context & lctx) {
         uint32_t n_seqs = 1; // TODO: worst-case number of sequences
         uint32_t n_tokens = std::min(lctx.cparams.n_ctx, lctx.cparams.n_ubatch);
         llama_token token = lctx.model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-        llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+        llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
         ggml_cgraph * gf = llama_build_graph(lctx, ubatch, true);
 
         // initialize scheduler with the worst-case graph
@@ -9963,6 +9963,15 @@ struct llama_context * llama_init_from_model(
             return nullptr;
         }
 
+        if (llama_model_has_cross_kv(model)) {
+            // TODO: Add parameter for cross kv cache size
+            if (!llama_cross_kv_cache_init(ctx->kv_cross, ctx->model, type_k, type_v, 1024 * 6400, cparams.offload_kqv)) {
+                LLAMA_LOG_ERROR("%s: llama_cross_kv_cache_init() failed\n", __func__);
+                llama_free(ctx);
+                return nullptr;
+            }
+        }
+
         {
             size_t memory_size_k = 0;
             size_t memory_size_v = 0;
@@ -10058,7 +10067,7 @@ struct llama_context * llama_init_from_model(
             uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
             llama_token token = ctx->model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
 
-            llama_ubatch ubatch_pp = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+            llama_ubatch ubatch_pp = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
             ggml_cgraph * gf_pp = llama_build_graph(*ctx, ubatch_pp, true);
 
             // reserve pp graph first so that buffers are only allocated once
@@ -10067,7 +10076,7 @@ struct llama_context * llama_init_from_model(
             int n_nodes_pp = ggml_graph_n_nodes(gf_pp);
 
             // reserve with tg graph to get the number of splits and nodes
-            llama_ubatch ubatch_tg = { true, 1, 1, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+            llama_ubatch ubatch_tg = { true, 1, 1, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
             ggml_cgraph * gf_tg = llama_build_graph(*ctx, ubatch_tg, true);
             ggml_backend_sched_reserve(ctx->sched.get(), gf_tg);
             int n_splits_tg = ggml_backend_sched_get_n_splits(ctx->sched.get());

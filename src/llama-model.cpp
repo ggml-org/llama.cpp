@@ -1249,8 +1249,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
-                    case 32: model.type = e_model::MODEL_7B; break;
-                    default: model.type = e_model::MODEL_UNKNOWN;
+                    case 32: type = LLM_TYPE_7B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
                 }
             }break;
         case LLM_ARCH_WAVTOKENIZER_DEC:
@@ -3384,42 +3384,40 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_COGVLM:
                 {
-                    model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-                    model.output_norm = ml.create_tensor(ctx_input, tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd});
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
-                    model.output = ml.create_tensor(ctx_output, tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab});
+                    output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, 0);
 
                     // Not supporting ctx_split
                     for (int i=0; i < n_layer; i++) {
-                        ggml_context * ctx_layer = ctx_for_layer(i);
+                        auto & layer = layers[i];
 
-                        auto & layer = model.layers[i];
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.attn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd});
+                        layer.wqkv_txt = create_tensor(tn(LLM_TENSOR_ATTN_TXT_QKV, "weight", i), {n_embd, n_embd * 3}, 0);
+                        layer.wqkv_img = create_tensor(tn(LLM_TENSOR_ATTN_IMG_QKV, "weight", i), {n_embd, n_embd * 3}, 0);
+                        layer.wdense_txt = create_tensor(tn(LLM_TENSOR_ATTN_TXT_DENSE, "weight", i), {n_embd, n_embd}, 0);
+                        layer.wdense_img = create_tensor(tn(LLM_TENSOR_ATTN_IMG_DENSE, "weight", i), {n_embd, n_embd}, 0);
 
-                        layer.wqkv_txt = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_TXT_QKV, "weight", i), {n_embd, n_embd * 3});
-                        layer.wqkv_img = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_IMG_QKV, "weight", i), {n_embd, n_embd * 3});
-                        layer.wdense_txt = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_TXT_DENSE, "weight", i), {n_embd, n_embd});
-                        layer.wdense_img = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_IMG_DENSE, "weight", i), {n_embd, n_embd});
+                        layer.attn_norm_2 = create_tensor(tn(LLM_TENSOR_ATTN_NORM_2, "weight", i), {n_embd}, 0);
 
-                        layer.attn_norm_2 = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_NORM_2, "weight", i), {n_embd});
-
-                        layer.wq_cross = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_CROSS_ATTN_Q, "weight", i), {n_embd, n_embd_cross});
+                        layer.wq_cross = create_tensor(tn(LLM_TENSOR_CROSS_ATTN_Q, "weight", i), {n_embd, n_embd_cross}, 0);
                         // The input dimension is the number of dimensions from the cross vision encoder
                         // it might not be guaranteed that this is the same as the number of dimensions
                         // in the cogvlm attention calculation
-                        layer.wkv_cross = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_CROSS_ATTN_KV, "weight", i), {n_embd_cross, n_embd_cross * 2});
-                        layer.wdense_cross = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_CROSS_ATTN_DENSE, "weight", i), {n_embd_cross, n_embd});
+                        layer.wkv_cross = create_tensor(tn(LLM_TENSOR_CROSS_ATTN_KV, "weight", i), {n_embd_cross, n_embd_cross * 2}, 0);
+                        layer.wdense_cross = create_tensor(tn(LLM_TENSOR_CROSS_ATTN_DENSE, "weight", i), {n_embd_cross, n_embd}, 0);
 
-                        layer.ffn_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd});
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.ffn_gate_txt = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_TXT_GATE, "weight", i), {n_embd, n_ff});
-                        layer.ffn_down_txt = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_TXT_DOWN, "weight", i), {n_ff, n_embd});
-                        layer.ffn_up_txt = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_TXT_UP, "weight", i), {n_embd, n_ff});
-                        layer.ffn_gate_img = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_IMG_GATE, "weight", i), {n_embd, n_ff});
-                        layer.ffn_down_img = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_IMG_DOWN, "weight", i), {n_ff, n_embd});
-                        layer.ffn_up_img = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_IMG_UP, "weight", i), {n_embd, n_ff});
+                        layer.ffn_gate_txt = create_tensor(tn(LLM_TENSOR_FFN_TXT_GATE, "weight", i), {n_embd, n_ff}, 0);
+                        layer.ffn_down_txt = create_tensor(tn(LLM_TENSOR_FFN_TXT_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                        layer.ffn_up_txt = create_tensor(tn(LLM_TENSOR_FFN_TXT_UP, "weight", i), {n_embd, n_ff}, 0);
+                        layer.ffn_gate_img = create_tensor(tn(LLM_TENSOR_FFN_IMG_GATE, "weight", i), {n_embd, n_ff}, 0);
+                        layer.ffn_down_img = create_tensor(tn(LLM_TENSOR_FFN_IMG_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                        layer.ffn_up_img = create_tensor(tn(LLM_TENSOR_FFN_IMG_UP, "weight", i), {n_embd, n_ff}, 0);
                     }
                 } break;
             case LLM_ARCH_WAVTOKENIZER_DEC:
@@ -4170,6 +4168,7 @@ enum llama_rope_type llama_model_rope_type(const struct llama_model * model) {
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_CHAMELEON:
+        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -4307,5 +4306,12 @@ bool llama_model_is_recurrent(const struct llama_model * model) {
         case LLM_ARCH_RWKV6:  return true;
         case LLM_ARCH_RWKV6QWEN2: return true;
         default:              return false;
+    }
+}
+
+bool llama_model_has_cross_kv(const struct llama_model * model) {
+    switch (model->arch) {
+        case LLM_ARCH_COGVLM: return true;
+        default: return false;
     }
 }
