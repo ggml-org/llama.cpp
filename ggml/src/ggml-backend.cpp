@@ -600,7 +600,7 @@ static struct ggml_tensor * ggml_dup_tensor_layout(struct ggml_context * ctx, co
     return dup;
 }
 
-static bool ggml_is_view_op(enum ggml_op op) {
+bool ggml_is_view_op(enum ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
 }
 

@@ -663,6 +663,8 @@ extern "C" {
 
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
 
+    GGML_API bool    ggml_is_view_op(enum ggml_op op);
+
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
 

@@ -293,10 +293,6 @@ static bool isinf_or_max(float f) {
     return _isinf(f) || f == FLT_MAX || f == -FLT_MAX;
 }
 
-static bool ggml_is_view_op(enum ggml_op op) {
-    return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
-}
-
 enum test_mode {
     MODE_TEST,
     MODE_PERF,
