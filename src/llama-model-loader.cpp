@@ -679,6 +679,9 @@ llama_model_loader::llama_model_loader(
     if (!llama_mmap::SUPPORTED) {
         LLAMA_LOG_WARN("%s: mmap is not supported on this platform\n", __func__);
         use_mmap = false;
+    } else if (gguf_needs_byteswap(meta.get())) {
+        LLAMA_LOG_WARN("%s: gguf file needs byteswapping, mmap is disabled. This may impact performance.\n", __func__);
+        use_mmap = false;
     }
 
     this->use_mmap = use_mmap;
@@ -869,6 +872,13 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         const auto & file = files.at(w.idx);
         file->seek(w.offs, SEEK_SET);
         file->read_raw(cur->data, ggml_nbytes(cur));
+
+        if (gguf_needs_byteswap(meta.get())) {
+            auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+            if (byteswap != nullptr) {
+                byteswap(cur->data, ggml_nelements(cur) / ggml_blck_size(cur->type));
+            }
+        }
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
@@ -1024,6 +1034,14 @@ bool llama_model_loader::load_all_data(
             if (ggml_backend_buffer_is_host(cur->buffer)) {
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
+
+                if (gguf_needs_byteswap(meta.get())) {
+                    auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+                    if (byteswap != nullptr) {
+                        byteswap(cur->data, ggml_nelements(cur) / ggml_blck_size(cur->type));
+                    }
+                }
+
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
@@ -1036,11 +1054,22 @@ bool llama_model_loader::load_all_data(
 
                     size_t bytes_read = 0;
 
+                    // for byteswapping purposes ensure that there is whole number of elements in buffer
+                    const size_t buf_size_aligned = gguf_needs_byteswap(meta.get()) ? buffer_size - (buffer_size % ggml_blck_size(cur->type)) : buffer_size;
+
                     while (bytes_read < n_size) {
-                        size_t read_iteration = std::min<size_t>(buffer_size, n_size - bytes_read);
+                        size_t read_iteration = std::min<size_t>(buf_size_aligned, n_size - bytes_read);
 
                         ggml_backend_event_synchronize(events[buffer_idx]);
                         file->read_raw(host_ptrs[buffer_idx], read_iteration);
+
+                        if (gguf_needs_byteswap(meta.get())) {
+                            auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+                            if (byteswap != nullptr) {
+                                byteswap(host_ptrs[buffer_idx], read_iteration / ggml_blck_size(cur->type));
+                            }
+                        }
+
                         ggml_backend_tensor_set_async(upload_backend, cur, host_ptrs[buffer_idx], bytes_read, read_iteration);
                         ggml_backend_event_record(events[buffer_idx], upload_backend);
 
@@ -1052,6 +1081,14 @@ bool llama_model_loader::load_all_data(
                     read_buf.resize(n_size);
                     file->seek(weight->offs, SEEK_SET);
                     file->read_raw(read_buf.data(), n_size);
+
+                    if (gguf_needs_byteswap(meta.get())) {
+                        auto byteswap = ggml_get_type_traits(cur->type)->byteswap;
+                        if (byteswap != nullptr) {
+                            byteswap(read_buf.data(), read_buf.size() / ggml_blck_size(cur->type));
+                        }
+                    }
+
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));

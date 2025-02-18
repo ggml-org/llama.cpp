@@ -197,6 +197,9 @@ extern "C" {
     // writes the meta data to pointer "data"
     GGML_API void   gguf_get_meta_data(const struct gguf_context * ctx, void * data);
 
+    // returns true if gguf file needs byteswapping when reading. byteswapping for writing not implemented
+    GGML_API bool gguf_needs_byteswap(const struct gguf_context * ctx);
+
 #ifdef  __cplusplus
 }
 #endif

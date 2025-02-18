@@ -328,14 +328,20 @@ struct split_strategy {
                 const char * t_name = gguf_get_tensor_name(ctx_out, i);
                 struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
                 auto n_bytes = ggml_nbytes(t);
+                auto n_elements = ggml_nelements(t) / ggml_blck_size(t->type);
                 read_buf.resize(n_bytes);
 
                 // calculate offset
                 auto i_tensor_in = gguf_find_tensor(ctx_gguf, t_name); // idx of tensor in the input file
                 auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor_in);
 
+                ggml_byteswap_t byteswap_func = nullptr;
+                if (gguf_needs_byteswap(ctx_gguf)) {
+                    byteswap_func = ggml_get_type_traits(t->type)->byteswap;
+                }
+
                 // copy tensor from input to output file
-                copy_file_to_file(f_input, fout, offset, n_bytes);
+                copy_file_to_file(f_input, fout, offset, n_bytes, n_elements, byteswap_func);
                 zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
             }
 
@@ -346,13 +352,18 @@ struct split_strategy {
         }
     }
 
-    void copy_file_to_file(std::ifstream & f_in, std::ofstream & f_out, const size_t in_offset, const size_t len) {
+    void copy_file_to_file(std::ifstream & f_in, std::ofstream & f_out, const size_t in_offset, const size_t len, const size_t elements, ggml_byteswap_t byteswap_func) {
         // TODO: detect OS and use copy_file_range() here for better performance
         if (read_buf.size() < len) {
             read_buf.resize(len);
         }
         f_in.seekg(in_offset);
         f_in.read((char *)read_buf.data(), len);
+
+        if (byteswap_func != nullptr) {
+            byteswap_func(read_buf.data(), elements);
+        }
+
         f_out.write((const char *)read_buf.data(), len);
     }
 };
@@ -540,6 +551,13 @@ static void gguf_merge(const split_params & split_params) {
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
             f_input.read((char *)read_data.data(), n_bytes);
+
+            if (gguf_needs_byteswap(ctx_gguf)) {
+                auto byteswap = ggml_get_type_traits(t->type)->byteswap;
+                if (byteswap != nullptr) {
+                    byteswap(read_data.data(), ggml_nelements(t) / ggml_blck_size(t->type));
+                }
+            }
 
             // write tensor data + padding
             fout.write((const char *)read_data.data(), n_bytes);
