@@ -1596,7 +1596,7 @@ struct llm_build_context {
                         nullptr,
                         n_expert, n_expert_used,
                         LLM_FFN_SILU, true,
-                        false, 0.0,
+                        hparams.expert_weights_scale > 0, hparams.expert_weights_scale,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                         cb, il);
                 cb(cur, "ffn_moe_out", il);
