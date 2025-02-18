@@ -101,7 +101,26 @@ python ./examples/convert_legacy_llama.py ../llava-v1.6-vicuna-7b/ --skip-unknow
 ```
 
 **note** llava-1.6 needs more context than llava-1.5, at least 3000 is needed (just run it at -c 4096)
+
 **note** llava-1.6 greatly benefits from batched prompt processing (defaults work)
+
+**note** if the language model in step `6)` is incompatible with the legacy conversion script, the easiest way handle the LLM model conversion is to load the model in transformers, and export only the LLM from the llava next model.
+
+```python
+import os
+import transformers
+
+model_path = ...
+llm_export_path = ...
+
+tokenizer = transformers.AutoTokenizer.from_pretrained(model_path)
+model = transformers.AutoModelForImageTextToText.from_pretrained(model_path)
+
+tokenizer.save_pretrained(llm_export_path)
+model.language_model.save_pretrained(llm_export_path)
+```
+
+Then, you can convert the LLM using the `convert_hf_to_gguf.py` script, which handles more LLM architectures.
 
 ## llava-cli templating and llava-1.6 prompting
 
