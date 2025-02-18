@@ -339,7 +339,8 @@ int main(void) {
     common_chat_msg sys_msg{"system", "You are a helpful assistant", {}};
 
     auto fmt_sys = [&](std::string tmpl_str) {
-        minja::chat_template tmpl(tmpl_str, "", "");
+        common_chat_templates tmpl;
+        tmpl.template_default.reset(new common_chat_template(tmpl_str, "", ""));
         auto output = common_chat_format_single(tmpl, chat2, sys_msg, false, /* use_jinja= */ false);
         printf("fmt_sys(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         printf("-------------------------\n");
@@ -366,7 +367,8 @@ int main(void) {
     common_chat_msg new_msg{"user", "How are you", {}};
 
     auto fmt_single = [&](std::string tmpl_str) {
-        minja::chat_template tmpl(tmpl_str, "", "");
+        common_chat_templates tmpl;
+        tmpl.template_default.reset(new common_chat_template(tmpl_str, "", ""));
         auto output = common_chat_format_single(tmpl, chat2, new_msg, true, /* use_jinja= */ false);
         printf("fmt_single(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         printf("-------------------------\n");

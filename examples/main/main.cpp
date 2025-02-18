@@ -1,4 +1,5 @@
 #include "arg.h"
+#include "chat.hpp"
 #include "common.h"
 #include "console.h"
 #include "log.h"
@@ -219,7 +220,7 @@ int main(int argc, char ** argv) {
     // print chat template example in conversation mode
     if (params.conversation_mode) {
         if (params.enable_chat_template) {
-            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(*chat_templates.template_default, params.use_jinja).c_str());
+            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates, params.use_jinja).c_str());
         } else {
             LOG_INF("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }
@@ -263,20 +264,57 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd_inp;
 
-    auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
+    auto toolcall_handler = toolcall::create_handler(params.jinja_tools);
+
+    auto chat_add_and_format = [&chat_msgs, &chat_templates, &sparams, vocab](
+        const std::string & role, const std::string & content,
+        toolcall::handler::ptr handler = nullptr)
+    {
+        bool add_ass = (role == "user");
+
         common_chat_msg new_msg{role, content, {}};
-        auto formatted = common_chat_format_single(*chat_templates.template_default, chat_msgs, new_msg, role == "user", g_params->use_jinja);
+
+        common_chat_inputs cinputs;
+        if (handler != nullptr) {
+            auto choice = handler->tool_choice();
+            if (std::holds_alternative<std::string>(choice)) {
+                cinputs.tool_choice = std::get<std::string>(choice);
+
+            } else {
+                auto choice_ptr = std::get<toolcall::json_ptr>(choice);
+                if (choice_ptr != nullptr) {
+                    cinputs.tool_choice = *choice_ptr;
+                }
+            }
+            cinputs.tools = handler->tool_list();
+        }
+
+        common_chat_params cparams;
+        auto formatted =
+            common_chat_format_single(chat_templates, chat_msgs, new_msg, add_ass, g_params->use_jinja,
+                                      &cinputs, &cparams);
+
         chat_msgs.push_back({role, content, {}});
         LOG_DBG("formatted: '%s'\n", formatted.c_str());
+
+        if (g_params->use_jinja) {
+            common_chat_grammar_to_sampler(&cparams, vocab, &sparams);
+            if (handler != nullptr) {
+                json response;
+                handler->call(formatted, response);
+                return std::string(response);
+            }
+        }
         return formatted;
     };
 
     {
-        auto prompt = (params.conversation_mode && params.enable_chat_template)
-            // format the system prompt in conversation mode (fallback to default if empty)
-            ? chat_add_and_format("system", params.prompt.empty() ? DEFAULT_SYSTEM_MESSAGE : params.prompt)
-            // otherwise use the prompt as is
+        std::string system_prompt (params.prompt.empty() ? DEFAULT_SYSTEM_MESSAGE : params.prompt);
+        bool use_conversation_prompt (params.conversation_mode && params.enable_chat_template);
+        auto prompt = use_conversation_prompt ?
+            chat_add_and_format("system", system_prompt, toolcall_handler)
             : params.prompt;
+
         if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
             LOG_DBG("tokenize the prompt\n");
             embd_inp = common_tokenize(ctx, prompt, true, true);
@@ -780,10 +818,24 @@ int main(int argc, char ** argv) {
                     }
 
                     if (params.enable_chat_template) {
-                        chat_add_and_format("assistant", assistant_ss.str());
+                        auto output = chat_add_and_format("assistant", assistant_ss.str(), toolcall_handler);
+                        if (toolcall_handler != nullptr) {
+                            auto action = toolcall_handler->last_action();
+                            if (action == toolcall::ACCEPT) {
+                                LOG_DBG("tokenizing toolcall response");
+                                auto response = common_tokenize(ctx, output, false, true);
+                                embd_inp.insert(embd_inp.end(), response.begin(), response.end());
+
+                            } else {
+                                is_interacting = true;
+                                LOG("\n");
+                            }
+
+                        } else {
+                            is_interacting = true;
+                            LOG("\n");
+                        }
                     }
-                    is_interacting = true;
-                    LOG("\n");
                 }
             }
 

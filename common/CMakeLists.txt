@@ -75,6 +75,17 @@ add_library(${TARGET} STATIC
     sampling.h
     speculative.cpp
     speculative.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/params.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/params.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/handler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/handler.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_messages.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_messages.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_transport.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_sse_transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_sse_transport.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_stdio_transport.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/toolcall/mcp_stdio_transport.hpp
     )
 
 if (BUILD_SHARED_LIBS)

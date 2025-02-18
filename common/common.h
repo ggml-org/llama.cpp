@@ -3,11 +3,12 @@
 #pragma once
 
 #include "llama-cpp.h"
-
+#include "toolcall/handler.hpp"
 #include <set>
 #include <string>
 #include <vector>
 #include <sstream>
+#include <variant>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -353,6 +354,7 @@ struct common_params {
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
+    toolcall::params jinja_tools;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
 
     std::vector<std::string> api_keys;
@@ -616,6 +618,13 @@ std::string common_detokenize(
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
 
+struct common_chat_params;
+struct common_chat_inputs;
+void common_chat_grammar_to_sampler(const common_chat_params * src,
+                                    const llama_vocab * vocab,
+                                    common_params_sampling * sparams);
+
+
 //
 // Chat template utils
 //
@@ -653,22 +662,26 @@ struct common_chat_templates {
 // If the built-in template is not supported, we default to chatml
 // If the custom "tmpl" is not supported, we throw an error
 std::string common_chat_apply_template(
-        const common_chat_template & tmpl,
+        const common_chat_templates & tmpl,
         const std::vector<common_chat_msg> & chat,
         bool add_ass,
-        bool use_jinja);
+        bool use_jinja,
+        const common_chat_inputs * inputs = nullptr,
+        common_chat_params * out_params = nullptr);
 
 // Format single message, while taking into account the position of that message in chat history
 std::string common_chat_format_single(
-        const common_chat_template & tmpl,
+        const common_chat_templates & tmpl,
         const std::vector<common_chat_msg> & past_msg,
         const common_chat_msg & new_msg,
         bool add_ass,
-        bool use_jinja);
+        bool use_jinja,
+        const common_chat_inputs * inputs = nullptr,
+        common_chat_params * out_params = nullptr);
 
 // Returns an example of formatted chat
 std::string common_chat_format_example(
-    const common_chat_template & tmpl, bool use_jinja);
+    const common_chat_templates & tmpl, bool use_jinja);
 
 common_chat_templates common_chat_templates_from_model(const struct llama_model * model, const std::string & chat_template_override);
 
