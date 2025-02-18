@@ -127,7 +127,7 @@ class SpecialVocab:
                         self.merges = merges
                     elif isinstance(merges[0], list) and len(merges[0]) == 2 and isinstance(merges[0][0], str):
                         # New format since transformers 4.45 to support spaces in merges
-                        # ref: https://github.com/ggerganov/llama.cpp/issues/9692
+                        # ref: https://github.com/ggml-org/llama.cpp/issues/9692
                         # TODO: internally store as the new format instead of converting to old
                         if any(' ' in s for pair in merges for s in pair):
                             logger.warning(f'Spaces in merges detected, encoding as {chr(ord(" ") + 256)!r}')

@@ -12,7 +12,7 @@
 
 - Squash-merge PRs
 - Use the following format for the squashed commit title: `<module> : <commit title> (#<issue_number>)`. For example: `utils : fix typo in utils.py (#1234)`
-- Optionally pick a `<module>` from here: https://github.com/ggerganov/llama.cpp/wiki/Modules
+- Optionally pick a `<module>` from here: https://github.com/ggml-org/llama.cpp/wiki/Modules
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS)
 
 # Coding guidelines
@@ -40,14 +40,14 @@
 - Try to follow the existing patterns in the code (indentation, spaces, etc.). In case of doubt use `clang-format` to format the added code
 - For anything not covered in the current guidelines, refer to the [C++ Core Guidelines](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines)
 - Tensors store data in row-major order. We refer to dimension 0 as columns, 1 as rows, 2 as matrices
-- Matrix multiplication is unconventional: [`C = ggml_mul_mat(ctx, A, B)`](https://github.com/ggerganov/llama.cpp/blob/880e352277fc017df4d5794f0c21c44e1eae2b84/ggml.h#L1058-L1064) means $C^T = A B^T \Leftrightarrow C = B A^T.$
+- Matrix multiplication is unconventional: [`C = ggml_mul_mat(ctx, A, B)`](https://github.com/ggml-org/llama.cpp/blob/880e352277fc017df4d5794f0c21c44e1eae2b84/ggml.h#L1058-L1064) means $C^T = A B^T \Leftrightarrow C = B A^T.$
 
 ![matmul](media/matmul.png)
 
 # Naming guidelines
 
 - Use `snake_case` for function, variable and type names
-- Naming usually optimizes for longest common prefix (see https://github.com/ggerganov/ggml/pull/302#discussion_r1243240963)
+- Naming usually optimizes for longest common prefix (see https://github.com/ggml-org/ggml/pull/302#discussion_r1243240963)
 
     ```cpp
     // not OK
@@ -122,4 +122,4 @@
 
 The Github issues, PRs and discussions contain a lot of information that can be useful to get familiar with the codebase. For convenience, some of the more important information is referenced from Github projects:
 
-https://github.com/ggerganov/llama.cpp/projects
+https://github.com/ggml-org/llama.cpp/projects

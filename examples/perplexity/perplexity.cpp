@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>

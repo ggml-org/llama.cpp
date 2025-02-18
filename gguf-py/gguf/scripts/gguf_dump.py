@@ -181,7 +181,7 @@ def element_count_rounded_notation(count: int) -> str:
 def translate_tensor_name(name):
     words = name.split(".")
 
-    # Source: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#standardized-tensor-names
+    # Source: https://github.com/ggml-org/ggml/blob/master/docs/gguf.md#standardized-tensor-names
     abbreviation_dictionary = {
         'token_embd': 'Token embedding',
         'pos_embd': 'Position embedding',

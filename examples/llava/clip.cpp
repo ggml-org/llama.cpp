@@ -102,6 +102,7 @@ static std::string format(const char * fmt, ...) {
 #define KEY_HAS_VIS_ENC         "clip.has_vision_encoder"
 #define KEY_HAS_LLAVA_PROJ      "clip.has_llava_projector"
 #define KEY_HAS_MINICPMV_PROJ   "clip.has_minicpmv_projector"
+#define KEY_HAS_GLM_PROJ        "clip.has_glm_projector"
 #define KEY_MINICPMV_VERSION    "clip.minicpmv_version"
 #define KEY_HAS_QWEN2VL_MERGER  "clip.has_qwen2vl_merger"
 #define KEY_USE_GELU            "clip.use_gelu"
@@ -160,6 +161,15 @@ static std::string format(const char * fmt, ...) {
 #define TN_MINICPMV_ATTN "resampler.attn.%s.%s"
 #define TN_MINICPMV_LN "resampler.ln_%s.%s"
 
+#define TN_GLM_ADAPER_CONV "adapter.conv.%s"
+#define TN_GLM_ADAPTER_LINEAR "adapter.linear.linear.%s"
+#define TN_GLM_ADAPTER_NORM_1 "adapter.linear.norm1.%s"
+#define TN_GLM_ADAPTER_D_H_2_4H "adapter.linear.dense_h_to_4h.%s"
+#define TN_GLM_ADAPTER_GATE "adapter.linear.gate.%s"
+#define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
+#define TN_GLM_BOI_W "adapter.boi"
+#define TN_GLM_EOI_W "adapter.eoi"
+
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,
@@ -167,6 +177,7 @@ enum projector_type {
     PROJECTOR_TYPE_LDP,
     PROJECTOR_TYPE_LDPV2,
     PROJECTOR_TYPE_RESAMPLER,
+    PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_MERGER,
     PROJECTOR_TYPE_UNKNOWN,
 };
@@ -176,6 +187,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_LDP, "ldp" },
     { PROJECTOR_TYPE_LDPV2, "ldpv2"},
     { PROJECTOR_TYPE_RESAMPLER, "resampler"},
+    { PROJECTOR_TYPE_GLM_EDGE, "adapter"},
     { PROJECTOR_TYPE_MERGER, "qwen2vl_merger"},
 };
 
@@ -500,6 +512,12 @@ struct clip_vision_model {
     struct ggml_tensor * mm_4_w = NULL;
     struct ggml_tensor * mm_4_b = NULL;
 
+    //GLMV-Edge projection
+    struct ggml_tensor * mm_model_adapter_conv_w;
+    struct ggml_tensor * mm_model_adapter_conv_b;
+    struct ggml_tensor * boi_w;
+    struct ggml_tensor * eoi_w;
+
     // MobileVLM projection
     struct ggml_tensor * mm_model_mlp_1_w;
     struct ggml_tensor * mm_model_mlp_1_b;
@@ -560,6 +578,7 @@ struct clip_ctx {
     bool has_vision_encoder  = false;
     bool has_llava_projector = false;
     bool has_minicpmv_projector = false;
+    bool has_glm_projector = false;
     bool has_qwen2vl_merger = false;
     int minicpmv_version = 2;
 
@@ -638,7 +657,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
 
     const int batch_size = imgs->size;
 
-    if (ctx->has_llava_projector || ctx->has_minicpmv_projector) {
+    if (ctx->has_llava_projector || ctx->has_minicpmv_projector || ctx->has_glm_projector) {
         GGML_ASSERT(batch_size == 1);
     }
 
@@ -734,8 +753,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     }
 
     // loop over layers
-    if (ctx->has_minicpmv_projector || ctx->has_qwen2vl_merger) {
-        // TODO: figure out why we doing thing in this way ???
+    if (ctx->has_minicpmv_projector || ctx->has_glm_projector || ctx->has_qwen2vl_merger) {
         n_layer += 1;
     }
     for (int il = 0; il < n_layer - 1; il++) {
@@ -1095,7 +1113,33 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             GGML_ASSERT(false);
         }
     }
-    else if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
+    // glm projector
+    else if (ctx->has_glm_projector) {
+        if (ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE) {
+            size_t gridsz = (size_t)sqrt(embeddings->ne[1]);
+            embeddings = ggml_cont(ctx0, ggml_permute(ctx0,embeddings,1,0,2,3));
+            embeddings = ggml_reshape_3d(ctx0, embeddings, gridsz, gridsz, embeddings->ne[1]);
+            embeddings = ggml_conv_2d(ctx0, model.mm_model_adapter_conv_w, embeddings, 2, 2, 0, 0, 1, 1);
+            embeddings = ggml_reshape_3d(ctx0, embeddings,embeddings->ne[0]*embeddings->ne[1] , embeddings->ne[2], batch_size);
+            embeddings = ggml_cont(ctx0, ggml_permute(ctx0,embeddings, 1, 0, 2, 3));
+            embeddings = ggml_add(ctx0, embeddings, model.mm_model_adapter_conv_b);
+            //GLU
+            {
+                embeddings = ggml_mul_mat(ctx0, model.mm_model_mlp_0_w, embeddings);
+                embeddings = ggml_norm(ctx0, embeddings, eps);
+                embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.mm_model_ln_q_w), model.mm_model_ln_q_b);
+                embeddings = ggml_gelu_inplace(ctx0, embeddings);
+                struct ggml_tensor * x = embeddings;
+                embeddings = ggml_mul_mat(ctx0, model.mm_model_mlp_2_w, embeddings);
+                x = ggml_mul_mat(ctx0, model.mm_model_mlp_1_w,x);
+                embeddings = ggml_silu_inplace(ctx0, embeddings);
+                embeddings = ggml_mul(ctx0, embeddings,x);
+                embeddings = ggml_mul_mat(ctx0, model.mm_model_mlp_3_w, embeddings);
+            }
+        } else {
+            GGML_ABORT("fatel error");
+        }
+    } else if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
         embeddings = ggml_reshape_3d(ctx0, embeddings, hidden_size * 4, num_positions / 4, batch_size);
 
         embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
@@ -1284,6 +1328,11 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             new_clip->minicpmv_version = gguf_get_val_i32(ctx, idx);
         }
 
+        idx = gguf_find_key(ctx, KEY_HAS_GLM_PROJ);
+        if (idx != -1) {
+            new_clip->has_glm_projector = gguf_get_val_bool(ctx, idx);
+        }
+
         idx = gguf_find_key(ctx, KEY_HAS_QWEN2VL_MERGER);
         if (idx != -1) {
             new_clip->has_qwen2vl_merger = gguf_get_val_bool(ctx, idx);
@@ -1308,6 +1357,7 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             LOG_INF("%s: vision_encoder: %d\n", __func__, new_clip->has_vision_encoder);
             LOG_INF("%s: llava_projector:  %d\n", __func__, new_clip->has_llava_projector);
             LOG_INF("%s: minicpmv_projector:  %d\n", __func__, new_clip->has_minicpmv_projector);
+            LOG_INF("%s: glm_projector:  %d\n", __func__, new_clip->has_glm_projector);
             LOG_INF("%s: model size:     %.2f MB\n", __func__, model_size / 1024.0 / 1024.0);
             LOG_INF("%s: metadata size:  %.2f MB\n", __func__, ggml_get_mem_size(meta) / 1024.0 / 1024.0);
         }
@@ -1574,6 +1624,18 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
             vision_model.mm_model_ln_kv_b = get_tensor(new_clip->ctx_data, format(TN_MINICPMV_LN, "kv", "bias"));
             vision_model.mm_model_ln_post_w = get_tensor(new_clip->ctx_data, format(TN_MINICPMV_LN, "post", "weight"));
             vision_model.mm_model_ln_post_b = get_tensor(new_clip->ctx_data, format(TN_MINICPMV_LN, "post", "bias"));
+        }
+        else if (new_clip->proj_type == PROJECTOR_TYPE_GLM_EDGE) {
+            vision_model.mm_model_adapter_conv_w = get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPER_CONV, "weight"));
+            vision_model.mm_model_adapter_conv_b = get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPER_CONV, "bias"));
+            vision_model.mm_model_mlp_0_w = get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_LINEAR,"weight"));
+            vision_model.mm_model_ln_q_w = get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_NORM_1,"weight"));
+            vision_model.mm_model_ln_q_b = get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_NORM_1,"bias"));
+            vision_model.mm_model_mlp_1_w =  get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_D_H_2_4H,"weight"));
+            vision_model.mm_model_mlp_2_w =  get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_GATE,"weight"));
+            vision_model.mm_model_mlp_3_w =  get_tensor(new_clip->ctx_data, format(TN_GLM_ADAPTER_D_4H_2_H,"weight"));
+            vision_model.boi_w = get_tensor(new_clip->ctx_data, TN_GLM_BOI_W);
+            vision_model.eoi_w = get_tensor(new_clip->ctx_data, TN_GLM_EOI_W);
         }
         else if (new_clip->proj_type == PROJECTOR_TYPE_MERGER) {
             vision_model.mm_0_w = get_tensor(new_clip->ctx_data, format(TN_LLAVA_PROJ, 0, "weight"));
@@ -2115,6 +2177,20 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, cli
         return true;
     }
 
+    if (ctx->has_glm_projector) {
+        res_imgs->size = 1;
+        res_imgs->data = new clip_image_f32[res_imgs->size];
+        clip_image_u8 resized_image;
+        int32_t sz=ctx->vision_model.hparams.image_size;
+        bicubic_resize(*img, resized_image,sz,sz);
+        clip_image_f32 * res = clip_image_f32_init();
+        //clip_image_save_to_bmp(resized_image, "resized.bmp");
+        normalize_image_u8_to_f32(&resized_image, res, ctx->image_mean, ctx->image_std);
+        res_imgs->data[0] = *res;
+        clip_image_f32_free(res);
+        return true;
+    }
+
     bool pad_to_square = true;
     if (!ctx->has_vision_encoder) {
         LOG_ERR("This gguf file seems to have no vision encoder\n");
@@ -2300,7 +2376,8 @@ void clip_free(clip_ctx * ctx) {
 }
 
 size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
-    return clip_n_patches(ctx) * clip_n_mmproj_embd(ctx) * sizeof(float);
+    int extra_tokens = ctx->has_glm_projector ? 2 : 0;
+    return (clip_n_patches(ctx) + extra_tokens) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
 size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_h, int img_w) {
@@ -2342,7 +2419,7 @@ int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * i
 
     int n_patches = (params.image_size / params.patch_size) * (params.image_size / params.patch_size);
 
-    if (ctx->proj_type == PROJECTOR_TYPE_LDP || ctx->proj_type == PROJECTOR_TYPE_LDPV2) {
+    if (ctx->proj_type == PROJECTOR_TYPE_LDP || ctx->proj_type == PROJECTOR_TYPE_LDPV2 || ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE) {
         n_patches /= 4;
     } else if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
         if (ctx->minicpmv_version == 2) {
@@ -2474,6 +2551,12 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
     if (ctx->has_minicpmv_projector) {
         GGML_ASSERT(batch_size == 1);
+    }
+    if (ctx->has_glm_projector) {
+        GGML_ASSERT(batch_size == 1);
+        ggml_tensor * boi = ctx->vision_model.boi_w;
+        ggml_backend_tensor_get(boi,vec,0,ggml_nbytes(boi));
+        vec = (float*)(vec+ggml_nelements(boi)); //offset for boi
     }
 
     // build the inference graph
@@ -2627,7 +2710,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
             free(positions_data);
 
-            {
+            if (!ctx->has_glm_projector) {
                 struct ggml_tensor * patches = ggml_graph_get_tensor(gf, "patches");
                 int* patches_data = (int*)malloc(ggml_nbytes(patches));
                 for (int i = 0; i < num_patches; i++) {
@@ -2651,14 +2734,19 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     // copy the embeddings to the location passed by the user
     ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
 
+    if (ctx->has_glm_projector) {
+        //eoi
+        ggml_tensor * eoi = ctx->vision_model.eoi_w;
+        int offset = ggml_nelements(embeddings);
+        ggml_backend_tensor_get(eoi, vec+offset, 0, ggml_nbytes(eoi));
+    }
+
     return true;
 }
 
 bool clip_model_quantize(const char * fname_inp, const char * fname_out, const int itype) {
-    ggml_type type = GGML_TYPE_Q4_1;
-
     assert(itype < GGML_TYPE_COUNT);
-    type = static_cast<ggml_type>(itype);
+    ggml_type type = static_cast<ggml_type>(itype);
 
     auto * ctx_clip = clip_model_load(fname_inp, 2);
 
@@ -2711,8 +2799,8 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
             }
         }
 
-        // quantize only 2D tensors
-        quantize &= (ggml_n_dims(cur) == 2);
+        // quantize only 2D tensors and bigger than block size
+        quantize &= (ggml_n_dims(cur) == 2) && cur->ne[0] > ggml_blck_size(type);
 
         if (quantize) {
             new_type = type;
@@ -2812,6 +2900,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return 3584;
         }
     }
+    if (ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE){
+        return ctx->vision_model.mm_model_mlp_3_w->ne[1];
+    }
     if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
         return ctx->vision_model.mm_1_b->ne[0];
     }
@@ -2827,6 +2918,9 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
     return 0;
 }
 
+bool clip_is_glm(const struct clip_ctx * ctx) {
+    return ctx->has_glm_projector;
+}
 bool clip_is_qwen2vl(const struct clip_ctx * ctx) {
     return ctx->has_qwen2vl_merger;
 }

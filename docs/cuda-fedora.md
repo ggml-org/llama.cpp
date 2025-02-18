@@ -1,17 +1,16 @@
 # Setting Up CUDA on Fedora
 
 In this guide we setup [Nvidia CUDA](https://docs.nvidia.com/cuda/) in a toolbox container. This guide is applicable for:
+
 - [Fedora Workstation](https://fedoraproject.org/workstation/)
 - [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/)
 - [Fedora Spins](https://fedoraproject.org/spins)
-- [Other Distributions](https://containertoolbx.org/distros/), including `Red Hat Enterprise Linux >= 8.`, `Arch Linux`, and `Ubuntu`.
-
+- [Other Distributions](https://containertoolbx.org/distros/), including `Red Hat Enterprise Linux >= 8.5`, `Arch Linux`, and `Ubuntu`.
 
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
-- [Monitoring NVIDIA CUDA Repositories](#monitoring-nvidia-cuda-repositories)
-- [Using the Fedora 39 CUDA Repository](#using-the-fedora-39-cuda-repository)
+- [Using the Fedora 41 CUDA Repository](#using-the-fedora-41-cuda-repository)
 - [Creating a Fedora Toolbox Environment](#creating-a-fedora-toolbox-environment)
 - [Installing Essential Development Tools](#installing-essential-development-tools)
 - [Adding the CUDA Repository](#adding-the-cuda-repository)
@@ -29,44 +28,33 @@ In this guide we setup [Nvidia CUDA](https://docs.nvidia.com/cuda/) in a toolbox
 ## Prerequisites
 
 - **Toolbox Installed on the Host System** `Fedora Silverblue` and `Fedora Workstation` both have toolbox by default, other distributions may need to install the [toolbox package](https://containertoolbx.org/install/).
-- **NVIDIA Drivers and Graphics Card installed on Host System (optional)** To run CUDA program, such as `llama.cpp`, the host should be setup to access your NVIDIA hardware. Fedora Hosts can use the [RPM Fusion Repository](https://rpmfusion.org/Howto/NVIDIA).
+- **NVIDIA Drivers and Graphics Card installed on Host System (recommended)** To run CUDA program, such as `llama.cpp`, the host should be setup to access your NVIDIA hardware. Fedora Hosts can use the [RPM Fusion Repository](https://rpmfusion.org/Howto/NVIDIA).
 - **Internet connectivity** to download packages.
 
-### Monitoring NVIDIA CUDA Repositories
+### Using the Fedora 41 CUDA Repository
 
-Before proceeding, it is advisable to check if NVIDIA has updated their CUDA repositories for your Fedora version. NVIDIA's repositories can be found at:
+The latest release is 41.
 
-- [Fedora 40 CUDA Repository](https://developer.download.nvidia.com/compute/cuda/repos/fedora40/x86_64/)
 - [Fedora 41 CUDA Repository](https://developer.download.nvidia.com/compute/cuda/repos/fedora41/x86_64/)
 
-As of the latest update, these repositories do not contain the `cuda` meta-package or are missing essential components.
-
-### Using the Fedora 39 CUDA Repository
-
-Since the newer repositories are incomplete, we'll use the Fedora 39 repository:
-
-- [Fedora 39 CUDA Repository](https://developer.download.nvidia.com/compute/cuda/repos/fedora39/x86_64/)
-
-**Note:** Fedora 39 is no longer maintained, so we recommend using a toolbox environment to prevent system conflicts.
+**Note:** We recommend using a toolbox environment to prevent system conflicts.
 
 ## Creating a Fedora Toolbox Environment
 
-This guide focuses on Fedora hosts, but with small adjustments, it can work for other hosts. Using a Fedora 39 toolbox allows us to install the necessary packages without affecting the host system.
+This guide focuses on Fedora hosts, but with small adjustments, it can work for other hosts. Using the Fedora Toolbox allows us to install the necessary packages without affecting the host system.
 
 **Note:** Toolbox is available for other systems, and even without Toolbox, it is possible to use Podman or Docker.
 
-We do not recommend installing on the host system, as Fedora 39 is out-of-maintenance, and instead you should upgrade to a maintained version of Fedora for your host.
-
-1. **Create a Fedora 39 Toolbox:**
+1. **Create a Fedora 41 Toolbox:**
 
    ```bash
-   toolbox create --image registry.fedoraproject.org/fedora-toolbox:39 --container fedora-toolbox-39-cuda
+   toolbox create --image registry.fedoraproject.org/fedora-toolbox:41 --container fedora-toolbox-41-cuda
    ```
 
 2. **Enter the Toolbox:**
 
    ```bash
-   toolbox enter --container fedora-toolbox-39-cuda
+   toolbox enter --container fedora-toolbox-41-cuda
    ```
 
    Inside the toolbox, you have root privileges and can install packages without affecting the host system.
@@ -85,7 +73,7 @@ We do not recommend installing on the host system, as Fedora 39 is out-of-mainte
    sudo dnf install vim-default-editor --allowerasing
    ```
 
-   The `--allowerasing` flag resolves any package conflicts.
+   The `--allowerasing` flag will allow the removal of the conflicting `nano-default-editor` package.
 
 3. **Install Development Tools and Libraries:**
 
@@ -100,7 +88,7 @@ We do not recommend installing on the host system, as Fedora 39 is out-of-mainte
 Add the NVIDIA CUDA repository to your DNF configuration:
 
 ```bash
-sudo dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/fedora39/x86_64/cuda-fedora39.repo
+sudo dnf config-manager addrepo --from-repofile=https://developer.download.nvidia.com/compute/cuda/repos/fedora41/x86_64/cuda-fedora41.repo
 ```
 
 After adding the repository, synchronize the package manager again:
@@ -109,106 +97,62 @@ After adding the repository, synchronize the package manager again:
 sudo dnf distro-sync
 ```
 
-## Installing `nvidia-driver-libs`
+## Installing `nvidia-driver-libs` and `nvidia-driver-cuda-libs`
 
-Attempt to install `nvidia-driver-libs`:
+We need to detect if the host is supplying the [NVIDIA driver libraries into the toolbox](https://github.com/containers/toolbox/blob/main/src/pkg/nvidia/nvidia.go).
 
 ```bash
-sudo dnf install nvidia-driver-libs
+ls -la /usr/lib64/libcuda.so.1
 ```
 
 **Explanation:**
 
-- `nvidia-driver-libs` contains necessary NVIDIA driver libraries required by CUDA.
-- This step might fail due to conflicts with existing NVIDIA drivers on the host system.
+- `nvidia-driver-libs` and `nvidia-driver-cuda-libs` contains necessary NVIDIA driver libraries required by CUDA,
+  on hosts with NVIDIA drivers installed the Fedora Container will supply the host libraries.
 
-## Manually Resolving Package Conflicts
+### Install Nvidia Driver Libraries on Guest (if `libcuda.so.1` was NOT found).
+
+```bash
+sudo dnf install nvidia-driver-libs nvidia-driver-cuda-libs
+```
+
+### Manually Updating the RPM database for host-supplied NVIDIA drivers (if `libcuda.so.1` was found).
 
 If the installation fails due to conflicts, we'll manually download and install the required packages, excluding conflicting files.
 
-### 1. Download the `nvidia-driver-libs` RPM
+#### 1. Download `nvidia-driver-libs` and `nvidia-driver-cuda-libs` RPM's (with dependencies)
 
 ```bash
-sudo dnf download --arch x86_64 nvidia-driver-libs
+sudo dnf download --destdir=/tmp/nvidia-driver-libs --resolve --arch x86_64 nvidia-driver-libs nvidia-driver-cuda-libs
 ```
 
-You should see a file similar to:
-
-```
-nvidia-driver-libs-560.35.05-1.fc39.x86_64.rpm
-```
-
-### 2. Attempt to Install the RPM
+#### 2. Update the RPM database to assume the installation of these packages.
 
 ```bash
-sudo dnf install nvidia-driver-libs-560.35.05-1.fc39.x86_64.rpm
-```
-
-**Expected Error:**
-
-Installation may fail with errors pointing to conflicts with `egl-gbm` and `egl-wayland`.
-
-**Note: It is important to carefully read the error messages to identify the exact paths that need to be excluded.**
-
-### 3. Download Dependencies
-
-```bash
-sudo dnf download --arch x86_64 egl-gbm egl-wayland
-```
-
-### 4. Install `egl-gbm` with Excluded Paths
-
-Exclude conflicting files during installation:
-
-```bash
-sudo rpm --install --verbose --hash \
-  --excludepath=/usr/lib64/libnvidia-egl-gbm.so.1.1.2 \
-  --excludepath=/usr/share/egl/egl_external_platform.d/15_nvidia_gbm.json \
-  egl-gbm-1.1.2^20240919gitb24587d-3.fc39.x86_64.rpm
-```
-
-**Explanation:**
-
-- The `--excludepath` option skips installing files that conflict with existing files.
-- Adjust the paths based on the error messages you receive.
-
-### 5. Install `egl-wayland` with Excluded Paths
-
-```bash
-sudo rpm --install --verbose --hash \
-  --excludepath=/usr/share/egl/egl_external_platform.d/10_nvidia_wayland.json \
-  egl-wayland-1.1.17^20241118giteeb29e1-5.fc39.x86_64.rpm
-```
-
-### 6. Install `nvidia-driver-libs` with Excluded Paths
-
-```bash
-sudo rpm --install --verbose --hash \
-  --excludepath=/usr/share/glvnd/egl_vendor.d/10_nvidia.json \
-  --excludepath=/usr/share/nvidia/nvoptix.bin \
-  nvidia-driver-libs-560.35.05-1.fc39.x86_64.rpm
+sudo rpm --install --verbose --hash --justdb /tmp/nvidia-driver-libs/*
 ```
 
 **Note:**
 
-- Replace the paths with the ones causing conflicts in your installation if they differ.
-- The `--verbose` and `--hash` options provide detailed output during installation.
+- The `--justdb` option only updates the RPM database, without touching the filesystem.
 
-## Finalizing the Installation of `nvidia-driver-libs`
+#### Finalizing the Installation of `nvidia-driver-libs` and `nvidia-driver-cuda-libs`
 
 After manually installing the dependencies, run:
 
 ```bash
-sudo dnf install nvidia-driver-libs
+sudo dnf install nvidia-driver-libs nvidia-driver-cuda-libs
 ```
 
 You should receive a message indicating the package is already installed:
 
 ```
-Package nvidia-driver-libs-3:560.35.05-1.fc39.x86_64 is already installed.
-Dependencies resolved.
+Updating and loading repositories:
+Repositories loaded.
+Package "nvidia-driver-libs-3:570.86.10-1.fc41.x86_64" is already installed.
+Package "nvidia-driver-cuda-libs-3:570.86.10-1.fc41.x86_64" is already installed.
+
 Nothing to do.
-Complete!
 ```
 
 ## Installing the CUDA Meta-Package
@@ -233,7 +177,7 @@ To use CUDA, add its binary directory to your system's `PATH`.
 
    **Explanation:**
 
-   - We add to  `/etc/profile.d/` as the `/etc/` folder is unique to this particular container, and is not shared with other containers or the host system.
+   - We add to `/etc/profile.d/` as the `/etc/` folder is unique to this particular container, and is not shared with other containers or the host system.
    - The backslash `\` before `$PATH` ensures the variable is correctly written into the script.
 
 2. **Make the Script Executable:**
@@ -262,26 +206,33 @@ You should see output similar to:
 
 ```
 nvcc: NVIDIA (R) Cuda compiler driver
-Copyright (c) 2005-2024 NVIDIA Corporation
-Built on Tue_Oct_29_23:50:19_PDT_2024
-Cuda compilation tools, release 12.6, V12.6.85
-Build cuda_12.6.r12.6/compiler.35059454_0
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Jan_15_19:20:09_PST_2025
+Cuda compilation tools, release 12.8, V12.8.61
+Build cuda_12.8.r12.8/compiler.35404655_0
 ```
 
 This output confirms that the CUDA compiler is accessible and indicates the installed version.
 
 ## Conclusion
 
-You have successfully set up CUDA on Fedora within a toolbox environment using the Fedora 39 CUDA repository. By manually resolving package conflicts and configuring the environment, you can develop CUDA applications without affecting your host system.
+You have successfully set up CUDA on Fedora within a toolbox environment using the Fedora 41 CUDA repository. By manually updating the RPM db and configuring the environment, you can develop CUDA applications without affecting your host system.
 
 ## Troubleshooting
 
 - **Installation Failures:**
-  - If you encounter errors during installation, carefully read the error messages. They often indicate conflicting files or missing dependencies.
-  - Use the `--excludepath` option with `rpm` to exclude conflicting files during manual installations.
 
-- **Driver Conflicts:**
-  - Since the host system may already have NVIDIA drivers installed, conflicts can arise. Using the toolbox environment helps isolate these issues.
+  - If you encounter errors during installation, carefully read the error messages. They often indicate conflicting files or missing dependencies.
+  - You may use the `--excludepath` option with `rpm` to exclude conflicting files during manual RPM installations.
+
+- **Rebooting the Container:**
+
+  - Sometimes there may be a bug in the NVIDIA driver host passthrough (such as missing a shared library). Rebooting the container may solve this issue:
+
+  ```bash
+  # on the host system
+  podman container restart --all
+  ```
 
 - **Environment Variables Not Set:**
   - If `nvcc` is not found after installation, ensure that `/usr/local/cuda/bin` is in your `PATH`.
@@ -291,11 +242,13 @@ You have successfully set up CUDA on Fedora within a toolbox environment using t
 ## Additional Notes
 
 - **Updating CUDA in the Future:**
+
   - Keep an eye on the official NVIDIA repositories for updates to your Fedora version.
   - When an updated repository becomes available, adjust your `dnf` configuration accordingly.
 
 - **Building `llama.cpp`:**
-  - With CUDA installed, you can follow these [build instructions for `llama.cpp`](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md) to compile it with CUDA support.
+
+  - With CUDA installed, you can follow these [build instructions for `llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) to compile it with CUDA support.
   - Ensure that any CUDA-specific build flags or paths are correctly set in your build configuration.
 
 - **Using the Toolbox Environment:**

@@ -3,159 +3,13 @@ set(LLAMA_BUILD_COMMIT @LLAMA_BUILD_COMMIT@)
 set(LLAMA_BUILD_NUMBER @LLAMA_BUILD_NUMBER@)
 set(LLAMA_SHARED_LIB   @BUILD_SHARED_LIBS@)
 
-set(GGML_STATIC @GGML_STATIC@)
-set(GGML_NATIVE @GGML_NATIVE@)
-set(GGML_LTO    @GGML_LTO@)
-set(GGML_CCACHE @GGML_CCACHE@)
-set(GGML_AVX    @GGML_AVX@)
-set(GGML_AVX2   @GGML_AVX2@)
-set(GGML_AVX512 @GGML_AVX512@)
-set(GGML_AVX512_VBMI @GGML_AVX512_VBMI@)
-set(GGML_AVX512_VNNI @GGML_AVX512_VNNI@)
-set(GGML_AVX512_BF16 @GGML_AVX512_BF16@)
-set(GGML_AMX_TILE @GGML_AMX_TILE@)
-set(GGML_AMX_INT8 @GGML_AMX_INT8@)
-set(GGML_AMX_BF16 @GGML_AMX_BF16@)
-set(GGML_FMA  @GGML_FMA@)
-set(GGML_LASX @GGML_LASX@)
-set(GGML_LSX  @GGML_LSX@)
-set(GGML_RVV  @GGML_RVV@)
-set(GGML_SVE  @GGML_SVE@)
-
-set(GGML_ACCELERATE @GGML_ACCELERATE@)
-set(GGML_OPENMP  @GGML_OPENMP@)
-set(GGML_CPU_HBM @GGML_CPU_HBM@)
-set(GGML_BLAS_VENDOR @GGML_BLAS_VENDOR@)
-
-set(GGML_CUDA_FORCE_MMQ    @GGML_CUDA_FORCE_MMQ@)
-set(GGML_CUDA_FORCE_CUBLAS @GGML_CUDA_FORCE_CUBLAS@)
-set(GGML_CUDA_F16          @GGML_CUDA_F16@)
-set(GGML_CUDA_PEER_MAX_BATCH_SIZE @GGML_CUDA_PEER_MAX_BATCH_SIZE@)
-set(GGML_CUDA_NO_PEER_COPY  @GGML_CUDA_NO_PEER_COPY@)
-set(GGML_CUDA_NO_VMM        @GGML_CUDA_NO_VMM@)
-set(GGML_CUDA_FA_ALL_QUANTS @GGML_CUDA_FA_ALL_QUANTS@)
-set(GGML_CUDA_GRAPHS        @GGML_CUDA_GRAPHS@)
-
-set(GGML_HIP_UMA @GGML_HIP_UMA@)
-
-set(GGML_VULKAN_CHECK_RESULTS @GGML_VULKAN_CHECK_RESULTS@)
-set(GGML_VULKAN_DEBUG         @GGML_VULKAN_DEBUG@)
-set(GGML_VULKAN_MEMORY_DEBUG  @GGML_VULKAN_MEMORY_DEBUG@)
-set(GGML_VULKAN_SHADER_DEBUG_INFO @GGML_VULKAN_SHADER_DEBUG_INFO@)
-set(GGML_VULKAN_PERF      @GGML_VULKAN_PERF@)
-set(GGML_VULKAN_VALIDATE  @GGML_VULKAN_VALIDATE@)
-set(GGML_VULKAN_RUN_TESTS @GGML_VULKAN_RUN_TESTS@)
-
-set(GGML_METAL_USE_BF16 @GGML_METAL_USE_BF16@)
-set(GGML_METAL_NDEBUG   @GGML_METAL_NDEBUG@)
-set(GGML_METAL_SHADER_DEBUG  @GGML_METAL_SHADER_DEBUG@)
-set(GGML_METAL_EMBED_LIBRARY @GGML_METAL_EMBED_LIBRARY@)
-set(GGML_METAL_MACOSX_VERSION_MIN @GGML_METAL_MACOSX_VERSION_MIN@)
-set(GGML_METAL_STD @GGML_METAL_STD@)
-
-set(GGML_SYCL_F16    @GGML_SYCL_F16@)
-set(GGML_SYCL_TARGET @GGML_SYCL_TARGET@)
-set(GGML_SYCL_DEVICE_ARCH @GGML_SYCL_DEVICE_ARCH@)
-
-
 @PACKAGE_INIT@
 
 set_and_check(LLAMA_INCLUDE_DIR "@PACKAGE_LLAMA_INCLUDE_INSTALL_DIR@")
 set_and_check(LLAMA_LIB_DIR     "@PACKAGE_LLAMA_LIB_INSTALL_DIR@")
 set_and_check(LLAMA_BIN_DIR     "@PACKAGE_LLAMA_BIN_INSTALL_DIR@")
 
-find_package(Threads REQUIRED)
-
-set(_llama_transient_defines "@GGML_TRANSIENT_DEFINES@")
-set(_llama_link_deps "")
-set(_llama_link_opts "")
-foreach(_ggml_lib ggml ggml-base)
-    string(REPLACE "-" "_" _ggml_lib_var "${_ggml_lib}_LIBRARY")
-    find_library(${_ggml_lib_var} ${_ggml_lib}
-        REQUIRED
-        HINTS ${LLAMA_LIB_DIR}
-        NO_CMAKE_FIND_ROOT_PATH
-    )
-    list(APPEND _llama_link_deps "${${_ggml_lib_var}}")
-    message(STATUS "Found ${${_ggml_lib_var}}")
-endforeach()
-
-foreach(backend amx blas cann cpu cuda hip kompute metal musa rpc sycl vulkan)
-    string(TOUPPER "GGML_${backend}" backend_id)
-    set(_ggml_lib "ggml-${backend}")
-    string(REPLACE "-" "_" _ggml_lib_var "${_ggml_lib}_LIBRARY")
-
-    find_library(${_ggml_lib_var} ${_ggml_lib}
-        HINTS ${LLAMA_LIB_DIR}
-        NO_CMAKE_FIND_ROOT_PATH
-    )
-    if(${_ggml_lib_var})
-        list(APPEND _llama_link_deps "${${_ggml_lib_var}}")
-        set(${backend_id} ON)
-        message(STATUS "Found backend ${${_ggml_lib_var}}")
-    else()
-        set(${backend_id} OFF)
-    endif()
-endforeach()
-
-if (NOT LLAMA_SHARED_LIB)
-    if (APPLE AND GGML_ACCELERATE)
-        find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
-        list(APPEND _llama_link_deps ${ACCELERATE_FRAMEWORK})
-    endif()
-
-    if (GGML_OPENMP)
-        find_package(OpenMP REQUIRED)
-        list(APPEND _llama_link_deps OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
-    endif()
-
-    if (GGML_CPU_HBM)
-        find_library(memkind memkind REQUIRED)
-        list(APPEND _llama_link_deps memkind)
-    endif()
-
-    if (GGML_BLAS)
-        find_package(BLAS REQUIRED)
-        list(APPEND _llama_link_deps ${BLAS_LIBRARIES})
-        list(APPEND _llama_link_opts ${BLAS_LINKER_FLAGS})
-    endif()
-
-    if (GGML_CUDA)
-        find_package(CUDAToolkit REQUIRED)
-    endif()
-
-    if (GGML_METAL)
-        find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
-        find_library(METAL_FRAMEWORK    Metal REQUIRED)
-        find_library(METALKIT_FRAMEWORK MetalKit REQUIRED)
-        list(APPEND _llama_link_deps ${FOUNDATION_LIBRARY}
-                                     ${METAL_FRAMEWORK} ${METALKIT_FRAMEWORK})
-    endif()
-
-    if (GGML_VULKAN)
-        find_package(Vulkan REQUIRED)
-        list(APPEND _llama_link_deps Vulkan::Vulkan)
-    endif()
-
-    if (GGML_HIP)
-        find_package(hip     REQUIRED)
-        find_package(hipblas REQUIRED)
-        find_package(rocblas REQUIRED)
-        list(APPEND _llama_link_deps hip::host roc::rocblas roc::hipblas)
-    endif()
-
-    if (GGML_SYCL)
-        find_package(DNNL)
-        if (${DNNL_FOUND} AND GGML_SYCL_TARGET STREQUAL "INTEL")
-            list(APPEND _llama_link_deps DNNL::dnnl)
-        endif()
-        if (WIN32)
-            find_package(IntelSYCL REQUIRED)
-            find_package(MKL       REQUIRED)
-            list(APPEND _llama_link_deps IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)
-        endif()
-    endif()
-endif()
+find_package(ggml REQUIRED HINTS ${LLAMA_LIB_DIR}/cmake)
 
 find_library(llama_LIBRARY llama
     REQUIRED
@@ -167,12 +21,10 @@ add_library(llama UNKNOWN IMPORTED)
 set_target_properties(llama
     PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${LLAMA_INCLUDE_DIR}"
-        INTERFACE_LINK_LIBRARIES "${_llama_link_deps}"
-        INTERFACE_LINK_OPTIONS   "${_llama_link_opts}"
-        INTERFACE_COMPILE_DEFINITIONS "${_llama_transient_defines}"
+        INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
         IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
         IMPORTED_LOCATION "${llama_LIBRARY}"
-        INTERFACE_COMPILE_FEATURES cxx_std_11
-        POSITION_INDEPENDENT_CODE ON )
+        INTERFACE_COMPILE_FEATURES c_std_90
+        POSITION_INDEPENDENT_CODE ON)
 
 check_required_components(Llama)

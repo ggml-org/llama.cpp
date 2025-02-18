@@ -9,7 +9,7 @@ packages = [
 ]
 readme = "README.md"
 homepage = "https://ggml.ai"
-repository = "https://github.com/ggerganov/llama.cpp"
+repository = "https://github.com/ggml-org/llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
 classifiers = [
     "Programming Language :: Python :: 3",

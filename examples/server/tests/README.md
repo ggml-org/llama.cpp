@@ -31,8 +31,9 @@ It's possible to override some scenario steps values with environment variables:
 | `LLAMA_SERVER_BIN_PATH`  | to change the server binary path, default: `../../../build/bin/llama-server`                         |
 | `DEBUG`                  | to enable steps and server verbose mode `--verbose`                                       |
 | `N_GPU_LAYERS`           | number of model layers to offload to VRAM `-ngl --n-gpu-layers`                                |
+| `LLAMA_CACHE`            | by default server tests re-download models to the `tmp` subfolder. Set this to your cache (e.g. `$HOME/Library/Caches/llama.cpp` on Mac or `$HOME/.cache/llama.cpp` on Unix) to avoid this |
 
-To run slow tests:
+To run slow tests (will download many models, make sure to set `LLAMA_CACHE` if needed):
 
 ```shell
 SLOW_TESTS=1 ./tests.sh
@@ -44,10 +45,16 @@ To run with stdout/stderr display in real time (verbose output, but useful for d
 DEBUG=1 ./tests.sh -s -v -x
 ```
 
-To run single test unit:
+To run all the tests in a file:
 
 ```shell
-./tests.sh unit/test_{name of test case here}.py -v -x
+./tests.sh unit/test_chat_completion.py -v -x
+```
+
+To run a single test:
+
+```shell
+./tests.sh unit/test_chat_completion.py::test_invalid_chat_completion_req
 ```
 
 Hint: You can compile and run test in single command, useful for local developement:

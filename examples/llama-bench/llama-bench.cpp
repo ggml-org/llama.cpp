@@ -876,8 +876,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
 struct test {
     static const std::string build_commit;
     static const int         build_number;
-    static const std::string cpu_info;
-    static const std::string gpu_info;
+    const std::string        cpu_info;
+    const std::string        gpu_info;
     std::string              model_filename;
     std::string              model_type;
     uint64_t                 model_size;
@@ -903,7 +903,10 @@ struct test {
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
 
-    test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) {
+    test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
+        cpu_info(get_cpu_info()),
+        gpu_info(get_gpu_info()) {
+
         model_filename = inst.model;
         char buf[128];
         llama_model_desc(lmodel, buf, sizeof(buf));
@@ -1058,8 +1061,6 @@ struct test {
 
 const std::string test::build_commit = LLAMA_COMMIT;
 const int         test::build_number = LLAMA_BUILD_NUMBER;
-const std::string test::cpu_info     = get_cpu_info();
-const std::string test::gpu_info     = get_gpu_info();
 
 struct printer {
     virtual ~printer() {}

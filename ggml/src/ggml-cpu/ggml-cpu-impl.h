@@ -360,21 +360,15 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #endif
 
 #if defined(__loongarch_asx)
-
-typedef union {
-    int32_t i;
-    float f;
-} ft_union;
-
 /* float type data load instructions */
-static __m128 __lsx_vreplfr2vr_s(float val) {
-    ft_union fi_tmpval = {.f = val};
-    return (__m128)__lsx_vreplgr2vr_w(fi_tmpval.i);
+static __m128 __lsx_vreplfr2vr_s(const float val) {
+    v4f32 res = {val, val, val, val};
+    return (__m128)res;
 }
 
-static __m256 __lasx_xvreplfr2vr_s(float val) {
-    ft_union fi_tmpval = {.f = val};
-    return (__m256)__lasx_xvreplgr2vr_w(fi_tmpval.i);
+static __m256 __lasx_xvreplfr2vr_s(const float val) {
+    v8f32 res = {val, val, val, val, val, val, val, val};
+    return (__m256)res;
 }
 #endif
 

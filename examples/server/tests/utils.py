@@ -26,7 +26,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 10 if "LLAMA_SANITIZE" not in os.environ else 30
+DEFAULT_HTTP_TIMEOUT = 12 if "LLAMA_SANITIZE" not in os.environ else 30
 
 
 class ServerResponse:
@@ -41,7 +41,7 @@ class ServerProcess:
     server_port: int = 8080
     server_host: str = "127.0.0.1"
     model_hf_repo: str = "ggml-org/models"
-    model_hf_file: str = "tinyllamas/stories260K.gguf"
+    model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
     seed: int = 42
@@ -78,6 +78,7 @@ class ServerProcess:
     draft_max: int | None = None
     no_webui: bool | None = None
     jinja: bool | None = None
+    reasoning_format: Literal['deepseek', 'none'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
 
@@ -172,6 +173,8 @@ class ServerProcess:
             server_args.append("--no-webui")
         if self.jinja:
             server_args.append("--jinja")
+        if self.reasoning_format is not None:
+            server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.chat_template:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
@@ -191,7 +194,7 @@ class ServerProcess:
             creationflags=flags,
             stdout=sys.stdout,
             stderr=sys.stdout,
-            env={**os.environ, "LLAMA_CACHE": "tmp"},
+            env={**os.environ, "LLAMA_CACHE": "tmp"} if "LLAMA_CACHE" not in os.environ else None,
         )
         server_instances.add(self)
 

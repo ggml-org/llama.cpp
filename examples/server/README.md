@@ -7,14 +7,14 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
- * Reranking endoint (WIP: https://github.com/ggerganov/llama.cpp/pull/9510)
+ * Reranking endoint (WIP: https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
  * Multimodal (wip)
  * Monitoring endpoints
  * Schema-constrained JSON response format
 
-The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
+The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggml-org/llama.cpp/issues/4216).
 
 ## Usage
 
@@ -65,7 +65,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--no-mmap` | do not memory-map model (slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_NO_MMAP) |
-| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggerganov/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
+| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | number of layers to store in VRAM<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
@@ -126,7 +126,8 @@ The project is under active development, and we are [looking for feedback and co
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '') |
 | `--grammar-file FNAME` | file to read grammar from |
 | `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `--jinja` | Enable experimental Jinja templating engine (needed for tool use) |
+| `--jinja` | Enable experimental Jinja templating engine (required for tool use) |
+| `--reasoning-format FORMAT` | Controls extraction of model thinking traces and the format / field in which they are returned (default: `deepseek`; allowed values: `deepseek`, `none`; requires `--jinja`). `none` will leave thinking traces inline in `message.content` in a model-specific format, while `deepseek` will return them separately under `message.reasoning_content` |
 
 **Example-specific params**
 
@@ -177,7 +178,7 @@ Example usage of docker compose with environment variables:
 ```yml
 services:
   llamacpp-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     ports:
       - 8080:8080
     volumes:
@@ -220,7 +221,7 @@ services:
 The project includes a web-based user interface that enables interaction with the model through the `/chat/completions` endpoint.
 
 The web UI is developed using:
-- `vue` framework for frontend development
+- `react` framework for frontend development
 - `tailwindcss` and `daisyui` for styling
 - `vite` for build tooling
 
@@ -236,9 +237,13 @@ npm i
 # to run the dev server
 npm run dev
 
-# to build the public/index.html
+# to build the public/index.html.gz
 npm run build
 ```
+After `public/index.html.gz` has been generated we need to generate the c++
+headers (like build/examples/server/index.html.gz.hpp) that will be included
+by server.cpp. This is done by building `llama-server` as described in the
+[build](#build) section above.
 
 NOTE: if you are using the vite dev server, you can change the API base URL to llama.cpp. To do that, run this code snippet in browser's console:
 
@@ -268,10 +273,10 @@ You can consume the endpoints with Postman or NodeJS with axios library. You can
 ### Docker
 
 ```bash
-docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
+docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
 
 # or, with CUDA:
-docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggerganov/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
+docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
 
 ## Testing with CURL
@@ -456,7 +461,7 @@ These words will not be included in the completion, so make sure to add them to 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
 - `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
-  ```json
+  ```
   {
     "content": "<the generated completion text>",
     "tokens": [ generated token ids if requested ],
@@ -557,7 +562,7 @@ If `with_pieces` is `true`:
 ```
 
 With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
-```json
+```
 {
   "tokens": [
     {"id": 198, "piece": [195]}, // hex C3
@@ -571,6 +576,18 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 *Options:*
 
 `tokens`: Set the tokens to detokenize.
+
+### POST `/apply-template`: Apply chat template to a conversation
+
+Uses the server's prompt template formatting functionality to convert chat messages to a single string expected by a chat model as input, but does not perform inference. Instead, the prompt string is returned in the `prompt` field of the JSON response. The prompt can then be modified as desired (for example, to insert "Sure!" at the beginning of the model's response) before sending to `/completion` to generate the chat response.
+
+*Options:*
+
+`messages`: (Required) Chat turns in the same format as `/v1/chat/completions`.
+
+**Response format**
+
+Returns a JSON object with a field `prompt` containing a string of the input messages formatted according to the model's chat template format.
 
 ### POST `/embedding`: Generate embedding of a given text
 
@@ -764,7 +781,7 @@ Same as the `/v1/embeddings` endpoint.
 
 **Response format**
 
-```json
+```
 [
   {
     "index": 0,
@@ -1049,11 +1066,11 @@ print(completion.choices[0].text)
 
 ### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
 
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
 *Options:*
 
-See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
@@ -1100,6 +1117,384 @@ curl http://localhost:8080/v1/chat/completions \
 ]
 }'
 ```
+
+*Tool call support*
+
+[Function calling](https://platform.openai.com/docs/guides/function-calling) is supported for all models (see https://github.com/ggml-org/llama.cpp/pull/9639):
+
+- Requires `--jinja` flag
+- Native tool call formats supported:
+  - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
+  - Functionary v3.1 / v3.2
+  - Hermes 2/3, Qwen 2.5
+  - Mistral Nemo
+  - Firefunction v2
+  - Command R7B
+  - DeepSeek R1 (WIP / seems reluctant to call any tools?)
+
+  <details>
+  <summary>Show some common templates and which format handler they use</summary>
+
+  | Template | Format |
+  |----------|--------|
+  | Almawave-Velvet-14B.jinja | Hermes 2 Pro |
+  | AtlaAI-Selene-1-Mini-Llama-3.1-8B.jinja | Llama 3.x |
+  | CohereForAI-aya-expanse-8b.jinja | Generic |
+  | CohereForAI-c4ai-command-r-plus-default.jinja | Generic |
+  | CohereForAI-c4ai-command-r-plus-rag.jinja | Generic |
+  | CohereForAI-c4ai-command-r-plus-tool_use.jinja | Generic |
+  | CohereForAI-c4ai-command-r7b-12-2024-default.jinja | Command R7B (extract reasoning) |
+  | CohereForAI-c4ai-command-r7b-12-2024-rag.jinja | Command R7B (extract reasoning) |
+  | CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja | Command R7B (extract reasoning) |
+  | CohereForAI-c4ai-command-r7b-12-2024.jinja | Generic |
+  | DavieLion-Llama-3.2-1B-SPIN-iter3.jinja | Generic |
+  | Delta-Vector-Rei-12B.jinja | Mistral Nemo |
+  | EpistemeAI-Mistral-Nemo-Instruct-12B-Philosophy-Math.jinja | Mistral Nemo |
+  | FlofloB-83k_continued_pretraining_Qwen2.5-0.5B-Instruct_Unsloth_merged_16bit.jinja | Hermes 2 Pro |
+  | FlofloB-test_continued_pretraining_Phi-3-mini-4k-instruct_Unsloth_merged_16bit.jinja | Generic |
+  | HelpingAI-HAI-SER.jinja | Generic |
+  | HuggingFaceTB-SmolLM2-1.7B-Instruct.jinja | Generic |
+  | HuggingFaceTB-SmolLM2-135M-Instruct.jinja | Generic |
+  | HuggingFaceTB-SmolLM2-360M-Instruct.jinja | Generic |
+  | INSAIT-Institute-BgGPT-Gemma-2-27B-IT-v1.0.jinja | Generic |
+  | Ihor-Text2Graph-R1-Qwen2.5-0.5b.jinja | Hermes 2 Pro |
+  | Infinigence-Megrez-3B-Instruct.jinja | Generic |
+  | Josephgflowers-TinyLlama_v1.1_math_code-world-test-1.jinja | Generic |
+  | LGAI-EXAONE-EXAONE-3.5-2.4B-Instruct.jinja | Generic |
+  | LGAI-EXAONE-EXAONE-3.5-7.8B-Instruct.jinja | Generic |
+  | LatitudeGames-Wayfarer-12B.jinja | Generic |
+  | Magpie-Align-Llama-3-8B-Magpie-Align-v0.1.jinja | Generic |
+  | Magpie-Align-Llama-3.1-8B-Magpie-Align-v0.1.jinja | Generic |
+  | MaziyarPanahi-calme-3.2-instruct-78b.jinja | Generic |
+  | MiniMaxAI-MiniMax-Text-01.jinja | Generic |
+  | MiniMaxAI-MiniMax-VL-01.jinja | Generic |
+  | NaniDAO-deepseek-r1-qwen-2.5-32B-ablated.jinja | DeepSeek R1 (extract reasoning) |
+  | NexaAIDev-Octopus-v2.jinja | Generic |
+  | NousResearch-Hermes-2-Pro-Llama-3-8B-default.jinja | Generic |
+  | NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja | Hermes 2 Pro |
+  | NousResearch-Hermes-2-Pro-Mistral-7B-default.jinja | Generic |
+  | NousResearch-Hermes-2-Pro-Mistral-7B-tool_use.jinja | Hermes 2 Pro |
+  | NousResearch-Hermes-3-Llama-3.1-70B-default.jinja | Generic |
+  | NousResearch-Hermes-3-Llama-3.1-70B-tool_use.jinja | Hermes 2 Pro |
+  | NovaSky-AI-Sky-T1-32B-Flash.jinja | Hermes 2 Pro |
+  | NovaSky-AI-Sky-T1-32B-Preview.jinja | Hermes 2 Pro |
+  | OnlyCheeini-greesychat-turbo.jinja | Generic |
+  | Orenguteng-Llama-3.1-8B-Lexi-Uncensored-V2.jinja | Llama 3.x |
+  | OrionStarAI-Orion-14B-Chat.jinja | Generic |
+  | PowerInfer-SmallThinker-3B-Preview.jinja | Generic |
+  | PrimeIntellect-INTELLECT-1-Instruct.jinja | Generic |
+  | Qwen-QVQ-72B-Preview.jinja | Generic |
+  | Qwen-QwQ-32B-Preview.jinja | Hermes 2 Pro |
+  | Qwen-Qwen1.5-7B-Chat.jinja | Generic |
+  | Qwen-Qwen2-7B-Instruct.jinja | Generic |
+  | Qwen-Qwen2-VL-72B-Instruct.jinja | Generic |
+  | Qwen-Qwen2-VL-7B-Instruct.jinja | Generic |
+  | Qwen-Qwen2.5-0.5B.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-1.5B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-14B-Instruct-1M.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-14B.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-32B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-32B.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-3B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-72B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-7B-Instruct-1M.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-7B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-7B.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-Coder-32B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-Coder-7B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-Math-1.5B.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-Math-7B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-VL-3B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-VL-72B-Instruct.jinja | Hermes 2 Pro |
+  | Qwen-Qwen2.5-VL-7B-Instruct.jinja | Hermes 2 Pro |
+  | RWKV-Red-Team-ARWKV-7B-Preview-0.1.jinja | Hermes 2 Pro |
+  | SakanaAI-TinySwallow-1.5B-Instruct.jinja | Hermes 2 Pro |
+  | SakanaAI-TinySwallow-1.5B.jinja | Hermes 2 Pro |
+  | Sao10K-70B-L3.3-Cirrus-x1.jinja | Llama 3.x |
+  | SentientAGI-Dobby-Mini-Leashed-Llama-3.1-8B.jinja | Llama 3.x |
+  | SentientAGI-Dobby-Mini-Unhinged-Llama-3.1-8B.jinja | Llama 3.x |
+  | Steelskull-L3.3-Damascus-R1.jinja | Llama 3.x |
+  | Steelskull-L3.3-MS-Nevoria-70b.jinja | Llama 3.x |
+  | Steelskull-L3.3-Nevoria-R1-70b.jinja | Llama 3.x |
+  | THUDM-glm-4-9b-chat.jinja | Generic |
+  | THUDM-glm-edge-1.5b-chat.jinja | Generic |
+  | Tarek07-Progenitor-V1.1-LLaMa-70B.jinja | Llama 3.x |
+  | TheBloke-FusionNet_34Bx2_MoE-AWQ.jinja | Generic |
+  | TinyLlama-TinyLlama-1.1B-Chat-v1.0.jinja | Generic |
+  | UCLA-AGI-Mistral7B-PairRM-SPPO-Iter3.jinja | Generic |
+  | ValiantLabs-Llama3.1-8B-Enigma.jinja | Llama 3.x |
+  | abacusai-Fewshot-Metamath-OrcaVicuna-Mistral.jinja | Generic |
+  | ai21labs-AI21-Jamba-1.5-Large.jinja | Generic |
+  | allenai-Llama-3.1-Tulu-3-405B-SFT.jinja | Generic |
+  | allenai-Llama-3.1-Tulu-3-405B.jinja | Generic |
+  | allenai-Llama-3.1-Tulu-3-8B.jinja | Generic |
+  | arcee-ai-Virtuoso-Lite.jinja | Hermes 2 Pro |
+  | arcee-ai-Virtuoso-Medium-v2.jinja | Hermes 2 Pro |
+  | arcee-ai-Virtuoso-Small-v2.jinja | Hermes 2 Pro |
+  | avemio-GRAG-NEMO-12B-ORPO-HESSIAN-AI.jinja | Generic |
+  | bespokelabs-Bespoke-Stratos-7B.jinja | Hermes 2 Pro |
+  | bfuzzy1-acheron-m1a-llama.jinja | Generic |
+  | bofenghuang-vigogne-2-70b-chat.jinja | Generic |
+  | bytedance-research-UI-TARS-72B-DPO.jinja | Generic |
+  | bytedance-research-UI-TARS-7B-DPO.jinja | Generic |
+  | bytedance-research-UI-TARS-7B-SFT.jinja | Generic |
+  | carsenk-phi3.5_mini_exp_825_uncensored.jinja | Generic |
+  | cyberagent-DeepSeek-R1-Distill-Qwen-14B-Japanese.jinja | DeepSeek R1 (extract reasoning) |
+  | cyberagent-DeepSeek-R1-Distill-Qwen-32B-Japanese.jinja | DeepSeek R1 (extract reasoning) |
+  | databricks-dbrx-instruct.jinja | Generic |
+  | deepseek-ai-DeepSeek-Coder-V2-Instruct.jinja | Generic |
+  | deepseek-ai-DeepSeek-Coder-V2-Lite-Base.jinja | Generic |
+  | deepseek-ai-DeepSeek-Coder-V2-Lite-Instruct.jinja | Generic |
+  | deepseek-ai-DeepSeek-R1-Distill-Llama-70B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-1.5B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-14B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Distill-Qwen-7B.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1-Zero.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-R1.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-V2-Lite.jinja | Generic |
+  | deepseek-ai-DeepSeek-V2.5.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-DeepSeek-V3.jinja | DeepSeek R1 (extract reasoning) |
+  | deepseek-ai-deepseek-coder-33b-instruct.jinja | Generic |
+  | deepseek-ai-deepseek-coder-6.7b-instruct.jinja | Generic |
+  | deepseek-ai-deepseek-coder-7b-instruct-v1.5.jinja | Generic |
+  | deepseek-ai-deepseek-llm-67b-chat.jinja | Generic |
+  | deepseek-ai-deepseek-llm-7b-chat.jinja | Generic |
+  | dicta-il-dictalm2.0-instruct.jinja | Generic |
+  | ehristoforu-Falcon3-8B-Franken-Basestruct.jinja | Hermes 2 Pro |
+  | fireworks-ai-llama-3-firefunction-v2.jinja | FireFunction v2 |
+  | godlikehhd-alpaca_data_sampled_ifd_new_5200.jinja | Hermes 2 Pro |
+  | godlikehhd-alpaca_data_score_max_0.7_2600.jinja | Hermes 2 Pro |
+  | google-gemma-2-27b-it.jinja | Generic |
+  | google-gemma-2-2b-it.jinja | Generic |
+  | google-gemma-2-2b-jpn-it.jinja | Generic |
+  | google-gemma-7b-it.jinja | Generic |
+  | huihui-ai-DeepSeek-R1-Distill-Llama-70B-abliterated.jinja | DeepSeek R1 (extract reasoning) |
+  | huihui-ai-DeepSeek-R1-Distill-Llama-8B-abliterated.jinja | DeepSeek R1 (extract reasoning) |
+  | huihui-ai-DeepSeek-R1-Distill-Qwen-14B-abliterated-v2.jinja | DeepSeek R1 (extract reasoning) |
+  | huihui-ai-DeepSeek-R1-Distill-Qwen-32B-abliterated.jinja | DeepSeek R1 (extract reasoning) |
+  | huihui-ai-DeepSeek-R1-Distill-Qwen-7B-abliterated-v2.jinja | DeepSeek R1 (extract reasoning) |
+  | huihui-ai-Qwen2.5-14B-Instruct-1M-abliterated.jinja | Hermes 2 Pro |
+  | ibm-granite-granite-3.1-8b-instruct.jinja | Generic |
+  | indischepartij-MiniCPM-3B-OpenHermes-2.5-v2.jinja | Generic |
+  | inflatebot-MN-12B-Mag-Mell-R1.jinja | Generic |
+  | jinaai-ReaderLM-v2.jinja | Generic |
+  | kms7530-chemeng_qwen-math-7b_24_1_100_1_nonmath.jinja | Hermes 2 Pro |
+  | knifeayumu-Cydonia-v1.3-Magnum-v4-22B.jinja | Mistral Nemo |
+  | langgptai-qwen1.5-7b-chat-sa-v0.1.jinja | Generic |
+  | lightblue-DeepSeek-R1-Distill-Qwen-7B-Japanese.jinja | DeepSeek R1 (extract reasoning) |
+  | mattshumer-Reflection-Llama-3.1-70B.jinja | Generic |
+  | meetkai-functionary-medium-v3.1.jinja | Functionary v3.1 Llama 3.1 |
+  | meetkai-functionary-medium-v3.2.jinja | Functionary v3.2 |
+  | meta-llama-Llama-2-7b-chat-hf.jinja | Generic |
+  | meta-llama-Llama-3.1-8B-Instruct.jinja | Llama 3.x |
+  | meta-llama-Llama-3.2-11B-Vision-Instruct.jinja | Llama 3.x |
+  | meta-llama-Llama-3.2-1B-Instruct.jinja | Llama 3.x |
+  | meta-llama-Llama-3.2-3B-Instruct.jinja | Llama 3.x |
+  | meta-llama-Llama-3.3-70B-Instruct.jinja | Llama 3.x |
+  | meta-llama-Meta-Llama-3-8B-Instruct.jinja | Generic |
+  | meta-llama-Meta-Llama-3.1-8B-Instruct.jinja | Llama 3.x |
+  | microsoft-Phi-3-medium-4k-instruct.jinja | Generic |
+  | microsoft-Phi-3-mini-4k-instruct.jinja | Generic |
+  | microsoft-Phi-3-small-8k-instruct.jinja | Generic |
+  | microsoft-Phi-3.5-mini-instruct.jinja | Generic |
+  | microsoft-Phi-3.5-vision-instruct.jinja | Generic |
+  | microsoft-phi-4.jinja | Generic |
+  | migtissera-Tess-3-Mistral-Nemo-12B.jinja | Generic |
+  | ministral-Ministral-3b-instruct.jinja | Generic |
+  | mistralai-Codestral-22B-v0.1.jinja | Generic |
+  | mistralai-Mistral-7B-Instruct-v0.1.jinja | Generic |
+  | mistralai-Mistral-7B-Instruct-v0.2.jinja | Generic |
+  | mistralai-Mistral-7B-Instruct-v0.3.jinja | Mistral Nemo |
+  | mistralai-Mistral-Large-Instruct-2407.jinja | Mistral Nemo |
+  | mistralai-Mistral-Large-Instruct-2411.jinja | Generic |
+  | mistralai-Mistral-Nemo-Instruct-2407.jinja | Mistral Nemo |
+  | mistralai-Mistral-Small-24B-Instruct-2501.jinja | Generic |
+  | mistralai-Mixtral-8x7B-Instruct-v0.1.jinja | Generic |
+  | mkurman-Qwen2.5-14B-DeepSeek-R1-1M.jinja | Hermes 2 Pro |
+  | mlabonne-AlphaMonarch-7B.jinja | Generic |
+  | mlx-community-Josiefied-Qwen2.5-0.5B-Instruct-abliterated-v1-float32.jinja | Hermes 2 Pro |
+  | mlx-community-Qwen2.5-VL-7B-Instruct-8bit.jinja | Hermes 2 Pro |
+  | mobiuslabsgmbh-DeepSeek-R1-ReDistill-Qwen-1.5B-v1.1.jinja | DeepSeek R1 (extract reasoning) |
+  | netcat420-MFANNv0.20.jinja | Generic |
+  | netcat420-MFANNv0.24.jinja | Generic |
+  | netease-youdao-Confucius-o1-14B.jinja | Hermes 2 Pro |
+  | nvidia-AceMath-7B-RM.jinja | Hermes 2 Pro |
+  | nvidia-Eagle2-1B.jinja | Hermes 2 Pro |
+  | nvidia-Eagle2-9B.jinja | Hermes 2 Pro |
+  | nvidia-Llama-3.1-Nemotron-70B-Instruct-HF.jinja | Llama 3.x |
+  | onnx-community-DeepSeek-R1-Distill-Qwen-1.5B-ONNX.jinja | DeepSeek R1 (extract reasoning) |
+  | open-thoughts-OpenThinker-7B.jinja | Hermes 2 Pro |
+  | openchat-openchat-3.5-0106.jinja | Generic |
+  | pankajmathur-orca_mini_v6_8b.jinja | Generic |
+  | princeton-nlp-Mistral-7B-Base-SFT-RDPO.jinja | Generic |
+  | princeton-nlp-Mistral-7B-Instruct-DPO.jinja | Generic |
+  | princeton-nlp-Mistral-7B-Instruct-RDPO.jinja | Generic |
+  | prithivMLmods-Bellatrix-Tiny-1.5B-R1.jinja | Hermes 2 Pro |
+  | prithivMLmods-Bellatrix-Tiny-1B-R1.jinja | Llama 3.x |
+  | prithivMLmods-Bellatrix-Tiny-1B-v3.jinja | Generic |
+  | prithivMLmods-Bellatrix-Tiny-3B-R1.jinja | Llama 3.x |
+  | prithivMLmods-Blaze-14B-xElite.jinja | Generic |
+  | prithivMLmods-Calcium-Opus-14B-Elite2-R1.jinja | Hermes 2 Pro |
+  | prithivMLmods-Calme-Ties-78B.jinja | Generic |
+  | prithivMLmods-Calme-Ties2-78B.jinja | Generic |
+  | prithivMLmods-Calme-Ties3-78B.jinja | Generic |
+  | prithivMLmods-ChemQwen2-vL.jinja | Generic |
+  | prithivMLmods-GWQ2b.jinja | Generic |
+  | prithivMLmods-LatexMind-2B-Codec.jinja | Generic |
+  | prithivMLmods-Llama-3.2-6B-AlgoCode.jinja | Llama 3.x |
+  | prithivMLmods-Megatron-Opus-14B-Exp.jinja | Hermes 2 Pro |
+  | prithivMLmods-Megatron-Opus-14B-Stock.jinja | Hermes 2 Pro |
+  | prithivMLmods-Megatron-Opus-7B-Exp.jinja | Hermes 2 Pro |
+  | prithivMLmods-Omni-Reasoner-Merged.jinja | Hermes 2 Pro |
+  | prithivMLmods-Omni-Reasoner4-Merged.jinja | Hermes 2 Pro |
+  | prithivMLmods-Primal-Opus-14B-Optimus-v1.jinja | Hermes 2 Pro |
+  | prithivMLmods-QwQ-Math-IO-500M.jinja | Hermes 2 Pro |
+  | prithivMLmods-Qwen-7B-Distill-Reasoner.jinja | DeepSeek R1 (extract reasoning) |
+  | prithivMLmods-Qwen2.5-1.5B-DeepSeek-R1-Instruct.jinja | Hermes 2 Pro |
+  | prithivMLmods-Qwen2.5-14B-DeepSeek-R1-1M.jinja | Hermes 2 Pro |
+  | prithivMLmods-Qwen2.5-32B-DeepSeek-R1-Instruct.jinja | Hermes 2 Pro |
+  | prithivMLmods-Qwen2.5-7B-DeepSeek-R1-1M.jinja | Hermes 2 Pro |
+  | prithivMLmods-Triangulum-v2-10B.jinja | Hermes 2 Pro |
+  | qingy2024-Falcon3-2x10B-MoE-Instruct.jinja | Hermes 2 Pro |
+  | rubenroy-Zurich-14B-GCv2-5m.jinja | Hermes 2 Pro |
+  | rubenroy-Zurich-7B-GCv2-5m.jinja | Hermes 2 Pro |
+  | silma-ai-SILMA-Kashif-2B-Instruct-v1.0.jinja | Generic |
+  | simplescaling-s1-32B.jinja | Hermes 2 Pro |
+  | sometimesanotion-Lamarck-14B-v0.7.jinja | Hermes 2 Pro |
+  | sonthenguyen-zephyr-sft-bnb-4bit-DPO-mtbr-180steps.jinja | Generic |
+  | sthenno-tempesthenno-icy-0130.jinja | Generic |
+  | sumink-qwft.jinja | Hermes 2 Pro |
+  | teknium-OpenHermes-2.5-Mistral-7B.jinja | Generic |
+  | thirdeyeai-elevate360m.jinja | Generic |
+  | tiiuae-Falcon3-10B-Instruct.jinja | Hermes 2 Pro |
+  | unsloth-DeepSeek-R1-Distill-Llama-8B-unsloth-bnb-4bit.jinja | DeepSeek R1 (extract reasoning) |
+  | unsloth-DeepSeek-R1-Distill-Llama-8B.jinja | DeepSeek R1 (extract reasoning) |
+  | unsloth-DeepSeek-R1.jinja | DeepSeek R1 (extract reasoning) |
+  | unsloth-Mistral-Small-24B-Instruct-2501-unsloth-bnb-4bit.jinja | Generic |
+  | upstage-solar-pro-preview-instruct.jinja | Generic |
+  | whyhow-ai-PatientSeek.jinja | Generic |
+  | xwen-team-Xwen-72B-Chat.jinja | Hermes 2 Pro |
+  | xwen-team-Xwen-7B-Chat.jinja | Hermes 2 Pro |
+
+  This table can be generated with:
+
+  ```bash
+  ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
+  ```
+
+  </details>
+
+- Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
+  - Use `--chat-template-file` to override the template when appropriate (see examples below)
+  - Generic support may consume more tokens and be less efficient than a model's native format.
+
+- Run with:
+
+  ```shell
+  # Native support:
+
+  llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
+  llama-server --jinja -fa -hf bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q6_K_L
+  llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M
+  llama-server --jinja -fa -hf bartowski/Llama-3.3-70B-Instruct-GGUF:Q4_K_M
+
+  # Native support for DeepSeek R1 works best w/ our own template (official template buggy)
+
+  llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q6_K_L \
+    --chat-template-file models/templates/llama-cpp-deepseek-r1.jinja
+
+  llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF:Q4_K_M \
+    --chat-template-file models/templates/llama-cpp-deepseek-r1.jinja
+
+  # Native support requires the right template for these GGUFs:
+
+  llama-server --jinja -fa -hf bartowski/Hermes-2-Pro-Llama-3-8B-GGUF:Q4_K_M \
+    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-2-Pro-Llama-3-8B tool_use )
+
+  llama-server --jinja -fa -hf bartowski/Hermes-3-Llama-3.1-8B-GGUF:Q4_K_M \
+    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-3-Llama-3.1-8B tool_use )
+
+  llama-server --jinja -fa -hf bartowski/firefunction-v2-GGUF -hff firefunction-v2-IQ1_M.gguf \
+    --chat-template-file <( python scripts/get_chat_template.py fireworks-ai/llama-3-firefunction-v2 tool_use )
+
+  llama-server --jinja -fa -hf bartowski/c4ai-command-r7b-12-2024-GGUF:Q6_K_L \
+    --chat-template-file <( python scripts/get_chat_template.py CohereForAI/c4ai-command-r7b-12-2024 tool_use )
+
+  # Generic format support
+  llama-server --jinja -fa -hf bartowski/phi-4-GGUF:Q4_0
+  llama-server --jinja -fa -hf bartowski/gemma-2-2b-it-GGUF:Q8_0
+  llama-server --jinja -fa -hf bartowski/c4ai-command-r-v01-GGUF:Q2_K
+  ```
+
+- Test in CLI:
+
+  ```bash
+  curl http://localhost:8080/v1/chat/completions -d '{
+    "model": "gpt-3.5-turbo",
+    "tools": [
+      {
+        "type":"function",
+        "function":{
+          "name":"python",
+          "description":"Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
+          "parameters":{
+            "type":"object",
+            "properties":{
+              "code":{
+                "type":"string",
+                "description":"The code to run in the ipython interpreter."
+              }
+            },
+            "required":["code"]
+          }
+        }
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "content": "Print a hello world message with python."
+      }
+    ]
+  }'
+  ```
+
+  <details>
+  <summary>Show output</summary>
+
+  ```json
+  {
+    "choices": [
+      {
+        "finish_reason": "tool",
+        "index": 0,
+        "message": {
+          "content": null,
+          "tool_calls": [
+            {
+              "name": "python",
+              "arguments": "{\"code\":\" \\nprint(\\\"Hello, World!\\\")\"}"
+            }
+          ],
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1727287211,
+    "model": "gpt-3.5-turbo",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 16,
+      "prompt_tokens": 44,
+      "total_tokens": 60
+    },
+    "id": "chatcmpl-Htbgh9feMmGM0LEH2hmQvwsCxq3c6Ni8"
+  }
+  ```
+
+  </details>
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
@@ -1204,7 +1599,7 @@ Apart from error types supported by OAI, we also have custom types that are spec
 
 ### Legacy completion web UI
 
-A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggerganov/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
+A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
 
 For example:
 

@@ -36,7 +36,7 @@
   # ```
   # nixConfig = {
   #   extra-substituters = [
-  #     # Populated by the CI in ggerganov/llama.cpp
+  #     # Populated by the CI in ggml-org/llama.cpp
   #     "https://llama-cpp.cachix.org"
   #
   #     # A development cache for nixpkgs imported with `config.cudaSupport = true`.
@@ -56,11 +56,11 @@
   # };
   # ```
 
-  # For inspection, use `nix flake show github:ggerganov/llama.cpp` or the nix repl:
+  # For inspection, use `nix flake show github:ggml-org/llama.cpp` or the nix repl:
   #
   # ```bash
   # ❯ nix repl
-  # nix-repl> :lf github:ggerganov/llama.cpp
+  # nix-repl> :lf github:ggml-org/llama.cpp
   # Added 13 variables.
   # nix-repl> outputs.apps.x86_64-linux.quantize
   # { program = "/nix/store/00000000000000000000000000000000-llama.cpp/bin/llama-quantize"; type = "app"; }
@@ -176,7 +176,7 @@
             #
             # We could test all outputs e.g. as `checks = confg.packages`.
             #
-            # TODO: Build more once https://github.com/ggerganov/llama.cpp/issues/6346 has been addressed
+            # TODO: Build more once https://github.com/ggml-org/llama.cpp/issues/6346 has been addressed
             checks = {
               inherit (config.packages) default vulkan;
             };

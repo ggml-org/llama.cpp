@@ -217,8 +217,8 @@ void quantize(uint dst_idx, uint src_idx)
 #endif
 
 void main() {
-#if defined(DATA_A_IQ4_NL)
-    init_iq4nl_shmem();
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
     if (gl_LocalInvocationIndex.x != 0) {
         return;
     }

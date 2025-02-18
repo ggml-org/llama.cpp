@@ -26,7 +26,7 @@ python ./convert_hf_to_gguf.py ../MiniCPM-o-2_6/model
 ```
 
 Build llama.cpp using `CMake`:
-https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md
+https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
 
 ```bash
 cmake -B build

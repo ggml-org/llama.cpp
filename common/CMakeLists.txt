@@ -56,16 +56,19 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
-    chat-template.hpp
+    chat.cpp
+    chat.h
     common.cpp
     common.h
     console.cpp
     console.h
     json-schema-to-grammar.cpp
     json.hpp
+    llguidance.cpp
     log.cpp
     log.h
-    minja.hpp
+    minja/chat-template.hpp
+    minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
     sampling.cpp
@@ -87,6 +90,50 @@ if (LLAMA_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     find_library(CURL_LIBRARY curl REQUIRED)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARY})
+endif ()
+
+if (LLAMA_LLGUIDANCE)
+    include(ExternalProject)
+    set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
+    set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
+
+    # Set the correct library file extension based on platform
+    if (WIN32)
+        set(LLGUIDANCE_LIB_NAME "llguidance.lib")
+        # Add Windows-specific libraries
+        set(LLGUIDANCE_PLATFORM_LIBS
+            ws2_32    # Windows Sockets API
+            userenv   # For GetUserProfileDirectoryW
+            ntdll     # For NT functions
+            bcrypt    # For BCryptGenRandom
+        )
+    else()
+        set(LLGUIDANCE_LIB_NAME "libllguidance.a")
+        set(LLGUIDANCE_PLATFORM_LIBS "")
+    endif()
+
+    ExternalProject_Add(llguidance_ext
+        GIT_REPOSITORY https://github.com/guidance-ai/llguidance
+        # v0.6.12:
+        GIT_TAG ced1c9023d47ec194fa977932d35ce65c2ebfc09
+        PREFIX ${CMAKE_BINARY_DIR}/llguidance
+        SOURCE_DIR ${LLGUIDANCE_SRC}
+        BUILD_IN_SOURCE TRUE
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND cargo build --release
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
+        UPDATE_COMMAND ""
+    )
+    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_LLGUIDANCE)
+
+    add_library(llguidance STATIC IMPORTED)
+    set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
+    add_dependencies(llguidance llguidance_ext)
+
+    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
+    # Add platform libraries to the main target
+    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance ${LLGUIDANCE_PLATFORM_LIBS})
 endif ()
 
 target_include_directories(${TARGET} PUBLIC .)

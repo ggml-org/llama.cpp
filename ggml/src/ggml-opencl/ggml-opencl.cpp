@@ -143,6 +143,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_rms_norm;
     cl_kernel kernel_diag_mask_inf, kernel_diag_mask_inf_8;
     cl_kernel kernel_soft_max, kernel_soft_max_4;
+    cl_kernel kernel_soft_max_f16, kernel_soft_max_4_f16;
     cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0;
     cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
     cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32;
@@ -614,6 +615,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->kernel_diag_mask_inf_8    = clCreateKernel(backend_ctx->program, "kernel_diag_mask_inf_8", &err), err));
     CL_CHECK((backend_ctx->kernel_soft_max           = clCreateKernel(backend_ctx->program, "kernel_soft_max", &err), err));
     CL_CHECK((backend_ctx->kernel_soft_max_4         = clCreateKernel(backend_ctx->program, "kernel_soft_max_4", &err), err));
+    CL_CHECK((backend_ctx->kernel_soft_max_f16       = clCreateKernel(backend_ctx->program, "kernel_soft_max_f16", &err), err));
+    CL_CHECK((backend_ctx->kernel_soft_max_4_f16     = clCreateKernel(backend_ctx->program, "kernel_soft_max_4_f16", &err), err));
     CL_CHECK((backend_ctx->kernel_rope_norm_f32      = clCreateKernel(backend_ctx->program, "kernel_rope_norm_f32", &err), err));
     CL_CHECK((backend_ctx->kernel_rope_norm_f16      = clCreateKernel(backend_ctx->program, "kernel_rope_norm_f16", &err), err));
     CL_CHECK((backend_ctx->kernel_rope_neox_f32      = clCreateKernel(backend_ctx->program, "kernel_rope_neox_f32", &err), err));
@@ -1044,8 +1047,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return true;
         case GGML_OP_DIAG_MASK_INF:
             return op->ne[3] == 1;
-        case GGML_OP_ROPE:
+        case GGML_OP_ROPE: {
+            const int mode = ((const int32_t *) op->op_params)[2];
+            if (mode & GGML_ROPE_TYPE_MROPE) {
+                return false;
+            }
+            if (mode & GGML_ROPE_TYPE_VISION) {
+                return false;
+            }
             return true;
+        }
         default:
             return false;
     }
@@ -3666,6 +3677,8 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
+    const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
+
     // Local size must be wave size. Each workgroup is a wave, working on a row,
     // where a row corresponds to leading dimension.
     int nth = MIN(32, ne00);
@@ -3683,9 +3696,17 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     cl_kernel kernel;
 
     if (ne00%4 == 0) {
-        kernel = backend_ctx->kernel_soft_max_4;
+        if (use_f16) {
+            kernel = backend_ctx->kernel_soft_max_4_f16;
+        } else {
+            kernel = backend_ctx->kernel_soft_max_4;
+        }
     } else {
-        kernel = backend_ctx->kernel_soft_max;
+        if (use_f16) {
+            kernel = backend_ctx->kernel_soft_max_f16;
+        } else {
+            kernel = backend_ctx->kernel_soft_max;
+        }
     }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
@@ -3766,7 +3787,8 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     const int  nb2 = dst ? dst->nb[2] : 0;
     const int  nb3 = dst ? dst->nb[3] : 0;
 
-    GGML_ASSERT(ne10 == ne02);
+    GGML_ASSERT(ne10 % ne02 == 0);
+    GGML_ASSERT(ne10 >= ne02);
 
     int nth = MIN(64, ne00);
 

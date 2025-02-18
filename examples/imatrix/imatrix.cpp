@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -99,7 +100,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     const float * data = is_host ? (const float *) src1->data : m_src1_data.data();
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
-    // ref: https://github.com/ggerganov/llama.cpp/pull/6387
+    // ref: https://github.com/ggml-org/llama.cpp/pull/6387
     if (t->op == GGML_OP_MUL_MAT_ID) {
         //   ids  -> [n_experts_used, n_tokens]
         //   src1 -> [cols, n_expert_used, n_tokens]

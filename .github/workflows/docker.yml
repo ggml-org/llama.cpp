@@ -28,10 +28,11 @@ jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       COMMIT_SHA: ${{ github.sha }}
     strategy:
+      fail-fast: false
       matrix:
         config:
           # Multi-stage build
@@ -50,6 +51,8 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

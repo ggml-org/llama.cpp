@@ -8,5 +8,5 @@ The key parameters for lookup decoding are `ngram_min`, `ngram_max` and `n_draft
 
 More info:
 
-https://github.com/ggerganov/llama.cpp/pull/4484
-https://github.com/ggerganov/llama.cpp/issues/4226
+https://github.com/ggml-org/llama.cpp/pull/4484
+https://github.com/ggml-org/llama.cpp/issues/4226

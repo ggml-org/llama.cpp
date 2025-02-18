@@ -6,8 +6,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Don't forget to [check for existing refactor issue tickets](https://github.com/ggerganov/llama.cpp/issues?q=is%3Aopen+is%3Aissue+label%3Arefactoring) in case it's already covered.
-        Also you may want to check [Pull request refactor label as well](https://github.com/ggerganov/llama.cpp/pulls?q=is%3Aopen+is%3Apr+label%3Arefactoring) for duplicates too.
+        Don't forget to [check for existing refactor issue tickets](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aopen+is%3Aissue+label%3Arefactoring) in case it's already covered.
+        Also you may want to check [Pull request refactor label as well](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Aopen+is%3Apr+label%3Arefactoring) for duplicates too.
 
   - type: textarea
     id: background-description

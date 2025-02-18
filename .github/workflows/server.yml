@@ -81,13 +81,36 @@ jobs:
         with:
           node-version: '22.11.0'
 
+      - name: WebUI - Install dependencies
+        id: webui_lint
+        run: |
+          cd examples/server/webui
+          npm ci
+
+      - name: WebUI - Check code format
+        id: webui_format
+        run: |
+          git config --global --add safe.directory $(realpath .)
+          cd examples/server/webui
+          git status
+
+          npm run format
+          git status
+          modified_files="$(git status -s)"
+          echo "Modified files: ${modified_files}"
+          if [ -n "${modified_files}" ]; then
+            echo "Files do not follow coding style. To fix: npm run format"
+            echo "${modified_files}"
+            exit 1
+          fi
+
       - name: Verify bundled index.html
         id: verify_server_index_html
         run: |
           git config --global --add safe.directory $(realpath .)
           cd examples/server/webui
           git status
-          npm ci
+
           npm run build
           git status
           modified_files="$(git status -s)"
@@ -205,7 +228,7 @@ jobs:
         run: |
           cd examples/server/tests
           $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x
+          pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow

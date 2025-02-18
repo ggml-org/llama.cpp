@@ -1,7 +1,7 @@
-#include "norm.hpp"
+#include "softmax.hpp"
 
-template <bool vals_smem, int ncols_template, int block_size_template>
-static void soft_max_f32(const float * x, const float * mask, float * dst, const int ncols_par,
+template <bool vals_smem, int ncols_template, int block_size_template, typename T>
+static void soft_max_f32(const float * x, const T * mask, float * dst, const int ncols_par,
                          const int nrows_y, const float scale, const float max_bias, const float m0,
                          const float m1, uint32_t n_head_log2, const sycl::nd_item<3> &item_ct1, float *buf) {
     const int ncols = ncols_template == 0 ? ncols_par : ncols_template;
@@ -29,7 +29,7 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
         slope = sycl::pow(base, float(exp));
     }
 
-    float *vals = vals_smem ? buf + std::max(nwarps, WARP_SIZE) : dst + rowx * ncols;
+    float *vals = vals_smem ? buf + sycl::max(nwarps, WARP_SIZE) : dst + rowx * ncols;
     float max_val = -INFINITY;
 
     for (int col0 = 0; col0 < ncols; col0 += block_size) {
@@ -42,7 +42,7 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
         const int ix = rowx*ncols + col;
         const int iy = rowy*ncols + col;
 
-        const float val = x[ix]*scale + (mask ? slope*mask[iy] : 0.0f);
+        const float val = x[ix]*scale + (mask ? slope*static_cast<float>(mask[iy]) : 0.0f);
 
         vals[col] = val;
         max_val = sycl::max(max_val, val);
@@ -65,7 +65,7 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
         item_ct1.barrier(sycl::access::fence_space::local_space);
         max_val = buf[lane_id];
         for (size_t i = 1; i < nreduce; i += 1) {
-            max_val = std::max(max_val, buf[lane_id + i * WARP_SIZE]);
+            max_val = sycl::max(max_val, buf[lane_id + i * WARP_SIZE]);
         }
         max_val = warp_reduce_max(max_val, item_ct1);
     }
@@ -122,8 +122,8 @@ static void soft_max_f32(const float * x, const float * mask, float * dst, const
     }
 }
 
-template <bool vals_smem, int ncols_template, int block_size_template>
-static void soft_max_f32_submitter(const float * x, const float * mask, float * dst, const int ncols_par,
+template <bool vals_smem, int ncols_template, int block_size_template, typename T>
+static void soft_max_f32_submitter(const float * x, const T * mask, float * dst, const int ncols_par,
                                    const int nrows_y, const float scale, const float max_bias, const float m0,
                                    const float m1, uint32_t n_head_log2, sycl::range<3> block_nums, sycl::range<3> block_dims,
                                    const size_t n_local_scratch, queue_ptr stream) {
@@ -141,7 +141,8 @@ static void soft_max_f32_submitter(const float * x, const float * mask, float * 
     });
 }
 
-static void soft_max_f32_sycl(const float * x, const float * mask,
+template<typename T>
+static void soft_max_f32_sycl(const float * x, const T * mask,
                               float * dst, const int ncols_x, const int nrows_x,
                               const int nrows_y, const float scale, const float max_bias,
                               queue_ptr stream, int device) {
@@ -223,22 +224,16 @@ static void soft_max_f32_sycl(const float * x, const float * mask,
     }
 }
 
-void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                  const ggml_tensor *src1, ggml_tensor *dst,
-                                  const float *src0_dd, const float *src1_dd,
-                                  float *dst_dd,
-                                  const queue_ptr &main_stream) {
+void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
-#pragma message("TODO: add ggml_sycl_op_soft_max() F16 src1 support")
-#pragma message("ref:  https://github.com/ggerganov/llama.cpp/pull/5021")
-    GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F32); // src1 contains mask and it is optional
+    GGML_ASSERT(!dst->src[1] || dst->src[1]->type == GGML_TYPE_F16 || dst->src[1]->type == GGML_TYPE_F32); // src1 contains mask and it is optional
 
-    const int64_t ne00 = src0->ne[0];
-    const int64_t nrows_x = ggml_nrows(src0);
-    const int64_t nrows_y = src0->ne[1];
+    const int64_t ne00 = dst->src[0]->ne[0];
+    const int64_t nrows_x = ggml_nrows(dst->src[0]);
+    const int64_t nrows_y = dst->src[0]->ne[1];
 
     float scale = 1.0f;
     float max_bias = 0.0f;
@@ -246,6 +241,21 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, const ggml_tensor *s
     memcpy(&scale, dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, dst->op_params + 1, sizeof(float));
 
-    soft_max_f32_sycl(src0_dd, src1 ? src1_dd : nullptr, dst_dd, ne00,
-        nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float * dst_dd = static_cast<float *>(dst->data);
+
+    ggml_sycl_set_device(ctx.device);
+    dpct::queue_ptr main_stream = ctx.stream();
+
+    if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F16) {
+        const sycl::half * src1_dd = static_cast<sycl::half *>(dst->src[1]->data);
+        soft_max_f32_sycl<sycl::half>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias,
+                          main_stream, ctx.device);
+    } else if (dst->src[1] && dst->src[1]->type == GGML_TYPE_F32) {
+        const float * src1_dd = static_cast<const float *>(dst->src[1]->data);
+        soft_max_f32_sycl<float>(src0_dd, src1_dd, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
+    } else {
+        /* mask unavailable */
+        soft_max_f32_sycl<float>(src0_dd, nullptr, dst_dd, ne00, nrows_x, nrows_y, scale, max_bias, main_stream, ctx.device);
+    }
 }
