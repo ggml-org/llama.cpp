@@ -113,6 +113,7 @@ class Opt {
     llama_context_params ctx_params;
     llama_model_params   model_params;
     std::string model_;
+    std::string chat_template_file;
     std::string          user;
     bool                 use_jinja   = false;
     int                  context_size = -1, ngl = -1;
@@ -148,6 +149,16 @@ class Opt {
         return 0;
     }
 
+    int handle_option_with_value(int argc, const char ** argv, int & i, std::string & option_value) {
+        if (i + 1 >= argc) {
+            return 1;
+        }
+
+        option_value = argv[++i];
+
+        return 0;
+    }
+
     int parse(int argc, const char ** argv) {
         bool options_parsing   = true;
         for (int i = 1, positional_args_i = 0; i < argc; ++i) {
@@ -168,6 +179,11 @@ class Opt {
                        (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
                 verbose = true;
             } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
+                use_jinja = true;
+            } else if (options_parsing && strcmp(argv[i], "--chat-template-file") == 0){
+                if (handle_option_with_value(argc, argv, i, chat_template_file) == 1) {
+                    return 1;
+                }
                 use_jinja = true;
             } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
                 help = true;
@@ -207,6 +223,11 @@ class Opt {
             "Options:\n"
             "  -c, --context-size <value>\n"
             "      Context size (default: %d)\n"
+            "  --chat-template-file <path>\n"
+            "      Path to the file containing the chat template to use with the model.\n"
+            "      Only supports jinja templates and implicitly sets the --jinja flag.\n"
+            "  --jinja\n"
+            "      Use jinja templating for the chat template of the model\n"
             "  -n, -ngl, --ngl <value>\n"
             "      Number of GPU layers (default: %d)\n"
             "  --temp <value>\n"
@@ -1074,12 +1095,44 @@ static int get_user_input(std::string & user_input, const std::string & user) {
     return 0;
 }
 
+// Reads a chat template file to be used
+static std::string read_chat_template_file(const std::string & chat_template_file) {
+    if(chat_template_file.empty()){
+        return "";
+    }
+
+    FILE* file = ggml_fopen(chat_template_file.c_str(), "r");
+        if (!file) {
+        std::cerr << "Error opening chat template file '" << chat_template_file << "': " << strerror(errno) << "\n";
+        return "";
+    }
+
+    fseek(file, 0, SEEK_END);
+    size_t size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    std::vector<unsigned char> data(size);
+    size_t                     read_size = fread(data.data(), 1, size, file);
+    fclose(file);
+    if (read_size != size) {
+        std::cerr << "Error reading chat template file '" << chat_template_file << "': " << strerror(errno) << "\n";
+        return "";
+    }
+    return std::string(data.begin(), data.end());
+}
+
 // Main chat loop function
-static int chat_loop(LlamaData & llama_data, const std::string & user, bool use_jinja) {
+static int chat_loop(LlamaData & llama_data, const std::string & user, const std::string & chat_template_file, bool use_jinja) {
     int prev_len = 0;
     llama_data.fmtted.resize(llama_n_ctx(llama_data.context.get()));
-    auto chat_templates = common_chat_templates_from_model(llama_data.model.get(), "");
+
+    std::string chat_template = "";
+    if(!chat_template_file.empty()){
+        chat_template = read_chat_template_file(chat_template_file);
+    }
+    auto chat_templates = common_chat_templates_from_model(llama_data.model.get(), chat_template);
     GGML_ASSERT(chat_templates.template_default);
+
     static const bool stdout_a_terminal = is_stdout_a_terminal();
     while (true) {
         // Get user input
@@ -1165,7 +1218,7 @@ int main(int argc, const char ** argv) {
         return 1;
     }
 
-    if (chat_loop(llama_data, opt.user, opt.use_jinja)) {
+    if (chat_loop(llama_data, opt.user, opt.chat_template_file, opt.use_jinja)) {
         return 1;
     }
 
