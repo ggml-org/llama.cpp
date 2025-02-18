@@ -65,6 +65,15 @@ public:
     virtual bool check_if_continuous() const override {
         return m_continuous;
     }
+
+    virtual const std::string& get_node_op_name(const std::string& name) const {
+        auto it = m_node_op_name.find(name);
+        if (it != m_node_op_name.end()) {
+            return it->second;
+        }
+        return "";
+    }
+
 private:
     void set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs);
 
@@ -79,5 +88,6 @@ private:
     const std::string m_op_name;
     mutable std::string m_name;
     bool m_continuous;
+    std::map<std::string, std::string> m_node_op_name;
 };
 

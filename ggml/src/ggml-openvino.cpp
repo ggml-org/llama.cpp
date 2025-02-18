@@ -419,191 +419,200 @@ void ggml_backend_openvino_rms_norm(ggml_tensor * dst) {
     }
 }
 
+// Extracting valid shapes
+std::vector<int64_t> get_effective_shape(const ggml_tensor * t) {
+    std::vector<int64_t> shape;
+    for (int i = 2; i >= 0; i--) {
+        if (t->ne[i] != 1 || t->ne[2] != 1)
+            shape.push_back(t->ne[i]);
+    }
+    return shape;
+}
+
+/*
+* Construct an index vector for Gather to extract non-contiguous data.
+* Parameters:
+* - valid_cols: number of valid columns per row (e.g., for src0, valid columns = 96)
+* - num_rows: number of rows in each batch (e.g., src0: 32 rows per batch)
+* - batch: number of batches (e.g., 32)
+* - row_stride: physical row length (in elements), e.g., src0: nb[1]/(element_size) = 6144/2 = 3072
+* - batch_stride: physical batch stride (in elements), e.g., src0: nb[2]/(element_size) = 192/2 = 96
+*/
+std::vector<int64_t> build_indices(int valid_cols, int num_rows, int batch, int row_stride, int batch_stride) {
+    std::vector<int64_t> indices;
+    indices.reserve(valid_cols * num_rows * batch);
+    for (int b = 0; b < batch; b++) {
+        for (int r = 0; r < num_rows; r++) {
+            for (int c = 0; c < valid_cols; c++) {
+                // 计算物理索引 = b * batch_stride + r * row_stride + c
+                indices.push_back(b * batch_stride + r * row_stride + c);
+            }
+        }
+    }
+    return indices;
+}
 
 void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
+    assert(dst && dst->src[0] && dst->src[1]);
+    const ggml_tensor * src0 = dst->src[0]; // src0 type F16
+    const ggml_tensor * src1 = dst->src[1]; // src1 type F32
 
-    const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
+    if(!ggml_is_contiguous(src1) || dst->src[1]->ne[0] * dst->src[1]->nb[0] != dst->src[1]->nb[1]) {
+        int valid_cols_src0 = dst->src[0]->ne[0];
+        int num_rows_src0   = dst->src[0]->ne[1];
+        int batch_src0      = dst->src[0]->ne[2];
+        int valid_cols_src1 = dst->src[1]->ne[0];
+        int num_rows_src1   = dst->src[1]->ne[1];
+        int batch_src1      = dst->src[1]->ne[2];
+        int row_stride_src0   = dst->src[0]->nb[1] / dst->src[0]->nb[0];
+        int batch_stride_src0 = dst->src[0]->nb[2] / dst->src[0]->nb[0];
 
-    GGML_TENSOR_BINARY_OP_LOCALS
+        int row_stride_src1   = dst->src[1]->nb[1] / dst->src[1]->nb[0];
+        int batch_stride_src1 = dst->src[1]->nb[2] / dst->src[1]->nb[0];
 
-    const int ith = 0;
-    const int nth = 1;
+        std::vector<int64_t> indices_src0 = build_indices(valid_cols_src0, num_rows_src0, batch_src0, row_stride_src0, batch_stride_src0);
+        std::vector<int64_t> indices_src1 = build_indices(valid_cols_src1, num_rows_src1, batch_src1, row_stride_src1, batch_stride_src1);
 
-    const enum ggml_type type = src0->type;
-    const auto *type_traits = ggml_get_type_traits(type);
+        // Total number of elements
+        size_t total_src0 = indices_src0.size(); // = 96 * 32 * 32
+        size_t total_src1 = indices_src1.size(); // = 96 * 7 * 32
 
-    enum ggml_type           const vec_dot_type         = type_traits->vec_dot_type;
-    ggml_from_float_t        const from_float           = type_traits->from_float;
-    ggml_from_float_to_mat_t const from_float_to_mat    = type_traits->from_float_to_mat;
-    int64_t                  const vec_dot_num_rows     = type_traits->nrows;
-    int64_t                  const matmul_num_cols      = type_traits->ncols;
-    int64_t                  const blck_size_interleave = type_traits->blck_size_interleave;
-    ggml_gemv_t              const gemv                 = type_traits->gemv;
-    ggml_gemm_t              const gemm                 = type_traits->gemm;
+        // Treat src0->data and src1->data as 1D tensors
+        // Note: The total length of physical data should be enough to cover the last valid element index + 1.
+        // flat shapes:
+        ov::Shape flat_shape_src0 = { total_src0 };
+        ov::Shape flat_shape_src1 = { total_src1 };
 
-    GGML_ASSERT(ne0 == ne01);
-    GGML_ASSERT(ne1 == ne11);
-    GGML_ASSERT(ne2 == ne12);
-    GGML_ASSERT(ne3 == ne13);
+        // Create a Parameter node for collecting non-continuous data
+        auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
+        auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape_src1);
 
-    // we don't support permuted src0 or src1
-    GGML_ASSERT(nb00 == ggml_type_size(type));
-    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
+        // Create an index Constant node
+        auto indices_const_src0 = ov::op::v0::Constant::create(ov::element::i64, flat_shape_src0, indices_src0);
+        auto indices_const_src1 = ov::op::v0::Constant::create(ov::element::i64, flat_shape_src1, indices_src1);
 
-    // dst cannot be transposed or permuted
-    GGML_ASSERT(nb0 == sizeof(float));
-    GGML_ASSERT(nb0 <= nb1);
-    GGML_ASSERT(nb1 <= nb2);
-    GGML_ASSERT(nb2 <= nb3);
+        // Use the Gather operator to collect valid data
+        // axis = 0
+        auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto gathered_src0 = std::make_shared<ov::op::v8::Gather>(param_src0, indices_const_src0, axis_const);
+        auto gathered_src1 = std::make_shared<ov::op::v8::Gather>(param_src1, indices_const_src1, axis_const);
 
-    // src1->type = GGML_TYPE_F32, vec_dot_type = GGML_TYPE_F16
-    // The main function of this code is to convert the data of src1 from GGML_TYPE_F32 type to vec_dot_type (i.e. GGML_TYPE_F16) and store the result in params->wdata.
-    // The code processes data of different dimensions through multiple loops and conditional judgments and uses different conversion functions to complete data conversion.
-    std::unique_ptr<char[]> wdata(new char[ne13 * ggml_row_size(vec_dot_type, ne10) * ne11 * ne12]);
-    if (src1->type != vec_dot_type) {
-        const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
-        const size_t nbw2 = nbw1*ne11;
-        const size_t nbw3 = nbw2*ne12;
+        // Reshape to batched form:
+        // For src0: valid matrix size for each batch [num_rows_src0, valid_cols_src0] = [32,96], total batches = 32,
+        // Therefore, reshape to 3D Tensor: shape = [32, 32, 96] where first dimension is batch.
+        std::vector<int64_t> shape_src0_cont = { batch_src0, num_rows_src0, valid_cols_src0 };
+        auto reshape_src0 = std::make_shared<ov::op::v1::Reshape>(
+            gathered_src0,
+            ov::op::v0::Constant::create(ov::element::i64, { shape_src0_cont.size() }, shape_src0_cont),
+            false);
+        // For src1: valid matrix size for each batch [num_rows_src1, valid_cols_src1] = [7,96], batch = 32,
+        // Reshape to 3D Tensor: shape = [32, 7, 96].
+        std::vector<int64_t> shape_src1_cont = { batch_src1, num_rows_src1, valid_cols_src1 };
+        auto reshape_src1 = std::make_shared<ov::op::v1::Reshape>(
+            gathered_src1,
+            ov::op::v0::Constant::create(ov::element::i64, { shape_src1_cont.size() }, shape_src1_cont),
+            false);
 
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        // For src0, first Convert from F16 to F32
+        auto src0_f32 = std::make_shared<ov::op::v0::Convert>(reshape_src0, ov::element::f32);
 
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-                           (void *)               (wdata.get() + i13*nbw3 + i12*nbw2 + i11*nbw1),
-                           ne10);
-                }
-            }
-        }
+        // Use Batched Transpose: swap the last two dimensions, dimension order [0, 2, 1]
+        auto transpose_order = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{0, 2, 1});
+        auto src0_transposed = std::make_shared<ov::op::v1::Transpose>(src0_f32, transpose_order);
+
+        auto A = src0_transposed;
+        auto B = reshape_src1;
+
+        auto batched_matmul = std::make_shared<ov::op::v0::MatMul>(B, A, false, false);
+        // batched_matmul output: shape = [32,7,32]
+
+        std::vector<int64_t> full_dst_shape = { dst->ne[2], dst->ne[1], dst->ne[0]};
+        auto final_shape_const = ov::op::v0::Constant::create(ov::element::i64, { full_dst_shape.size() }, full_dst_shape);
+
+        auto model = std::make_shared<ov::Model>(ov::NodeVector{ batched_matmul }, ov::ParameterVector{param_src1, param_src0});
+
+        ov::Core core;
+        auto compiled_model = core.compile_model(model, "CPU");
+        auto infer_request = compiled_model.create_infer_request();
+
+        // Construct input Tensors: treat src0->data and src1->data as 1D flat data respectively
+        ov::Tensor tensor_src0(ov::element::f16, flat_shape_src0, src0->data);
+        ov::Tensor tensor_src1(ov::element::f32, flat_shape_src1, src1->data);
+        infer_request.set_input_tensor(0, tensor_src1);
+        infer_request.set_input_tensor(1, tensor_src0);
+
+        ov::Tensor tensor_dst(ov::element::f32, ov::Shape(full_dst_shape.begin(), full_dst_shape.end()), dst->data);
+        infer_request.set_output_tensor(0, tensor_dst);
+
+        infer_request.infer();
+        return ;
     }
 
-    // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
-    const int64_t nr0 = ne0;
+    const int64_t ne0 = dst->ne[0];
+    const int64_t ne1 = dst->ne[1];
 
-    // This is the size of the rest of the dimensions of the result
-    const int64_t nr1 = ne1 * ne2 * ne3;
+    // Valid shape
+    std::vector<int64_t> eff_shape_src0 = get_effective_shape(src0);
+    std::vector<int64_t> eff_shape_src1 = get_effective_shape(src1);
+    std::vector<int64_t> eff_shape_dst = get_effective_shape(dst);
 
-    // dot kernels can handle 1 row and col at a time, but mmla kernels can process 2 rows and cols
-    int64_t num_rows_per_vec_dot = vec_dot_num_rows;
-    // TODO: currently the mmla kernels support only even numbered rows/cols.
-    // this check can be removed once they are extended to support odd numbered rows/cols too
-    if ((nr0 % 2 != 0) || (ne11 % 2 != 0)) {
-        num_rows_per_vec_dot = 1;
+    // Determine whether it is batched (effective rank==3) or two-dimensional (rank==2) or one-dimensional (rank==1)
+    int rank = static_cast<int>(eff_shape_dst.size());
+    if (rank != 1 && rank != 2 && rank != 3)
+        throw std::runtime_error("Only rank 1, 2 or 3 supported");
+
+    // Total number of flattened elements
+    size_t total_src0 = 1; for (auto d : eff_shape_src0) total_src0 *= d;
+    size_t total_src1 = 1; for (auto d : eff_shape_src1) total_src1 *= d;
+
+    ov::Shape flat_shape_src0 = { total_src0 };
+    ov::Shape flat_shape_src1 = { total_src1 };
+
+    auto param_flat_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
+    auto param_flat_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape_src1);
+
+    auto reshape_src0 = std::make_shared<ov::op::v1::Reshape>(
+        param_flat_src0,
+        ov::op::v0::Constant::create(ov::element::i64, { eff_shape_src0.size() }, eff_shape_src0),
+        false);
+    auto reshape_src1 = std::make_shared<ov::op::v1::Reshape>(
+        param_flat_src1,
+        ov::op::v0::Constant::create(ov::element::i64, { eff_shape_src1.size() }, eff_shape_src1),
+        false);
+
+    // Convert src0: F16 -> F32
+    auto src0_f32 = std::make_shared<ov::op::v0::Convert>(reshape_src0, ov::element::f32);
+
+    // Transpose src0_f32:
+    // For the 2D case, the shape of reshape_src0 is [3072,9216], and after transposition, it is [9216,3072].
+    // For the batched case, assuming the shape is [M, K, Batch], batch-wise transposition is required: use order [0, 2, 1].
+    ov::Output<ov::Node> A_for_mul;
+    if (rank == 1) {
+        auto trans_order = ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{1, 0});
+        A_for_mul = std::make_shared<ov::op::v1::Transpose>(src0_f32, trans_order);
+    } else if (rank == 2) {
+        auto trans_order = ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{1, 0});
+        A_for_mul = std::make_shared<ov::op::v1::Transpose>(src0_f32, trans_order);
+    } else { // rank == 3
+        auto trans_order = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{0, 2, 1});
+        A_for_mul = std::make_shared<ov::op::v1::Transpose>(src0_f32, trans_order);
     }
 
-    // Now select a reasonable chunk size.
-    int chunk_size = 16;
+    ov::Core core;
+    ov::Tensor tensor_src0{ov::element::f16, flat_shape_src0, (void *)src0->data};
+    ov::Tensor tensor_src1{ov::element::f32, flat_shape_src1, (void *)src1->data};
+    ov::Tensor tensor_dst(ov::element::f32, ov::Shape(eff_shape_dst.begin(), eff_shape_dst.end()), dst->data);
 
-    // We need to step up the size if it's small
-    if (nr0 == 1 || nr1 == 1) {
-        chunk_size = 64;
-    }
+    std::shared_ptr<ov::op::v0::MatMul> matmul = std::make_shared<ov::op::v0::MatMul>(reshape_src1, A_for_mul, false, false);
+    auto model = std::make_shared<ov::Model>(ov::NodeVector{matmul}, ov::ParameterVector{param_flat_src1, param_flat_src0});
 
-    // distribute the work across the inner or outer loop based on which one is larger
-    // The number of chunks in the 0/1 dim.
-    // CEIL(nr0/chunk_size)
-    int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
-    int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
+    auto compiled_model = core.compile_model(model, "CPU");
+    auto infer_request = compiled_model.create_infer_request();
 
-    // The number of elements in each chunk
-    const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
-    const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
-
-    // The first chunk comes from our thread_id, the rest will get auto-assigned.
-    int current_chunk = ith;
-
-    while (current_chunk < nchunk0 * nchunk1) {
-        const int64_t ith0 = current_chunk % nchunk0;
-        const int64_t ith1 = current_chunk / nchunk0;
-
-        const int64_t ir0_start = dr0 * ith0;
-        const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
-
-        const int64_t ir1_start = dr1 * ith1;
-        const int64_t ir1_end = MIN(ir1_start + dr1, nr1);
-
-        const bool src1_cont = ggml_is_contiguous(src1);
-
-        ggml_vec_dot_t const vec_dot      = type_traits->vec_dot;
-        enum ggml_type const vec_dot_type = type_traits->vec_dot_type;
-
-        // broadcast factors
-        const int64_t r2 = ne12 / ne02;
-        const int64_t r3 = ne13 / ne03;
-
-        // threads with no work simply yield (not sure if it helps)
-        if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
-            return;
-        }
-
-        // const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
-        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
-        assert(ne12 % ne02 == 0);
-        assert(ne13 % ne03 == 0);
-
-        // block-tiling attempt
-        const int64_t blck_0 = 16;
-        const int64_t blck_1 = 16;
-
-        const size_t src1_col_stride = src1_cont || src1->type != vec_dot_type ? row_size : nb11;
-
-        // attempt to reduce false-sharing (does not seem to make a difference)
-        // 16 * 2, accounting for mmla kernels
-        float tmp[32];
-
-        for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
-            for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
-                for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
-                    const int64_t i13 = (ir1 / (ne12 * ne1));
-                    const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
-                    const int64_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
-
-                    // broadcast src0 into src1
-                    const int64_t i03 = i13 / r3;
-                    const int64_t i02 = i12 / r2;
-
-                    const int64_t i1 = i11;
-                    const int64_t i2 = i12;
-                    const int64_t i3 = i13;
-
-                    const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
-
-                    // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
-                    //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
-                    //       the original src1 data pointer, so we should index using the indices directly
-                    const char * src1_col = (const char*)wdata.get() +
-                        (src1_cont || src1->type != vec_dot_type
-                            ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
-                            : (i11 * nb11 + i12 * nb12 + i13 * nb13));
-                    float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
-
-                    for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
-                        vec_dot(ne00, &tmp[ir0 - iir0],
-                                (num_rows_per_vec_dot > 1 ? 16 : 0),
-                                src0_row + ir0 * nb01,
-                                (num_rows_per_vec_dot > 1 ? nb01 : 0),
-                                src1_col,
-                                (num_rows_per_vec_dot > 1 ? src1_col_stride : 0),
-                                num_rows_per_vec_dot);
-                    }
-
-                    for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
-                        memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
-                    }
-                }
-            }
-        }
-
-        if (nth >= nchunk0 * nchunk1) {
-            break;
-        }
-
-        // current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
-        current_chunk++;
-    }
+    infer_request.set_input_tensor(0, tensor_src1);
+    infer_request.set_input_tensor(1, tensor_src0);
+    infer_request.set_output_tensor(0, tensor_dst);
+    infer_request.infer();
 }
 
 void ggml_backend_openvino_reshape(ggml_tensor *dst) {
@@ -628,19 +637,45 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
 
     // Case 1: Both tensors are contiguous
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
-        // OpenVINO tensors for src and dst
-        // Source is 1D since it's contiguous
-        ov::Tensor src_tensor(ov::element::f32, {src0->ne[0]}, src0->data);
-        // // Destination is 1D since it's contiguous
-        ov::Tensor dst_tensor(ov::element::f32, {dst->ne[0]}, dst->data);
+        ov::Shape flat_shape = { static_cast<size_t>(ggml_nelements(dst)) };
 
-        // Perform the memory copy row by row
-        size_t row_size = dst->nb[0];  // Size of one row in destination
-        size_t src_stride = src0->nb[0];  // Stride for source tensor
+        // Construct the logical shape of the target tensor
+        ov::Shape dst_shape = {
+            static_cast<size_t>(dst->ne[2]),
+            static_cast<size_t>(dst->ne[1]),
+            static_cast<size_t>(dst->ne[0])
+        };
 
-        for (size_t i = 0; i < dst->ne[0]; ++i) {
-            std::memcpy((char *)dst_tensor.data()+i*row_size, (char *)src_tensor.data()+i*src_stride, row_size);
-        }
+        // --- Construct the OpenVINO computation graph ---
+        // 1. Define input parameter, type f32, shape flat_shape: [8192]
+        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape);
+
+        // 2. Create a Constant node to represent the new shape of the target Reshape(dst_shape)
+        //    Note: dst_shape needs to be converted to an int64_t array
+        std::vector<int64_t> dst_shape_vec(dst_shape.begin(), dst_shape.end());
+        auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, { dst_shape_vec.size() }, dst_shape_vec);
+
+        // 3. Use the Reshape operator to reshape the input tensor to the target shape(dst_shape)
+        auto reshape_op = std::make_shared<ov::op::v1::Reshape>(input_param, reshape_const, false);
+
+        // 4. Construct the model, whose output is the result of reshape_op
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{ reshape_op }, ov::ParameterVector{ input_param });
+
+        // --- Compile and execute ---
+        ov::Core core;
+        auto compiled_model = core.compile_model(model, "CPU");
+        auto infer_request = compiled_model.create_infer_request();
+
+        // Construct input Tensor: directly wrap src0->data, shape is flat_shape[8192]
+        ov::Tensor input_tensor(ov::element::f32, flat_shape, src0->data);
+        infer_request.set_input_tensor(0, input_tensor);
+
+        // Construct output Tensor: dst->data, shape is dst_shape: [1,1,8192]
+        ov::Tensor output_tensor(ov::element::f32, dst_shape, dst->data);
+        infer_request.set_output_tensor(0, output_tensor);
+
+        // Execute inference, the computation graph flattens the data of src0 and reshapes it to the shape of dst->ne, and writes it directly to dst->data
+        infer_request.infer();
         return;
     }
 
@@ -652,6 +687,70 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
     const size_t nb0 = dst->nb[0];
 
     if (src0->type == dst->type && ne00 == dst->ne[0] && nb00 == element_size && nb0 == element_size) {
+        // Assume that the data type is f32 and each element is 4 bytes
+        const size_t element_size = ggml_type_size(src0->type); // 4 bytes
+
+        // Logically, the number of valid elements per row is 3072 (src0->ne[0]), and the number of rows is 7 (src0->ne[1])
+        size_t valid_elems = static_cast<size_t>(src0->ne[0]); // 3072
+        size_t num_rows    = static_cast<size_t>(src0->ne[1]); // 7
+
+        // Number of floats physically stored per row = nb[1] / element_size = 36864/4 = 9216
+        size_t phys_stride = static_cast<size_t>(src0->nb[1]) / element_size; // 9216
+
+        // Total number of physical elements = (num_rows - 1)*phys_stride + valid_elems
+        size_t total_phys = (num_rows - 1) * phys_stride + valid_elems; // 6*9216 + 3072 = 58368
+        // size_t total_phys = num_rows * phys_stride;
+
+        // 1. Wrap src0->data into a 1D tensor with shape [58368]
+        ov::Shape flat_input_shape = { total_phys };
+        auto flat_input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_input_shape);
+
+        // 2. Construct index tensor idx with shape [3072,7]
+        // For each logical position (i,j) (i in [0,3072), j in [0,7)), calculate index = j*phys_stride + i.
+        std::vector<int64_t> indices;
+        indices.reserve(valid_elems * num_rows);
+        for (size_t j = 0; j < num_rows; j++) {
+            for (size_t i = 0; i < valid_elems; i++) {
+                indices.push_back(static_cast<int64_t>(j * phys_stride + i));
+            }
+        }
+        ov::Shape indices_shape = { valid_elems, num_rows }; // [3072,7]
+        auto indices_const = ov::op::v0::Constant::create(ov::element::i64, indices_shape, indices);
+
+        // 3. Use the Gather operator (axis=0) to collect valid data
+        // Note: The third parameter is axis, and a value of 0 means collecting data from the 1D input according to the index
+        auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto gathered = std::make_shared<ov::op::v8::Gather>(flat_input_param, indices_const, axis_const);
+        // The shape of gathered should be [3072,7]
+
+        // 4. Reshape gathered into a 4D tensor [3072,7,1,1]
+        auto reshape_const = ov::op::v0::Constant::create(
+            ov::element::i64, {4}, std::vector<int64_t>{ static_cast<int64_t>(valid_elems), static_cast<int64_t>(num_rows), 1, 1 }
+        );
+        auto reshaped = std::make_shared<ov::op::v1::Reshape>(gathered, reshape_const, false);
+        // The reshaped shape is [3072,7,1,1]
+
+        // 5. Construct the model and output it as reshaped
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{reshaped}, ov::ParameterVector{flat_input_param});
+
+        // --- Compile and execute ---
+        ov::Core core;
+        auto compiled_model = core.compile_model(model, "CPU");
+        auto infer_request = compiled_model.create_infer_request();
+
+        // Construct input Tensor: directly wrap src0->data, shape is flat_input_shape = [58368]
+        ov::Tensor input_tensor(ov::element::f32, flat_input_shape, src0->data);
+        infer_request.set_input_tensor(0, input_tensor);
+
+        // Construct output Tensor: dst is continuous storage, and its logical shape is [3072,7,1,1]
+        ov::Shape output_shape = { valid_elems, num_rows, 1, 1 };
+        ov::Tensor output_tensor(ov::element::f32, output_shape, dst->data);
+        infer_request.set_output_tensor(0, output_tensor);
+
+        // Execute inference. The computation graph uses Gather to collect the first 3072 valid elements of each row of src0,
+        // and reshape them to [3072,7,1,1] and write them directly to dst->data
+        infer_request.infer();
+        /*
         for (size_t i01 = 0; i01 < ne01; ++i01) {
             const char *src_row = reinterpret_cast<const char *>(src0->data) + i01 * nb01;
             char *dst_row = reinterpret_cast<char *>(dst->data) + i01 * dst->nb[1];
@@ -660,7 +759,7 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
             ov::Tensor dst_row_tensor(ov::element::f32, {ne00}, reinterpret_cast<void *>(dst_row));
 
             std::memcpy(dst_row_tensor.data<float>(), src_row_tensor.data<float>(), ne00 * sizeof(float));
-        }
+        }*/
         return;
     }
 
@@ -673,6 +772,72 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
     // dst->ne        =[3072,7,1,1],       dst->nb =[4,12288,86016,86016],          dst->type=GGML_TYPE_F32
     // dst->src[0]->ne=[96,32,7,1], dst->src[0]->nb=[4,2688,384,86016],     dst->src[0]->type=GGML_TYPE_F32
     if (ggml_is_contiguous(dst)) {
+        size_t valid_i = static_cast<size_t>(src0->ne[0]); // 96
+        size_t valid_j = static_cast<size_t>(src0->ne[1]); // 32
+        size_t valid_k = static_cast<size_t>(src0->ne[2]); // 7
+
+        // Output the logical shape of dst: dst->ne = [3072, 7, 1, 1]
+        // 3072 = 32 * 96, 7 is consistent with src0->ne[2]
+        size_t total_valid = valid_i * valid_j * valid_k; // 96 * 32 * 7 = 21504
+
+        // Physics step length:
+        size_t stride_j = static_cast<size_t>(src0->nb[1]) / ggml_type_size(src0->type); // 2688/4 = 672
+        size_t stride_k = static_cast<size_t>(src0->nb[2]) / ggml_type_size(src0->type); // 384/4 = 96
+
+        // Construct index array, output order: for k in [0,6], for j in [0,31], for i in [0,95]:
+        // desired input index = j * stride_j + k * stride_k + i
+        std::vector<int64_t> indices;
+        indices.reserve(total_valid);
+        for (size_t k = 0; k < valid_k; k++) {
+            for (size_t j = 0; j < valid_j; j++) {
+                for (size_t i = 0; i < valid_i; i++) {
+                    int64_t idx = static_cast<int64_t>(j * stride_j + k * stride_k + i);
+                    indices.push_back(idx);
+                }
+            }
+        }
+        // The size of indices should be 21504
+
+        // 1. Construct input: treat src0->data as a 1D tensor. The valid range is 0~21503.
+        ov::Shape flat_input_shape = { total_valid };
+        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_input_shape);
+
+        // 2. Construct index constant: 1D tensor, shape [21504]
+        ov::Shape indices_shape = { total_valid };
+        auto indices_const = ov::op::v0::Constant::create(ov::element::i64, indices_shape, indices);
+
+        // 3. Set axis=0 (collect data from 1D input)
+        auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+
+        // 4. Use the Gather operator (OpenVINO v8 Gather is used here) to collect valid data
+        auto gathered = std::make_shared<ov::op::v8::Gather>(input_param, indices_const, axis_const);
+        // gathered has a shape of [21504]
+
+        // 5. Reshape gathered to [3072,7,1,1], because 3072*7 = 21504
+        ov::Shape target_shape = { static_cast<size_t>(dst->ne[0]), static_cast<size_t>(dst->ne[1]), 1, 1 }; // [3072,7,1,1]
+        auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, {4},
+                               std::vector<int64_t>{ static_cast<int64_t>(dst->ne[0]), static_cast<int64_t>(dst->ne[1]), 1, 1 });
+        auto reshaped = std::make_shared<ov::op::v1::Reshape>(gathered, reshape_const, false);
+
+        // 6. Construct model
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{reshaped}, ov::ParameterVector{input_param});
+
+        // --- Compile and execute ---
+        ov::Core core;
+        auto compiled_model = core.compile_model(model, "CPU");
+        auto infer_request = compiled_model.create_infer_request();
+
+        // Construct input Tensor: directly wrap src0->data. Note: src0->data is regarded as a one-dimensional array according to the physical valid area, flat_input_shape: [21504]
+        ov::Tensor input_tensor(ov::element::f32, flat_input_shape, src0->data);
+        infer_request.set_input_tensor(0, input_tensor);
+
+        // Construct output Tensor: dst->data is stored continuously, with shape target_shape: [3072,7,1,1]
+        ov::Tensor output_tensor(ov::element::f32, target_shape, dst->data);
+        infer_request.set_output_tensor(0, output_tensor);
+
+        // Execute reasoning: The computation graph uses Gather+Reshape to collect each valid element of src0 in a predetermined order and write it directly to dst->data
+        infer_request.infer();
+        /*
         const size_t rs = ne00 * element_size; // Row size in bytes for dst
 
         // Create OpenVINO tensors for source and destination
@@ -699,7 +864,7 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
 
             // Copy row
             std::memcpy(dst_ptr, src0_ptr, rs);
-        }
+        }*/
         return;
     }
     std::cout << "Duplication of bytes completed successfully." << std::endl;
@@ -746,7 +911,7 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
             ov::ResultVector{std::make_shared<ov::op::v0::Result>(dst_output)},
             ov::ParameterVector{src_input},
             "ContiguousCopy");
-            // Compile and execute the model
+        // Compile and execute the model
         auto compiled_model = core.compile_model(model, "CPU");
 
         ov::Tensor src_tensor(ov::element::f32, src_shape, src0->data);
@@ -757,6 +922,93 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
         infer_request.set_output_tensor(0, dst_tensor);
         infer_request.infer();
     } else {
+        // In this example, the logical shape is [7,3072,1,1].
+        // Here we assume that the number of "rows" is 3072 and the number of "columns" is 7.
+        const size_t num_cols = static_cast<size_t>(dst->ne[0]);   // 7
+        const size_t num_rows = static_cast<size_t>(dst->ne[1]);   // 3072
+        const size_t total_elems = num_cols * num_rows;            // 7 * 3072 = 21504
+
+        // For src0:
+        // src0->nb[0] = 12288, so the stride along logical dimension 0 = 12288/4 = 3072 (f32)
+        // const size_t src_stride0 = 12288 / ggml_type_size(src0->type); // 3072
+        const size_t src_stride0 = src0->nb[0] / ggml_type_size(src0->type); // 3072
+
+        // Construct index array (length 21504), in flat output order (row-first, row length = 7):
+        // For output flat index n, set:
+        // r = n / 7, c = n % 7.
+        // Valid data index corresponding to src0 = c * src_stride0 + r.
+        std::vector<int64_t> indices;
+        indices.reserve(total_elems);
+        for (size_t n = 0; n < total_elems; n++) {
+            size_t r = n / num_cols;  // r in [0,3072)
+            size_t c = n % num_cols;  // c in [0,7)
+            int64_t idx = static_cast<int64_t>(c * src_stride0 + r);
+            indices.push_back(idx);
+        }
+
+        // --- Construct OpenVINO calculation graph ---
+        // 1. Encapsulate src0->data into 1D input Tensor with shape [21504]
+        ov::Shape flat_shape = { total_elems };
+        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape);
+
+        // 2. Constructs an index constant with a shape of [21504]
+        auto indices_const = ov::op::v0::Constant::create(ov::element::i64, flat_shape, indices);
+
+        // 3. Construct axis constant, axis = 0
+        auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+
+        // 4. Use the Gather operator to collect valid data. The result shape is [21504], type f32
+        auto gathered = std::make_shared<ov::op::v8::Gather>(input_param, indices_const, axis_const);
+
+        // 5. Convert data types: f32 to f16
+        auto converted = std::make_shared<ov::op::v0::Convert>(gathered, ov::element::f16);
+
+        // 6. Reshape into a 2D tensor with shape [num_rows, num_cols] = [3072,7].
+        // Note: row-first arrangement is used here, that is, the 0th dimension represents rows (3072 rows) and the 1st dimension represents columns (7 consecutive elements)
+        std::vector<int64_t> new_shape = { static_cast<int64_t>(num_rows), static_cast<int64_t>(num_cols) };
+        auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, {2}, new_shape);
+        auto reshaped = std::make_shared<ov::op::v1::Reshape>(converted, reshape_const, false);
+
+        // 7. To keep consistent with the logical shape of dst [7,3072,1,1] (note: the order of ne arrays in ggml may be different from the intuitive),
+        // Here we finally need to get a flat continuous result with row-first arrangement of [3072,7] (i.e., 7 consecutive elements per row).
+        // If you need to expand to 4D, you can further reshape, but here we only focus on two-dimensional valid data.
+        // Let output_shape = [num_rows, num_cols] = [3072,7]
+
+        // 8. Construct model: input is input_param, output is reshaped
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{ reshaped }, ov::ParameterVector{ input_param });
+
+        ov::Core core;
+        auto compiled_model = core.compile_model(model, "CPU");
+        auto infer_request = compiled_model.create_infer_request();
+
+        // 9. Construct input Tensor: directly wrap src0->data, shape is flat_shape, type f32
+        ov::Tensor input_tensor(ov::element::f32, flat_shape, src0->data);
+        infer_request.set_input_tensor(0, input_tensor);
+
+        // 10. Since dst is non-contiguous (row spacing is dst->nb[1] = 64 bytes),
+        // We let the model output to a temporary continuous buffer and then copy it row by row to dst->data.
+        ov::Shape contig_output_shape = { num_rows, num_cols }; // [3072,7]
+        // Allocate a temporary buffer (to store f16 data, number of elements = 3072*7)
+        std::vector<uint16_t> temp_output(total_elems);
+        ov::Tensor output_tensor_contig(ov::element::f16, contig_output_shape, temp_output.data());
+        infer_request.set_output_tensor(0, output_tensor_contig);
+
+        // 11. Execute inference, the computation graph will collect, convert, and reshape to obtain a continuous f16 result
+        infer_request.infer();
+
+        // 12. Copy temporary output to dst->data by line, considering the non-continuous storage of dst (each line is separated by dst->nb[1] bytes)
+        // Each line of valid data is num_cols * sizeof(f16) = 7 * 2 = 14 bytes.
+        uint8_t *dst_ptr = static_cast<uint8_t*>(dst->data);
+        size_t dst_row_stride = static_cast<size_t>(dst->nb[1]); // 64 bytes per row
+        size_t row_bytes = num_cols * ggml_type_size(dst->type); // 7 * 2 = 14 bytes
+        for (size_t r = 0; r < num_rows; r++) {
+            // Temporary output is a continuous two-dimensional array, offset = r * num_cols
+            uint8_t *src_row_ptr = reinterpret_cast<uint8_t*>(temp_output.data()) + r * row_bytes;
+            // Copy row_bytes to the starting address of the dst row
+            std::memcpy(dst_ptr + r * dst_row_stride, src_row_ptr, row_bytes);
+        }
+
+        /**
         // Non-contiguous case: element-wise copy
         for (int64_t i03 = 0; i03 < dst->ne[3]; ++i03) {
             for (int64_t i02 = 0; i02 < dst->ne[2]; ++i02) {
@@ -774,7 +1026,7 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
                     }
                 }
             }
-        }
+        }*/
     }
 }
 
@@ -828,6 +1080,7 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
             // Process a range of nodes with openvino_frontend_compute
             int start_index = i;
             while (i < cgraph->n_nodes &&
+                    // std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end() &&
                     std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end() &&
                     std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()) {
                 i++;
