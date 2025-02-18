@@ -4,6 +4,7 @@
 #include <ggml-cpu-impl.h>
 
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
+    m_node_op_name[node->name] = ggml_op_name(node->op);
     switch (node->op) {
         // Unary OPs 
         case GGML_OP_UNARY:
