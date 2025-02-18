@@ -3126,6 +3126,7 @@ struct server_context {
                 batch.n_seq_id + i,
                 batch.seq_id   + i,
                 batch.logits   + i,
+                nullptr,
             };
 
             const int ret = llama_decode(ctx, batch_view);

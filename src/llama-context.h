@@ -6,6 +6,7 @@
 #include "llama-model.h"
 #include "llama-kv-cache.h"
 #include "llama-adapter.h"
+#include "llama-vision.h"
 
 #include "ggml-cpp.h"
 

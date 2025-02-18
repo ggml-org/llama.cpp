@@ -24,6 +24,7 @@ add_library(llama
             llama-quant.cpp
             llama-sampling.cpp
             llama-vocab.cpp
+            llama-vision.cpp
             unicode.h
             unicode.cpp
             unicode-data.cpp

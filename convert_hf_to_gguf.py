@@ -17,6 +17,7 @@ from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
 from itertools import chain
 
+from transformers import AutoConfig
 import math
 import numpy as np
 import torch
@@ -65,6 +66,13 @@ class Model:
     model_name: str | None
     metadata_override: Path | None
     dir_model_card: Path
+
+    # for vision model
+    vision_arch: gguf.MODEL_ARCH | None = None
+    preprocessor_config: dict[str, Any] | None = None
+    vparams: dict[str, Any] | None = None
+    v_tensor_map: gguf.TensorNameMap | None = None
+    v_tensor_names: set[str] | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -126,6 +134,16 @@ class Model:
             return None
         raise KeyError(f"could not find any of: {keys}")
 
+    def find_vparams(self, keys: Iterable[str], optional: bool = False) -> Any:
+        if self.vparams is None:
+            raise ValueError("vision model parameters not set")
+        key = next((k for k in keys if k in self.vparams), None)
+        if key is not None:
+            return self.vparams[key]
+        if optional:
+            return None
+        raise KeyError(f"(vision) could not find any of: {keys}")
+
     def set_vocab(self):
         self._set_vocab_gpt2()
 
@@ -186,9 +204,10 @@ class Model:
                                  f"Missing tensors: {missing}\n"
                                  f"Extra tensors: {extra}")
 
-    def format_tensor_name(self, key: gguf.MODEL_TENSOR, bid: int | None = None, suffix: str = ".weight") -> str:
-        if key not in gguf.MODEL_TENSORS[self.model_arch]:
-            raise ValueError(f"Missing {key!r} for MODEL_TENSORS of {self.model_arch!r}")
+    def format_tensor_name(self, key: gguf.MODEL_TENSOR, bid: int | None = None, suffix: str = ".weight", is_vision = False) -> str:
+        arch = self.vision_arch if is_vision and self.vision_arch is not None else self.model_arch
+        if key not in gguf.MODEL_TENSORS[arch]:
+            raise ValueError(f"Missing {key!r} for MODEL_TENSORS of {arch!r}")
         name: str = gguf.TENSOR_NAMES[key]
         if "{bid}" in name:
             assert bid is not None
@@ -210,9 +229,13 @@ class Model:
 
     def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
         new_name = self.tensor_map.get_name(key=name, try_suffixes=try_suffixes)
-        if new_name is None:
+        new_name_vision = self.v_tensor_map.get_name(key=name, try_suffixes=try_suffixes) if self.v_tensor_map is not None else None
+        if new_name is not None:
+            return new_name
+        elif new_name_vision is not None:
+            return new_name_vision
+        else:
             raise ValueError(f"Can not map tensor {name!r}")
-        return new_name
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
@@ -256,6 +279,23 @@ class Model:
         if (head_dim := self.hparams.get("head_dim")) is not None:
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
+
+        # Vision model parameters
+        if self.vparams is not None and self.preprocessor_config is not None and self.vision_arch is not None:
+            self.gguf_writer.add_vision_type("vit")
+            self.gguf_writer.add_vision_image_size(self.vparams["image_size"])
+            self.gguf_writer.add_vision_patch_size(self.vparams["patch_size"])
+            self.gguf_writer.add_vision_vit_architecture(gguf.MODEL_ARCH_NAMES[self.vision_arch])
+            self.gguf_writer.add_vision_vit_block_count(self.vparams["num_hidden_layers"])
+            self.gguf_writer.add_vision_vit_embedding_length(self.vparams["hidden_size"])
+            self.gguf_writer.add_vision_vit_feed_forward_length(self.vparams["intermediate_size"])
+            self.gguf_writer.add_vision_vit_head_count(self.vparams["num_attention_heads"])
+            self.gguf_writer.add_vision_vit_image_mean(self.preprocessor_config["image_mean"])
+            self.gguf_writer.add_vision_vit_image_std(self.preprocessor_config["image_std"])
+            try:
+                self.gguf_writer.add_vision_vit_select_layer(self.find_hparam(["vision_feature_layer", "mm_vision_select_layer"]))
+            except KeyError:
+                self.gguf_writer.add_vision_vit_select_layer(0)
 
         self.gguf_writer.add_file_type(self.ftype)
         logger.info(f"gguf: file type = {self.ftype}")
@@ -466,7 +506,25 @@ class Model:
     @staticmethod
     def load_hparams(dir_model: Path):
         with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+            hparams = json.load(f)
+            if "text_config" in hparams:
+                text_config = hparams["text_config"]
+                model_id = text_config.get("_name_or_path", None)
+                # for example, llava-1.5-7b-hf misses the language model config, need to retrieve it via model ID
+                if model_id is not None and model_id != "None" and model_id != "":
+                    text_config = AutoConfig.from_pretrained(text_config["_name_or_path"]).to_dict()
+                hparams = {**text_config, **hparams}
+            return hparams
+
+    @staticmethod
+    def load_preprocessor_config(dir_model: Path):
+        # TODO: this varies vastly among models, need to handle more cases in the future
+        file_path = dir_model / "preprocessor_config.json"
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            raise Exception(f"Preprocessor config not found at {file_path}")
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -519,7 +577,9 @@ class Model:
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        # DEBIAN_FRONTEND=noninteractive means that the script is running in a non-interactive environment (i.e. CI), so we cannot answer Y/N when it asks for user input
+        is_cli_non_interactive = os.environ.get("DEBIAN_FRONTEND", "") == "noninteractive"
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=is_cli_non_interactive)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
@@ -946,6 +1006,29 @@ class Model:
             self.gguf_writer.add_add_bos_token(field.parts[-1].tolist()[0])
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
+
+
+# TODO: maybe merge this with Model in the future
+class VisionModelHelper:
+    model: Model
+    tok_embd_tensor: Tensor | None = None
+
+    def __init__(self, model: Model):
+        self.model = model
+        # TODO: how to do this without reading the whole safetensor file?
+        for tname, tensor in model.get_tensors():
+            if tname.endswith("embed_tokens.weight"):
+                self.tok_embd_tensor = tensor
+
+    def get_embd_for_tokens(self, map_token_to_tensor_name: Iterable[tuple[str, gguf.MODEL_TENSOR]], tensor_name_postfix = '.weight') -> Iterable[tuple[str, Tensor]]:
+        if self.tok_embd_tensor is None:
+            raise ValueError("Token embedding tensor not found")
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.model.dir_model, trust_remote_code=True)
+        for token, tensor_name in map_token_to_tensor_name:
+            tok_id = tokenizer.get_vocab()[token]
+            row = self.tok_embd_tensor[tok_id]
+            yield gguf.TENSOR_NAMES[tensor_name] + tensor_name_postfix, row
 
 
 @Model.register("GPTNeoXForCausalLM")
@@ -1560,9 +1643,37 @@ class StableLMModel(Model):
                 raise ValueError(f"Unprocessed norms: {norms}")
 
 
-@Model.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM")
+@Model.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM", "LlavaForConditionalGeneration", "MobileLlamaForCausalLM", "Idefics3ForConditionalGeneration")
 class LlamaModel(Model):
     model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        model_type = self.hparams.get("model_type", None)
+        self.vision_arch = None
+
+        # only tested with https://huggingface.co/llava-hf/llava-1.5-7b-hf
+        if "vision_config" in self.hparams and model_type == "llava":
+            self.vparams = self.hparams["vision_config"]
+            self.preprocessor_config = self.load_preprocessor_config(self.dir_model)
+            self.vision_arch = gguf.MODEL_ARCH.VISION_LLAVA
+
+        # only tested with https://huggingface.co/mtgv/MobileVLM_V2-1.7B
+        if "mm_vision_tower" in self.hparams and model_type == "mobilevlm":
+            from transformers import AutoImageProcessor
+            vision_model_id = self.hparams["mm_vision_tower"]
+            self.vparams = AutoConfig.from_pretrained(vision_model_id).to_dict()["vision_config"]
+            self.preprocessor_config = AutoImageProcessor.from_pretrained(vision_model_id).to_dict()
+            self.vision_arch = gguf.MODEL_ARCH.VISION_MOBILEVLM
+
+        if "vision_config" in self.hparams and model_type == "idefics3":
+            self.vparams = self.hparams["vision_config"]
+            self.preprocessor_config = self.load_preprocessor_config(self.dir_model)
+            self.vision_arch = gguf.MODEL_ARCH.VISION_IDEFICS3
+
+        if self.vparams is not None and self.vision_arch is not None:
+            self.v_tensor_map = gguf.get_tensor_name_map(self.vision_arch, self.vparams["num_hidden_layers"])
 
     def set_vocab(self):
         try:
@@ -1613,6 +1724,24 @@ class LlamaModel(Model):
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
 
+        # For vision model
+        if self.vparams is not None:
+            max_pos_embd = -1
+            self.gguf_writer.add_vision_vit_patch_merge_type(gguf.CLIPPatchMergeType.FLAT)
+            # TODO: should not hardcode these, but they are currently missing from config.json
+            if self.vision_arch == gguf.MODEL_ARCH.VISION_LLAVA:
+                self.gguf_writer.add_vision_vit_projector_type(gguf.constants.CLIPProjectorType.MLP)
+                max_pos_embd = (self.vparams["image_size"] // self.vparams["patch_size"])**2 + 1
+            if self.vision_arch == gguf.MODEL_ARCH.VISION_MOBILEVLM:
+                self.gguf_writer.add_vision_vit_projector_type(gguf.constants.CLIPProjectorType.LDPV2)
+                max_pos_embd = (self.vparams["image_size"] // self.vparams["patch_size"])**2 + 1
+            if self.vision_arch == gguf.MODEL_ARCH.VISION_IDEFICS3:
+                self.gguf_writer.add_vision_vit_projector_type(gguf.constants.CLIPProjectorType.MLP)
+                self.gguf_writer.add_vision_vit_scale_factor(self.hparams["scale_factor"])
+                max_pos_embd = (self.vparams["image_size"] // self.vparams["patch_size"])**2
+            self.gguf_writer.add_vision_vit_layer_norm_epsilon(1e-05)
+            self.gguf_writer.add_vision_vit_max_position_embeddings(max_pos_embd)
+
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
         if n_head_kv is not None and n_head != n_head_kv:
@@ -1626,11 +1755,24 @@ class LlamaModel(Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
+        is_vision_tensor = "vision_tower" in name or "vision_model" in name
 
-        if name.endswith(("q_proj.weight", "q_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-        if name.endswith(("k_proj.weight", "k_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
+        if is_vision_tensor:
+            if name.startswith("model.text_model"):
+                name = name.replace("text_model.", "") # for SmolVLM
+            else:
+                name = name.replace("model.vision_tower.", "")
+            if "post_layernorm" in name and self.vision_arch != gguf.MODEL_ARCH.VISION_IDEFICS3:
+                return [] # skip post_layernorm
+
+        if not is_vision_tensor:
+            if name.startswith("language_model"):
+                # language model tensors, remove the prefix
+                name = name.replace("language_model.", "")
+            if name.endswith(("q_proj.weight", "q_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_head)
+            if name.endswith(("k_proj.weight", "k_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
         # process the experts separately
         if name.find("block_sparse_moe.experts") != -1:
@@ -2232,6 +2374,173 @@ class Qwen2VLModel(Model):
             if name.startswith("visual."):
                 continue
             yield name, data
+
+
+@Model.register("MiniCPMV")
+class MiniCPMVModel(Qwen2Model):
+    # MiniCPM-V 2.5 is Qwen2 and 2.6 is Qwen-2.5
+    model_arch = gguf.MODEL_ARCH.QWEN2
+    proj_type: gguf.constants.CLIPProjectorType | None
+    resampler_n_embd = 0
+    vhelper: VisionModelHelper | None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        model_type = self.hparams.get("model_type", None)
+
+        # only tested with https://huggingface.co/openbmb/MiniCPM-V-2_6
+        if "vision_config" in self.hparams and model_type == "minicpmv":
+            self.vparams = self.hparams["vision_config"]
+            self.preprocessor_config = self.load_preprocessor_config(self.dir_model)
+            self.vision_arch = gguf.MODEL_ARCH.VISION_MINICPMV
+            version = str(self.hparams.get("version", "unknown"))
+            if version == "2.5":
+                self.proj_type = gguf.constants.CLIPProjectorType.MINICPMV_2_5
+            elif version == "2.6":
+                self.proj_type = gguf.constants.CLIPProjectorType.MINICPMV_2_6
+            else:
+                raise ValueError(f"Unsupported MiniCPM-V version: {version}")
+            self.vhelper = VisionModelHelper(self)
+            # TODO: how to do this without reading the whole safetensor file?
+            for tname, tensor in self.get_tensors():
+                if tname == "resampler.ln_post.bias":
+                    self.resampler_n_embd = tensor.shape[0]
+            if self.resampler_n_embd < 2:
+                raise ValueError("Failed to detect resampler embedding size")
+        else:
+            raise ValueError("Expected vision_config, but not found")
+
+        assert self.vparams is not None
+        assert self.vision_arch is not None
+        assert self.preprocessor_config is not None
+        self.preprocessor_config["image_mean"] = [0.5, 0.5, 0.5]
+        self.preprocessor_config["image_std"] = [0.5, 0.5, 0.5]
+        self.hparams["vision_feature_layer"] = 0
+        self.v_tensor_map = gguf.get_tensor_name_map(self.vision_arch, self.vparams["num_hidden_layers"])
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.vparams is not None and self.proj_type is not None
+        self.gguf_writer.add_vision_vit_patch_merge_type(gguf.CLIPPatchMergeType.FLAT)
+        self.gguf_writer.add_vision_vit_projector_type(self.proj_type)
+        self.gguf_writer.add_vision_vit_layer_norm_epsilon(1e-06)
+        max_pos_embd = (self.vparams["image_size"] // self.vparams["patch_size"])**2
+        self.gguf_writer.add_vision_vit_max_position_embeddings(max_pos_embd)
+
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # because the model operates excusively on 70x70 patches for now, we should precompute the positional embeddings to gain performance
+        # in the future, we can do it in cpp if we figure out how to do it efficiently
+        yield (
+            self.format_tensor_name(gguf.MODEL_TENSOR.V_RESMPL_POS_EMBD_K, is_vision=True),
+            torch.from_numpy(self._get_2d_sincos_pos_embed(self.resampler_n_embd, (70, 70)))
+        )
+        assert self.vhelper is not None
+        added_tokens = [
+            ("<image>",  gguf.MODEL_TENSOR.V_TOK_EMBD_IMAGE),
+            ("</image>", gguf.MODEL_TENSOR.V_TOK_EMBD_END_IMAGE),
+            ("<slice>",  gguf.MODEL_TENSOR.V_TOK_EMBD_SLICE),
+            ("</slice>", gguf.MODEL_TENSOR.V_TOK_EMBD_END_SLICE),
+        ]
+        for tensor_name, tensor in self.vhelper.get_embd_for_tokens(added_tokens):
+            yield tensor_name, tensor
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # for language part
+        if name.startswith("llm."):
+            return [(self.map_tensor_name(name.replace("llm.", "")), data_torch)]
+
+        # split the resampler.attn.in_proj_(weight|bias) tensors into q, k, v
+        if name.endswith("in_proj_weight") or name.endswith("in_proj_bias"):
+            assert data_torch.shape[0] == 3 * self.resampler_n_embd
+            split_tensor = data_torch.chunk(3, dim=0)
+            name_q = name.replace("in_proj_", "in_proj_q.") # in_proj_q.(weight|bias)
+            name_k = name.replace("in_proj_", "in_proj_k.") # in_proj_k.(weight|bias)
+            name_v = name.replace("in_proj_", "in_proj_v.") # in_proj_v.(weight|bias)
+            return [
+                # TODO: permute these
+                (self.map_tensor_name(name_q), split_tensor[0]),
+                (self.map_tensor_name(name_k), split_tensor[1]),
+                (self.map_tensor_name(name_v), split_tensor[2]),
+            ]
+
+        # append .weight to these tensors
+        if name == "resampler.proj" or name == "resampler.query":
+            name += ".weight"
+
+        if name.startswith("resampler.proj"):
+            data_torch = data_torch.transpose(-1, -2).contiguous()
+
+        if "post_layernorm" in name:
+            return [] # skip post_layernorm
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        del name, bid  # unused
+        if "v.resmpl.query" in new_name or "v.resmpl.pos_embd_k" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        if "v.resmpl." in new_name:
+            return gguf.GGMLQuantizationType.F32 if n_dims == 1 else gguf.GGMLQuantizationType.F16
+        return False
+
+    # utils to work with MiniCPM-V resampler
+
+    # https://github.com/facebookresearch/mae/blob/efb2a8062c206524e35e47d04501ed4f544c0ae8/util/pos_embed.py#L20
+    def _get_2d_sincos_pos_embed(self, embed_dim: int, grid_size: tuple[int, int] | int, cls_token=False) -> np.ndarray:
+        """
+        grid_size: int of the grid height and width
+        return:
+        pos_embed: [grid_size*grid_size, embed_dim] or [1+grid_size*grid_size, embed_dim] (w/ or w/o cls_token)
+        """
+        if isinstance(grid_size, int):
+            grid_h_size, grid_w_size = grid_size, grid_size
+        else:
+            grid_h_size, grid_w_size = grid_size[0], grid_size[1]
+
+        grid_h = np.arange(grid_h_size, dtype=np.float32)
+        grid_w = np.arange(grid_w_size, dtype=np.float32)
+        grid = np.meshgrid(grid_w, grid_h)  # here w goes first
+        grid = np.stack(grid, axis=0)
+
+        grid = grid.reshape([2, 1, grid_h_size, grid_w_size])
+        pos_embed = self._get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
+        if cls_token:
+            pos_embed = np.concatenate([np.zeros([1, embed_dim]), pos_embed], axis=0)
+        return pos_embed
+
+    def _get_2d_sincos_pos_embed_from_grid(self, embed_dim: int, grid: np.ndarray) -> np.ndarray:
+        assert embed_dim % 2 == 0
+
+        # use half of dimensions to encode grid_h
+        emb_h = self._get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
+        emb_w = self._get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
+
+        emb = np.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
+        return emb
+
+    def _get_1d_sincos_pos_embed_from_grid(self, embed_dim: int, pos: np.ndarray) -> np.ndarray:
+        """
+        embed_dim: output dimension for each position
+        pos: a list of positions to be encoded: size (M,)
+        out: (M, D)
+        """
+        assert embed_dim % 2 == 0
+        omega = np.arange(embed_dim // 2, dtype=np.float32)
+        omega /= embed_dim / 2.
+        omega = 1. / 10000 ** omega  # (D/2,)
+
+        pos = pos.reshape(-1)  # (M,)
+        out = np.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
+
+        emb_sin = np.sin(out)  # (M, D/2)
+        emb_cos = np.cos(out)  # (M, D/2)
+
+        emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
+        return emb
 
 
 @Model.register("WavTokenizerDec")
@@ -4949,7 +5258,7 @@ class LazyTorchTensor(gguf.LazyBase):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Convert a huggingface model to a GGML compatible file")
+        description="Convert a huggingface model to a GGML compatible file\n\nNote: When converting vision models, this script may use internet connection to download configuration files via Hugging Face.")
     parser.add_argument(
         "--vocab-only", action="store_true",
         help="extract only the vocab",
