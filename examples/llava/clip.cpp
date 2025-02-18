@@ -1377,6 +1377,7 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
         new_clip->ctx_data = ggml_init(params);
         if (!new_clip->ctx_data) {
             LOG_ERR("%s: ggml_init() failed\n", __func__);
+            ggml_free(meta);
             clip_free(new_clip);
             gguf_free(ctx);
             return nullptr;
@@ -1385,6 +1386,7 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
         auto fin = std::ifstream(fname, std::ios::binary);
         if (!fin) {
             LOG_ERR("cannot open model file for loading tensors\n");
+            ggml_free(meta);
             clip_free(new_clip);
             gguf_free(ctx);
             return nullptr;
