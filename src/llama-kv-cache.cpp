@@ -53,7 +53,7 @@ bool llama_kv_cache_init(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             struct ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*n_layer*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(5u*n_layer*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -70,6 +70,11 @@ bool llama_kv_cache_init(
 
     cache.k_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
+
+    // DeepSeek MLA
+    cache.kr_l.reserve(n_layer);
+    cache.kv_l.reserve(n_layer);
+    cache.kvt_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
@@ -97,6 +102,20 @@ bool llama_kv_cache_init(
         ggml_format_name(v, "cache_v_l%d", i);
         cache.k_l.push_back(k);
         cache.v_l.push_back(v);
+
+        // DeepSeek MLA
+        const uint32_t n_embd_head_qk_rope = hparams.n_rot;
+        const uint32_t kv_lora_rank = hparams.n_lora_kv;
+        LLAMA_LOG_DEBUG("%s: layer %d: n_embd_head_qk_rope = %d, kv_lora_rank = %d\n", __func__, i, n_embd_head_qk_rope, kv_lora_rank);
+        ggml_tensor * kr = ggml_new_tensor_1d(ctx, cache.type_kr, n_embd_head_qk_rope*kv_size);
+        ggml_tensor * kv = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
+        ggml_tensor * kvt = ggml_new_tensor_1d(ctx, cache.type_kv, kv_lora_rank*kv_size);
+        ggml_format_name(kr, "cache_kr_l%d", i);
+        ggml_format_name(kv, "cache_kv_l%d", i);
+        ggml_format_name(kvt, "cache_kvt_l%d", i);
+        cache.kr_l.push_back(kr);
+        cache.kv_l.push_back(kv);
+        cache.kvt_l.push_back(kvt);
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
