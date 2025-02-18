@@ -554,8 +554,10 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
 // Batch utils
 //
 
+// DEPRECATED
 void common_batch_clear(struct llama_batch & batch);
 
+// DEPRECATED
 void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,
