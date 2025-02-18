@@ -137,10 +137,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {
         return true;
     }
 
-#if defined(GGML_USE_MUSA)
-    return true;
-#endif // defined(GGML_USE_MUSA)
-
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
         return false;
     }
