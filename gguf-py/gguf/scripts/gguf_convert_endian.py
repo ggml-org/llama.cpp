@@ -20,22 +20,15 @@ logger = logging.getLogger("gguf-convert-endian")
 
 
 def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None:
-    if np.uint32(1) == np.uint32(1).newbyteorder("<"):
-        # Host is little endian
-        host_endian = "little"
-        swapped_endian = "big"
+    file_endian = reader.endianess.name
+    if reader.byte_order == 'S':
+        host_endian = 'BIG' if file_endian == 'LITTLE' else 'LITTLE'
     else:
-        # Sorry PDP or other weird systems that don't use BE or LE.
-        host_endian = "big"
-        swapped_endian = "little"
-    if reader.byte_order == "S":
-        file_endian = swapped_endian
-    else:
-        file_endian = host_endian
-    order = host_endian if args.order == "native" else args.order
-    logger.info(f"* Host is {host_endian.upper()} endian, GGUF file seems to be {file_endian.upper()} endian")
+        host_endian = file_endian
+    order = host_endian if args.order == "native" else args.order.upper()
+    logger.info(f"* Host is {host_endian} endian, GGUF file seems to be {file_endian} endian")
     if file_endian == order:
-        logger.info(f"* File is already {order.upper()} endian. Nothing to do.")
+        logger.info(f"* File is already {order} endian. Nothing to do.")
         sys.exit(0)
     logger.info("* Checking tensors for conversion compatibility")
     for tensor in reader.tensors:
@@ -45,7 +38,7 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
             gguf.GGMLQuantizationType.Q8_0,
         ):
             raise ValueError(f"Cannot handle type {tensor.tensor_type.name} for tensor {repr(tensor.name)}")
-    logger.info(f"* Preparing to convert from {file_endian.upper()} to {order.upper()}")
+    logger.info(f"* Preparing to convert from {file_endian} to {order}")
     if args.dry_run:
         return
     logger.warning("*** Warning *** Warning *** Warning **")
