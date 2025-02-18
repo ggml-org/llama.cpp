@@ -1148,6 +1148,8 @@ rpc_server::~rpc_server() {
 }
 
 static void rpc_serve_client(ggml_backend_t backend, sockfd_t sockfd, size_t free_mem, size_t total_mem) {
+    std::vector<uint8_t> set_tensor_vec;
+    set_tensor_vec.reserve(100);
     rpc_server server(backend);
     while (true) {
         uint8_t cmd;
@@ -1247,11 +1249,10 @@ static void rpc_serve_client(ggml_backend_t backend, sockfd_t sockfd, size_t fre
                 break;
             }
             case RPC_CMD_SET_TENSOR: {
-                std::vector<uint8_t> input;
-                if (!recv_msg(sockfd, input)) {
+                if (!recv_msg(sockfd, set_tensor_vec)) {
                     return;
                 }
-                if (!server.set_tensor(input)) {
+                if (!server.set_tensor(set_tensor_vec)) {
                     return;
                 }
                 if (!send_msg(sockfd, nullptr, 0)) {
