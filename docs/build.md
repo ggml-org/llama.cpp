@@ -202,14 +202,17 @@ This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GP
 - Using `CMake`:
 
   ```bash
-  cmake -B build -DGGML_MUSA=ON
+  # build with MUSA and using the compilers from MUSA SDK:
+  cmake -B build -DGGML_MUSA=ON \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   cmake --build build --config Release
   ```
 - For static build:
 
   ```bash
   cmake -B build -DGGML_MUSA=ON \
-    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
   cmake --build build --config Release
   ```
 
