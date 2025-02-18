@@ -1,0 +1,406 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+
+#extension GL_EXT_integer_dot_product : require
+
+#ifdef FLOAT16
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#endif
+
+#ifdef COOPMAT
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#endif
+
+#ifdef MUL_MAT_ID
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#endif
+
+#include "types.comp"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE_PACKED16 data_a[];};
+layout (binding = 1) readonly buffer B {block_q8_1_packed16 data_b[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+#ifdef MUL_MAT_ID
+layout (binding = 3) readonly buffer IDS {int data_ids[];};
+#endif
+
+layout (push_constant) uniform parameter
+{
+    uint M;
+    uint N;
+    uint K;
+    uint stride_a;
+    uint stride_b;
+    uint stride_d;
+
+    uint batch_stride_a;
+    uint batch_stride_b;
+    uint batch_stride_d;
+
+#ifdef MUL_MAT_ID
+    uint nei0;
+    uint nei1;
+    uint nbi1;
+    uint ne11;
+#else
+    uint k_split;
+    uint ne02;
+    uint ne12;
+    uint broadcast2;
+    uint broadcast3;
+#endif
+} p;
+
+layout (constant_id = 0) const uint BLOCK_SIZE = 64;
+layout (constant_id = 1) const uint BM = 64;
+layout (constant_id = 2) const uint BN = 64;
+// layout (constant_id = 3) const uint BK = 32;
+layout (constant_id = 4) const uint WM = 32;
+layout (constant_id = 5) const uint WN = 32;
+layout (constant_id = 6) const uint WMITER = 2;
+layout (constant_id = 7) const uint TM = 4;
+layout (constant_id = 8) const uint TN = 2;
+layout (constant_id = 9) const uint TK = 1;  // Only needed for coopmat
+layout (constant_id = 10) const uint WARP = 32;
+
+#define BK 32
+
+#ifdef COOPMAT
+#define SHMEM_STRIDE (BK + 8)
+#else
+#define SHMEM_STRIDE (BK + 1)
+#endif
+
+// Assumption: BK == 32
+struct block_q8_0_internal {
+    FLOAT_TYPE ds;
+    int32_t qs[BK / 4];
+};
+
+struct block_q8_1_internal {
+    FLOAT_TYPE_VEC2 ds;
+    int32_t qs[BK / 4];
+};
+
+// Does this need SHMEM_STRIDE somewhere?
+#if QUANT_AUXF == 1
+shared block_q8_0_internal buf_a[BM];
+#else
+shared block_q8_1_internal buf_a[BM];
+#endif
+
+shared block_q8_1_internal buf_b[BN];
+
+#define LOAD_VEC 4
+
+#ifdef MUL_MAT_ID
+shared u16vec2 row_ids[3072];
+#endif // MUL_MAT_ID
+
+#define NUM_WARPS (BLOCK_SIZE / WARP)
+
+#ifdef COOPMAT
+shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
+#endif
+
+void main() {
+#if defined(DATA_A_IQ4_NL)
+    init_iq4nl_shmem();
+#endif
+
+#ifdef MUL_MAT_ID
+    const uint expert_idx = gl_GlobalInvocationID.z;
+#else
+    const uint batch_idx = gl_GlobalInvocationID.z;
+
+    const uint i13 = batch_idx / p.ne12;
+    const uint i12 = batch_idx % p.ne12;
+
+    const uint i03 = i13 / p.broadcast3;
+    const uint i02 = i12 / p.broadcast2;
+
+    const uint batch_idx_a = i03 * p.ne02 + i02;
+#endif
+
+    const uint blocks_m = (p.M + BM - 1) / BM;
+    const uint ir = gl_WorkGroupID.x % blocks_m;
+    const uint ik = gl_WorkGroupID.x / blocks_m;
+    const uint ic = gl_WorkGroupID.y;
+
+    const uint WNITER = (WM * WN) / (WARP * TM * TN * WMITER);
+    const uint WSUBM = WM / WMITER;
+    const uint WSUBN = WN / WNITER;
+
+#ifdef COOPMAT
+    const uint warp_i = gl_SubgroupID;
+
+    const uint tiw = gl_SubgroupInvocationID;
+
+    const uint cms_per_row = WM / TM;
+    const uint cms_per_col = WN / TN;
+
+    const uint storestride = WARP / TM;
+    const uint store_r = tiw % TM;
+    const uint store_c = tiw / TM;
+#else
+    const uint warp_i = gl_LocalInvocationID.x / WARP;
+
+    const uint tiw = gl_LocalInvocationID.x % WARP;
+
+    const uint tiwr = tiw % (WSUBM / TM);
+    const uint tiwc = tiw / (WSUBM / TM);
+#endif
+
+    const uint warp_r = warp_i % (BM / WM);
+    const uint warp_c = warp_i / (BM / WM);
+
+    const uint loadr = gl_LocalInvocationID.x % (BK / LOAD_VEC);
+    const uint loadc = gl_LocalInvocationID.x / (BK / LOAD_VEC);
+
+    const uint loadstride = BLOCK_SIZE * LOAD_VEC / BK;
+
+#ifdef MUL_MAT_ID
+    uint _ne1 = 0;
+    for (uint ii1 = 0; ii1 < p.nei1; ii1++) {
+        for (uint ii0 = 0; ii0 < p.nei0; ii0++) {
+            if (data_ids[ii1*p.nbi1 + ii0] == expert_idx) {
+                row_ids[_ne1] = u16vec2(ii0, ii1);
+                _ne1++;
+            }
+        }
+    }
+
+    barrier();
+
+    // Workgroup has no work
+    if (ic * BN >= _ne1) return;
+#endif
+
+#ifdef MUL_MAT_ID
+    const uint start_k = 0;
+    const uint end_k = p.K;
+#else
+    const uint start_k = ik * p.k_split;
+    const uint end_k = min(p.K, (ik + 1) * p.k_split);
+#endif
+
+    uint pos_a_ib = (
+#ifdef MUL_MAT_ID
+        expert_idx * p.batch_stride_a +
+#else
+        batch_idx_a * p.batch_stride_a +
+#endif
+        ir * BM * p.stride_a + start_k) / BK;
+#ifdef MUL_MAT_ID
+    uint pos_b_ib = 0;
+#else
+    uint pos_b_ib = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / BK;
+#endif
+
+#ifdef COOPMAT
+    coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
+    coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
+    coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[cms_per_row * cms_per_col];
+
+    [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col; i++) {
+        sums[i] = coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0f);
+    }
+#else
+    ACC_TYPE sums[WMITER * TM * WNITER * TN];
+
+#if QUANT_AUXF == 1
+    block_q8_0_internal cache_a[WMITER * TM];
+#else
+    block_q8_1_internal cache_a[WMITER * TM];
+#endif
+
+    block_q8_1_internal cache_b[TN];
+
+    [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
+        sums[i] = ACC_TYPE(0.0f);
+    }
+#endif
+
+    for (uint block = start_k; block < end_k; block += BK) {
+        [[unroll]] for (uint l = 0; loadc + l < BM; l += loadstride) {
+#if defined(DATA_A_Q8_0)
+            const uint ib = pos_a_ib + (loadc + l) * p.stride_a / BK;
+            const uint iqs = loadr;
+
+            const uint buf_ib = loadc + l;
+
+            // Should ds be gated to a single thread?
+            if (iqs == 0) {
+                buf_a[buf_ib].ds = FLOAT_TYPE(data_a[ib].d);
+            }
+            const int16_t v0 = data_a[ib].qs[iqs * 2    ];
+            const int16_t v1 = data_a[ib].qs[iqs * 2 + 1];
+            buf_a[buf_ib].qs[iqs] = pack32(i16vec2(v1, v0));
+#endif
+        }
+        [[unroll]] for (uint l = 0; loadc + l < BN; l += loadstride) {
+#ifdef MUL_MAT_ID
+            const u16vec2 row_idx = row_ids[ic * BN + loadc + l];
+            const uint idx = pos_b_ib + row_idx.y * p.batch_stride_b / LOAD_VEC + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC + loadr;
+            const uint ib = idx / 8;
+            const uint iqs = idx & 0x7;
+#else
+            const uint ib = pos_b_ib + (loadc + l) * p.stride_b / BK;
+            const uint iqs = loadr;
+#endif
+
+            const uint buf_ib = loadc + l;
+
+            // Should ds be gated to a single thread?
+            if (iqs == 0) {
+                buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(data_b[ib].ds);
+            }
+            const int32_t v0 = int32_t(data_b[ib].qs[iqs * 2    ]);
+            const int32_t v1 = int32_t(data_b[ib].qs[iqs * 2 + 1]);
+            buf_b[buf_ib].qs[iqs] = pack32(i16vec2(v1, v0));
+        }
+
+        barrier();
+
+        pos_a_ib += 1;
+        pos_b_ib += 1;
+
+#ifdef COOPMAT
+        [[unroll]] for (uint i = 0; i < BK; i += TK) {
+            [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+                // Load from shared into cache
+                coopMatLoad(cache_a, buf_a, (warp_r * WM + cm_row * TM) * SHMEM_STRIDE + i, SHMEM_STRIDE, gl_CooperativeMatrixLayoutRowMajor);
+
+                [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+                    coopMatLoad(cache_b, buf_b, (warp_c * WN + cm_col * TN) * SHMEM_STRIDE + i, SHMEM_STRIDE, gl_CooperativeMatrixLayoutColumnMajor);
+
+                    sums[cm_col * cms_per_row + cm_row] = coopMatMulAdd(cache_a, cache_b, sums[cm_col * cms_per_row + cm_row]);
+                }
+            }
+        }
+#else
+        // Load from shared into cache
+        [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
+            [[unroll]] for (uint cr = 0; cr < TM; cr++) {
+                const uint ib = warp_r * WM + wsir * WSUBM + tiwr * TM + cr;
+                cache_a[wsir * TM + cr] = buf_a[ib];
+            }
+        }
+
+        [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
+            [[unroll]] for (uint cc = 0; cc < TN; cc++) {
+                const uint ib = warp_c * WN + wsic * WSUBN + tiwc * TN + cc;
+                cache_b[cc] = buf_b[ib];
+            }
+
+            [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
+                [[unroll]] for (uint cc = 0; cc < TN; cc++) {
+                    [[unroll]] for (uint cr = 0; cr < TM; cr++) {
+                        const uint cache_a_idx = wsir * TM + cr;
+                        const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
+                        int32_t q_sum = 0;
+                        [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
+                            q_sum = dotPacked4x8AccSatEXT(cache_a[cache_a_idx].qs[idx_k], cache_b[cc].qs[idx_k], q_sum);
+                        }
+
+                        const float factor = float(cache_a[cache_a_idx].ds) * float(cache_b[cc].ds.x);
+
+                        sums[sums_idx] = ACC_TYPE(fma(float(q_sum), factor, float(sums[sums_idx])));
+                    }
+                }
+            }
+        }
+#endif
+
+        barrier();
+    }
+
+    const uint dr = ir * BM + warp_r * WM;
+    const uint dc = ic * BN + warp_c * WN;
+
+#ifndef MUL_MAT_ID
+    const uint offsets = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * gl_NumWorkGroups.z;
+#endif
+
+#ifdef COOPMAT
+#ifdef MUL_MAT_ID
+    [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+        [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+            coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
+
+            [[unroll]] for (uint col = 0; col < BN; col += storestride) {
+                const uint row_i = dc + cm_col * TN + col + store_c;
+                if (row_i >= _ne1) break;
+
+                const u16vec2 row_idx = row_ids[row_i];
+
+                data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
+            }
+        }
+    }
+#else
+    const bool is_aligned = p.stride_d % 4 == 0;  // Assumption: D_TYPE == float
+
+    [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+        [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+            const bool is_in_bounds = dr + (cm_row + 1) * TM <= p.M && dc + (cm_col + 1) * TN <= p.N;
+
+            if (is_aligned && is_in_bounds) {
+                // Full coopMat is within bounds and stride_d is aligned with 16B
+                coopmat<D_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> cm_dtype = coopmat<D_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(sums[cm_col * cms_per_row + cm_row]);
+                coopMatStore(cm_dtype, data_d, offsets + (dc + cm_col * TN) * p.stride_d + dr + cm_row * TM, p.stride_d, gl_CooperativeMatrixLayoutColumnMajor);
+            } else if (is_in_bounds) {
+                // Full coopMat is within bounds, but stride_d is not aligned
+                coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
+
+                [[unroll]] for (uint col = 0; col < TN; col += storestride) {
+                    data_d[offsets + (dc + cm_col * TN + col + store_c) * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
+                }
+            } else if (dr + cm_row * TM < p.M && dc + cm_col * TN < p.N) {
+                // Partial coopMat is within bounds
+                coopMatStore(sums[cm_col * cms_per_row + cm_row], coopmat_stage, warp_i * TM * TN, TM, gl_CooperativeMatrixLayoutColumnMajor);
+
+                [[unroll]] for (uint col = 0; col < TN; col += storestride) {
+                    if (dr + cm_row * TM + store_r < p.M && dc + cm_col * TN + col + store_c < p.N) {
+                        data_d[offsets + (dc + cm_col * TN + col + store_c) * p.stride_d + dr + cm_row * TM + store_r] = D_TYPE(coopmat_stage[warp_i * TM * TN + (col + store_c) * TM + store_r]);
+                    }
+                }
+            }
+        }
+    }
+#endif // MUL_MAT_ID
+#else
+    [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
+        [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
+
+            const uint dr_warp = dr + wsir * WSUBM + tiwr * TM;
+            const uint dc_warp = dc + wsic * WSUBN + tiwc * TN;
+            [[unroll]] for (uint cc = 0; cc < TN; cc++) {
+#ifdef MUL_MAT_ID
+                const uint row_i = dc_warp + cc;
+                if (row_i >= _ne1) break;
+
+                const u16vec2 row_idx = row_ids[row_i];
+#endif // MUL_MAT_ID
+                [[unroll]] for (uint cr = 0; cr < TM; cr++) {
+#ifdef MUL_MAT_ID
+                    data_d[row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + dr_warp + cr] = D_TYPE(sums[(wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr]);
+#else
+                    if (dr_warp + cr < p.M && dc_warp + cc < p.N) {
+                        data_d[offsets + (dc_warp + cc) * p.stride_d + dr_warp + cr] = D_TYPE(sums[(wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr]);
+                    }
+#endif // MUL_MAT_ID
+                }
+            }
+        }
+    }
+#endif // COOPMAT
+}
