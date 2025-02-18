@@ -583,6 +583,7 @@ void llama_output_reorder(struct llama_context & ctx) {
 //
 
 void llama_free(struct llama_context * ctx) {
+    ggml_opt_free(ctx->opt_ctx);
     delete ctx;
 }
 
