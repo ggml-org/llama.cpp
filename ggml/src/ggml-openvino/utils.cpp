@@ -109,6 +109,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     auto output_names = ggml_decoder->get_output_names();
     auto output_tensors = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < output_names.size(); i++) {
+        // std::string op_name = ggml_decoder->get_node_op_name(output_names[i]);
         auto output_tensor = infer_request.get_output_tensor(i);
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
         #ifdef GGML_OPENVINO_DEBUG
