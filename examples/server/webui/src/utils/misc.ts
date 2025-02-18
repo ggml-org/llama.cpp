@@ -53,12 +53,23 @@ export const copyStr = (textToCopy: string) => {
 
 /**
  * filter out redundant fields upon sending to API
+ * also format extra into text
  */
 export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
   return messages.map((msg) => {
+    let newContent = '';
+
+    for (const extra of msg.extra ?? []) {
+      if (extra.type === 'context') {
+        newContent += `${extra.content}\n\n`;
+      }
+    }
+
+    newContent += msg.content;
+
     return {
       role: msg.role,
-      content: msg.content,
+      content: newContent,
     };
   }) as APIMessage[];
 }

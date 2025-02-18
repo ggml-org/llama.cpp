@@ -159,6 +159,35 @@ export default function ChatMessage({
                         </div>
                       </details>
                     )}
+
+                    {msg.extra && msg.extra.length > 0 && (
+                      <details
+                        className={classNames({
+                          'collapse collapse-arrow mb-4 bg-base-200': true,
+                          'bg-opacity-10': msg.role !== 'assistant',
+                        })}
+                      >
+                        <summary className="collapse-title">
+                          Extra content
+                        </summary>
+                        <div className="collapse-content">
+                          {msg.extra.map(
+                            (extra, i) =>
+                              extra.type === 'textFile' ? (
+                                <div key={extra.name}>
+                                  <b>{extra.name}</b>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : extra.type === 'context' ? (
+                                <div key={i}>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : null // TODO: support other extra types
+                          )}
+                        </div>
+                      </details>
+                    )}
+
                     <MarkdownDisplay
                       content={content}
                       isGenerating={isPending}
