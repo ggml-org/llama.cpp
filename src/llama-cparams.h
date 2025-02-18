@@ -29,6 +29,7 @@ struct llama_cparams {
     bool offload_kqv;
     bool flash_attn;
     bool no_perf;
+    bool cross_attn;
 
     enum llama_pooling_type pooling_type;
 

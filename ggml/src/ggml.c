@@ -958,6 +958,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "UPSCALE",
     "PAD",
     "PAD_REFLECT_1D",
+    "UNPAD",
     "ARANGE",
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
@@ -992,7 +993,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1055,6 +1056,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "upscale(x)",
     "pad(x)",
     "pad_reflect_1d(x)",
+    "unpad(x)",
     "arange(start, stop, step)",
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
@@ -1089,7 +1091,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4216,6 +4218,25 @@ struct ggml_tensor * ggml_pad_reflect_1d(
     ggml_set_op_params(result, params, sizeof(params));
 
     result->op     = GGML_OP_PAD_REFLECT_1D;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_unpad
+
+struct ggml_tensor * ggml_unpad(
+    struct ggml_context * ctx,
+    struct ggml_tensor  * a,
+    int p0, int p1, int p2, int p3) {
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type,
+            a->ne[0] - p0,
+            a->ne[1] - p1,
+            a->ne[2] - p2,
+            a->ne[3] - p3);
+
+    result->op = GGML_OP_UNPAD;
     result->src[0] = a;
 
     return result;

@@ -74,10 +74,19 @@ void llama_set_inputs(llama_context & lctx, const llama_ubatch & ubatch) {
     }
 
     if (ubatch.embd) {
-        const int64_t n_embd   = hparams.n_embd;
-        const int64_t n_tokens = ubatch.n_tokens;
+        if (lctx.inp_cross_attn_state && lctx.inp_cross_attn_state->buffer) {
+            ggml_backend_tensor_set(lctx.inp_cross_attn_state, ubatch.embd, 0, ggml_nbytes(lctx.inp_cross_attn_state));
+            // zero out inp_embd since it's not used
+            float * inp_embd_data = (float *)lctx.inp_embd->data;
+            for (int i = 0; i < ggml_nelements(lctx.inp_embd); ++i) {
+                inp_embd_data[i] = 0.0f;
+            }
+        } else {
+            const int64_t n_embd   = hparams.n_embd;
+            const int64_t n_tokens = ubatch.n_tokens;
 
-        ggml_backend_tensor_set(lctx.inp_embd, ubatch.embd, 0, n_tokens*n_embd*ggml_element_size(lctx.inp_embd));
+            ggml_backend_tensor_set(lctx.inp_embd, ubatch.embd, 0, n_tokens*n_embd*ggml_element_size(lctx.inp_embd));
+        }
     }
 
     if (ubatch.pos && lctx.inp_pos) {
@@ -655,6 +664,10 @@ void llama_set_embeddings(struct llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn) {
     ctx->cparams.causal_attn = causal_attn;
+}
+
+void llama_set_cross_attention(struct llama_context * ctx, bool cross_attention) {
+    ctx->cparams.cross_attn = cross_attention;
 }
 
 void llama_synchronize(struct llama_context * ctx) {

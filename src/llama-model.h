@@ -9,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <stdexcept>
 
 struct llama_model_loader;
 
@@ -62,6 +63,7 @@ enum llm_type {
     LLM_TYPE_40B,
     LLM_TYPE_65B,
     LLM_TYPE_70B,
+    LLM_TYPE_90B,
     LLM_TYPE_236B,
     LLM_TYPE_314B,
     LLM_TYPE_671B,
@@ -280,6 +282,16 @@ struct llama_layer {
     struct ggml_tensor * ffn_gate_scale = nullptr;
     struct ggml_tensor * ffn_up_scale   = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;
+
+    // cross attention
+    struct ggml_tensor * cross_attn_k_norm = nullptr;
+    struct ggml_tensor * cross_attn_k_proj = nullptr;
+    struct ggml_tensor * cross_attn_o_proj = nullptr;
+    struct ggml_tensor * cross_attn_q_norm = nullptr;
+    struct ggml_tensor * cross_attn_q_proj = nullptr;
+    struct ggml_tensor * cross_attn_v_proj = nullptr;
+    struct ggml_tensor * cross_attn_attn_gate = nullptr;
+    struct ggml_tensor * cross_attn_mlp_gate = nullptr;
 
     struct llama_layer_posnet posnet;
 

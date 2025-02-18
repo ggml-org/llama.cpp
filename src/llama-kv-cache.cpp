@@ -91,6 +91,17 @@ bool llama_kv_cache_init(
             return false;
         }
 
+        // for cross attention layers
+        if (model.arch == LLM_ARCH_MLLAMA && hparams.cross_attention_layers(i)) {
+            ggml_tensor * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hparams.n_embd_head_k, 6404, hparams.n_head_kv(i));
+            ggml_tensor * v = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hparams.n_embd_head_v, 6404, hparams.n_head_kv(i));
+            ggml_format_name(k, "cache_k_l%d", i);
+            ggml_format_name(v, "cache_v_l%d", i);
+            cache.k_l.push_back(k);
+            cache.v_l.push_back(v);
+            continue;
+        }
+
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
         ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
         ggml_format_name(k, "cache_k_l%d", i);
