@@ -43,6 +43,8 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
             gguf.GGMLQuantizationType.F32,
             gguf.GGMLQuantizationType.F16,
             gguf.GGMLQuantizationType.Q8_0,
+            gguf.GGMLQuantizationType.Q4_K,
+            gguf.GGMLQuantizationType.Q6_K,
         ):
             raise ValueError(f"Cannot handle type {tensor.tensor_type.name} for tensor {repr(tensor.name)}")
     logger.info(f"* Preparing to convert from {file_endian.upper()} to {order.upper()}")
@@ -93,6 +95,59 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
                 delta.byteswap(inplace=True)
 
                 # Byte-Swap Q8 weights
+                if block_num % 100000 == 0:
+                    inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
+
+        elif tensor.tensor_type == gguf.GGMLQuantizationType.Q4_K:
+            # Handle Q4_K tensor blocks (block_q4_k)
+            # Specific handling of block_q4_k is required.
+            # Each block_q4_k consists of 2 f16 values followed by 140 int8 values.
+
+            # first flatten structure
+            newshape = 1
+            for i in tensor.data.shape:
+                newshape *= i
+
+            tensor.data.resize(newshape)
+
+            block_size = 144
+            n_blocks = len(tensor.data) // block_size
+            for block_num in (inner_pbar := tqdm(range(n_blocks), desc="Byte-swapping Blocks", leave=False)):
+                block_offs = block_num * block_size
+
+                # Byte-Swap f16 sized fields
+                delta = tensor.data[block_offs:block_offs + 2].view(dtype=np.uint16)
+                delta.byteswap(inplace=True)
+
+                delta = tensor.data[block_offs + 2:block_offs + 4].view(dtype=np.uint16)
+                delta.byteswap(inplace=True)
+
+                # Byte-Swap
+                if block_num % 100000 == 0:
+                    inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
+
+        elif tensor.tensor_type == gguf.GGMLQuantizationType.Q6_K:
+            # Handle Q6_K tensor blocks (block_q6_k)
+            # Specific handling of block_q6_k is required.
+            # Each block_q6_k consists of 208 int8 values followed by 1 f16 value.
+
+            # first flatten structure
+            newshape = 1
+            for i in tensor.data.shape:
+                newshape *= i
+
+            tensor.data.resize(newshape)
+
+            block_size = 210
+            n_blocks = len(tensor.data) // block_size
+            for block_num in (inner_pbar := tqdm(range(n_blocks), desc="Byte-swapping Blocks", leave=False)):
+                block_offs = block_num * block_size
+
+                # Byte-Swap f16 sized field
+                delta = tensor.data[block_offs + 208:block_offs + 210].view(dtype=np.uint16)
+                delta.byteswap(inplace=True)
+
+                # Byte-Swap
                 if block_num % 100000 == 0:
                     inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
 
