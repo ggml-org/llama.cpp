@@ -20,6 +20,9 @@ extern "C" {
   void tensor_export(const struct ggml_tensor * tensor, const char * fname);
   struct ggml_tensor * tensor_import(const char * fname);
   void dump_tensor_first_n(const struct ggml_tensor * tensor, int n, FILE * fout);
+  void compare_tensor(const struct ggml_tensor *a, const struct ggml_tensor *b);
+  void print_q4_tensor(const struct ggml_tensor *a);
+  void print_tensor(const struct ggml_tensor *tensor, FILE *fout);
   void dump_tensor(const struct ggml_tensor * tensor, FILE * fout);
 
   float mul_add_q4_0_q8_0(struct ggml_tensor * a, struct ggml_tensor * b);

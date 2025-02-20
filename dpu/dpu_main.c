@@ -91,25 +91,37 @@ int wram2mram(__mram_ptr void *pmram,void *pwram,uint32_t size)
 }
 
 
-// main
-int main() {
-    unsigned int tasklet_id = me();
+static float *psumf = NULL;
+
+void init(unsigned int tasklet_id) {
 #if PRINT
-    // printf("tasklet_id = %u\n", tasklet_id);
+    printf("tasklet_id = %u\n", tasklet_id);
 #endif
     if (tasklet_id == 0){ // Initialize once the cycle counter
         mem_reset(); // Reset the heap
+
+        ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
     }
     // Barrier
     barrier_wait(&my_barrier);
 
+    // ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
+}
+
+// main
+int main() {
+
+    unsigned int tasklet_id = me();
+    
+    init(tasklet_id);
+    
     //fp32->fp16 table
     ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
     uint32_t table_f32_f16_len = (1 << 16)*sizeof(float);
     uint32_t offset = table_f32_f16_len;
     int input_row_size = 0;
     int input_cols = 0;
-    float *psumf = NULL;
+    
 
 #if PRINT
     printf("table_f32_f16_len=%d\n",table_f32_f16_len);
@@ -128,6 +140,11 @@ int main() {
     printf("layer_num: %d, weight_type=%d, rows_per_dpu=%d, rest_rows=%d, input_offset=%d",
         cache_meta->layer_num,cache_meta->weight_type,cache_meta->rows_per_dpu,cache_meta->rest_rows,cache_meta->input_offset);
 #endif
+
+    // 先不考虑尾行
+    uint16_t weight_rows_per_thread = cache_meta->rows_per_dpu / NR_TASKLETS;
+    uint16_t weight_start_row = tasklet_id * weight_rows_per_thread;
+    uint16_t weight_end_row = weight_start_row + weight_rows_per_thread;
 
     // todo:rest row is existed, first thread in every dpu can one more row
     uint16_t weight_rows_cur_thread;
@@ -169,7 +186,13 @@ int main() {
         input_row_size = nb*sizeof(block_q8_0);
         __mram_ptr void *pweight_base = (__mram_ptr void *)(weightmetadatabase + sizeof(struct pim_meta));
         __mram_ptr void *pinput_base = DPU_MRAM_HEAP_POINTER + cache_meta->input_offset + sizeof(pim_matrix_des);
-        psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
+
+        if (tasklet_id == 0) {
+            psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
+        }
+        barrier_wait(&my_barrier);
+
+        // psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
         memset(psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
 #if PRINT
         printf("input_cols=%d, rows_cur_thread=%d, nb=%d, input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
@@ -179,7 +202,7 @@ int main() {
 
         // weight_rows_cur_thread = 16;
         for(int l = 0;l < input_cols;l++) {
-          __mram_ptr block_q8_0 *pinput = pinput_base + l*nb*sizeof(block_q8_0);
+          __mram_ptr block_q8_0 *pinput = pinput_base + l * nb * sizeof(block_q8_0);
             mram2wram(pinput, pinput_cache, sizeof(block_q8_0)*nb);
 #if PRINT
             printf("input:\n");
@@ -192,8 +215,9 @@ int main() {
             }
             printf("pweight_base: %p\n", pweight_base);
 #endif
-            for(int k = 0;k < weight_rows_cur_thread;k++) {
-              __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid*cache_meta->layer_len + k*nb*sizeof(block_q4_0);
+            // for(int k = 0;k < weight_rows_cur_thread;k++) {
+            for (int k = weight_start_row; k < weight_end_row; ++k) {
+              __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid * cache_meta->layer_len + k * nb * sizeof(block_q4_0);
                 mram2wram(pweight, pweight_cache, sizeof(block_q4_0)*nb);
 #if PRINT
                 if (k % 64 == 0) {

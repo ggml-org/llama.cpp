@@ -1,6 +1,7 @@
 #include "trace_driver.h"
 #include <iostream>
 #include <iomanip>
+#include <chrono>
 
 #define NR_DPUS 8
 #define NR_LAYER 2
@@ -24,6 +25,8 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
   DPU_ASSERT(dpu_broadcast_to(context->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, (void *)(ggml_table_f32_f16), sizeof(ggml_table_f32_f16), DPU_XFER_DEFAULT));
   pim_offset += sizeof(ggml_table_f32_f16);
 
+  std::cout << "ggml_table_f32_f16 len = " << sizeof(ggml_table_f32_f16) << std::endl;
+
   // Transfer pim_metadata into DPUs
   context->pim_metadata.layer_num = NR_LAYER;
   context->pim_metadata.weight_type = (uint16_t)(w->type);
@@ -35,6 +38,8 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   context->pim_metadata.layer_len = w->nb[1] * (context->pim_metadata.rows_per_dpu);
   context->pim_metadata.input_offset = sizeof(ggml_table_f32_f16) + sizeof(struct pim_meta) + context->pim_metadata.layer_len * NR_LAYER;
+
+  std::cout << "layer_num = " << NR_LAYER << ", weight_type = " << (uint16_t)(w->type) << ", rows_per_dpu = " << w->ne[1] / NR_DPUS << ", rest_rows = " << w->ne[1] % NR_DPUS << ", layer_len = " << context->pim_metadata.layer_len << ", input_offset = " << context->pim_metadata.input_offset << std::endl;
 
   //Todo: NR_DPUS contexts are dispatched to different dpus(rest row is different on different dpu)
   DPU_ASSERT(dpu_broadcast_to(context->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, &(context->pim_metadata), sizeof(struct pim_meta), DPU_XFER_DEFAULT));
@@ -50,10 +55,10 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
       uint32_t prev_rows_dpu = i * context->pim_metadata.rows_per_dpu;
 
       // every dpu's data
-      DPU_ASSERT(dpu_prepare_xfer(dpu, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
+      DPU_ASSERT(dpu_prepare_xfer(dpu, ((unsigned char *)w->data) + prev_rows_dpu * size_per_row));
     }
 
-    DPU_ASSERT(dpu_push_xfer(context->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layer_len*layeridx, layer_len, DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_push_xfer(context->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layer_len * layeridx, layer_len, DPU_XFER_DEFAULT));
   }
 
   // Transfer input into DPUs
@@ -72,8 +77,14 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
   DPU_ASSERT(dpu_broadcast_to(context->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, in_q->data, bclen, DPU_XFER_DEFAULT));
   input_offset += bclen;
 
+  std::chrono::high_resolution_clock::time_point ex_tp1 = std::chrono::high_resolution_clock::now();
   // Launch DPU kernel
   DPU_ASSERT(dpu_launch(context->dpu_set, DPU_SYNCHRONOUS));
+  std::chrono::high_resolution_clock::time_point ex_tp2 = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<size_t, std::nano> dur = ex_tp2 - ex_tp1;
+
+  std::cout << "执行用时：" << std::chrono::duration_cast<std::chrono::milliseconds>(dur).count() << " ms" << std::endl;
 
   // Check results
   float *mul_mat_res = (float *)res->data;
@@ -105,23 +116,30 @@ int main(int argc, char** argv) {
   struct ggml_tensor * ts_bq = tensor_import(filenamebq);
   struct ggml_tensor * ts_c = tensor_import(filenamec);
   struct ggml_tensor * ts_c_pim = tensor_import(filenamec_p);
-  std::cout<<"ts_a:"<<std::endl;
-  dump_tensor(ts_a, stdout);
-  std::cout<<"ts_b:"<<std::endl;
-  dump_tensor(ts_b, stdout);
-  std::cout<<"ts_bq:"<<std::endl;
-  dump_tensor(ts_bq, stdout);
-  std::cout<<"ts_c:"<<std::endl;
-  dump_tensor(ts_c, stdout);
-  std::cout<<"ts_c_pim:"<<std::endl;
-  dump_tensor(ts_c_pim, stdout);
+  // std::cout<<"ts_a:"<<std::endl;
+  // dump_tensor(ts_a, stdout);
+  // std::cout<<"ts_b:"<<std::endl;
+  // dump_tensor(ts_b, stdout);
+  // std::cout<<"ts_bq:"<<std::endl;
+  // dump_tensor(ts_bq, stdout);
+  // std::cout<<"ts_c:"<<std::endl;
+  // dump_tensor(ts_c, stdout);
+  // std::cout<<"ts_c_pim:"<<std::endl;
+  // dump_tensor(ts_c_pim, stdout);
 
+  std::cout << "ts_a: " << std::endl;
+  print_tensor(ts_a, stdout);
+  std::cout << "ts_b: " << std::endl;
+  print_tensor(ts_b, stdout);
 
   gemv_dpu_kernel(pqcontext, ts_a, ts_bq, ts_c_pim);
-  std::cout<<"ts_c_pim calculated by DPUs:"<<std::endl;
-  dump_tensor(ts_c_pim, stdout);
+  // std::cout<<"ts_c_pim calculated by DPUs:"<<std::endl;
+  // dump_tensor(ts_c_pim, stdout);
 
   float first_res = mul_add_q4_0_q8_0(ts_a, ts_bq);
   std::cout<<"first element: "<<std::fixed << std::setprecision(6)<<first_res<<std::endl;
+
+  std::cout << "error between c and c_pim:" << std::endl;
+  compare_tensor(ts_c, ts_c_pim);
   return 0;
 }
