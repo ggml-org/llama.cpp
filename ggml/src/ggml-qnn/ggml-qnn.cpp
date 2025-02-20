@@ -13,9 +13,10 @@
  * section-5 does ggml-qnn backend helper macro / data structure / function / class
  * section-6 does implementation of ggml-qnn backend according to ggml's backend subsystem
  *
- * currently only provide OPs' QNN backend implementation of GGML_OP_ADD & GGML_OP_MUL_MAT:
+ * currently provide following ggml ops' QNN backend implementation:
  * - GGML_OP_ADD:    this is a simple skeleton, can expand other ggml ops according to expertise
- * - GGML_OP_MUL_MAT:this is a complicated skeleton, can expand other complex op accordingly
+ * - GGML_OP_MUL:    this is a simple skeleton, can expand other ggml ops according to expertise
+ * - GGML_OP_MUL_MAT:this is a complicated skeleton, can expand other complex ggml ops accordingly
  *
  * of course, can porting ggml-qnn to Windows on ARM as need.
  *
@@ -95,7 +96,6 @@
 #include "ggml-qnn.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
-
 // =================================================================================================
 //  section-1: forward/external declaration
 // =================================================================================================
@@ -110,9 +110,9 @@ static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const 
 // =================================================================================================
 #define GGMLQNN_DEBUG                           1  // for troubleshooting QNN backend
 #define GGML_QNN_LOGBUF_LEN                     4096
-#define ENABLE_QNNBACKEND_PERF                  1  // enable/disable op's perf info
+#define ENABLE_QNNBACKEND_PERF                  0  // enable/disable op's perf info
 #define GGMLQNN_PRINT_QNN_INTERNAL_LOG          0  // enable/disable QNN's internal log
-#define GGMLQNN_PRINT_OP_ADD_LOG                1  // GGML_OP_ADD already verified with QNN-CPU / QNN-GPU / QNN-NPU
+#define GGMLQNN_PRINT_OP_ADD_LOG                0  // GGML_OP_ADD already verified with QNN-CPU / QNN-GPU / QNN-NPU
 #define GGMLQNN_PRINT_OP_MUL_MAT_LOG            1
 
 #define GGMLQNN_LOG_ERROR(...) ggmlqnn_log_internal(GGML_LOG_LEVEL_DEBUG,  __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
@@ -1187,25 +1187,28 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .socinfo              = {}},
 };
 
-
 struct qnn_op_caps_t {
     const char * qnn_op_name = nullptr;
     const size_t input_param_count = 0;
     const char * qnn_param_name = nullptr;
 };
 
-static const qnn_op_caps_t kOpCaps[] = {
+static const qnn_op_caps_t k_op_caps[] = {
         {}, // GGML_OP_NONE
         {}, // GGML_OP_DUP
         {
                 // GGML_OP_ADD
-                QNN_OP_ELEMENT_WISE_ADD, // qnn_op_name
-                2,                   // input_param_count
+                QNN_OP_ELEMENT_WISE_ADD,
+                2,
         },
         {}, // GGML_OP_ADD1
         {}, // GGML_OP_ACC
         {}, // GGML_OP_SUB
-        {}, // GGML_OP_MUL
+        {
+                // GGML_OP_MUL
+                QNN_OP_ELEMENT_WISE_MULTIPLY,
+                2,
+        },
         {}, // GGML_OP_DIV
         {}, // GGML_OP_SQR
         {}, // GGML_OP_SQRT
@@ -1227,8 +1230,8 @@ static const qnn_op_caps_t kOpCaps[] = {
         {}, // GGML_OP_GROUP_NORM
         {
                 // GGML_OP_MUL_MAT
-                QNN_OP_MAT_MUL,  // qnn_op_name
-                2,               // input_param_count
+                QNN_OP_MAT_MUL,
+                2,
         },
         {}, // GGML_OP_MUL_MAT_ID
         {}, // GGML_OP_OUT_PROD
@@ -1580,11 +1583,9 @@ static void append_tensor_dimensions(const ggml_tensor * tensor, std::string & o
     output.append(buffer, len);
 }
 
-constexpr const size_t kGgmlUnaryOpStart = GGML_OP_COUNT;
-
 static size_t get_qnn_op_index(const ggml_tensor * tensor) {
     if (tensor->op == GGML_OP_UNARY) {
-        return kGgmlUnaryOpStart + ggml_get_unary_op(tensor);
+        return GGML_OP_COUNT + ggml_get_unary_op(tensor);
     }
 
     return tensor->op;
@@ -1592,8 +1593,8 @@ static size_t get_qnn_op_index(const ggml_tensor * tensor) {
 
 static size_t get_qnn_op_input_param_count(const ggml_tensor * op) {
     auto op_index = get_qnn_op_index(op);
-    GGML_ASSERT(op_index < std::size(kOpCaps));
-    return kOpCaps[op_index].input_param_count;
+    GGML_ASSERT(op_index < std::size(k_op_caps));
+    return k_op_caps[op_index].input_param_count;
 }
 
 static void get_graph_key_from_op(const ggml_tensor * op, std::string & output) {
@@ -1796,21 +1797,21 @@ public:
 
     int qnn_finalize();
 
-    const qnn_interface &get_qnn_interface() {
+    const qnn_interface & get_qnn_interface() {
         if (!_qnn_interface.is_loaded()) {
             GGMLQNN_LOG_WARN("pls check why _qnn_interface is not loaded\n");
         }
         return _qnn_interface;
     }
 
-    const QNN_INTERFACE_VER_TYPE &get_qnn_raw_interface() {
+    const QNN_INTERFACE_VER_TYPE & get_qnn_raw_interface() {
         if (!_qnn_interface.is_loaded()) {
             GGMLQNN_LOG_WARN("pls check why _qnn_interface is not loaded\n");
         }
         return _qnn_raw_interface;
     }
 
-    const QNN_SYSTEM_INTERFACE_VER_TYPE &get_qnn_raw_system_interface() {
+    const QNN_SYSTEM_INTERFACE_VER_TYPE & get_qnn_raw_system_interface() {
         if (!_qnn_interface.is_loaded()) {
             GGMLQNN_LOG_WARN("pls check why _qnn_interface is not loaded\n");
         }
@@ -1836,7 +1837,7 @@ public:
                        uint8_t do_node_validation = 1,
                        const QnnGraph_Config_t ** graph_configs = nullptr
     );
-    int init_qnn_graph(const std::string &graph_name, QNNBackend device, size_t vtcm_size_in_mb = 8, size_t hvx_threads = 8);
+    int init_qnn_graph(const std::string & graph_name, QNNBackend device, size_t vtcm_size_in_mb = 8, size_t hvx_threads = 8);
 
     int finalize_qnn_graph();
 
@@ -1850,8 +1851,8 @@ public:
             return 1;
         }
 
-        QnnHtpDevice_Infrastructure_t *htp_infra = static_cast<QnnHtpDevice_Infrastructure_t *>(device_infra);
-        QnnHtpDevice_PerfInfrastructure_t *htp_perfinfra = &htp_infra->perfInfra;
+        QnnHtpDevice_Infrastructure_t * htp_infra = static_cast<QnnHtpDevice_Infrastructure_t *>(device_infra);
+        QnnHtpDevice_PerfInfrastructure_t * htp_perfinfra = &htp_infra->perfInfra;
         uint32_t power_configid = 1;
         uint32_t device_id = 0;
         uint32_t core_id = 0;
@@ -1925,6 +1926,7 @@ public:
     }
 
     size_t get_rpcmem_capacity() { return _rpcmem_capacity; }
+    size_t get_rpcmem_usage() { return _rpcmem_usage; }
 
     int32_t rpcmem_to_fd(void * buf);
 
@@ -1950,6 +1952,32 @@ public:
         return _enable_qnn_rpc;
     }
 
+    void probe_device_meminfo() {
+        size_t candidate_size = 0;
+        uint8_t *rpc_buffer = nullptr;
+        const int SIZE_IN_MB = (1 << 20);
+        size_t probe_slots[] = {1024, 1536, 2048 - 48, 2048};
+        size_t probe_counts = sizeof(probe_slots) / sizeof(size_t);
+        for (size_t idx = 0; idx < probe_counts; idx++) {
+            rpc_buffer = static_cast<uint8_t *>(alloc_rpcmem_internal(probe_slots[idx] * SIZE_IN_MB, 4));
+            if (nullptr == rpc_buffer) {
+                GGMLQNN_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx],
+                                  strerror(errno));
+                break;
+            } else {
+                candidate_size = probe_slots[idx];
+                free_rpcmem(rpc_buffer);
+                rpc_buffer = nullptr;
+            }
+        }
+        if (candidate_size > _rpcmem_capacity)
+            _rpcmem_capacity = candidate_size;
+
+        free_rpcmem();
+        _rpcmem_usage = 0;
+        GGMLQNN_LOG_INFO("capacity of rpc ion memory %d MB\n", _rpcmem_capacity);
+    }
+
 public:
     std::map<std::string, std::tuple<Qnn_GraphHandle_t, std::vector< Qnn_Tensor_t *>>> _qnn_graph_map;
 
@@ -1969,6 +1997,8 @@ private:
     void set_qnn_raw_system_interface(QNN_SYSTEM_INTERFACE_VER_TYPE & raw_interface) {
         _qnn_raw_system_interface = raw_interface;
     }
+    
+    void * alloc_rpcmem_internal(size_t bytes, size_t alignment);
 
 private:
     static constexpr const int _required_num_providers = 1;
@@ -1987,7 +2017,7 @@ private:
 
     qnn_interface _qnn_interface;
 
-    void *_system_lib_handle = nullptr;
+    void * _system_lib_handle = nullptr;
 
     Qnn_GraphHandle_t _qnn_graph_handle = nullptr;
 
@@ -2013,7 +2043,6 @@ private:
     std::unordered_map<void *, Qnn_MemHandle_t> _qnn_mem_set;
     std::unordered_map<void *, Qnn_MemHandle_t> _qnn_rpc_buffer_to_handles;
 
-
     static std::mutex _init_mutex;
     static std::unordered_map<BackendIdType, void *> _loaded_lib_handle;
     static std::unordered_map<std::string, BackendIdType> _lib_path_to_backend_id;
@@ -2027,7 +2056,9 @@ private:
     pfn_rpc_mem_init  _pfn_rpc_mem_init;
     pfn_rpc_mem_deinit _pfn_rpc_mem_deinit;
     std::unordered_map<void *, void *> _rpcmem_store_map;
-    size_t                             _rpcmem_capacity = 512;
+    std::unordered_map<void *, size_t> _rpcmem_usage_map;
+    size_t                             _rpcmem_capacity = 512; // mempool size  in Mbytes
+    size_t                             _rpcmem_usage    = 0;   // mempool usage in MBytes
 
     std::string _graph_name;
     QNNBackend _device_id;
@@ -2042,7 +2073,7 @@ std::unordered_map<qnn_instance::BackendIdType, void *> qnn_instance::_loaded_li
 std::unordered_map<std::string, qnn_instance::BackendIdType> qnn_instance::_lib_path_to_backend_id;
 std::unordered_map<qnn_instance::BackendIdType, const QnnInterface_t *> qnn_instance::_loaded_backend;
 
-void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
+void * qnn_instance::alloc_rpcmem_internal(size_t bytes, size_t alignment) {
     if (!_rpcmem_initialized) {
         GGMLQNN_LOG_WARN("rpc memory not initialized\n");
         return nullptr;
@@ -2062,17 +2093,50 @@ void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
         GGMLQNN_LOG_WARN("failed to allocate rpc memory\n");
         _pfn_rpc_mem_free(buf);
     }
+    return aligned_buf;
+}
 
+void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
+    if (_rpcmem_usage > (_rpcmem_capacity - 8)) { // reserve 8Mbytes in rpc mempool
+        GGMLQNN_LOG_WARN("rpc mempool capcaity: %d MB, usage: %d MB", _rpcmem_capacity, _rpcmem_usage);
+        return nullptr;
+    }
+
+    auto aligned_buf = alloc_rpcmem_internal(bytes, alignment);
+    if (nullptr == aligned_buf)
+        return nullptr;
+    _rpcmem_usage_map.insert(std::pair<void *, size_t>(aligned_buf, bytes));
+
+    size_t rpcmem_usage_in_bytes = _rpcmem_usage * (1 << 20);
+    rpcmem_usage_in_bytes += bytes;
+    _rpcmem_usage = rpcmem_usage_in_bytes / ( 1 << 20);
     return aligned_buf;
 }
 
 void qnn_instance::free_rpcmem(void * buf) {
+    size_t rpcbuffer_size = 0;
     if (!_rpcmem_initialized) {
         GGMLQNN_LOG_WARN("rpc memory not initialized\n");
     } else if (0 == _rpcmem_store_map.count(buf)) {
         GGMLQNN_LOG_WARN("no allocated tensor\n");
     } else {
         GGMLQNN_LOG_DEBUG("free rpc mem %p", _rpcmem_store_map[buf]);
+        for (std::unordered_map<void *, size_t>::iterator it = _rpcmem_usage_map.begin();
+             it != _rpcmem_usage_map.end();
+             it++) {
+            void * rpcbuffer = it->first;
+            if (buf == rpcbuffer) {
+                rpcbuffer_size = it->second;
+                size_t rpcmem_usage_in_bytes = _rpcmem_usage * (1 << 20);
+                rpcmem_usage_in_bytes -= rpcbuffer_size;
+                _rpcmem_usage = rpcmem_usage_in_bytes / ( 1 << 20);
+            }
+        }
+        if (rpcbuffer_size != 0) {
+            _rpcmem_usage_map.erase(buf);
+        } else {
+            GGMLQNN_LOG_WARN("it shouldn't happen, pls check why?");
+        }
         _pfn_rpc_mem_free(_rpcmem_store_map[buf]);
         _rpcmem_store_map.erase(buf);
     }
@@ -2094,6 +2158,8 @@ void qnn_instance::free_rpcmem() {
         _pfn_rpc_mem_free(rpcbuffer);
     }
     _rpcmem_store_map.clear();
+    _rpcmem_usage_map.clear();
+    _rpcmem_usage = 0;
 }
 
 int32_t qnn_instance::rpcmem_to_fd(void * buf) {
@@ -2177,7 +2243,11 @@ Qnn_MemHandle_t  qnn_instance::register_rpcmem(void * p_data, const uint32_t ran
     }
 
     GGMLQNN_LOG_DEBUG("mem_fd %d", mem_fd);
-    Qnn_MemDescriptor_t descriptor = {{rank, dimensions, nullptr}, data_type, QNN_MEM_TYPE_ION, {{mem_fd}}};
+    Qnn_MemDescriptor_t descriptor = {
+            {rank, dimensions, nullptr},
+            data_type, QNN_MEM_TYPE_ION,
+            {{mem_fd}}
+    };
     Qnn_MemHandle_t handle = nullptr;
     auto error = _qnn_interface.qnn_mem_register(_qnn_context_handle, &descriptor,
             /*numDescriptors=*/1, &handle);
@@ -2318,7 +2388,7 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
     _loaded_lib_handle[backend_id] = lib_handle;
     _backend_id = backend_id;
 
-#if 0 // keep them here for further use
+#if 0 // leave them here for further use
     QnnSaver_Config_t outputdir_cfg;
     outputdir_cfg.option = QNN_SAVER_CONFIG_OPTION_OUTPUT_DIRECTORY;
     outputdir_cfg.outputDirectory = "/data/local/tmp/";
@@ -2468,6 +2538,7 @@ int qnn_instance::unload_system() {
     return result;
 }
 
+#if GGMLQNN_PRINT_QNN_INTERNAL_LOG
 static void ggml_qnn_logcallback(const char * fmt,
                                  QnnLog_Level_t level,
                                  uint64_t timestamp,
@@ -2499,24 +2570,25 @@ static void ggml_qnn_logcallback(const char * fmt,
     }
 
     double ms = (double) timestamp / 1000000.0;
-
     {
         std::lock_guard<std::mutex> lock(log_mutex);
-
         memset(s_ggml_qnn_logbuf, 0, GGML_QNN_LOGBUF_LEN);
         vsnprintf(reinterpret_cast<char *const>(s_ggml_qnn_logbuf), GGML_QNN_LOGBUF_LEN, fmt, argp);
-#if GGMLQNN_PRINT_QNN_INTERNAL_LOG
         GGMLQNN_LOG_INFO("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggml_qnn_logbuf);
-#endif
     }
 }
+#else
+static void ggml_qnn_logcallback(const char * fmt,
+                                 QnnLog_Level_t level,
+                                 uint64_t timestamp,
+                                 va_list argp) {
+}
+#endif
 
 int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
     BackendIdType backend_id = QNN_BACKEND_ID_NULL;
     GGMLQNN_LOG_DEBUG("enter qni_init\n");
-
     const std::lock_guard<std::mutex> lock(_init_mutex);
-
     if (0 != load_system()) {
         GGMLQNN_LOG_WARN("can not load QNN system lib, pls check why?\n");
         return 1;
@@ -2542,9 +2614,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
               _loaded_lib_handle.count(backend_id));
         return 3;
     }
-
     _qnn_interface.set_qnn_interface(_loaded_backend[backend_id]);
-
 #if 1
     _qnn_interface.qnn_log_create(ggml_qnn_logcallback, _qnn_log_level, &_qnn_log_handle);
 #else
@@ -2671,25 +2741,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         }
         _qnn_raw_interface.deviceFreePlatformInfo(nullptr, p_info);
 
-        size_t candidate_size = 0;
-        uint8_t * rpc_buffer = nullptr;
-        const int SIZE_IN_MB = (1 << 20);
-        size_t probe_slots[] = {1024, 1536, 2048 - 48, 2048};
-        size_t probe_counts  = sizeof(probe_slots) / sizeof(size_t);
-        for (size_t idx = 0; idx < probe_counts; idx++) {
-            rpc_buffer = static_cast<uint8_t *>(alloc_rpcmem(probe_slots[idx] * SIZE_IN_MB, 4));
-            if (nullptr == rpc_buffer) {
-                GGMLQNN_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx], strerror(errno));
-                break;
-            } else {
-                candidate_size = probe_slots[idx];
-                free_rpcmem(rpc_buffer);
-                rpc_buffer = nullptr;
-            }
-        }
-        if (candidate_size > _rpcmem_capacity)
-            _rpcmem_capacity = candidate_size;
-        GGMLQNN_LOG_INFO("capacity of rpc ion memory %d MB\n", _rpcmem_capacity);
+        probe_device_meminfo();
 
         if (0 != init_htp_perfinfra()) {
             GGMLQNN_LOG_WARN("initialize HTP performance failure");
@@ -2963,6 +3015,7 @@ static void get_qnn_dimensions_from_ggml_dimensions(uint32_t * qnn_dimensions, u
 // =================================================================================================
 //  section-6: implementation of ggml-qnn backend
 // =================================================================================================
+//TODO: refine this function as it is a performance hotspot/bottleneck function
 static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
     if (tensor->op == GGML_OP_NONE) {
         return true;
@@ -2973,7 +3026,9 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
         return false;
     }
 
-    bool supported_op = ((tensor->op == GGML_OP_ADD) || (tensor->op == GGML_OP_MUL_MAT));
+    //TODO: support other op
+    bool supported_op = ((tensor->op == GGML_OP_ADD) || (tensor->op == GGML_OP_MUL_MAT)
+            || (tensor->op == GGML_OP_MUL));
     if (!supported_op) {
         return false;
     }
@@ -2981,37 +3036,34 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
     struct ggml_tensor * src0 = tensor->src[0];
     struct ggml_tensor * src1 = tensor->src[1];
 
-    int64_t ne00 = tensor->src[0]->ne[0];
-    int64_t ne01 = tensor->src[0]->ne[1];
+    const int64_t ne00 = tensor->src[0]->ne[0];
+    const int64_t ne01 = tensor->src[0]->ne[1];
 
-    int64_t ne10 = tensor->src[1]->ne[0];
-    int64_t ne11 = tensor->src[1]->ne[1];
+    const int64_t ne10 = tensor->src[1]->ne[0];
+    const int64_t ne11 = tensor->src[1]->ne[1];
 
-    int64_t ne0 = tensor->ne[0];
-    int64_t ne1 = tensor->ne[1];
+    const int64_t ne0 = tensor->ne[0];
+    const int64_t ne1 = tensor->ne[1];
+
+    const uint32_t src0_rank = ggml_get_tensor_rank(src0);
+    const uint32_t src1_rank = ggml_get_tensor_rank(src1);
 
     if (tensor->op == GGML_OP_ADD) {
         //dump_tensors_info(tensor);
         if (!ggml_are_same_shape(src0, src1)) {
             return false;
         }
-
         if (ne00 < 32)
             return false;
-
         return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)
                && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
     }
 
     if (tensor->op == GGML_OP_MUL_MAT) {
-        dump_tensors_info(tensor);
-        uint32_t src0_rank = ggml_get_tensor_rank(src0);
-        uint32_t src1_rank = ggml_get_tensor_rank(src1);
-
+        //dump_tensors_info(tensor);
         if ((src0_rank != 2) || (src1_rank != 2)) //TODO: only support offload 2D matrix mulmat to QNN backend
             return false;
-
-        //TODO: support more data type in func ggml_qnn_mul_mat(...):
+        //TODO: support more data type in func ggml_qnn_mul_mat(...)
         //src0: q4_0, q6_k, ...
         //src1: f32
         //dst : f32
@@ -3020,19 +3072,30 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
                 && (src0->type == src1->type) && (src0->type == tensor->type);
     }
 
-    //TODO:for other op
+    if (tensor->op == GGML_OP_MUL) {
+        dump_tensors_info(tensor);
+        if ((src0_rank != 2) || (src1_rank != 2)) //TODO: only support offload 2D matrix mul to QNN backend
+            return false;
+        return  (src0->type == GGML_TYPE_F32)
+                && (src1->type == GGML_TYPE_F32)
+                && (tensor->type == src1->type);
+    }
+
     return  (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)
             && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16)
             && (src0->type == src1->type) && (src0->type == tensor->type);
 }
 
-static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
+/*
+ * provide a general skeleton to offload ggml op to QNN backend: a single node contains 2 input
+ * tensor and 1 output tensor
+*/
+static void ggml_qnn_general_node(ggml_backend_t backend, ggml_tensor * op) {
     Qnn_ErrorHandle_t error                     = QNN_SUCCESS;
     enum ggml_status result                     = GGML_STATUS_SUCCESS;
     bool graph_initialized                      = false;
     qnn_instance * instance                     = nullptr;
     ggml_backend_qnn_context * ctx              = (ggml_backend_qnn_context *)backend->context;
-    qnn_perf op_perf                            = qnn_perf("ggml_qnn_add");
     Qnn_GraphHandle_t graph_handle              = nullptr;
     Qnn_Tensor_t * p_tensor0                    = nullptr;
     Qnn_Tensor_t * p_tensor1                    = nullptr;
@@ -3045,6 +3108,14 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
     GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst);
     instance                                    = ctx->instance;
     QNN_INTERFACE_VER_TYPE qnn_raw_interface    = ctx->raw_interface;
+
+    size_t qnn_op_index = get_qnn_op_index(op);
+    GGML_ASSERT(qnn_op_index < std::size(k_op_caps));
+    const char * qnn_op_name = k_op_caps[qnn_op_index].qnn_op_name;
+    std::string ggml_op_name_string = std::string("ggml_") + ggml_op_name(op->op);
+    const char * ggml_op_name = ggml_op_name_string.c_str();
+
+    qnn_perf op_perf                            = qnn_perf(ggml_op_name);
     op_perf.start();
 
     std::string graph_name;
@@ -3124,9 +3195,9 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
         };
         Qnn_OpConfig_t op_config = {
                 QNN_OPCONFIG_VERSION_1, .v1 = {
-                        "ggml_op_add",
+                        ggml_op_name,
                         QNN_OP_PACKAGE_NAME_QTI_AISW,
-                        QNN_OP_ELEMENT_WISE_ADD,
+                        qnn_op_name,
                         0,
                         qnn_params,
                         2,
@@ -3138,9 +3209,9 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, op_config));
         CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, nullptr, nullptr));
         CHECK_QNN_API(error, qnn_raw_interface.graphExecute(graph_handle,
-                                               tensor_inputs, 2,
-                                               tensor_outputs, 1,
-                                               nullptr, nullptr));
+                                                            tensor_inputs, 2,
+                                                            tensor_outputs, 1,
+                                                            nullptr, nullptr));
 
         if (enable_npu_rpc) {
             uint8_t * qnn_rpcbuffer = static_cast<uint8_t *>(instance->get_rpcmem_from_memhandle(QNN_VER_PTR(*p_tensor2)->memHandle));
@@ -3214,9 +3285,9 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
                 *p_tensor2
         };
         CHECK_QNN_API(error, qnn_raw_interface.graphExecute(graph_handle,
-                                               tensor_inputs, 2,
-                                               tensor_outputs, 1,
-                                               nullptr, nullptr));
+                                                            tensor_inputs, 2,
+                                                            tensor_outputs, 1,
+                                                            nullptr, nullptr));
 
         if (enable_npu_rpc) {
             //TODO:NPU RPC feature will failed with test-backend-ops
@@ -3231,18 +3302,17 @@ static void ggml_qnn_add(ggml_backend_t backend, ggml_tensor * op) {
     QNN_VER_PTR(*p_tensor0)->dimensions = tensor_0_dimensions;
     QNN_VER_PTR(*p_tensor1)->dimensions = tensor_1_dimensions;
     QNN_VER_PTR(*p_tensor2)->dimensions = tensor_2_dimensions;
-#if GGMLQNN_PRINT_OP_ADD_LOG
     op_perf.info();
-#endif
 }
 
 /*
- * the logic of ggml_qnn_mul_mat is similar to ggml_qnn_add but much more complicated than ggml_qnn_add,
+ * the logic of ggml_qnn_mul_mat is similar to ggml_qnn_general_node but much more complicated
+ * than ggml_qnn_general_node.
  * matrix transpose and type trait are required for offload mulmat to QNN backend,
  * so it's a standalone function. accordingly, this is another typical skeleton for offload other
  * ggml ops to QNN backend
  *
- * MUL_MAT take most of the compute time (about 95%).so to speed up llama inference, we should focus on MUL_MAT.
+ * MUL_MAT take most of the compute time (about 95%).so to speed up llama inference, should focus on MUL_MAT.
  *
  * have three kinds of MUL_MAT to compute:
  * mul_mat_f32:     both src0 and src1 are F32, this will be naturally handled in QNN backend
@@ -3288,7 +3358,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         p_tensor2 = ggml_qnn_create_general_tensor(dst, nullptr, QNN_TENSOR_TYPE_APP_READ,QNN_DATATYPE_FLOAT_32, 2, nullptr, nullptr, 0);
     }
 
-    print_tensors_info(__func__, ctx, src0, src1, dst);
+    //print_tensors_info(__func__, ctx, src0, src1, dst);
 
     //ensure QNN tensor has correct tensor type
     QNN_VER_PTR(*p_tensor0)->type = QNN_TENSOR_TYPE_APP_WRITE;
@@ -3444,8 +3514,8 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         // QNN SDK, details could be found at
         // https://github.com/kantv-ai/llama.cpp/wiki/mapping-ggml-compute-graph-to-QNN-compute-graph
         CHECK_QNN_API(error, qnn_raw_interface.graphExecute(graph_handle,
-                                              tensor_inputs, 2,
-                                             tensor_outputs, 1,
+                                         tensor_inputs, 2,
+                                         tensor_outputs, 1,
                                          nullptr, nullptr));
     }
 
@@ -3453,7 +3523,6 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
     QNN_VER_PTR(*p_tensor0)->dimensions = tensor_0_dimensions;
     QNN_VER_PTR(*p_tensor1)->dimensions = tensor_1_dimensions;
     QNN_VER_PTR(*p_tensor2)->dimensions = tensor_2_dimensions;
-
     op_perf.info();
 }
 
@@ -3462,11 +3531,15 @@ static bool ggml_qnn_compute_forward(ggml_backend_t backend, struct ggml_tensor 
 
     switch (tensor->op) {
         case GGML_OP_ADD:
-            func = ggml_qnn_add;
+            func = ggml_qnn_general_node;
             break;
 
         case GGML_OP_MUL_MAT:
             func = ggml_qnn_mul_mat;
+            break;
+
+        case GGML_OP_MUL:
+            func = ggml_qnn_general_node;
             break;
 
         default:
@@ -3667,7 +3740,6 @@ static enum ggml_status ggml_backend_qnn_graph_compute(ggml_backend_t backend, s
     ggml_backend_qnn_context * ctx  = (ggml_backend_qnn_context *) backend->context;
     GGML_UNUSED(ctx);
 
-    GGMLQNN_LOG_DEBUG("cgraph->n_nodes %d", cgraph->n_nodes);
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE
@@ -3715,10 +3787,28 @@ static const char * ggml_backend_qnn_device_get_description(ggml_backend_dev_t d
 }
 
 static void ggml_backend_qnn_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    //FIXME:this is NOT QNN device memory info
-    *free  = get_system_free_memory_in_bytes();
-    *total = get_system_total_memory_in_bytes();
-    GGML_UNUSED(dev);
+    struct ggml_backend_qnn_context * ctx = static_cast<ggml_backend_qnn_context *>(dev->context);
+    if ((nullptr == ctx) || (ctx->device > QNN_BACKEND_GGML)) {
+        GGMLQNN_LOG_ERROR("pls check params");
+        *free = 0;
+        *total = 0;
+    }
+
+    if (QNN_BACKEND_CPU == ctx->device || QNN_BACKEND_GGML == ctx->device) {
+        *total = get_system_total_memory_in_bytes();
+        *free = get_system_free_memory_in_bytes();
+    } else if (QNN_BACKEND_GPU == ctx->device) {
+        //TODO: probe GPU info in Qualcomm Adreno GPU
+        *total = get_system_total_memory_in_bytes();
+        *free = get_system_free_memory_in_bytes();
+    } else if (QNN_BACKEND_NPU == ctx->device) {
+        size_t rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
+        size_t rpc_ion_usage = ctx->instance->get_rpcmem_usage();
+        GGMLQNN_LOG_DEBUG("rpc memsize %d", rpc_ion_memsize);
+        GGMLQNN_LOG_DEBUG("rpc usage %d", rpc_ion_usage);
+        *total = rpc_ion_memsize * (1 << 20);
+        *free = (rpc_ion_memsize - rpc_ion_usage) * (1 << 20);
+    }
 }
 
 static enum ggml_backend_dev_type ggml_backend_qnn_device_get_type(ggml_backend_dev_t dev) {
