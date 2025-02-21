@@ -1132,8 +1132,8 @@ struct ggml_backend_qnn_context {
     struct qcom_socinfo           socinfo;
 } ;
 
-//TODO: the following global vars and three helper funcs should be removed in the future
-static int32_t  g_ggmltensor_idx    = 0;
+//the following helper funcs are used to ensure every QNN tensor name is unique
+static std::atomic<int32_t>  g_ggmltensor_idx(0);
 static void reset_idx() {
     g_ggmltensor_idx = 0;
 }
@@ -1143,7 +1143,7 @@ static void inc_idx() {
 }
 
 static int32_t get_idx() {
-    return g_ggmltensor_idx;
+    return g_ggmltensor_idx.load();
 }
 
 // file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/quantization.html
@@ -1474,7 +1474,7 @@ static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor,
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
     char tensor_name[GGML_MAX_NAME] = {0};
 
-    //TODO:remove get_idx() and inc_idx() in the future but ensure the tensor name is unique
+    //ensure the tensor name is unique
     if (nullptr != name) {
         snprintf(tensor_name, GGML_MAX_NAME, "tensor_%-8d", get_idx());
     } else {
@@ -2762,7 +2762,6 @@ int qnn_instance::qnn_finalize() {
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
 
     GGMLQNN_LOG_DEBUG("enter %s\n", __func__);
-    //TODO:should be removed in the future
     reset_idx();
 
     free_rpcmem();
@@ -3451,7 +3450,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
                 }
         };
 
-        Qnn_Tensor_t out_0_inputs[]  = {*p_tensor0,*p_tensor1};
+        Qnn_Tensor_t out_0_inputs[]  = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t out_0_outputs[] = {*p_tensor2_transpose};
         Qnn_OpConfig_t out_0 = {
                 QNN_OPCONFIG_VERSION_1, .v1 =
@@ -3488,7 +3487,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
 
         //step-6: finalize qnn graph and execute qnn graph
         CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, NULL, NULL));
-        Qnn_Tensor_t input_tensors_0[]  = {*p_tensor0,*p_tensor1};
+        Qnn_Tensor_t input_tensors_0[]  = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t output_tensors_0[] = {*p_tensor2};
         CHECK_QNN_API(error, qnn_raw_interface.graphExecute(graph_handle,
                                                input_tensors_0, 2,
