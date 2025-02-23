@@ -104,6 +104,12 @@ struct ggml_backend_qnn_context;
 static int free_qnn_tensor(Qnn_Tensor_t * tensor);
 static enum ggml_status ggml_backend_qnn_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
+static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor, const char * name,
+                                                     Qnn_TensorType_t qnn_tensor_type,
+                                                     Qnn_DataType_t qnn_data_type,
+                                                     uint32_t rank, uint32_t * dims,
+                                                     void * data, uint32_t data_size,
+                                                     bool b_transpose = false);
 
 // =================================================================================================
 //  section-2: ggml-qnn internal troubleshooting function
@@ -163,6 +169,7 @@ static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const 
 
 #define GGMLQNN_MEM_ADD(alignment)              (sizeof (size_t) + alignment)
 #define GGMLQNN_MEM_MASK(alignment)             ((uintptr_t)alignment - 1)
+#define GQCGT                                   ggml_qnn_create_general_tensor
 
 static intptr_t ggmlqnn_align_to(size_t alignment, intptr_t offset) {
     return offset % alignment == 0 ? offset
@@ -1013,6 +1020,20 @@ static const char * qnn_get_error_string(Qnn_ErrorHandle_t qnn_error_code) {
     }
 }
 
+// helper function to create an operation config
+static Qnn_OpConfig_t create_op_config(const char * name, const char * package, const char * type,
+                                       Qnn_Param_t * params, uint32_t num_params,
+                                       Qnn_Tensor_t * inputs, uint32_t num_inputs,
+                                       Qnn_Tensor_t * outputs, uint32_t num_outputs) {
+    Qnn_OpConfigV1_t v1 = {name, package, type,
+                           num_params, params,
+                           num_inputs, inputs,
+                           num_outputs, outputs
+    };
+
+    return (Qnn_OpConfig_t){QNN_OPCONFIG_VERSION_1, .v1 = v1};
+}
+
 // =================================================================================================
 //  section-5:ggml-qnn backend helper macro / data structure / function / class
 // =================================================================================================
@@ -1469,10 +1490,32 @@ static const char * qnn_opname_from_ggmlop(enum ggml_op ggmlop) {
     return nullptr;
 }
 
-static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor, const char * name, Qnn_TensorType_t qnn_tensor_type,
-                                                    Qnn_DataType_t qnn_data_type, uint32_t rank, uint32_t * dims, void * data, uint32_t data_size) {
-    Qnn_ErrorHandle_t error = QNN_SUCCESS;
-    char tensor_name[GGML_MAX_NAME] = {0};
+static void get_qnn_dimensions_from_ggml_dimensions(uint32_t * qnn_dimensions, const uint32_t * ggml_dimensions, uint32_t rank) {
+    if (rank > GGML_MAX_DIMS) {
+        GGMLQNN_LOG_WARN("invalid params");
+        return;
+    }
+    if (nullptr == qnn_dimensions || nullptr == ggml_dimensions) {
+        GGMLQNN_LOG_WARN("invalid params");
+        return;
+    }
+    for (size_t idx = 0; idx < GGML_MAX_DIMS; idx++)
+        qnn_dimensions[idx] = ggml_dimensions[idx];
+
+    if (rank >= 2) {
+        qnn_dimensions[rank - 1] = ggml_dimensions[rank - 2];
+        qnn_dimensions[rank - 2] = ggml_dimensions[rank - 1];
+    }
+}
+
+static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor, const char * name,
+                                                     Qnn_TensorType_t qnn_tensor_type,
+                                                     Qnn_DataType_t qnn_data_type,
+                                                     uint32_t rank, uint32_t * dims,
+                                                     void * data, uint32_t data_size,
+                                                     bool b_transpose) {
+    Qnn_ErrorHandle_t error         = QNN_SUCCESS;
+    char tensor_name[GGML_MAX_NAME] = {};
 
     //ensure the tensor name is unique
     if (nullptr != name) {
@@ -1483,18 +1526,35 @@ static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor,
     GGMLQNN_LOG_DEBUG("init_tensor %d", get_idx());
     inc_idx();
 
-    uint32_t dimensions_transpose[GGML_MAX_DIMS] = {};
-    uint32_t * tensor_dims = nullptr;
+    uint32_t reverse_dims[GGML_MAX_DIMS]    = {};
+    uint32_t transpose_dims[GGML_MAX_DIMS]  = {};
+    uint32_t * tensor_dims                  = nullptr;
+    //case 1:use dims info from ggml tensor
     if (nullptr != tensor) {
         //there are different dimension order between ggml tensor and qnn tensor
         for (size_t idx = 0; idx < rank; idx++) {
-            dimensions_transpose[idx] = (uint32_t)tensor->ne[rank - 1 - idx];
+            reverse_dims[idx] = (uint32_t)tensor->ne[rank - 1 - idx];
         }
-        tensor_dims = dimensions_transpose;
+        tensor_dims = reverse_dims;
     }
-    //re-assign tensor_dims
+    //case 2: use user's specified tensor_dims
     if (nullptr != dims) {
         tensor_dims = dims;
+    }
+    //case 3: transpose for dst tensor
+    if (b_transpose) {
+        GGML_ASSERT(tensor != nullptr); //ensure ggml_tensor is not nullptr for this special case
+
+        get_qnn_dimensions_from_ggml_dimensions(transpose_dims, reverse_dims, ggml_get_tensor_rank(tensor));
+        tensor_dims = transpose_dims;
+#if 0
+        for (size_t idx = 0; idx < 4; idx++) {
+            GGMLQNN_LOG_DEBUG("origin dim[%d]=%d\n", idx, reverse_dims[idx]);
+        }
+        for (size_t idx = 0; idx < 4; idx++) {
+            GGMLQNN_LOG_DEBUG("trans  dim[%d]=%d\n", idx, transpose_dims[idx]);
+        }
+#endif
     }
 
     Qnn_Tensor_t qnn_tensor = {
@@ -2989,25 +3049,6 @@ static void dump_op_info(const struct ggml_tensor * tensor) {
     print_tensors_info(nullptr, nullptr, src0, src1, dst);
 }
 
-//TODO: currently only support offloading 2D matrix to QNN backend
-static void get_qnn_dimensions_from_ggml_dimensions(uint32_t * qnn_dimensions, uint32_t * ggml_dimensions, uint32_t rank) {
-    if (rank > GGML_MAX_DIMS) {
-        GGMLQNN_LOG_WARN("invalid params");
-        return;
-    }
-    if (nullptr == qnn_dimensions || nullptr == ggml_dimensions) {
-        GGMLQNN_LOG_WARN("invalid params");
-        return;
-    }
-    for (size_t idx = 0; idx < GGML_MAX_DIMS; idx++)
-        qnn_dimensions[idx] = ggml_dimensions[idx];
-
-    if (rank >= 2) {
-        qnn_dimensions[rank - 1] = ggml_dimensions[rank - 2];
-        qnn_dimensions[rank - 2] = ggml_dimensions[rank - 1];
-    }
-}
-
 // =================================================================================================
 //  section-6: implementation of ggml-qnn backend
 // =================================================================================================
@@ -3056,10 +3097,9 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
     }
 
     if (tensor->op == GGML_OP_MUL_MAT) {
-        dump_op_info(tensor);
         if (src0_rank != src1_rank) // make QNN SDK happy
             return false;
-        if (src0_rank < 2) // make QNN SDK happy
+        if (src0_rank < 2) // QNN's limitation, make QNN SDK happy
             return false;
         if (src0_rank > 3) //TODO: 4D matrix
             return false;
@@ -3327,7 +3367,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
     bool graph_initialized                      = false;
     qnn_perf op_perf                            = qnn_perf("ggml_qnn_mul_mat");
     qnn_instance * instance                     = nullptr;
-    ggml_backend_qnn_context * ctx              = (ggml_backend_qnn_context *) backend->context;
+    ggml_backend_qnn_context * ctx              = (ggml_backend_qnn_context *)backend->context;
     Qnn_GraphHandle_t graph_handle              = nullptr;
     Qnn_Tensor_t * p_tensor0                    = nullptr;
     Qnn_Tensor_t * p_tensor1                    = nullptr;
@@ -3361,11 +3401,10 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         p_param_tensor          = tensors[3];
         p_tensor2_transpose     = tensors[4];
     } else {
-        p_tensor0 = ggml_qnn_create_general_tensor(src0, nullptr, QNN_TENSOR_TYPE_APP_WRITE,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
-        p_tensor1 = ggml_qnn_create_general_tensor(src1, nullptr, QNN_TENSOR_TYPE_APP_WRITE,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
-        p_tensor2 = ggml_qnn_create_general_tensor(dst, nullptr, QNN_TENSOR_TYPE_APP_READ,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
+        p_tensor0 = GQCGT(src0, nullptr, QNN_TENSOR_TYPE_APP_WRITE,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
+        p_tensor1 = GQCGT(src1, nullptr, QNN_TENSOR_TYPE_APP_WRITE,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
+        p_tensor2 = GQCGT(dst, nullptr, QNN_TENSOR_TYPE_APP_READ,QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
     }
-
     print_tensors_info(__func__, ctx, src0, src1, dst);
 
     //ensure QNN tensor has correct tensor type
@@ -3418,9 +3457,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
                 {0, 1, 3, 2},
         };
         uint32_t param_tensor_dims[1]   = {src0_rank};
-        p_param_tensor = ggml_qnn_create_general_tensor(nullptr, "param", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32,
-                                                        1, param_tensor_dims,
-                                                        (void *) (param_tensor_data[src0_rank - 1]), src0_rank * sizeof(uint32_t));
+        p_param_tensor = GQCGT(nullptr, "param", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1, param_tensor_dims, (void *)(param_tensor_data[src0_rank - 1]), src0_rank * sizeof(uint32_t));
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_param_tensor));
 
         //step-3: create compute tensor from ggml tensor
@@ -3433,13 +3470,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, ggml_get_tensor_data_size(dst)};
 
         //step-4: create a transpose tensor
-        uint32_t tensor2_transpose_dims[GGML_MAX_DIMS] = {};
-        p_tensor2_transpose = ggml_qnn_create_general_tensor(dst, "transpose", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0);
-        get_qnn_dimensions_from_ggml_dimensions(tensor2_transpose_dims, tensor_2_dimensions, ggml_get_tensor_rank(dst));
-        //save pointer because the dimensions of tensor p_tensor2_transpose will be changed later
-        uint32_t * tensor2_dimensions_transpose = QNN_VER_PTR(*p_tensor2_transpose)->dimensions;
-        //update dimensions of tensor p_tensor2_transpose to make QNN SDK happy
-        QNN_VER_PTR(*p_tensor2_transpose)->dimensions = tensor2_transpose_dims;
+        p_tensor2_transpose = GQCGT(dst, "transpose", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0, true);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_tensor2_transpose));
 
         //step-5: compose qnn graph: add mat_mul node
@@ -3452,6 +3483,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
 
         Qnn_Tensor_t out_0_inputs[]  = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t out_0_outputs[] = {*p_tensor2_transpose};
+#if 0
         Qnn_OpConfig_t out_0 = {
                 QNN_OPCONFIG_VERSION_1, .v1 =
                         {"ggmlqnn_mulmat_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW, QNN_OP_MAT_MUL,
@@ -3462,6 +3494,10 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
                          1,
                          out_0_outputs}
         };
+#else
+        Qnn_OpConfig_t out_0 = create_op_config("ggmlqnn_mulmat_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW, QNN_OP_MAT_MUL,
+                                                out_0_params, 1, out_0_inputs, 2, out_0_outputs, 1);
+#endif
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_0));
 
         //step-5: compose qnn graph: add transpose node
@@ -3472,10 +3508,11 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         };
         Qnn_Tensor_t out_trans1_0_inputs[]  = {*p_tensor2_transpose};
         Qnn_Tensor_t out_trans1_0_outputs[] = {*p_tensor2};
+#if 0
         Qnn_OpConfig_t out_trans1_0 = {
                 QNN_OPCONFIG_VERSION_1,
                 .v1 =  {"ggmlqnn_mulmat_transpose_opconfig",
-                        "qti.aisw",
+                        QNN_OP_PACKAGE_NAME_QTI_AISW,
                         QNN_OP_TRANSPOSE, 1,
                         out_trans1_0_params,
                         1,
@@ -3483,6 +3520,10 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
                         1,
                         out_trans1_0_outputs}
         };
+#else
+        Qnn_OpConfig_t out_trans1_0 = create_op_config("ggmlqnn_mulmat_transpose_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW, QNN_OP_TRANSPOSE,
+                         out_trans1_0_params, 1, out_trans1_0_inputs, 1, out_trans1_0_outputs, 1);
+#endif
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_trans1_0));
 
         //step-6: finalize qnn graph and execute qnn graph
@@ -3501,15 +3542,8 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         ggml_op_mulmat_tensors.push_back(p_tensor2);
         ggml_op_mulmat_tensors.push_back(p_param_tensor);
         ggml_op_mulmat_tensors.push_back(p_tensor2_transpose);
-
         auto  graph_item = std::make_tuple(graph_handle, ggml_op_mulmat_tensors);
         instance->_qnn_graph_map[graph_name] = graph_item;
-
-        //avoid cleanup these resource to make test_backend_ops happy
-        //free_qnn_tensor(p_param_tensor);
-        //restore pointer to avoid memory leak
-        QNN_VER_PTR(*p_tensor2_transpose)->dimensions = tensor2_dimensions_transpose;
-        //free_qnn_tensor(p_tensor2_transpose);
     } else {
         QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, ggml_get_tensor_data_size(src0)};
         QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, ggml_get_tensor_data_size(src1)};
@@ -3522,7 +3556,6 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         Qnn_Tensor_t tensor_outputs[] = {
                 *p_tensor2
         };
-        //attention:
         // this is the second technical approach of "how to utilize the Hexagon NPU maximally" through
         // QNN SDK, details could be found at
         // https://github.com/kantv-ai/llama.cpp/wiki/mapping-ggml-compute-graph-to-QNN-compute-graph
