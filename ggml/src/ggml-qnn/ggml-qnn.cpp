@@ -3410,7 +3410,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
             GGMLQNN_LOG_INFO("can't create qnn graph handle with graph name %s, error = %d\n", graph_name.c_str(), error);
             return;
         }
-        //step-2: create param tensor for mulmat of 2d matrix
+        //step-2: create param tensor for mulmat of 2d/3d/4d matrix
         const uint32_t param_tensor_data[GGML_MAX_DIMS][GGML_MAX_DIMS] = {
                 {0},
                 {1, 0},
