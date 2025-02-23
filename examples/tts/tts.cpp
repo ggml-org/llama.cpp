@@ -87,11 +87,11 @@ struct wav_header {
     uint32_t data_size;
 };
 
-static void save_wav16(const std::string & fname, const std::vector<float> & data, int sample_rate) {
+static bool save_wav16(const std::string & fname, const std::vector<float> & data, int sample_rate) {
     std::ofstream file(fname, std::ios::binary);
     if (!file) {
-        LOG_ERR("%s: Failed to open file '%s' for writing", __func__, fname.c_str());
-        return;
+        LOG_ERR("%s: Failed to open file '%s' for writing.\n", __func__, fname.c_str());
+        return false;
     }
 
     wav_header header;
@@ -108,7 +108,8 @@ static void save_wav16(const std::string & fname, const std::vector<float> & dat
         file.write(reinterpret_cast<const char*>(&pcm_sample), sizeof(pcm_sample));
     }
 
-    file.close();
+    //file.close();
+    return file.good();
 }
 
 static void fill_hann_window(int length, bool periodic, float * output) {
@@ -544,6 +545,8 @@ int main(int argc, char ** argv) {
 
     params.sampling.top_k = 4;
     params.sampling.samplers = { COMMON_SAMPLER_TYPE_TOP_K, };
+
+    params.out_file = params.ttss_outfile;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
         return 1;
@@ -1060,8 +1063,6 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     }
 #endif
 
-    const std::string fname = "output.wav";
-
     const int n_sr = 24000; // sampling rate
 
     // zero out first 0.25 seconds
@@ -1072,11 +1073,18 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     LOG_INF("%s: time for spectral ops: %.3f ms\n", __func__, (ggml_time_us() - t_spec_start) / 1000.0f);
     LOG_INF("%s: total time:            %.3f ms\n", __func__, (ggml_time_us() - t_main_start) / 1000.0f);
 
-    save_wav16(fname, audio, n_sr);
+    int retval(0);
 
-    LOG_INF("%s: audio written to file '%s'\n", __func__, fname.c_str());
+    if (save_wav16(params.out_file, audio, n_sr)) {
+        LOG_INF("%s: audio written to file '%s'\n", __func__, params.out_file.c_str());
+    }
+
+    else {
+        retval=ENOENT;
+        LOG_ERR("Check path exists, directory write permissions, free disk space.\n");
+    }
 
     llama_backend_free();
 
-    return 0;
+    return retval;
 }
