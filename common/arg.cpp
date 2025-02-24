@@ -1865,16 +1865,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.i_pos = value;
         }
     ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+
+    // retrieving the right default output filename,
+    // depending on the example program...
+    std::string * out_file_ptr;
+
+    if (ex == LLAMA_EXAMPLE_EXPORT_LORA)
+        out_file_ptr = & params.lora_outfile;
+
+    else if (ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR)
+        out_file_ptr = & params.cvector_outfile;
+
+    else if (ex == LLAMA_EXAMPLE_TTS)
+        out_file_ptr = & params.ttss_outfile;
+
+    else // currently coded as "imatrix.dat", see common.h
+        out_file_ptr = & params.out_file;
+
     add_opt(common_arg(
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')",
-            ex == LLAMA_EXAMPLE_EXPORT_LORA
-                ? params.lora_outfile.c_str()
-                : ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR
-                    ? params.cvector_outfile.c_str()
-                    : ex == LLAMA_EXAMPLE_TTS
-                        ? params.ttss_outfile.c_str()
-                        : params.out_file.c_str()),
+            out_file_ptr->c_str()),
         [](common_params & params, const std::string & value) {
             params.out_file = value;
             params.cvector_outfile = value;
