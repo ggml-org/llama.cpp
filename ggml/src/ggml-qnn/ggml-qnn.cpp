@@ -2654,20 +2654,20 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         GGMLQNN_LOG_DEBUG("load QNN system lib successfully\n");
     }
 
-    std::string bakend_lib_path = _lib_path + _backend_name;
-    if (0 == _lib_path_to_backend_id.count(bakend_lib_path)) {
-        int is_load_ok = load_backend(bakend_lib_path, saver_config);
+    std::string backend_lib_path = _lib_path + _backend_name;
+    if (0 == _lib_path_to_backend_id.count(backend_lib_path)) {
+        int is_load_ok = load_backend(backend_lib_path, saver_config);
         if (0 != is_load_ok) {
             GGMLQNN_LOG_WARN("failed to load QNN backend\n");
             return 2;
         }
     }
 
-    backend_id = _lib_path_to_backend_id[bakend_lib_path];
+    backend_id = _lib_path_to_backend_id[backend_lib_path];
     if (0 == _loaded_backend.count(backend_id) ||
         0 == _loaded_lib_handle.count(backend_id)) {
         GGMLQNN_LOG_WARN("library %s is loaded but loaded backend count=%zu, loaded lib_handle count=%zu\n",
-              bakend_lib_path.c_str(),
+              backend_lib_path.c_str(),
               _loaded_backend.count(backend_id),
               _loaded_lib_handle.count(backend_id));
         return 3;
