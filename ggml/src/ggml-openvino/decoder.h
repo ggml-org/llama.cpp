@@ -42,6 +42,8 @@ public:
 
     virtual PartialShape get_output_shape(const std::string& name) const = 0;
 
+    virtual std::vector<size_t> get_output_stride(const std::string& name) const = 0;
+
     virtual element::Type get_output_type(const std::string& name) const = 0;
 
     virtual int32_t* get_output_op_params(const std::string& name) const = 0;
