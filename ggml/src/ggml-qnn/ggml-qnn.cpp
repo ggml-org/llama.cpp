@@ -44,12 +44,14 @@
 #include <inttypes.h>
 #include <math.h>
 #include <time.h>
+#if defined(__ANDROID__) || defined(__linux__)
 #include <unistd.h>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
 #include <unistd.h>
+#endif
 
 #include <string>
 #include <vector>
@@ -77,6 +79,10 @@
 #include "android/log.h"
 #endif
 
+#if defined(_WIN32) || defined(_MSC_VER)
+#include <Windows.h>
+#endif
+
 #include "QnnTypes.h"
 #include "QnnCommon.h"
 #include "QnnContext.h"
@@ -98,7 +104,7 @@
 // =================================================================================================
 class qnn_instance;
 struct ggml_backend_qnn_context;
-static int free_qnn_tensor(Qnn_Tensor_t * tensor);
+static int  free_qnn_tensor(Qnn_Tensor_t * tensor);
 static enum ggml_status ggml_backend_qnn_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
 static Qnn_Tensor_t * ggml_qnn_create_general_tensor(const ggml_tensor * tensor, const char * name,
@@ -180,9 +186,11 @@ static size_t get_system_total_memory_in_bytes() {
     auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return pages * page_size;
-#else
+#elif defined(_WIN32) || defined(_MSC_VER)
     //TODO: Snapdragon based WoA(Windows on ARM)
     return 0;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
 #endif
 }
 
@@ -196,9 +204,11 @@ static size_t get_system_free_memory_in_bytes() {
     auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return avail_pages * page_size;
-#else
+#elif defined(_WIN32) || defined(_MSC_VER)
     //TODO: Snapdragon based WoA(Windows on ARM)
     return 0;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
 #endif
 }
 
@@ -218,12 +228,19 @@ static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
 }
 
 static void * ggmlqnn_host_malloc(size_t n) {
-    void * data = NULL;
-    int result = posix_memalign((void **) &data, sysconf(_SC_PAGESIZE), n);
+#if defined(__ANDROID__) || defined(__linux__)
+    void * data = nullptr;
+    int result = posix_memalign((void **)&data, sysconf(_SC_PAGESIZE), n);
     if (result != 0) {
         GGMLQNN_LOG_WARN("%s: error: posix_memalign failed\n", __func__);
-        return NULL;
+        return nullptr;
     }
+#elif defined(_WIN32) || defined(_MSC_VER)
+    //TODO: Snapdragon based WoA(Windows on ARM)
+    return nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
 
     return data;
 }
@@ -231,15 +248,6 @@ static void * ggmlqnn_host_malloc(size_t n) {
 // =================================================================================================
 //  section-4: QNN helper macro / data structure / function
 // =================================================================================================
-#define VALIDATE(value, status)                                                 \
-  do {                                                                          \
-    status = value;                                                             \
-    if (status != QNN_SUCCESS) {                                                \
-      GGMLQNN_LOG_WARN("%s expected QNN_SUCCESS\n", #value);                    \
-      return status;                                                            \
-    }                                                                           \
-  } while (0)
-
 #define CHECK_QNN_API(error, result)                                            \
     do {                                                                        \
         error = (result);                                                       \
@@ -251,8 +259,6 @@ static void * ggmlqnn_host_malloc(size_t n) {
             }                                                                   \
         }                                                                       \
     } while (0)
-
-#define VALIDATE_TENSOR_VERSION(tensor, err)            VALIDATE(validate_tensor_version(tensor), err)
 
 #define QNN_VER_PTR(x)                                  (&((x).v1))
 #define QNN_TENSOR_GET_ID(tensor)                       get_qnn_tensorid(tensor)
@@ -278,16 +284,6 @@ static void * ggmlqnn_host_malloc(size_t n) {
 #define QNN_TENSOR_SET_MEM_TYPE(tensor, value)          set_qnn_tensor_memtype(tensor, value)
 #define QNN_TENSOR_SET_CLIENT_BUF(tensor, value)        set_qnn_tensor_clientbuf(tensor, value)
 #define QNN_TENSOR_SET_MEM_HANDLE(tensor, value)        set_qnn_tensor_memhandle(tensor, value)
-
-static inline int validate_tensor_version(Qnn_Tensor_t tensor) {
-    if (tensor.version != QNN_TENSOR_VERSION_1) {
-        GGMLQNN_LOG_WARN("validate_tensor_version() tensor %s, got unsupported version %d\n",
-              tensor.v1.name,
-              tensor.version);
-        return 1;
-    }
-    return 0;
-}
 
 static inline uint32_t get_qnn_tensorid(const Qnn_Tensor_t & tensor) {
     if (tensor.version == QNN_TENSOR_VERSION_1) {
@@ -421,7 +417,6 @@ static inline void set_qnn_tensor_memhandle(Qnn_Tensor_t & tensor, Qnn_MemHandle
 
 static int deep_copy_qnn_tensors(Qnn_Tensor_t & src, Qnn_Tensor_t & dst) {
     int err = 0;
-    VALIDATE_TENSOR_VERSION(src, err);
 
     dst.version = src.version;
     QNN_TENSOR_SET_NAME(
@@ -492,7 +487,7 @@ static int deep_copy_qnn_tensors(Qnn_Tensor_t & src, Qnn_Tensor_t & dst) {
 
 static int free_qnn_tensor(Qnn_Tensor_t * tensor) {
     int err = 0;
-    VALIDATE_TENSOR_VERSION(*tensor, err);
+
     free((void *) QNN_TENSOR_GET_NAME(*tensor));
 
     Qnn_QuantizeParams_t src_qparam      = QNN_TENSOR_GET_QUANT_PARAMS(*tensor);
@@ -510,7 +505,6 @@ static int free_qnn_tensor(Qnn_Tensor_t * tensor) {
 
     return err;
 }
-
 
 static size_t qnn_datatype_size(Qnn_DataType_t qnn_type) {
     switch (qnn_type) {
@@ -720,6 +714,11 @@ enum qcom_chipset_soc_model {
     SM8550 = 43,  // v73, SD 8 Gen 2
     SM8650 = 57,  // v75, SD 8 Gen 3
     SM8750 = 69,  // v79, SD 8 Gen 4
+#if defined(_WIN32) || defined(_MSC_VER)
+    SC7280X     = 44,
+    SC8280X     = 37,
+    SC8380XP    = 60,
+#endif
 };
 
 struct qcom_socinfo {
@@ -780,6 +779,29 @@ static struct qcom_socinfo g_qnn_soc_info_table[] = {
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 4"},
 
+#if defined(_WIN32) || defined(_MSC_VER)
+        /* Qualcomm SnapDragon 7c Gen 2 */
+        [SC7280X] = {
+                .soc_model         = SC7280X,
+                .htp_arch          = V68,
+                .vtcm_size_in_mb   = 8,
+                .soc_desc          = "Qualcomm SnapDragon 7c Gen 2"},
+
+        /* Qualcomm SnapDragon 8cx Gen 3 */
+        [SC8280X] = {
+                .soc_model         = SC8280X,
+                .htp_arch          = V68,
+                .vtcm_size_in_mb   = 8,
+                .soc_desc          = "Qualcomm SnapDragon 8cx Gen 3"},
+
+        /* Qualcomm SnapDragon 8cx Gen 4 */
+        [SC8380XP] = {
+                .soc_model         = SC8380XP,
+                .htp_arch          = V73,
+                .vtcm_size_in_mb   = 8,
+                .soc_desc          = "Qualcomm SnapDragon 8cx Gen 4"},
+#endif
+
 };
 
 struct ggml_backend_qnn_context {
@@ -820,7 +842,11 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-cpu",
                 .desc                 = "Qualcomm Kryo CPU",
+#if defined(_WIN32) || defined(_MSC_VER)
+                .lib                  = "QnnCpu.dll",
+#else
                 .lib                  = "libQnnCpu.so",
+#endif
                 .instance             = nullptr,
                 .backend              = nullptr,
                 .raw_interface        = {},
@@ -831,7 +857,11 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-gpu",
                 .desc                 = "Qualcomm Adreno GPU",
+#if defined(_WIN32) || defined(_MSC_VER)
+                .lib                  = "QnnGpu.dll",
+#else
                 .lib                  = "libQnnGpu.so",
+#endif
                 .instance             = nullptr,
                 .backend              = nullptr,
                 .raw_interface        = {},
@@ -842,7 +872,11 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-npu",
                 .desc                 = "Qualcomm NPU(Hexagon Tensor Processor)",
+#if defined(_WIN32) || defined(_MSC_VER)
+                .lib                  = "QnnHtp.dll",
+#else
                 .lib                  = "libQnnHtp.so",
+#endif
                 .instance             = nullptr,
                 .backend              = nullptr,
                 .raw_interface        = {},
@@ -1252,8 +1286,8 @@ static Qnn_Tensor_t * ggml_qnn_create_compute_tensor(const ggml_tensor * tensor)
     qnn_data_type = qnn_datatype_from_ggml_datatype(tensor->type);
     Qnn_Tensor_t * p_qnn_tensor = ggml_qnn_create_general_tensor(tensor, nullptr,
                                   qnn_tensor_type, qnn_data_type,
-                             ggml_n_dims(tensor), dimensions,
-                             nullptr, 0);
+                                  ggml_n_dims(tensor), dimensions,
+                                  nullptr, 0);
 
     return p_qnn_tensor;
 }
@@ -1351,7 +1385,14 @@ public:
 
 template<typename Fn>
 Fn load_qnn_functionpointers(void * handle, const char * function_name) {
+#if defined(__ANDROID__) || defined(__linux__)
     return reinterpret_cast<Fn>(dlsym(handle, function_name));
+#elif defined(_WIN32) || defined(_MSC_VER)
+    //TODO: Snapdragon based WoA(Windows on ARM)
+    return nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
 }
 
 class qnn_interface {
@@ -1485,7 +1526,7 @@ public:
     using BackendIdType = decltype(QnnInterface_t{}.backendId);
 
     explicit qnn_instance(const std::string & lib_path, const std::string & backend_name,
-                                const std::string & model_name) :
+                          const std::string & model_name) :
             _lib_path(std::move(lib_path)),
             _backend_name(std::move(backend_name)),
             _model_name(std::move(model_name)) {};
@@ -1567,8 +1608,7 @@ public:
         if (_qnn_rpc_pollingtime > 0) {
             QnnHtpPerfInfrastructure_PowerConfig_t rpc_pollingtime;
             memset(&rpc_pollingtime, 0, sizeof(rpc_pollingtime));
-            rpc_pollingtime.option =
-                    QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_POLLING_TIME;
+            rpc_pollingtime.option = QNN_HTP_PERF_INFRASTRUCTURE_POWER_CONFIGOPTION_RPC_POLLING_TIME;
             rpc_pollingtime.rpcPollingTimeConfig = _qnn_rpc_pollingtime;
             const QnnHtpPerfInfrastructure_PowerConfig_t * power_configs[] = {&rpc_pollingtime, nullptr};
             if (_qnn_htp_perfinfra) {
@@ -1653,16 +1693,15 @@ public:
     }
 
     void probe_device_meminfo() {
-        size_t candidate_size = 0;
-        uint8_t *rpc_buffer = nullptr;
-        const int SIZE_IN_MB = (1 << 20);
-        size_t probe_slots[] = {1024, 1536, 2048 - 48, 2048};
-        size_t probe_counts = sizeof(probe_slots) / sizeof(size_t);
+        size_t candidate_size   = 0;
+        uint8_t * rpc_buffer    = nullptr;
+        const int SIZE_IN_MB    = (1 << 20);
+        size_t probe_slots[]    = {1024, 1536, 2048 - 48, 2048};
+        size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
         for (size_t idx = 0; idx < probe_counts; idx++) {
             rpc_buffer = static_cast<uint8_t *>(alloc_rpcmem_internal(probe_slots[idx] * SIZE_IN_MB, 4));
             if (nullptr == rpc_buffer) {
-                GGMLQNN_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx],
-                                  strerror(errno));
+                GGMLQNN_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx], strerror(errno));
                 break;
             } else {
                 candidate_size = probe_slots[idx];
@@ -1697,17 +1736,17 @@ private:
     void set_qnn_raw_system_interface(QNN_SYSTEM_INTERFACE_VER_TYPE & raw_interface) {
         _qnn_raw_system_interface = raw_interface;
     }
-    
+
     void * alloc_rpcmem_internal(size_t bytes, size_t alignment);
 
 private:
     static constexpr const int _required_num_providers = 1;
 
 private:
-    std::string _lib_path;
-    std::string _backend_name;
-    std::string _model_name;               // name of prebuilt QNN model, might be used in the future
-    BackendIdType _backend_id;
+    std::string     _lib_path;
+    std::string     _backend_name;
+    std::string     _model_name; // name of prebuilt QNN model, might be used in the future
+    BackendIdType   _backend_id;
 
     bool _debug_tensor                      = false; // flag to indicate if requested graph is to be run in debug mode
     bool _do_node_validations               = true;  // flag to indicate whether all add_node calls need to be validated
@@ -1715,17 +1754,15 @@ private:
 
     ggml_qnn_profile_level _profile_level   = ggml_qnn_profile_level::profile_detail;
 
-    qnn_interface _qnn_interface;
+    void * _system_lib_handle               = nullptr;
 
-    void * _system_lib_handle = nullptr;
+    Qnn_GraphHandle_t _qnn_graph_handle     = nullptr;
 
-    Qnn_GraphHandle_t _qnn_graph_handle = nullptr;
-
-    Qnn_LogHandle_t _qnn_log_handle = nullptr;
+    Qnn_LogHandle_t _qnn_log_handle         = nullptr;
 
     Qnn_ProfileHandle_t _qnn_profile_handle = nullptr;
 
-    Qnn_DeviceHandle_t _qnn_device_handle = nullptr;
+    Qnn_DeviceHandle_t _qnn_device_handle   = nullptr;
 
     Qnn_BackendHandle_t _qnn_backend_handle = nullptr;
 
@@ -1733,10 +1770,11 @@ private:
 
     QnnSystemContext_Handle_t _qnn_system_handle = nullptr;
 
-    QnnHtpDevice_PerfInfrastructure_t *_qnn_htp_perfinfra = nullptr;
-    uint32_t _qnn_power_configid = 1;
-    uint32_t _qnn_rpc_pollingtime = 9999; // 0-10000 us for high performing
+    QnnHtpDevice_PerfInfrastructure_t * _qnn_htp_perfinfra = nullptr;
+    uint32_t _qnn_power_configid            = 1;
+    uint32_t _qnn_rpc_pollingtime           = 9999; // 0-10000 us for high performing
 
+    qnn_interface _qnn_interface;
     QNN_INTERFACE_VER_TYPE _qnn_raw_interface;
     QNN_SYSTEM_INTERFACE_VER_TYPE _qnn_raw_system_interface;
 
@@ -1748,7 +1786,6 @@ private:
     static std::unordered_map<std::string, BackendIdType> _lib_path_to_backend_id;
     static std::unordered_map<BackendIdType, const QnnInterface_t *> _loaded_backend;
 
-    void * _rpc_lib_handle = nullptr;
     std::atomic_bool _rpcmem_initialized{false};
     pfn_rpc_mem_alloc _pfn_rpc_mem_alloc;
     pfn_rpc_mem_free _pfn_rpc_mem_free;
@@ -1757,12 +1794,13 @@ private:
     pfn_rpc_mem_deinit _pfn_rpc_mem_deinit;
     std::unordered_map<void *, void *> _rpcmem_store_map;
     std::unordered_map<void *, size_t> _rpcmem_usage_map;
-    size_t                             _rpcmem_capacity = 512; // mempool size  in Mbytes
     size_t                             _rpcmem_usage    = 0;   // mempool usage in Mbytes
+    size_t                             _rpcmem_capacity = 512; // mempool size  in Mbytes
 
     std::string _graph_name;
     QNNBackend _device_id;
-    bool       _enable_qnn_rpc = false; //TODO:unknown issue with QNN RPC feature
+    void * _rpc_lib_handle      = nullptr;
+    bool       _enable_qnn_rpc  = false; //TODO:unknown issue with QNN RPC feature
 
     DISABLE_COPY(qnn_instance);
     DISABLE_MOVE(qnn_instance);
@@ -1781,13 +1819,13 @@ void * qnn_instance::alloc_rpcmem_internal(size_t bytes, size_t alignment) {
 
     auto allocate_bytes = static_cast<int32_t>(bytes + alignment);
     void * buf = _pfn_rpc_mem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, allocate_bytes);
-    if (buf == nullptr) {
+    if (nullptr == buf) {
         GGMLQNN_LOG_WARN("failed to allocate rpc memory\n");
         return nullptr;
     }
 
     auto aligned_buf = reinterpret_cast<void *>(ggmlqnn_align_to(alignment,
-                                                         reinterpret_cast<intptr_t>(buf)));
+                                                reinterpret_cast<intptr_t>(buf)));
     bool status = _rpcmem_store_map.insert(std::pair<void *, void *>(aligned_buf, buf)).second;
     if (!status) {
         GGMLQNN_LOG_WARN("failed to allocate rpc memory\n");
@@ -1886,13 +1924,13 @@ int qnn_instance::register_rpcmem(void * p_data, Qnn_Tensor_t * p_tensor) {
 
     if (is_rpcmem_registered((QNN_VER_PTR(*p_tensor)->memHandle))) {
         GGMLQNN_LOG_WARN("tensor %s has been registered shared memory\n", (QNN_VER_PTR(*p_tensor)->name));
-        return 4;
+        return 3;
     }
 
     int32_t mem_fd = rpcmem_to_fd(p_data);
     if (-1 == mem_fd) {
         GGMLQNN_LOG_WARN("failed to get file descriptor\n");
-        return 5;
+        return 4;
     }
     GGMLQNN_LOG_DEBUG("mem_fd %d\n", mem_fd);
     Qnn_MemDescriptor_t descriptor = {
@@ -1908,9 +1946,8 @@ int qnn_instance::register_rpcmem(void * p_data, Qnn_Tensor_t * p_tensor) {
             /*numDescriptors=*/1,
             &handle);
     if (error != QNN_SUCCESS) {
-        GGMLQNN_LOG_WARN("failed to register shared memory, error %d, %s\n", QNN_GET_ERROR_CODE(error),
-              strerror(error));
-        return 6;
+        GGMLQNN_LOG_WARN("failed to register shared memory, error %d, %s\n", QNN_GET_ERROR_CODE(error), strerror(error));
+        return 5;
     } else {
         GGMLQNN_LOG_INFO("tensor %s successfully register shared memory\n", (QNN_VER_PTR(*p_tensor)->name));
     }
@@ -1949,8 +1986,7 @@ Qnn_MemHandle_t  qnn_instance::register_rpcmem(void * p_data, const uint32_t ran
             {{mem_fd}}
     };
     Qnn_MemHandle_t handle = nullptr;
-    auto error = _qnn_interface.qnn_mem_register(_qnn_context_handle, &descriptor,
-            /*numDescriptors=*/1, &handle);
+    auto error = _qnn_interface.qnn_mem_register(_qnn_context_handle, &descriptor, /*numDescriptors=*/1, &handle);
     if (error != QNN_SUCCESS) {
         GGMLQNN_LOG_WARN("failed to register shared memory, error %d, %s", QNN_GET_ERROR_CODE(error), strerror(error));
         return nullptr;
@@ -1987,8 +2023,7 @@ void qnn_instance::unregister_rpcmem() {
         Qnn_MemHandle_t mem_handle = it->second;
         error = _qnn_interface.qnn_mem_de_register(&mem_handle, 1);
         if (error != QNN_SUCCESS) {
-            GGMLQNN_LOG_WARN("failed to unregister shared memory, error %d\n",
-                         QNN_GET_ERROR_CODE(error));
+            GGMLQNN_LOG_WARN("failed to unregister shared memory, error %d\n", QNN_GET_ERROR_CODE(error));
         } else {
             GGMLQNN_LOG_DEBUG("unregister shared memory ok");
         }
@@ -2020,15 +2055,22 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
     GGMLQNN_LOG_DEBUG("lib_path:%s\n", lib_path.c_str());
 
+#if defined(__ANDROID__) || defined(__linux__)
     void * lib_handle = dlopen(lib_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
+#elif defined(_WIN32) || defined(_MSC_VER)
+    //TODO: Snapdragon based WoA(Windows on ARM)
+    void * lib_handle = nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
     if (nullptr == lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, with error: %s", lib_path.c_str(), dlerror());
         return 1;
     }
 
-    auto get_providers =
-            load_qnn_functionpointers<_pfn_QnnInterface_getProviders *>(lib_handle,
-                                                          "QnnInterface_getProviders");
+    auto get_providers = load_qnn_functionpointers<_pfn_QnnInterface_getProviders *>(
+                               lib_handle,
+                               "QnnInterface_getProviders");
     if (nullptr == get_providers) {
         GGMLQNN_LOG_WARN("can not load symbol QnnInterface_getProviders : %s", dlerror());
         return 2;
@@ -2087,7 +2129,7 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
     }
     _loaded_lib_handle[backend_id] = lib_handle;
     _backend_id = backend_id;
-    
+
     auto saver_initialize =
             load_qnn_functionpointers<_pfn_QnnSaver_initialize *>(
             _loaded_lib_handle[backend_id], "QnnSaver_initialize");
@@ -2106,7 +2148,7 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
 
 int qnn_instance::unload_backend() {
     int dlclose_error = 0;
-    for (auto &it : _loaded_lib_handle) {
+    for (auto & it : _loaded_lib_handle) {
         dlclose_error = dlclose(it.second);
         if (dlclose_error != 0) {
             GGMLQNN_LOG_WARN("failed to close QNN backend %d, error %s\n", it.first, dlerror());
@@ -2126,13 +2168,27 @@ int qnn_instance::load_system() {
     std::string system_lib_path = _lib_path + "libQnnSystem.so";
     GGMLQNN_LOG_DEBUG("system_lib_path:%s\n", system_lib_path.c_str());
 
+#if defined(__ANDROID__) || defined(__linux__)
     _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#elif defined(_WIN32) || defined(_MSC_VER)
+    //TODO: Snapdragon based WoA(Windows on ARM)
+    _system_lib_handle = nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
     if (nullptr == _system_lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
         //re-try with default path of QNN binary runtime lib
         _lib_path = "/data/local/tmp/";
         system_lib_path = _lib_path + "libQnnSystem.so";
+#if defined(__ANDROID__) || defined(__linux__)
         _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+#elif defined(_WIN32) || defined(_MSC_VER)
+        //TODO: Snapdragon based WoA(Windows on ARM)
+        _system_lib_handle = nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
         if (nullptr == _system_lib_handle) {
             GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
             return 1;
@@ -2348,7 +2404,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
             if (QNN_PROFILE_NO_ERROR != _qnn_raw_interface.profileCreate(
                     _qnn_backend_handle, QNN_PROFILE_LEVEL_BASIC, &_qnn_profile_handle)) {
                 GGMLQNN_LOG_WARN("unable to create profile handle in the backend\n");
-                return 7;
+                return 6;
             } else {
                 GGMLQNN_LOG_DEBUG("initialize qnn profile successfully\n");
             }
@@ -2364,10 +2420,17 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         }
     }
 
+#if defined(__ANDROID__) || defined(__linux__)
     _rpc_lib_handle = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
+#elif defined(_WIN32) || defined(_MSC_VER)
+    //TODO: Snapdragon based WoA(Windows on ARM)
+    _rpc_lib_handle = nullptr;
+#else
+#error "ggml-qnn only support WoA, Android, Linux"
+#endif
     if (nullptr == _rpc_lib_handle) {
         GGMLQNN_LOG_WARN("failed to load qualcomm's rpc lib, error:%s\n", dlerror());
-        return 9;
+        return 8;
     } else {
         GGMLQNN_LOG_DEBUG("load rpcmem lib successfully\n");
         set_rpcmem_initialized(true);
@@ -2381,7 +2444,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         || nullptr == _pfn_rpc_mem_to_fd) {
         GGMLQNN_LOG_WARN("unable to access symbols in QNN RPC lib. dlerror(): %s", dlerror());
         dlclose(_rpc_lib_handle);
-        return 10;
+        return 9;
     }
 
     if (nullptr != _pfn_rpc_mem_init) // make Qualcomm's SoC based low-end phone happy
@@ -2393,7 +2456,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
                                &_qnn_context_handle);
     if (nullptr == _qnn_context_handle) {
         GGMLQNN_LOG_WARN("why failed to initialize qnn context, error:%s\n", strerror(errno));
-        return 8;
+        return 10;
     } else {
         GGMLQNN_LOG_DEBUG("initialize qnn context successfully\n");
     }
@@ -2578,7 +2641,7 @@ int qnn_instance::init_qnn_graph(const std::string & graph_name, QNNBackend devi
 }
 
 int qnn_instance::init_qnn_graph(const char * graph_name, bool debug, uint8_t do_node_validation,
-                                   const QnnGraph_Config_t ** graph_configs) {
+                                 const QnnGraph_Config_t ** graph_configs) {
     int result = 0;
 
     if (nullptr == graph_name) {
@@ -2685,14 +2748,18 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
         return true;
     }
     if (ggml_is_empty(tensor) || tensor->op == GGML_OP_RESHAPE
-    || tensor->op == GGML_OP_TRANSPOSE || tensor->op == GGML_OP_VIEW
-    || tensor->op == GGML_OP_PERMUTE) {
+        || tensor->op == GGML_OP_TRANSPOSE
+        || tensor->op == GGML_OP_VIEW
+        || tensor->op == GGML_OP_PERMUTE
+        ) {
         return false;
     }
 
     //TODO: support other op
-    bool supported_op = ((tensor->op == GGML_OP_ADD) || (tensor->op == GGML_OP_MUL_MAT)
-            || (tensor->op == GGML_OP_MUL));
+    bool supported_op = ((tensor->op == GGML_OP_ADD)
+                         || (tensor->op == GGML_OP_MUL_MAT)
+                         || (tensor->op == GGML_OP_MUL)
+                        );
     if (!supported_op) {
         return false;
     }
@@ -2700,14 +2767,14 @@ static bool ggml_qnn_can_handle_op(const struct ggml_tensor * tensor) {
     struct ggml_tensor * src0 = tensor->src[0];
     struct ggml_tensor * src1 = tensor->src[1];
 
-    const int64_t ne00 = tensor->src[0]->ne[0];
-    const int64_t ne01 = tensor->src[0]->ne[1];
+    const int64_t ne00  = tensor->src[0]->ne[0];
+    const int64_t ne01  = tensor->src[0]->ne[1];
 
-    const int64_t ne10 = tensor->src[1]->ne[0];
-    const int64_t ne11 = tensor->src[1]->ne[1];
+    const int64_t ne10  = tensor->src[1]->ne[0];
+    const int64_t ne11  = tensor->src[1]->ne[1];
 
-    const int64_t ne0 = tensor->ne[0];
-    const int64_t ne1 = tensor->ne[1];
+    const int64_t ne0   = tensor->ne[0];
+    const int64_t ne1   = tensor->ne[1];
 
     const uint32_t src0_rank = ggml_get_tensor_rank(src0);
     const uint32_t src1_rank = ggml_get_tensor_rank(src1);
@@ -3104,7 +3171,7 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         Qnn_Param_t out_0_params[] = {
                 {QNN_PARAMTYPE_SCALAR,
                            QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1,
-                             .scalarParam = {QNN_DATATYPE_BOOL_8, .bool8Value = 1}
+                           .scalarParam = {QNN_DATATYPE_BOOL_8, .bool8Value = 1}
                 }
         };
 
@@ -3154,13 +3221,13 @@ static void ggml_qnn_mul_mat(ggml_backend_t backend, ggml_tensor * op) {
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_trans1_0));
 
         //step-6: finalize qnn graph and execute qnn graph
-        CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, NULL, NULL));
+        CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, nullptr, nullptr));
         Qnn_Tensor_t input_tensors_0[]  = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t output_tensors_0[] = {*p_tensor2};
         CHECK_QNN_API(error, qnn_raw_interface.graphExecute(graph_handle,
                                                input_tensors_0, 2,
                                                output_tensors_0, 1,
-                                               NULL, NULL));
+                                               nullptr, nullptr));
 
         qnn_tensors_t ggml_op_mulmat_tensors;
         ggml_op_mulmat_tensors.reserve(5);
@@ -3318,7 +3385,7 @@ static ggml_backend_buffer_i ggml_backend_qnn_buffer_interface = {
         /* .get_tensor      = */ ggml_backend_qnn_buffer_get_tensor,
         /* .cpy_tensor      = */ ggml_backend_qnn_buffer_cpy_tensor,
         /* .clear           = */ ggml_backend_qnn_buffer_clear,
-        /* .reset           = */ NULL,
+        /* .reset           = */ nullptr,
 };
 
 static const char * ggml_backend_qnn_buffer_type_name(ggml_backend_buffer_type_t buft) {
@@ -3349,7 +3416,7 @@ static size_t ggml_backend_qnn_buffer_type_get_alignment(ggml_backend_buffer_typ
     return 32;
 }
 
-//FIXME: this value is an experimental value on Xiaomi14
+//FIXME: this value is an experimental value on Snapdragon 8 Gen3 based phone
 static size_t ggml_backend_qnn_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
 
@@ -3429,8 +3496,6 @@ static const char * ggml_backend_qnn_device_get_name(ggml_backend_dev_t dev) {
         return "unknown";
     }
     return ctx->name;
-
-    GGML_UNUSED(dev);
 }
 
 static const char * ggml_backend_qnn_device_get_description(ggml_backend_dev_t dev) {
@@ -3520,10 +3585,10 @@ ggml_backend_buffer_type_t ggml_backend_qnn_buffer_type(size_t device_index) {
                                      /* .alloc_buffer     = */ ggml_backend_qnn_buffer_type_alloc_buffer,
                                      /* .get_alignment    = */ ggml_backend_qnn_buffer_type_get_alignment,
                                      /* .get_max_size     = */ ggml_backend_qnn_buffer_type_get_max_size,
-                                     /* .get_alloc_size   = */ NULL,// defaults to ggml_nbytes
+                                     /* .get_alloc_size   = */ nullptr,// defaults to ggml_nbytes
                                      /* .is_host          = */ ggml_backend_qnn_buffer_is_host
                              },
-            /* .context = */ NULL,
+            /* .context = */ nullptr,
     };
 
     return &ggml_backend_buffer_type_qnn;
@@ -3561,14 +3626,14 @@ static struct ggml_backend_device_i ggml_backend_qnn_device_interface = {
         /* .get_props            = */ ggml_backend_qnn_device_get_props,
         /* .init_backend         = */ ggml_backend_qnn_device_init_backend,
         /* .get_buffer_type      = */ ggml_backend_qnn_device_get_buffer_type,
-        /* .get_host_buffer_type = */ NULL,
+        /* .get_host_buffer_type = */ nullptr,
         /* .buffer_from_host_ptr = */ ggml_backend_qnn_device_buffer_from_host_ptr,
         /* .supports_op          = */ ggml_backend_qnn_device_supports_op,
         /* .supports_buft        = */ ggml_backend_qnn_device_supports_buft,
-        /* .offload_op           = */ NULL,
-        /* .event_new            = */ NULL,
-        /* .event_free           = */ NULL,
-        /* .event_synchronize    = */ NULL,
+        /* .offload_op           = */ nullptr,
+        /* .event_new            = */ nullptr,
+        /* .event_free           = */ nullptr,
+        /* .event_synchronize    = */ nullptr,
 };
 
 static ggml_backend_i ggml_backend_qnn_interface = {
@@ -3616,9 +3681,8 @@ struct ggml_backend_qnn_reg_context {
 };
 
 static const char * ggml_backend_qnn_reg_get_name(ggml_backend_reg_t reg) {
-    return "ggml-qnn";
-
     GGML_UNUSED(reg);
+    return "ggml-qnn";
 }
 
 static size_t ggml_backend_qnn_reg_get_device_count(ggml_backend_reg_t reg) {
@@ -3639,10 +3703,15 @@ static ggml_backend_dev_t ggml_backend_qnn_reg_get_device(ggml_backend_reg_t reg
 static void * ggml_backend_qnn_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
 
-    if (std::strcmp(name, "ggml_backend_set_n_threads") == 0) {
+    if (nullptr == name)
+        return nullptr;
+
+    const char * slot_name =  "ggml_backend_set_n_threads";
+    //avoid buffer attack rather than strcmp
+    if (0 == std::memcmp(name, slot_name, strlen(slot_name))) {
         return (void *)ggml_backend_qnn_set_n_threads;
     }
-    return NULL;
+    return nullptr;
 }
 
 static const ggml_backend_reg_i ggml_backend_qnn_reg_interface = {
