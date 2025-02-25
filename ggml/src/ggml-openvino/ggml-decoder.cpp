@@ -7,8 +7,11 @@
 
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
     m_node_op_name[node->name] = ggml_op_name(node->op);
-    std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs) + "_input_" + ggml_op_name(node->src[0]->op);
-    std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_output_" + ggml_op_name(node->op);
+    // Execute singel CONT operator is OK
+    std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs) + "_" + ggml_op_name(node->src[0]->op);
+    std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_" + ggml_op_name(node->op);
+    // std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs);
+    // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs);
     switch (node->op) {
         // Unary OPs 
         case GGML_OP_UNARY:
@@ -17,21 +20,21 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         case GGML_OP_PERMUTE:
         case GGML_OP_RMS_NORM:
         {
-            inputs[node->src[0]->name] = node->src[0];
-            outputs[node->name] = node;
-            m_input_names.push_back(node->src[0]->name);
-            m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
-            m_output_names.push_back(node->name);
+            inputs[src0_name] = node->src[0];
+            outputs[node_name] = node;
+            m_input_names.push_back(src0_name);
+            m_node_op_name[src0_name] = ggml_op_name(node->op);
+            m_output_names.push_back(node_name);
             break;
         }
         case GGML_OP_CONT:
         {
             if (ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node)) {
-                inputs[node->src[0]->name] = node->src[0];
-                outputs[node->name] = node;
-                m_input_names.push_back(node->src[0]->name);
-                m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
-                m_output_names.push_back(node->name);
+                inputs[src0_name] = node->src[0];
+                outputs[node_name] = node;
+                m_input_names.push_back(src0_name);
+                m_node_op_name[src0_name] = ggml_op_name(node->op);
+                m_output_names.push_back(node_name);
                 m_continuous = true;
 
                 ov::Shape flat_shape = { static_cast<size_t>(ggml_nelements(node)) };
@@ -51,11 +54,11 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 //     std::memcpy(dst_row, src_row, node->src[0]->ne[0]  * ggml_type_size(node->src[0]->type));
                 // }
 
-                inputs[node->src[0]->name] = node->src[0];
-                outputs[node->name] = node;
-                m_input_names.push_back(node->src[0]->name);
-                m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
-                m_output_names.push_back(node->name);
+                inputs[src0_name] = node->src[0];
+                outputs[node_name] = node;
+                m_input_names.push_back(src0_name);
+                m_node_op_name[src0_name] = ggml_op_name(node->op);
+                m_output_names.push_back(node_name);
 
                 const size_t element_size = ggml_type_size(node->src[0]->type);
                 size_t valid_elems = static_cast<size_t>(node->src[0]->ne[0]); // 3072
@@ -71,11 +74,11 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             }
 
             if (ggml_is_contiguous(node)) {
-                inputs[node->src[0]->name] = node->src[0];
-                outputs[node->name] = node;
-                m_input_names.push_back(node->src[0]->name);
-                m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
-                m_output_names.push_back(node->name);
+                inputs[src0_name] = node->src[0];
+                outputs[node_name] = node;
+                m_input_names.push_back(src0_name);
+                m_node_op_name[src0_name] = ggml_op_name(node->op);
+                m_output_names.push_back(node_name);
 
                 size_t valid_i = static_cast<size_t>(node->src[0]->ne[0]); // 96
                 size_t valid_j = static_cast<size_t>(node->src[0]->ne[1]); // 32
@@ -98,6 +101,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_node_op_name[src0_name] = ggml_op_name(node->op);
                 m_output_names.push_back(node_name);
                 m_continuous = true;
+
+                ov::Shape src_shape(node->src[0]->ne, node->src[0]->ne + 4);
+                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
+                m_params.push_back(input_param);
                 break;
             } else {
                 for (int64_t i1 = 0; i1 < node->ne[1]; ++i1) {       // ne[1] = 3072
@@ -118,57 +125,52 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_continuous = false;
                 break;
 
-                // inputs[node->src[0]->name] = node->src[0];
-                // std::string temp_name = node->src[0]->name + std::string("_cpy_tmp");
+                // inputs[src0_name] = node->src[0];
+                // std::string temp_name = src0_name + std::string("_cpy_tmp");
                 // inputs[temp_name] = node;
 
-                // outputs[node->name] = node;
-                // m_input_names.push_back(node->src[0]->name);
+                // outputs[node_name] = node;
+                // m_input_names.push_back(src0_name);
                 // m_input_names.push_back(temp_name);
-                // m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
+                // m_node_op_name[src0_name] = ggml_op_name(node->op);
                 // m_node_op_name[temp_name] = ggml_op_name(node->op);
+                // m_output_names.push_back(node_name);
+                // m_continuous = false;
 
-                // m_output_names.push_back(node->name);
-
-                // ov::Shape flat_src0_shape = {80000};
+                // ov::Shape flat_src0_shape = {node->src[0]->nb[2]};
                 // auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
                 // m_params.push_back(param_src0);
 
-                // std::cout << "decoder ADDR-0:  " << param_src0.get() << std::endl;
-
-                // ov::Shape flat_dst_shape = {200000, 1};
+                // ov::Shape flat_dst_shape = {node->nb[2], 1};
                 // auto param_dst_base = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
                 // m_params.push_back(param_dst_base);
 
-                // std::cout << "decoder ADDR-1:  " << param_dst_base.get() << std::endl;
-
-                // m_continuous = false;
-                // break;
+                break;
             }
         }
         // For view, input is node itself
         case GGML_OP_VIEW:
         {
-            inputs[node->name] = node;
-            outputs[node->name] = node;
-            m_input_names.push_back(node->name);
-            m_node_op_name[node->name] = ggml_op_name(node->op);
-            m_output_names.push_back(node->name);
+            inputs[node_name] = node;
+            outputs[node_name] = node;
+            m_input_names.push_back(node_name);
+            m_node_op_name[node_name] = ggml_op_name(node->op);
+            m_output_names.push_back(node_name);
             break;
         }
         // SCALE
         case GGML_OP_SCALE:
         {
-            inputs[src0_name] = node->src[0];
+            inputs[node_name] = node->src[0];
             outputs[node_name] = node;
             m_input_names.push_back(node_name);
-            // m_node_op_name[node_name] = ggml_op_name(node->op);
+            m_node_op_name[node_name] = ggml_op_name(node->op);
             m_output_names.push_back(node_name);
             break;
         }
         case GGML_OP_MUL_MAT:
         {
-            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
+            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
             if (!ggml_is_contiguous(node->src[1]) || node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
                 m_continuous = false;
             } else {
@@ -198,7 +200,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             m_node_op_name[src0_name] = ggml_op_name(node->op);
             m_output_names.push_back(node_name);
             if (node->src[1]) {
-                std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
+                std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
                 inputs[src1_name] = node->src[1];
                 m_node_op_name[src1_name] = ggml_op_name(node->op);
                 m_input_names.push_back(src1_name);
@@ -208,20 +210,20 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // OPs with 3 inputs:
         case GGML_OP_ROPE:
         {
-            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
-            inputs[node->src[0]->name] = node->src[0];
-            inputs[node->src[1]->name] = node->src[1];
-            m_input_names.push_back(node->src[0]->name);
-            m_node_op_name[node->src[0]->name] = ggml_op_name(node->op);
-            m_input_names.push_back(node->src[1]->name);
-            m_node_op_name[node->src[1]->name] = ggml_op_name(node->op);
-            outputs[node->name] = node;
-            m_output_names.push_back(node->name);
+            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+            inputs[src0_name] = node->src[0];
+            inputs[src1_name] = node->src[1];
+            m_input_names.push_back(src0_name);
+            m_node_op_name[src0_name] = ggml_op_name(node->op);
+            m_input_names.push_back(src1_name);
+            m_node_op_name[src1_name] = ggml_op_name(node->op);
+            outputs[node_name] = node;
+            m_output_names.push_back(node_name);
             if (node->src[2]) {
-                std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs) + "_input_" + ggml_op_name(node->src[2]->op);
-                inputs[node->src[2]->name] = node->src[2];
-                m_input_names.push_back(node->src[2]->name);
-                m_node_op_name[node->src[2]->name] = ggml_op_name(node->op);
+                std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs);
+                inputs[src2_name] = node->src[2];
+                m_input_names.push_back(src2_name);
+                m_node_op_name[src2_name] = ggml_op_name(node->op);
             }
             break;
         } 
@@ -352,6 +354,15 @@ ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
 std::vector<size_t> GgmlOvDecoder::get_input_stride(const std::string& name) const {
     std::vector<size_t> stride;
     ggml_tensor * node = m_inputs.at(name);
+    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
+        stride.push_back(static_cast<size_t>(node->nb[i]));
+    }
+    return stride;
+}
+
+std::vector<size_t> GgmlOvDecoder::get_output_stride(const std::string& name) const {
+    std::vector<size_t> stride;
+    ggml_tensor * node = m_outputs.at(name);
     for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
         stride.push_back(static_cast<size_t>(node->nb[i]));
     }
