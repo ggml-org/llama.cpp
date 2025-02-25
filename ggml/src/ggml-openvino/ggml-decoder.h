@@ -2,6 +2,7 @@
 
 #include "decoder.h"
 #include "ggml.h"
+#include "openvino/op/parameter.hpp"
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
@@ -15,6 +16,8 @@ public:
     }
 
     virtual ov::PartialShape get_input_shape(const std::string& name) const override;
+
+    virtual std::vector<size_t> get_input_stride(const std::string& name) const override;
 
     virtual ov::element::Type get_input_type(const std::string& name) const override;
 
@@ -66,13 +69,10 @@ public:
         return m_continuous;
     }
 
-    virtual const std::string& get_node_op_name(const std::string& name) const {
-        auto it = m_node_op_name.find(name);
-        if (it != m_node_op_name.end()) {
-            return it->second;
-        }
-        return "";
-    }
+    virtual const std::string& get_node_op_name(const std::string& name) const override;
+    // virtual const std::string& get_node_op_info(const std::string& name) const override;
+
+    virtual const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& get_params() const override;
 
 private:
     void set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs);
@@ -85,9 +85,10 @@ private:
     ggml_tensor* m_node;
     std::vector<ggml_tensor *> m_nodes;
     std::vector<std::shared_ptr<GgmlOvDecoder>> m_decoders;
-    const std::string m_op_name;
+    std::string m_op_name;
     mutable std::string m_name;
     bool m_continuous;
     std::map<std::string, std::string> m_node_op_name;
+    std::vector<std::shared_ptr<ov::op::v0::Parameter>> m_params;
 };
 
