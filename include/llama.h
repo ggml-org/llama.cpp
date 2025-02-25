@@ -499,6 +499,8 @@ extern "C" {
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
     LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
 
+    LLAMA_API size_t                     llama_n_backends(const struct llama_context * ctx);
+    LLAMA_API size_t                     llama_get_backends(const struct llama_context * ctx, ggml_backend_t * out_buf, size_t out_len);
     DEPRECATED(LLAMA_API struct llama_kv_cache * llama_get_kv_self(struct llama_context * ctx), "use llama_get_memory instead");
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
@@ -510,6 +512,7 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+    LLAMA_API const ggml_backend_dev_t * llama_model_get_devices (const struct llama_model * model, size_t * out_len);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
