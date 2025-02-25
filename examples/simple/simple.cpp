@@ -140,7 +140,7 @@ int main(int argc, char ** argv) {
         std::string s(buf, n);
         printf("%s", s.c_str());
     }
-
+    printf("\n");
     // prepare a batch for the prompt
 
     llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
