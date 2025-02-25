@@ -685,8 +685,6 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
 
     if (src0->type == dst->type && ne00 == dst->ne[0] && nb00 == element_size && nb0 == element_size) {
         // Assume that the data type is f32 and each element is 4 bytes
-        const size_t element_size = ggml_type_size(src0->type); // 4 bytes
-
         // Logically, the number of valid elements per row is 3072 (src0->ne[0]), and the number of rows is 7 (src0->ne[1])
         size_t valid_elems = static_cast<size_t>(src0->ne[0]); // 3072
         size_t num_rows    = static_cast<size_t>(src0->ne[1]); // 7
@@ -740,7 +738,10 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
         infer_request.set_input_tensor(0, input_tensor);
 
         // Construct output Tensor: dst is continuous storage, and its logical shape is [3072,7,1,1]
-        ov::Shape output_shape = { valid_elems, num_rows, 1, 1 };
+        ov::Shape output_shape = { static_cast<size_t>(dst->ne[0]),
+            static_cast<size_t>(dst->ne[1]),
+            static_cast<size_t>(dst->ne[2]),
+            static_cast<size_t>(dst->ne[3])};
         ov::Tensor output_tensor(ov::element::f32, output_shape, dst->data);
         infer_request.set_output_tensor(0, output_tensor);
 
@@ -811,7 +812,10 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
         // gathered has a shape of [21504]
 
         // 5. Reshape gathered to [3072,7,1,1], because 3072*7 = 21504
-        ov::Shape target_shape = { static_cast<size_t>(dst->ne[0]), static_cast<size_t>(dst->ne[1]), 1, 1 }; // [3072,7,1,1]
+        ov::Shape target_shape = { static_cast<size_t>(dst->ne[0]),
+                                   static_cast<size_t>(dst->ne[1]),
+                                   static_cast<size_t>(dst->ne[2]),
+                                   static_cast<size_t>(dst->ne[3])}; // [3072,7,1,1]
         auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, {4},
                                std::vector<int64_t>{ static_cast<int64_t>(dst->ne[0]), static_cast<int64_t>(dst->ne[1]), 1, 1 });
         auto reshaped = std::make_shared<ov::op::v1::Reshape>(gathered, reshape_const, false);
@@ -834,34 +838,6 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
 
         // Execute reasoning: The computation graph uses Gather+Reshape to collect each valid element of src0 in a predetermined order and write it directly to dst->data
         infer_request.infer();
-        /*
-        const size_t rs = ne00 * element_size; // Row size in bytes for dst
-
-        // Create OpenVINO tensors for source and destination
-        // The tensors are reshaped to a 2D structure (num_rows x ne00) for easier iteration and compatibility with the simplified loop.
-        ov::Tensor src_tensor(ov::element::f32, ov::Shape{ne03 * ne02 * ne01, ne00}, src0->data);
-        ov::Tensor dst_tensor(ov::element::f32, ov::Shape{ne03 * ne02 * ne01, ne00}, dst->data);
-
-        // Perform the copy in a single loop
-        const size_t num_rows = ne03 * ne02 * ne01;
-        for (size_t row = 0; row < num_rows; ++row) {
-            // Calculate the source row pointer based on original strides
-            // The source row pointer is calculated based on the combined index row and the strides nb03, nb02, and nb01.
-            const char* src0_ptr = (char*)src_tensor.data() +
-                                    // Calculates which block of the i03 dimension the current row belongs to
-                                   (row / (ne02 * ne01)) * nb03 +   // 0
-                                    // Calculates which block of the i02 dimension the current row belongs to within the current i03 block.
-                                   ((row / ne01) % ne02) * nb02 +   // 0,   0,......,    0,384,  384,......,  384,768,......, 2304
-                                    // Calculates the position within the current i02 block in terms of the i01 index.
-                                   (row % ne01) * nb01;             // 0,2688,......,83328,  0, 2688,......,83328,  0,......, 83328
-
-            // Destination row pointer is linear
-            // Since dst is contiguous, its rows are accessed linearly using a single stride rs, simplifying the destination pointer calculation.
-            char* dst_ptr = (char*)dst_tensor.data() + row * rs;
-
-            // Copy row
-            std::memcpy(dst_ptr, src0_ptr, rs);
-        }*/
         return;
     }
     std::cout << "Duplication of bytes completed successfully." << std::endl;
@@ -939,6 +915,7 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
         // ov::Shape flat_src0_shape = {80000};
         ov::Shape flat_src0_shape = {dst->src[0]->nb[2]};
         auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
+        // auto param_src00 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
 
         auto gather_indices_const = ov::op::v0::Constant::create(ov::element::i64, gather_idx_shape, gather_idx);
         auto gather_axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
@@ -951,6 +928,7 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
         // ov::Shape flat_dst_shape = {200000, 1};
         ov::Shape flat_dst_shape = {dst->nb[2], 1};
         auto param_dst_base = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
+        // auto param_dst_base11 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
 
         auto scatter_indices_const = ov::op::v0::Constant::create(ov::element::i64, scatter_idx_shape, scatter_idx);
 
@@ -961,6 +939,8 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
         );
 
         ov::ParameterVector params = { param_src0, param_dst_base };
+        // ov::ParameterVector params = { param_src0};
+        // ov::ParameterVector params = { param_src00, param_dst_base11};
         auto model = std::make_shared<ov::Model>(ov::OutputVector{ scatter }, params);
 
         auto compiled_model = core.compile_model(model, "CPU");
@@ -1009,16 +989,17 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
         }
     }
 
+    // openvino_frontend_compute(backend, cgraph);
     // Process nodes in order
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
-            ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
-        } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
+        if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
             ggml_backend_openvino_reshape(cgraph->nodes[i]);
+        // } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
+        //    ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
         } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
-             ggml_backend_openvino_view(cgraph->nodes[i]);
-        // } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
-        //    ggml_backend_openvino_cpy(cgraph->nodes[i]);
+            ggml_backend_openvino_view(cgraph->nodes[i]);
+        } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
+           ggml_backend_openvino_cpy(cgraph->nodes[i]);
         } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {
             ggml_backend_openvino_transpose(cgraph->nodes[i]);
         } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
@@ -1029,8 +1010,8 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
             // Process a range of nodes with openvino_frontend_compute
             int start_index = i;
             while (i < cgraph->n_nodes &&
-                    // std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end() &&
-                    std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end() &&
+                    std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end() &&
+                    //std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end() &&
                     std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()) {
                 i++;
             }
@@ -1270,7 +1251,7 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
             switch (ggml_get_unary_op(op))
             {
                 case GGML_UNARY_OP_SILU:
-                    return true;
+                    return false;
                 case GGML_UNARY_OP_ABS: 
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_NEG:
