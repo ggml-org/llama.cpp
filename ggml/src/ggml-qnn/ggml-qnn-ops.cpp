@@ -23,6 +23,7 @@
 #include "ggml-common.h"
 #include "ggml-qnn-ops.h"
 
+<<<<<<< HEAD
 static inline uint32_t ggmlqnn_get_tensor_data_size(const ggml_tensor * tensor) {
     /*
     size_t data_size = ggml_row_size(tensor->type, tensor->ne[0]);
@@ -52,6 +53,8 @@ static inline bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const
     return true;
 }
 
+=======
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 #define GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst)                          \
     do {                                                                    \
         if (!ggmlqnn_is_valid_params((ctx), (src0), (src1), (dst))) {       \
@@ -82,7 +85,11 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     QNN_INTERFACE_VER_TYPE qnn_raw_interface    = ctx->raw_interface;
     size_t qnn_op_index                         = ggmlqnn_get_op_index(op);
     GGML_ASSERT(qnn_op_index < ggmlqnn_get_opcaps_size());
+<<<<<<< HEAD
     const char * qnn_op_name                    = ggmlqnn_k_op_caps[qnn_op_index].qnn_op_name;
+=======
+    const char * qnn_op_name                    = k_op_caps[qnn_op_index].qnn_op_name;
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
     std::string ggml_op_name_string             = std::string("ggml_") + ggml_op_name(op->op);
     const char * ggml_op_name                   = ggml_op_name_string.c_str();
 
@@ -104,7 +111,13 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         p_tensor1 = ggmlqnn_create_compute_tensor(src1);
         p_tensor2 = ggmlqnn_create_compute_tensor(dst);
     }
+<<<<<<< HEAD
     //ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
+=======
+#if GGMLQNN_PRINT_OP_ADD_LOG
+    print_tensors_info(__func__, ctx, src0, src1, dst);
+#endif
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
     //ensure QNN tensor has correct tensor type
     QNN_VER_PTR(*p_tensor0)->type = QNN_TENSOR_TYPE_APP_WRITE;
@@ -152,9 +165,15 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
                 return;
             }
         } else {
+<<<<<<< HEAD
             QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, ggmlqnn_get_tensor_data_size(src0)};
             QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, ggmlqnn_get_tensor_data_size(src1)};
             QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, ggmlqnn_get_tensor_data_size(dst)};
+=======
+            QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, static_cast<uint32_t>(ggml_nbytes(src0))};
+            QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, static_cast<uint32_t>(ggml_nbytes(src1))};
+            QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, static_cast<uint32_t>(ggml_nbytes(dst))};
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
         }
 
         Qnn_Tensor_t tensor_inputs[] = {
@@ -242,9 +261,15 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
                 memcpy(qnn_buffer_1, src1->data, ggml_nbytes(src1));
             }
         } else {
+<<<<<<< HEAD
             QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, ggmlqnn_get_tensor_data_size(src0)};
             QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, ggmlqnn_get_tensor_data_size(src1)};
             QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, ggmlqnn_get_tensor_data_size(dst)};
+=======
+            QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, static_cast<uint32_t>(ggml_nbytes(src0))};
+            QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, static_cast<uint32_t>(ggml_nbytes(src1))};
+            QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, static_cast<uint32_t>(ggml_nbytes(dst))};
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
         }
 
         Qnn_Tensor_t tensor_inputs[] = {
@@ -279,6 +304,7 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
 }
 
 /*
+<<<<<<< HEAD
  * this function is AI-assisted code from Grok 3 for purpose of offload 4d matrix mulmat to QNN backend
  * UT in ggml-qnn-ut.cpp passed:
  * ./scripts/build-run-android.sh run_ut_mulmat 0
@@ -474,6 +500,8 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
 }
 
 /*
+=======
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
  * @brief performs matrix multiplication with FP32 & quantized weights and floating-point inputs
  *        using the QNN backend. this function performs matrix multiplication of the input tensor
  *        `src1` and the weight tensor `src0`, handling transposing, and quantization as needed,
@@ -518,9 +546,13 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     const uint32_t src1_rank                    = ggml_n_dims(src1);
     GGML_ASSERT(src0_rank == src1_rank);
     GGML_ASSERT(src0_rank >= 2); //QNN SDK's limitation, make QNN SDK happy
+<<<<<<< HEAD
     if (4 == src0_rank) {
         return ggml_qnn_mul_mat_4d(ctx, op);
     }
+=======
+    GGML_ASSERT(src0_rank != 4); //TODO: 4D matrix mulmat
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
     void * wdata                                = ggmlqnn_type_trait(ctx, op);
     const size_t desired_size                   = ctx->desired_size;
 
@@ -604,10 +636,17 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         if (src0_type != GGML_TYPE_F32) {
             QNN_VER_PTR(*p_tensor0)->clientBuf = {wdata, static_cast<uint32_t>(desired_size)};
         } else {
+<<<<<<< HEAD
             QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, ggmlqnn_get_tensor_data_size(src0)};
         }
         QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, ggmlqnn_get_tensor_data_size(src1)};
         QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, ggmlqnn_get_tensor_data_size(dst)};
+=======
+            QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, static_cast<uint32_t>(ggml_nbytes(src0))};
+        }
+        QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, static_cast<uint32_t>(ggml_nbytes(src1))};
+        QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, static_cast<uint32_t>(ggml_nbytes(dst))};
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
         //step-4: create a transpose tensor
         p_tensor2_transpose = GQCGT(dst, "transpose", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, src0_rank, nullptr, nullptr, 0, true);
@@ -636,13 +675,21 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         };
 #else
         Qnn_OpConfig_t out_0 = ggmlqnn_create_op_config("ggmlqnn_mulmat_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW, QNN_OP_MAT_MUL,
+<<<<<<< HEAD
                                                         out_0_params, 1, out_0_inputs, 2, out_0_outputs, 1);
+=======
+                                                out_0_params, 1, out_0_inputs, 2, out_0_outputs, 1);
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 #endif
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_0));
 
         //step-5: compose qnn graph: add transpose node
         Qnn_Param_t out_trans1_0_params[] = {
+<<<<<<< HEAD
                 {QNN_PARAMTYPE_TENSOR,
+=======
+                {(Qnn_ParamType_t) 1,
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
                  "perm", .tensorParam = *p_param_tensor
                 }
         };
@@ -662,7 +709,11 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         };
 #else
         Qnn_OpConfig_t out_trans1_0 = ggmlqnn_create_op_config("ggmlqnn_mulmat_transpose_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW, QNN_OP_TRANSPOSE,
+<<<<<<< HEAD
                                                                out_trans1_0_params, 1, out_trans1_0_inputs, 1, out_trans1_0_outputs, 1);
+=======
+                                                       out_trans1_0_params, 1, out_trans1_0_inputs, 1, out_trans1_0_outputs, 1);
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 #endif
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_trans1_0));
 
@@ -688,10 +739,17 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         if (src0_type != GGML_TYPE_F32) {
             QNN_VER_PTR(*p_tensor0)->clientBuf = {wdata, static_cast<uint32_t>(desired_size)};
         } else {
+<<<<<<< HEAD
             QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, ggmlqnn_get_tensor_data_size(src0)};
         }
         QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, ggmlqnn_get_tensor_data_size(src1)};
         QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, ggmlqnn_get_tensor_data_size(dst)};
+=======
+            QNN_VER_PTR(*p_tensor0)->clientBuf = {src0->data, static_cast<uint32_t>(ggml_nbytes(src0))};
+        }
+        QNN_VER_PTR(*p_tensor1)->clientBuf = {src1->data, static_cast<uint32_t>(ggml_nbytes(src1))};
+        QNN_VER_PTR(*p_tensor2)->clientBuf = {dst->data, static_cast<uint32_t>(ggml_nbytes(dst))};
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
         Qnn_Tensor_t tensor_inputs[] = {
                 *p_tensor0,
@@ -715,6 +773,7 @@ void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     QNN_VER_PTR(*p_tensor2)->dimensions = tensor_2_dimensions;
     op_perf.info();
 }
+<<<<<<< HEAD
 
 void ggml_qnn_repeat(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
     GGML_UNUSED(ctx);
@@ -820,6 +879,78 @@ void ggml_qnn_im2col(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
 void ggml_qnn_timestep_embedding(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
     GGML_UNUSED(ctx);
     GGML_UNUSED(dst);
+=======
+void ggml_qnn_repeat(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_add(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_div(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_leaky_relu(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_concat(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_arange(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_sqr(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_clamp(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_scale(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_argsort(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_norm(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_group_norm(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_acc(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_sum_rows(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_upsample_nearest2d(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_pad(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+static void ggml_qnn_avg_pool2d(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+static void ggml_qnn_max_pool2d(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_pool2d(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_dup(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_rms_norm(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_diag_mask(ggml_backend_qnn_context * ctx, ggml_tensor * dst, float value) {
+}
+
+void ggml_qnn_im2col(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_timestep_embedding(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 }
 
 void ggml_qnn_cpy(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
@@ -827,6 +958,7 @@ void ggml_qnn_cpy(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
 }
 
 void ggml_qnn_softmax(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+<<<<<<< HEAD
     GGML_UNUSED(ctx);
     GGML_UNUSED(dst);
 }
@@ -839,4 +971,12 @@ void ggml_qnn_get_rows(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
 void ggml_qnn_rope(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
     GGML_UNUSED(ctx);
     GGML_UNUSED(dst);
+=======
+}
+
+void ggml_qnn_get_rows(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+}
+
+void ggml_qnn_rope(ggml_backend_qnn_context * ctx, ggml_tensor * dst) {
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 }
