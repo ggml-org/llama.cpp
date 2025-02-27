@@ -158,9 +158,17 @@ static struct ggml_tensor * llm_build_inp_embd(
 }
 
 static struct ggml_tensor * llm_build_cross_embd(
+    struct ggml_context * ctx,
     const llama_ubatch & ubatch
 ) {
-    struct ggml_tensor * cross_embd = ubatch.cross_embd;
+    struct ggml_tensor * cross_embd;
+    if (ubatch.cross_embd) {
+        cross_embd = ubatch.cross_embd;
+    } else {
+        printf("ubatch does not have cross_embd tensor, "
+            "building graph with placeholder instead\n");
+        cross_embd = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1024, 6400);
+    }
     ggml_set_input(cross_embd);
     return cross_embd;
 }
@@ -727,7 +735,7 @@ static struct ggml_tensor * llm_build_cross_kv(
     // H = number of heads
     // L = number of tokens
     // B = batch size
-    const int64_t num_heads = qcur->ne[1];
+    const int64_t num_heads = lctx.model.hparams.n_head();
     const float cross_attn_scale = 1.0f / sqrtf(float(qcur->ne[0]));
     // Only add the computation of K and V if
     // the cache doesn't already have the data
@@ -744,10 +752,8 @@ static struct ggml_tensor * llm_build_cross_kv(
     // Compute cross attention score
     struct ggml_tensor * q = ggml_reshape_4d(ctx, qcur, qcur->ne[0] / num_heads,
         num_heads, qcur->ne[1], qcur->ne[2]);
-    k = ggml_reshape_4d(ctx, k, kcur->ne[0] / num_heads, num_heads,
-        kcur->ne[1], kcur->ne[2]);
-    v = ggml_reshape_4d(ctx, v, vcur->ne[0] / num_heads, num_heads,
-        vcur->ne[1], vcur->ne[2]);
+    k = ggml_reshape_3d(ctx, k, 1024 / num_heads, num_heads, 6400);
+    v = ggml_reshape_3d(ctx, v, 1024 / num_heads, num_heads, 6400);
     q = ggml_permute(ctx, q, 0, 2, 1, 3);
     k = ggml_permute(ctx, k, 0, 2, 1, 3);
     v = ggml_permute(ctx, v, 1, 2, 0, 3);
@@ -8194,7 +8200,7 @@ struct llm_build_context {
 
         // Get the cross vision encoder embedded picture
         struct ggml_tensor * cross_embd;
-        cross_embd = llm_build_cross_embd(ubatch);
+        cross_embd = llm_build_cross_embd(ctx0, ubatch);
 
         // Assuming text tokens are in ubatch.token, and image tokens are in ubatch.embd_tensor
         bool batch_is_text;
@@ -8310,6 +8316,7 @@ struct llm_build_context {
 
             inpSA = ggml_add(ctx0, inpSA, cur);
         }
+        lctx.kv_cross.cache_filled = true;
 
         cur = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
         cur = ggml_mul(ctx0, cur, model.output_norm);

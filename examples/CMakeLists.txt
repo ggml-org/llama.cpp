@@ -18,6 +18,7 @@ if (EMSCRIPTEN)
 else()
     add_subdirectory(batched-bench)
     add_subdirectory(batched)
+    add_subdirectory(cogagent)
     add_subdirectory(embedding)
     add_subdirectory(eval-callback)
 
