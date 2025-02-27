@@ -2267,8 +2267,7 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
            else
                 return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
         else
-            return (src0->type == GGML_TYPE_F32   || src0->type == GGML_TYPE_Q4_0
-                    || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K)
+            return (src0->type == GGML_TYPE_F32   || ggml_is_quantized(src0->type))
                     && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
     }
 
