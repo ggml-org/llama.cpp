@@ -2248,7 +2248,7 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
     }
 
     if (tensor->op == GGML_OP_MUL_MAT) {
-        dump_op_info(tensor);
+        //dump_op_info(tensor);
         if (src0_rank != src1_rank) // make QNN SDK happy
             return false;
         if (src0_rank < 2) // QNN's limitation, make QNN SDK happy
@@ -2260,15 +2260,16 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
 
         if (ctx->device == QNN_BACKEND_NPU)
             if (2 == src0_rank)
-                return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16
+                return (src0->type == GGML_TYPE_F32
                     || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0
                     || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K
                    ) && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
            else
                 return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
         else
-            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type))
-                   && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
+            return (src0->type == GGML_TYPE_F32   || src0->type == GGML_TYPE_Q4_0
+                    || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K)
+                    && (src1->type == GGML_TYPE_F32) && (tensor->type == GGML_TYPE_F32);
     }
 
     if (tensor->op == GGML_OP_MUL) {
