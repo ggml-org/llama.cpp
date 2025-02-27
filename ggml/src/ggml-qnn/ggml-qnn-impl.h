@@ -64,8 +64,12 @@
 #include "android/log.h"
 #endif
 
+<<<<<<< HEAD
 #if defined(_WIN32)
 #include <wchar.h>
+=======
+#if defined(_WIN32) || defined(_MSC_VER)
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 #include <Windows.h>
 #endif
 
@@ -90,7 +94,11 @@ class  qnn_instance;
 struct ggml_backend_qnn_context;
 void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
 
+<<<<<<< HEAD
 #if 0//def NDEBUG
+=======
+#ifdef NDEBUG
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 #define GGMLQNN_DEBUG                           0
 #define ENABLE_QNNBACKEND_PERF                  0  // enable/disable op's perf info
 #define GGMLQNN_PRINT_QNN_INTERNAL_LOG          0  // enable/disable QNN's internal log
@@ -105,9 +113,15 @@ void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char 
 #endif
 #define GGML_QNN_LOGBUF_LEN                     4096
 
+<<<<<<< HEAD
 #define GGMLQNN_LOG_ERROR(...) ggmlqnn_log_internal(GGML_LOG_LEVEL_ERROR, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLQNN_LOG_WARN(...)  ggmlqnn_log_internal(GGML_LOG_LEVEL_WARN , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLQNN_LOG_INFO(...)  ggmlqnn_log_internal(GGML_LOG_LEVEL_INFO , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+=======
+#define GGMLQNN_LOG_ERROR(...) ggmlqnn_log_internal(GGML_LOG_LEVEL_DEBUG,  __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGMLQNN_LOG_WARN(...)  ggmlqnn_log_internal(GGML_LOG_LEVEL_DEBUG , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGMLQNN_LOG_INFO(...)  ggmlqnn_log_internal(GGML_LOG_LEVEL_DEBUG , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
 #if GGMLQNN_DEBUG
 #define GGMLQNN_LOG_DEBUG(...) ggmlqnn_log_internal(GGML_LOG_LEVEL_DEBUG, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
@@ -141,6 +155,7 @@ void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char 
 
 #define GQCGT                                   ggmlqnn_create_general_tensor
 
+<<<<<<< HEAD
 #if defined(_WIN32)
 #define RTLD_GLOBAL 0x100
 #define RTLD_LOCAL  0x000
@@ -152,6 +167,8 @@ void *              dlsym(void* handle, const char* name);
 const char *        dlerror(void);
 #endif
 
+=======
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 using pfn_rpc_mem_init                          = void (*)(void);
 using pfn_rpc_mem_deinit                        = void (*)(void);
 using pfn_rpc_mem_alloc                         = void *(*)(int, uint32_t, int);
@@ -226,7 +243,11 @@ struct qnn_op_caps_t {
     const size_t input_param_count  = 0;
     const char * qnn_param_name     = nullptr;
 };
+<<<<<<< HEAD
 extern const qnn_op_caps_t ggmlqnn_k_op_caps[];
+=======
+extern const qnn_op_caps_t k_op_caps[];
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
 #if ENABLE_QNNBACKEND_PERF
 class qnn_perf {
@@ -255,9 +276,13 @@ private:
 #else
 class qnn_perf {
 public:
+<<<<<<< HEAD
     qnn_perf(const std::string & perf_name) {
         GGML_UNUSED(perf_name);
     }
+=======
+    qnn_perf(const std::string & perf_name) {}
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
     qnn_perf() = delete;
     qnn_perf(const qnn_perf & ) = delete;
     qnn_perf & operator= (const qnn_perf & ) = delete;
@@ -289,6 +314,7 @@ public:
     qnn_interface() = default;
 
     // QnnBackend
+<<<<<<< HEAD
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_create, backendCreate)
 
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_free, backendFree)
@@ -369,6 +395,88 @@ public:
     DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_get_binary_info, systemContextGetBinaryInfo)
 
     DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_free, systemContextFree)
+=======
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_create, backendCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_free, backendFree);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_register_op_package, backendRegisterOpPackage);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_validate_op_config, backendValidateOpConfig);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_get_api_version, backendGetApiVersion);
+
+    // QnnDevice
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_create, deviceCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_free, deviceFree);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_infrastructure, deviceGetInfrastructure);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_platform_info, deviceGetPlatformInfo);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_info, deviceGetInfo);
+
+    // QnnContext
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_create, contextCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary_size, contextGetBinarySize);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary, contextGetBinary);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_create_from_binary, contextCreateFromBinary);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_free, contextFree);
+
+    // QnnGraph
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_create, graphCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_add_node, graphAddNode);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_finalize, graphFinalize);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_execute, graphExecute);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_retrieve, graphRetrieve);
+
+    // QnnLog
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_create, logCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_free, logFree);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_set_log_level, logSetLogLevel);
+
+    // QnnProfile
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_create, profileCreate);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_events, profileGetEvents);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_sub_events, profileGetSubEvents);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_event_data, profileGetEventData);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_free, profileFree);
+
+    // QnnMem
+    DEFINE_SHIM_FUNCTION_INTERFACE(mem_register, memRegister);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(mem_de_register, memDeRegister);
+
+    // QnnProperty
+    DEFINE_SHIM_FUNCTION_INTERFACE(property_has_capability, propertyHasCapability);
+
+    // QnnTensor
+    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_context_tensor, tensorCreateContextTensor);
+
+    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_graph_tensor, tensorCreateGraphTensor);
+
+    // QnnSystem
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_create, systemContextCreate);
+
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_get_binary_info, systemContextGetBinaryInfo);
+
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_free, systemContextFree);
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
     void set_qnn_interface(const QnnInterface_t * qnn_interface) {
         _qnn_interface = qnn_interface;
@@ -387,9 +495,15 @@ public:
     }
 
 private:
+<<<<<<< HEAD
     const QnnInterface_t * _qnn_interface           = nullptr;
 
     const QnnSystemInterface_t * _qnn_sys_interface = nullptr;
+=======
+    const QnnInterface_t *_qnn_interface = nullptr;
+
+    const QnnSystemInterface_t *_qnn_sys_interface = nullptr;
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 };
 
 class qnn_instance {
@@ -400,7 +514,11 @@ public:
                           const std::string & model_name) :
             _lib_path(std::move(lib_path)),
             _backend_name(std::move(backend_name)),
+<<<<<<< HEAD
             _model_name(std::move(model_name)) {}
+=======
+            _model_name(std::move(model_name)) {};
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
     ~qnn_instance() {
     }
@@ -430,6 +548,7 @@ public:
         return _qnn_raw_system_interface;
     }
 
+<<<<<<< HEAD
     Qnn_LogHandle_t get_qnn_log_handle() { return _qnn_log_handle; }
 
     Qnn_ProfileHandle_t get_qnn_profile_handle() { return _qnn_profile_handle; }
@@ -443,6 +562,21 @@ public:
     QnnSystemContext_Handle_t get_qnn_system_handle() { return _qnn_system_handle; }
 
     Qnn_GraphHandle_t get_qnn_graph_handle() { return _qnn_graph_handle; }
+=======
+    const Qnn_LogHandle_t get_qnn_log_handle() { return _qnn_log_handle; }
+
+    const Qnn_ProfileHandle_t get_qnn_profile_handle() { return _qnn_profile_handle; }
+
+    const Qnn_DeviceHandle_t get_qnn_device_handle() { return _qnn_device_handle; }
+
+    const Qnn_BackendHandle_t get_qnn_backend_handle() { return _qnn_backend_handle; }
+
+    const Qnn_ContextHandle_t get_qnn_context_handle() { return _qnn_context_handle; }
+
+    const QnnSystemContext_Handle_t get_qnn_system_handle() { return _qnn_system_handle; }
+
+    const Qnn_GraphHandle_t get_qnn_graph_handle() { return _qnn_graph_handle; }
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 
     int init_qnn_graph(const char * graph_name,
                        bool debug,
@@ -596,6 +730,10 @@ const char   * ggmlqnn_get_error_string(Qnn_ErrorHandle_t qnn_error_code);
 Qnn_DataType_t ggmlqnn_datatype_from_ggml_datatype(enum ggml_type ggmltype);
 void         * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
 void           ggmlqnn_get_graphkey_from_op(const ggml_tensor * op, std::string & output);
+<<<<<<< HEAD
+=======
+bool           ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+>>>>>>> ggml-qnn: refine source code structure to make code more clearly
 uint8_t      * ggmlqnn_create_rpc_buffer(qnn_instance * instance, const ggml_tensor * ggml_tensor, Qnn_Tensor_t * qnn_tensor, bool b_copydata);
 void           ggmlqnn_print_tensors_info(const char * func_name, ggml_backend_qnn_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
