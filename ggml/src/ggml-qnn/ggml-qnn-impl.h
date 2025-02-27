@@ -95,10 +95,14 @@ struct ggml_backend_qnn_context;
 void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 #if 0//def NDEBUG
 =======
 #ifdef NDEBUG
 >>>>>>> ggml-qnn: refine source code structure to make code more clearly
+=======
+#if 0//def NDEBUG
+>>>>>>> ggml-qnn: enable release build with necessary logs to make reviewers happy
 #define GGMLQNN_DEBUG                           0
 #define ENABLE_QNNBACKEND_PERF                  0  // enable/disable op's perf info
 #define GGMLQNN_PRINT_QNN_INTERNAL_LOG          0  // enable/disable QNN's internal log

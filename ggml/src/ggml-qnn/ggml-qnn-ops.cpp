@@ -112,12 +112,16 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
         p_tensor2 = ggmlqnn_create_compute_tensor(dst);
     }
 <<<<<<< HEAD
+<<<<<<< HEAD
     //ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
 =======
 #if GGMLQNN_PRINT_OP_ADD_LOG
     print_tensors_info(__func__, ctx, src0, src1, dst);
 #endif
 >>>>>>> ggml-qnn: refine source code structure to make code more clearly
+=======
+    ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
+>>>>>>> ggml-qnn: enable release build with necessary logs to make reviewers happy
 
     //ensure QNN tensor has correct tensor type
     QNN_VER_PTR(*p_tensor0)->type = QNN_TENSOR_TYPE_APP_WRITE;
