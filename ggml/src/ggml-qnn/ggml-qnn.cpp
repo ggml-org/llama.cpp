@@ -77,6 +77,48 @@ void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * 
 // =================================================================================================
 //  section-3: general helper macro / data structure / function
 // =================================================================================================
+#if defined(_WIN32)
+static const char * last_func = nullptr;
+static long last_err;
+void * dlopen(const char * dll, int flags) {
+  HINSTANCE h = LoadLibraryA(dll);
+  if (h == NULL) {
+    last_err  = GetLastError();
+    last_func = "dlopen";
+  }
+  return h;
+}
+
+int dlclose(void * h) {
+  if (!FreeLibrary((HINSTANCE)h)) {
+    last_err  = GetLastError();
+    last_func = "dlclose";
+    return -1;
+  }
+  return 0;
+}
+
+void * dlsym(void * h, const char * name) {
+  FARPROC p = GetProcAddress((HINSTANCE)h, name);
+  if (!p) {
+    last_err  = GetLastError();
+    last_func = "dlsym";
+  }
+  return (void*)(intptr_t)p;
+}
+
+const char * dlerror(void) {
+  static char str[512];
+  if (!last_err) return nullptr;
+
+  snprintf(str, 512, "%s error #%ld", last_func, last_err);
+  last_err  = 0;
+  last_func = NULL;
+
+  return str;
+}
+#endif
+
 static intptr_t ggmlqnn_align_to(size_t alignment, intptr_t offset) {
     return offset % alignment == 0 ? offset
                                    : offset +
@@ -94,7 +136,7 @@ static size_t get_system_total_memory_in_bytes() {
     auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return pages * page_size;
-#elif defined(_WIN32) || defined(_MSC_VER)
+#elif defined(_WIN32)
     //TODO: Snapdragon based WoA(Windows on ARM)
     return 0;
 #else
@@ -112,7 +154,7 @@ static size_t get_system_free_memory_in_bytes() {
     auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return avail_pages * page_size;
-#elif defined(_WIN32) || defined(_MSC_VER)
+#elif defined(_WIN32)
     //TODO: Snapdragon based WoA(Windows on ARM)
     return 0;
 #else
@@ -143,7 +185,7 @@ static void * ggmlqnn_host_malloc(size_t n) {
         GGMLQNN_LOG_WARN("%s: error: posix_memalign failed\n", __func__);
         return nullptr;
     }
-#elif defined(_WIN32) || defined(_MSC_VER)
+#elif defined(_WIN32)
     //TODO: Snapdragon based WoA(Windows on ARM)
     return nullptr;
 #else
@@ -569,7 +611,7 @@ static struct qcom_socinfo g_qnn_soc_info_table[] = {
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 4"},
 
-#if defined(_MSC_VER)
+#if defined(_WIN32)
         /* Qualcomm SnapDragon 7c Gen 2 */
         [SC7280X] = {
                 .soc_model         = SC7280X,
@@ -619,7 +661,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-cpu",
                 .desc                 = "Qualcomm Kryo CPU",
-#if defined(_MSC_VER)
+#if defined(_WIN32)
                 .lib                  = "QnnCpu.dll",
 #else
                 .lib                  = "libQnnCpu.so",
@@ -634,7 +676,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-gpu",
                 .desc                 = "Qualcomm Adreno GPU",
-#if defined(_MSC_VER)
+#if defined(_WIN32)
                 .lib                  = "QnnGpu.dll",
 #else
                 .lib                  = "libQnnGpu.so",
@@ -649,7 +691,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-npu",
                 .desc                 = "Qualcomm NPU(Hexagon Tensor Processor)",
-#if defined(_MSC_VER)
+#if defined(_WIN32)
                 .lib                  = "QnnHtp.dll",
 #else
                 .lib                  = "libQnnHtp.so",
@@ -1160,14 +1202,7 @@ bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const ggml_tensor *
 
 template<typename Fn>
 Fn load_qnn_functionpointers(void * handle, const char * function_name) {
-#if defined(__ANDROID__) || defined(__linux__)
     return reinterpret_cast<Fn>(dlsym(handle, function_name));
-#elif defined(_WIN32) || defined(_MSC_VER)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    return nullptr;
-#else
-#error "ggml-qnn only support WoA, Android, Linux"
-#endif
 }
 
 std::mutex qnn_instance::_init_mutex;
@@ -1419,14 +1454,7 @@ int qnn_instance::load_backend(std::string & lib_path, const QnnSaver_Config_t *
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
     GGMLQNN_LOG_DEBUG("lib_path:%s\n", lib_path.c_str());
 
-#if defined(__ANDROID__) || defined(__linux__)
     void * lib_handle = dlopen(lib_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
-#elif defined(_WIN32) || defined(_MSC_VER)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    void * lib_handle = nullptr;
-#else
-#error "ggml-qnn only support WoA, Android, Linux"
-#endif
     if (nullptr == lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, with error: %s", lib_path.c_str(), dlerror());
         return 1;
@@ -1529,30 +1557,24 @@ int qnn_instance::unload_backend() {
 int qnn_instance::load_system() {
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
 
+#ifdef _WIN32
+    std::string system_lib_path = _lib_path + "QnnSystem.dll";
+#else
     std::string system_lib_path = _lib_path + "libQnnSystem.so";
+#endif
     GGMLQNN_LOG_DEBUG("system_lib_path:%s\n", system_lib_path.c_str());
 
-#if defined(__ANDROID__) || defined(__linux__)
     _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
-#elif defined(_WIN32) || defined(_MSC_VER)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    _system_lib_handle = nullptr;
-#else
-#error "ggml-qnn only support WoA, Android, Linux"
-#endif
     if (nullptr == _system_lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
         //re-try with default path of QNN binary runtime lib
         _lib_path = "/data/local/tmp/";
-        system_lib_path = _lib_path + "libQnnSystem.so";
-#if defined(__ANDROID__) || defined(__linux__)
-        _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
-#elif defined(_WIN32) || defined(_MSC_VER)
-        //TODO: Snapdragon based WoA(Windows on ARM)
-        _system_lib_handle = nullptr;
+#ifdef _WIN32
+        system_lib_path = _lib_path + "QnnSystem.dll";
 #else
-#error "ggml-qnn only support WoA, Android, Linux"
+        system_lib_path = _lib_path + "libQnnSystem.so";
 #endif
+        _system_lib_handle = dlopen(system_lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (nullptr == _system_lib_handle) {
             GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
             return 1;
@@ -1786,9 +1808,8 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
 
 #if defined(__ANDROID__) || defined(__linux__)
     _rpc_lib_handle = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
-#elif defined(_WIN32) || defined(_MSC_VER)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    _rpc_lib_handle = nullptr;
+#elif defined(_WIN32)
+    _rpc_lib_handle = dlopen("libcdsprpc.dll", RTLD_NOW | RTLD_LOCAL);
 #else
 #error "ggml-qnn only support WoA, Android, Linux"
 #endif
@@ -2901,6 +2922,7 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
         return g_qnn_mgr[device].backend;
     }
 
+#if defined(__ANDROID__)
     std::string path = qnn_lib_path;
     if (QNN_BACKEND_NPU == device) {
         if (0 == setenv("LD_LIBRARY_PATH",
@@ -2929,6 +2951,7 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
             GGMLQNN_LOG_ERROR("%s backend setenv failure\n", ggml_backend_qnn_get_devname(device));
         }
     }
+#endif
 
     qnn_instance * instance = nullptr;
     instance = new qnn_instance(qnn_lib_path, g_qnn_mgr[device].lib, "");
