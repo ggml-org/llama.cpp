@@ -62,6 +62,9 @@ void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * 
 #if (defined __ANDROID__) || (defined ANDROID)
             //for Android application(standard APP or command line tool)
             __android_log_print(ANDROID_LOG_INFO, "ggml-qnn", "%s\n", s_ggmlqnn_log_internal_buf);
+            if (GGML_LOG_LEVEL_INFO == level) {
+                printf("%s\n", s_ggmlqnn_log_internal_buf);
+            }
 #else
             //for Snapdragon based WoA(Windows on ARM) device or Linux
             printf("%s\n", s_ggmlqnn_log_internal_buf);
@@ -1038,25 +1041,25 @@ void * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     void * wdata = ctx->work_data.get();
     // convert src0 to float
     if (src0_type != GGML_TYPE_F32) {
-        const auto *type_traits = ggml_get_type_traits(src0_type);
-        ggml_to_float_t const to_float = type_traits->to_float;
+        const auto * type_traits        = ggml_get_type_traits(src0_type);
+        ggml_to_float_t const to_float  = type_traits->to_float;
 
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
-                const void *x = (char *) src0->data + i02 * nb02 + i03 * nb03;
-                float *const wplane = (float *) wdata + i02 * ne_plane + i03 * ne02 * ne_plane;
+                const void * x          = (char *)src0->data + i02 * nb02 + i03 * nb03;
+                float * const wplane    = (float *)wdata + i02 * ne_plane + i03 * ne02 * ne_plane;
 
                 const int min_cols_per_thread = 4096;
-                const int min_rows_per_thread = std::max((int) (min_cols_per_thread / ne00), 1);
+                const int min_rows_per_thread = std::max((int)(min_cols_per_thread / ne00), 1);
                 const int n_threads = std::max(
-                        std::min(ctx->n_threads, (int) (ne01 / min_rows_per_thread)), 1);
+                        std::min(ctx->n_threads, (int)(ne01 / min_rows_per_thread)), 1);
                 for (int i = 1; i < n_threads; i++) {
                     const int64_t start = i * ne01 / n_threads;
-                    const int64_t end = (i + 1) * ne01 / n_threads;
+                    const int64_t end   = (i + 1) * ne01 / n_threads;
                     if (start < end) {
                         ctx->tasks.push_back(std::async(std::launch::async, [=]() {
                             for (int64_t i01 = start; i01 < end; i01++) {
-                                to_float((const char *) x + i01 * nb01, wplane + i01 * ne00, ne00);
+                                to_float((const char *)x + i01 * nb01, wplane + i01 * ne00, ne00);
                             }
                         }));
                     }
@@ -1996,7 +1999,7 @@ int qnn_instance::init_qnn_graph(const std::string & graph_name, QNNBackend devi
         return error;
     }
 
-    GGMLQNN_LOG_INFO("[%s]create graph %s succeed", ggml_backend_qnn_get_devname(device), graph_name.c_str());
+    GGMLQNN_LOG_DEBUG("[%s]create graph %s succeed", ggml_backend_qnn_get_devname(device), graph_name.c_str());
     _qnn_graph_handle = graph_handle;
     return QNN_SUCCESS;
 }
