@@ -26,18 +26,9 @@ std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<G
         // if (node_op_name == "CPY" && (input_shape[0] != 7)) {
         //     input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), {80000}, input_data);
 
-        // } else if (node_op_name == "CONT" || node_op_name == "MUL_MAT") {
-        //     // auto input_shape = ggml_decoder->get_input_shape(name).to_shape();
-        //     // size_t total_size = 1;
-        //     // for (auto dim : input_shape) {
-        //     //     total_size *= dim;
-        //     // }
-        //     // ov::Shape new_shape = {total_size};
-        //     input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), {ggml_decoder->get_input_shape(name).to_shape()[0]}, input_data);
-        // } else {
         if (node_op_name == "CONT" && ggml_decoder->check_if_continuous()) {
-            ov::Shape flat_shape = { ggml_decoder->get_input_shape(name).to_shape()[0] * 
-                                     ggml_decoder->get_input_shape(name).to_shape()[1] * 
+            ov::Shape flat_shape = { ggml_decoder->get_input_shape(name).to_shape()[0] *
+                                     ggml_decoder->get_input_shape(name).to_shape()[1] *
                                      ggml_decoder->get_input_shape(name).to_shape()[2] };
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), flat_shape, input_data);
         } else if ( node_op_name == "CONT" &&
@@ -59,6 +50,11 @@ std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<G
             size_t total_valid = valid_i * valid_j * valid_k; // 96 * 32 * 7 = 21504
             ov::Shape flat_input_shape = { total_valid };
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), flat_input_shape, input_data);
+        } else if (node_op_name == "MUL_MAT") {
+            ov::Shape flat_shape = { ggml_decoder->get_input_shape(name).to_shape()[0] * 
+                ggml_decoder->get_input_shape(name).to_shape()[1] * 
+                ggml_decoder->get_input_shape(name).to_shape()[2] };
+            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), flat_shape, input_data);
         } else {
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
         }
@@ -125,7 +121,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Convert InputModel -> ov::Model 
     std::shared_ptr<ov::Model> model = front_end->convert(input_model);
-    ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
+    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
     
     if (!model) {
         GGML_LOG_ERROR("Model is not converted \n");
