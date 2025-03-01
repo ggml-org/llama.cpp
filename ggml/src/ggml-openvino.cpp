@@ -482,6 +482,9 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
         // flat shapes:
         ov::Shape flat_shape_src0 = { total_src0 };
         ov::Shape flat_shape_src1 = { total_src1 };
+        // Same as above
+        // ov::Shape flat_shape_src0 = { ggml_nelements(src0) };
+        // ov::Shape flat_shape_src1 = { ggml_nelements(src1) };
 
         // Create a Parameter node for collecting non-continuous data
         auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
@@ -526,9 +529,6 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
         auto batched_matmul = std::make_shared<ov::op::v0::MatMul>(B, A, false, false);
         // batched_matmul output: shape = [32,7,32]
 
-        std::vector<int64_t> full_dst_shape = { dst->ne[2], dst->ne[1], dst->ne[0]};
-        auto final_shape_const = ov::op::v0::Constant::create(ov::element::i64, { full_dst_shape.size() }, full_dst_shape);
-
         auto model = std::make_shared<ov::Model>(ov::NodeVector{ batched_matmul }, ov::ParameterVector{param_src0, param_src1});
 
         ov::Core core;
@@ -541,7 +541,7 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
         infer_request.set_input_tensor(0, tensor_src0);
         infer_request.set_input_tensor(1, tensor_src1);
 
-        ov::Tensor tensor_dst(ov::element::f32, ov::Shape(full_dst_shape.begin(), full_dst_shape.end()), dst->data);
+        ov::Tensor tensor_dst(ov::element::f32, { dst->ne[0], dst->ne[1], dst->ne[2]}, dst->data);
         infer_request.set_output_tensor(0, tensor_dst);
 
         infer_request.infer();
@@ -564,6 +564,9 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
 
     ov::Shape flat_shape_src0 = { total_src0 };
     ov::Shape flat_shape_src1 = { total_src1 };
+    // Same as above
+    // ov::Shape flat_shape_src0 = { ggml_nelements(src0) };
+    // ov::Shape flat_shape_src1 = { ggml_nelements(src1) };
 
     auto param_flat_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
     auto param_flat_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape_src1);
@@ -602,6 +605,7 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
 
     std::shared_ptr<ov::op::v0::MatMul> matmul = std::make_shared<ov::op::v0::MatMul>(reshape_src1, A_for_mul, false, false);
     auto model = std::make_shared<ov::Model>(ov::NodeVector{matmul}, ov::ParameterVector{param_flat_src0, param_flat_src1});
+    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/002_backend_mulmat_model.xml");
 
     auto compiled_model = core.compile_model(model, "CPU");
     auto infer_request = compiled_model.create_infer_request();
@@ -618,8 +622,35 @@ void ggml_backend_openvino_reshape(ggml_tensor *dst) {
 }
 
 void ggml_backend_openvino_view(ggml_tensor *dst) {
+    ov::Core core;
+    ov::Shape tensor_shape{static_cast<size_t>(dst->ne[3]), static_cast<size_t>(dst->ne[2]), static_cast<size_t>(dst->ne[1]), static_cast<size_t>(dst->ne[0])};
 
-    GGML_UNUSED(dst);
+    // auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, tensor_shape);
+    auto param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, tensor_shape);
+
+    auto reshaped = std::make_shared<ov::op::v1::Reshape>(param,
+                                                        ov::op::v0::Constant::create(ov::element::i64, { tensor_shape.size() }, tensor_shape),
+                                                        false);
+
+    auto model = std::make_shared<ov::Model>(ov::NodeVector{reshaped}, ov::ParameterVector{param});
+    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/003_backend_view_model.xml");
+
+    auto compiled_model = core.compile_model(model, "CPU");
+
+    ov::InferRequest infer_request = compiled_model.create_infer_request();
+
+    // ov::Tensor input_tensor(ov::element::f32, tensor_shape, dst->data);
+    ov::Tensor input_tensor(ov::element::f16, tensor_shape, dst->data);
+    // infer_request.set_tensor(param, input_tensor);
+    infer_request.set_input_tensor(0, input_tensor);
+
+    // ov::Tensor output_tensor(ov::element::f32, tensor_shape, dst->data);
+    ov::Tensor output_tensor(ov::element::f16, tensor_shape, dst->data);
+    infer_request.set_output_tensor(0, output_tensor);
+
+    infer_request.infer();
+    // auto output_tensor = infer_request.get_output_tensor(0);
+    // dst->data = output_tensor.data();
 }
 
 void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
@@ -992,31 +1023,33 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
     // openvino_frontend_compute(backend, cgraph);
     // Process nodes in order
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
-            ggml_backend_openvino_reshape(cgraph->nodes[i]);
+        if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
+            ggml_backend_openvino_permute(cgraph->nodes[i]);
         // } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
         //    ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
-        } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
-            ggml_backend_openvino_view(cgraph->nodes[i]);
+        // } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
+        //     ggml_backend_openvino_view(cgraph->nodes[i]);
         // } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
         //    ggml_backend_openvino_cpy(cgraph->nodes[i]);
         } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {
             ggml_backend_openvino_transpose(cgraph->nodes[i]);
-        } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
-            ggml_backend_openvino_permute(cgraph->nodes[i]);
-        } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
-            ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
+        } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
+            ggml_backend_openvino_reshape(cgraph->nodes[i]);
+        // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
+        //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
         } else {
             // Process a range of nodes with openvino_frontend_compute
             int start_index = i;
-            while (i < cgraph->n_nodes &&
-                    // std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end() &&
-                    // std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end() &&
-                    std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()) {
+            while (i < cgraph->n_nodes
+                    // && std::find(view_indices.begin(), view_indices.end(), i) == view_indices.end()
+                    // && std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end()
+                    // && std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end()
+                    // && std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()
+                    ) {
                 i++;
             }
             if (start_index < i) {
-                openvino_frontend_compute(backend, cgraph, start_index, --i);
+                    openvino_frontend_compute(backend, cgraph, start_index, --i);
             }
         }
     }
