@@ -6,12 +6,20 @@
 #include <fstream>
 
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
-    m_node_op_name[node->name] = ggml_op_name(node->op);
+    // m_node_op_name[node->name] = ggml_op_name(node->op);
+
+    // std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs) + "_input_" + ggml_op_name(node->src[0]->op);
+    // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_output_" + ggml_op_name(node->op);
+
     // Execute singel CONT operator is OK
-    std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs) + "_" + ggml_op_name(node->src[0]->op);
-    std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_" + ggml_op_name(node->op);
+    // std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs) + "_" + ggml_op_name(node->src[0]->op);
+    // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_" + ggml_op_name(node->op);
+
     // std::string src0_name = std::string(node->src[0]->name) + "_" + std::to_string(node->src[0]->view_offs);
     // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs);
+
+    std::string src0_name = std::string(node->src[0]->name);
+    std::string node_name = std::string(node->name);
     switch (node->op) {
         // Unary OPs 
         case GGML_OP_UNARY:
@@ -151,6 +159,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // For view, input is node itself
         case GGML_OP_VIEW:
         {
+            // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_output_" + ggml_op_name(node->op);
             inputs[node_name] = node;
             outputs[node_name] = node;
             m_input_names.push_back(node_name);
@@ -161,21 +170,29 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // SCALE
         case GGML_OP_SCALE:
         {
-            inputs[node_name] = node->src[0];
+            inputs[src0_name] = node->src[0];
             outputs[node_name] = node;
-            m_input_names.push_back(node_name);
-            m_node_op_name[node_name] = ggml_op_name(node->op);
+            m_input_names.push_back(src0_name);
+            m_node_op_name[src0_name] = ggml_op_name(node->op);
             m_output_names.push_back(node_name);
             break;
         }
         case GGML_OP_MUL_MAT:
         {
-            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+            ov::Shape flat_shape_src0 = { node->src[0]->ne[0]*node->src[0]->ne[1]*node->src[0]->ne[2] };
+            ov::Shape flat_shape_src1 = { node->src[1]->ne[0]*node->src[1]->ne[1]*node->src[1]->ne[2] };
+            auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
+            auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape_src1);
+            m_params.push_back(param_src0);
+            m_params.push_back(param_src1);
             if (!ggml_is_contiguous(node->src[1]) || node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
                 m_continuous = false;
             } else {
                 m_continuous = true;
             }
+            // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
+            // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+            std::string src1_name = std::string(node->src[1]->name);
             inputs[src0_name] = node->src[0];
             inputs[src1_name] = node->src[1];
             outputs[node_name] = node;
@@ -200,7 +217,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             m_node_op_name[src0_name] = ggml_op_name(node->op);
             m_output_names.push_back(node_name);
             if (node->src[1]) {
-                std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+                // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+                std::string src1_name = std::string(node->src[1]->name);
                 inputs[src1_name] = node->src[1];
                 m_node_op_name[src1_name] = ggml_op_name(node->op);
                 m_input_names.push_back(src1_name);
@@ -210,7 +228,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // OPs with 3 inputs:
         case GGML_OP_ROPE:
         {
-            std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+            // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
+            std::string src1_name = std::string(node->src[1]->name);
             inputs[src0_name] = node->src[0];
             inputs[src1_name] = node->src[1];
             m_input_names.push_back(src0_name);
@@ -220,7 +239,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             outputs[node_name] = node;
             m_output_names.push_back(node_name);
             if (node->src[2]) {
-                std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs);
+                // std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs);
+                std::string src2_name = std::string(node->src[2]->name);
                 inputs[src2_name] = node->src[2];
                 m_input_names.push_back(src2_name);
                 m_node_op_name[src2_name] = ggml_op_name(node->op);
@@ -334,13 +354,6 @@ ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
     ggml_tensor * node = m_inputs.at(name);
     std::vector<size_t> shape;
 
-    // [TODO], 在这里判断如果是MUL_MAT就设置shape为一维
-    if(m_node_op_name.at(name) == "MUL_MAT") {
-        shape.push_back(static_cast<size_t>(node->ne[0] * node->ne[1] * node->ne[2]));
-        input_shape = ov::PartialShape(shape);
-        return input_shape;
-    }
-
     for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
         if (node->ne[i] == 0) {
             return input_shape;
@@ -405,10 +418,8 @@ std::vector<std::string> GgmlOvDecoder::get_input_names() const {
 
 const std::string& GgmlOvDecoder::get_node_op_name(const std::string& name) const {
     auto it = m_node_op_name.find(name);
-    if (it != m_node_op_name.end()) {
-        return it->second;
-    }
-    return "";
+    static const std::string empty_str;
+    return (it != m_node_op_name.end()) ? it->second : empty_str;
 }
 
 const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& GgmlOvDecoder::get_params() const {
