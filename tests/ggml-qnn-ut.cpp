@@ -439,10 +439,13 @@ int main(int argc, char * argv[]) {
         //src0 = ggml_new_tensor_3d(ctx, qtype, 128, 64, 8);
         //src1 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 128, 2, 8);
         //verify 4D matrix
+#if 1   //failure
         src0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
         src1 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 1, 6, 4);
-        //src0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
-        //src1 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
+#else   //ok
+        src0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
+        src1 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
+#endif
     }
 
     ggml_set_input(src0);
