@@ -342,29 +342,29 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
         // Step 1: Define dimensions (ne = [K2, K1, M, B] for src0, [N, K, N1, B] for src1)
         uint32_t B = src0->ne[3];
         uint32_t M = src0->ne[2];
-        uint32_t K0 = src0->ne[0] * src0->ne[1]; // K from src0
+        uint32_t K0 = src0->ne[0] * src0->ne[1];
         uint32_t N1 = src1->ne[2];
-        uint32_t K1 = src1->ne[1] * src1->ne[0]; // K from src1
+        uint32_t K1 = src1->ne[1] * src1->ne[0];
         uint32_t N = src1->ne[0];
 
         GGML_ASSERT(src0->ne[3] == src1->ne[3]); // Matching batch
         GGML_ASSERT(dst->ne[2] == M);            // M matches dst
         GGML_ASSERT(K0 == K1);                   // K must match
 
-        // src0: Use GGML's ne directly, let GQCGT reverse to QNN order
-        uint32_t src0_dims[] = {static_cast<uint32_t>(src0->ne[0]), static_cast<uint32_t>(src0->ne[1]), static_cast<uint32_t>(src0->ne[2]), static_cast<uint32_t>(src0->ne[3])};
+        // src0: [K2, K1, M, B] -> QNN sees [B, M, K1, K2] after GQCGT reversal
+        uint32_t src0_dims[] = {static_cast<uint32_t>(src0->ne[3]), static_cast<uint32_t>(src0->ne[2]), static_cast<uint32_t>(src0->ne[1]), static_cast<uint32_t>(src0->ne[0])};
         p_tensor0 = GQCGT(src0, "input0", QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, 4,
                           src0_dims, nullptr, 0);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_tensor0));
 
-        // Gather on src0: [K2, K1, M, B] -> [M, B, K2, K1]
-        uint32_t gather0_indices_data[] = {2, 3, 0, 1}; // Correct for QNN's reversed order
+        // Gather on src0: [B, M, K1, K2] -> [M, B, K1, K2]
+        uint32_t gather0_indices_data[] = {1, 0, 2, 3}; // [B, M, K1, K2] -> [M, B, K1, K2]
         uint32_t gather0_indices_dims[] = {4};
         p_gather0_indices = GQCGT(nullptr, "gather0_indices", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1,
                                   gather0_indices_dims, gather0_indices_data, sizeof(gather0_indices_data));
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_gather0_indices));
 
-        uint32_t gather0_out_dims[] = {M, B, static_cast<uint32_t>(src0->ne[0]), static_cast<uint32_t>(src0->ne[1])};
+        uint32_t gather0_out_dims[] = {M, B, static_cast<uint32_t>(src0->ne[1]), static_cast<uint32_t>(src0->ne[0])};
         p_gather0_out = GQCGT(nullptr, "gather0_out", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, 4,
                               gather0_out_dims, nullptr, 0);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_gather0_out));
@@ -379,14 +379,14 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
                                                              gather0_inputs, 2, gather0_outputs, 1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, gather0_op));
 
-        // src1: Use GGML's ne directly
-        uint32_t src1_dims[] = {static_cast<uint32_t>(src1->ne[0]), static_cast<uint32_t>(src1->ne[1]), static_cast<uint32_t>(src1->ne[2]), static_cast<uint32_t>(src1->ne[3])};
+        // src1: [N, K, N1, B] -> QNN sees [B, N1, K, N]
+        uint32_t src1_dims[] = {static_cast<uint32_t>(src1->ne[3]), static_cast<uint32_t>(src1->ne[2]), static_cast<uint32_t>(src1->ne[1]), static_cast<uint32_t>(src1->ne[0])};
         p_tensor1 = GQCGT(src1, "input1", QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, 4,
                           src1_dims, nullptr, 0);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_tensor1));
 
-        // Gather on src1: [N, K, N1, B] -> [N1, B, K, N]
-        uint32_t gather1_indices_data[] = {2, 3, 1, 0}; // Correct for QNN's reversed order
+        // Gather on src1: [B, N1, K, N] -> [N1, B, K, N]
+        uint32_t gather1_indices_data[] = {1, 0, 2, 3}; // [B, N1, K, N] -> [N1, B, K, N]
         uint32_t gather1_indices_dims[] = {4};
         p_gather1_indices = GQCGT(nullptr, "gather1_indices", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1,
                                   gather1_indices_dims, gather1_indices_data, sizeof(gather1_indices_data));
@@ -430,9 +430,9 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
                                                             matmul_inputs, 2, matmul_outputs, 1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, matmul_op));
 
-        // Transpose: [M, N] -> Match dst->ne
-        uint32_t perm_data[] = {3, 2, 1, 0}; // [M, N] -> [N, K, N1, M] for dst->ne
-        uint32_t perm_dims[] = {4};
+        // Transpose: [M, N] -> Match dst->ne ([N, K, N1, M] reversed)
+        uint32_t perm_data[] = {1, 0}; // [M, N] -> [N, M] for 2D
+        uint32_t perm_dims[] = {2};
         p_transpose_perm = GQCGT(nullptr, "transpose_perm", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1,
                                  perm_dims, perm_data, sizeof(perm_data));
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_transpose_perm));
