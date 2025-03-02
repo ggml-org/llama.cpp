@@ -344,9 +344,8 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
         uint32_t B0 = src0->ne[2] * src0->ne[3]; // src0 batch
         uint32_t B1 = src1->ne[2] * src1->ne[3]; // src1 batch (drives output)
 
-        // Validate
+        // Validate K only
         GGML_ASSERT(src0->ne[0] == src1->ne[0]); // K must match
-        //GGML_ASSERT(dst->ne[0] == N && dst->ne[1] == M && dst->ne[2] == src1->ne[2] && dst->ne[3] == src1->ne[3]);
 
         // src0: [K, M, H0, B0] -> QNN: [B0, H0, M, K]
         uint32_t src0_dims[] = {static_cast<uint32_t>(src0->ne[3]), static_cast<uint32_t>(src0->ne[2]), static_cast<uint32_t>(src0->ne[1]), static_cast<uint32_t>(src0->ne[0])};
@@ -471,6 +470,7 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
 
     op_perf.info();
 }
+
 /*
  * @brief performs matrix multiplication with FP32 & quantized weights and floating-point inputs
  *        using the QNN backend. this function performs matrix multiplication of the input tensor
