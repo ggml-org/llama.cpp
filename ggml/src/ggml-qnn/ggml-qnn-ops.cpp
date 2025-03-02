@@ -232,16 +232,16 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
 #endif
 }
 
-//TODO:there is issue in this function
 /*
- * this function is AI-assisted code from Grok 3 for purpose of 4d mulmat UT in ggml-qnn-ut.cpp
+ * this function is AI-assisted code from Grok 3 for purpose of offload 4d matrix mulmat to QNN backend
+ * UT in ggml-qnn-ut.cpp passed:
  * ./scripts/build-run-android.sh run_ut_mulmat 0
  * ./scripts/build-run-android.sh run_ut_mulmat 1
  * ./scripts/build-run-android.sh run_ut_mulmat 2
  *
  * the logic of ggml_qnn_mul_mat_4d is similar to ggml_qnn_mul_mat but much more complicated
  * than ggml_qnn_mul_mat, so it's a standalone function.
- * it will be combined with ggml_qnn_mul_mat after bugfix
+ * it will be combined with ggml_qnn_mul_mat in the future
  */
 static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) {
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
