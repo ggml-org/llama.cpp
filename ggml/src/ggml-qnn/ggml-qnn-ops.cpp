@@ -316,7 +316,6 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
     Qnn_Tensor_t *p_gather1_out = nullptr;
     Qnn_Tensor_t *p_gather1_indices = nullptr;
     Qnn_Tensor_t *p_matmul_out = nullptr;
-    Qnn_Tensor_t *p_transpose_perm = nullptr;
     Qnn_Tensor_t *p_tensor2 = nullptr;
 
     ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst); // Keep debug line
@@ -333,13 +332,12 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
         p_gather1_out = tensors[4];
         p_gather1_indices = tensors[5];
         p_matmul_out = tensors[6];
-        p_transpose_perm = tensors[7];
-        p_tensor2 = tensors[8];
+        p_tensor2 = tensors[7];
     } else {
         CHECK_QNN_API(error, qnn_raw_interface.graphCreate(instance->get_qnn_context_handle(),
                                                            graph_name.c_str(), NULL, &graph_handle));
 
-        // Step 1: Define dimensions (ne = [K2, K1, M, B] for src0, [N, K, N1, B] for src1)
+        // Step 1: Define dimensions
         uint32_t B = src0->ne[3];
         uint32_t M = src0->ne[2];
         uint32_t K0 = src0->ne[0] * src0->ne[1];
@@ -351,7 +349,7 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
         GGML_ASSERT(dst->ne[2] == M);            // M matches dst
         GGML_ASSERT(K0 == K1);                   // K must match
 
-        // src0: [K2, K1, M, B] -> QNN sees [B, M, K1, K2] after GQCGT reversal
+        // src0: [K2, K1, M, B] -> QNN: [B, M, K1, K2]
         uint32_t src0_dims[] = {static_cast<uint32_t>(src0->ne[3]), static_cast<uint32_t>(src0->ne[2]), static_cast<uint32_t>(src0->ne[1]), static_cast<uint32_t>(src0->ne[0])};
         p_tensor0 = GQCGT(src0, "input0", QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, 4,
                           src0_dims, nullptr, 0);
@@ -379,7 +377,7 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
                                                              gather0_inputs, 2, gather0_outputs, 1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, gather0_op));
 
-        // src1: [N, K, N1, B] -> QNN sees [B, N1, K, N]
+        // src1: [N, K, N1, B] -> QNN: [B, N1, K, N]
         uint32_t src1_dims[] = {static_cast<uint32_t>(src1->ne[3]), static_cast<uint32_t>(src1->ne[2]), static_cast<uint32_t>(src1->ne[1]), static_cast<uint32_t>(src1->ne[0])};
         p_tensor1 = GQCGT(src1, "input1", QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, 4,
                           src1_dims, nullptr, 0);
@@ -407,19 +405,19 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
                                                              gather1_inputs, 2, gather1_outputs, 1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, gather1_op));
 
-        // MatMul: [M, B * K0] x [B * K1, N]
-        uint32_t matmul_in0_dims[] = {M, B * K0};
+        // MatMul: [M, B, K0] x [N1, B, K1] -> [M, N1, N]
+        uint32_t matmul_in0_dims[] = {M, B, K0};
         Qnn_Tensor_t matmul_in0 = *p_gather0_out;
         QNN_VER_PTR(matmul_in0)->dimensions = matmul_in0_dims;
-        QNN_VER_PTR(matmul_in0)->rank = 2;
+        QNN_VER_PTR(matmul_in0)->rank = 3;
 
-        uint32_t matmul_in1_dims[] = {B * K1, N};
+        uint32_t matmul_in1_dims[] = {N1, B, K1};
         Qnn_Tensor_t matmul_in1 = *p_gather1_out;
         QNN_VER_PTR(matmul_in1)->dimensions = matmul_in1_dims;
-        QNN_VER_PTR(matmul_in1)->rank = 2;
+        QNN_VER_PTR(matmul_in1)->rank = 3;
 
-        uint32_t matmul_out_dims[] = {M, N};
-        p_matmul_out = GQCGT(nullptr, "matmul_out", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, 2,
+        uint32_t matmul_out_dims[] = {M, N1, N};
+        p_matmul_out = GQCGT(nullptr, "matmul_out", QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, 3,
                              matmul_out_dims, nullptr, 0);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_matmul_out));
 
@@ -430,27 +428,11 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
                                                             matmul_inputs, 2, matmul_outputs, 1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, matmul_op));
 
-        // Transpose: [M, N] -> Match dst->ne ([N, K, N1, M] reversed)
-        uint32_t perm_data[] = {1, 0}; // [M, N] -> [N, M] for 2D
-        uint32_t perm_dims[] = {2};
-        p_transpose_perm = GQCGT(nullptr, "transpose_perm", QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1,
-                                 perm_dims, perm_data, sizeof(perm_data));
-        CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_transpose_perm));
-
+        // Output: Match dst->ne directly
         uint32_t dst_dims[] = {static_cast<uint32_t>(dst->ne[0]), static_cast<uint32_t>(dst->ne[1]), static_cast<uint32_t>(dst->ne[2]), static_cast<uint32_t>(dst->ne[3])};
         p_tensor2 = GQCGT(dst, "output", QNN_TENSOR_TYPE_APP_READ, QNN_DATATYPE_FLOAT_32, 4,
                           dst_dims, nullptr, 0);
         CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_tensor2));
-
-        Qnn_Param_t transpose_params[] = {
-                {QNN_PARAMTYPE_TENSOR, "perm", .tensorParam = *p_transpose_perm}
-        };
-        Qnn_Tensor_t transpose_inputs[] = {*p_matmul_out};
-        Qnn_Tensor_t transpose_outputs[] = {*p_tensor2};
-        Qnn_OpConfig_t transpose_op = ggmlqnn_create_op_config("transpose", QNN_OP_PACKAGE_NAME_QTI_AISW,
-                                                               QNN_OP_TRANSPOSE, transpose_params, 1,
-                                                               transpose_inputs, 1, transpose_outputs, 1);
-        CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, transpose_op));
 
         // Finalize
         CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, NULL, NULL));
@@ -458,7 +440,7 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
         // Cache
         qnn_tensors_t ggml_op_mulmat_tensors = {p_tensor0, p_gather0_out, p_gather0_indices, p_tensor1,
                                                 p_gather1_out, p_gather1_indices, p_matmul_out,
-                                                p_transpose_perm, p_tensor2};
+                                                p_tensor2};
         instance->_qnn_graph_map[graph_name] = std::make_tuple(graph_handle, ggml_op_mulmat_tensors);
     }
 
@@ -470,7 +452,6 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
     uint32_t *gather1_out_dims = QNN_VER_PTR(*p_gather1_out)->dimensions;
     uint32_t *gather1_indices_dims = QNN_VER_PTR(*p_gather1_indices)->dimensions;
     uint32_t *matmul_out_dims = QNN_VER_PTR(*p_matmul_out)->dimensions;
-    uint32_t *transpose_perm_dims = QNN_VER_PTR(*p_transpose_perm)->dimensions;
     uint32_t *tensor_2_dims = QNN_VER_PTR(*p_tensor2)->dimensions;
 
     // Execute
@@ -491,7 +472,6 @@ static void ggml_qnn_mul_mat_4d(ggml_backend_qnn_context *ctx, ggml_tensor *op) 
     QNN_VER_PTR(*p_gather1_out)->dimensions = gather1_out_dims;
     QNN_VER_PTR(*p_gather1_indices)->dimensions = gather1_indices_dims;
     QNN_VER_PTR(*p_matmul_out)->dimensions = matmul_out_dims;
-    QNN_VER_PTR(*p_transpose_perm)->dimensions = transpose_perm_dims;
     QNN_VER_PTR(*p_tensor2)->dimensions = tensor_2_dims;
 
     op_perf.info();
