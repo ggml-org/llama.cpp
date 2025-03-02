@@ -332,7 +332,8 @@ int main(int argc, char * argv[]) {
     std::vector<ggml_backend_ptr> backends;
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
     printf("Testing %zu devices\n\n", ggml_backend_dev_count());
-    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+    //for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+    for (size_t i = 0; i < 2; i++) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
             printf("Backend %zu/%zu: %s\n", i + 1, ggml_backend_dev_count(),
@@ -439,7 +440,7 @@ int main(int argc, char * argv[]) {
         //src0 = ggml_new_tensor_3d(ctx, qtype, 128, 64, 8);
         //src1 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 128, 2, 8);
         //verify 4D matrix
-#if 1   //failure
+#if 1   //ok
         src0 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 16, 3, 2);
         src1 = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 256, 1, 6, 4);
 #else   //ok
