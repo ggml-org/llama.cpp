@@ -703,7 +703,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .socinfo              = {}},
 };
 
-const qnn_op_caps_t k_op_caps[] = {
+const qnn_op_caps_t ggmlqnn_k_op_caps[] = {
         {}, // GGML_OP_NONE
         {}, // GGML_OP_DUP
         {
@@ -1152,7 +1152,7 @@ static void append_tensor_dimensions(const ggml_tensor * tensor, std::string & o
 }
 
 size_t ggmlqnn_get_opcaps_size() {
-    return std::size(k_op_caps);
+    return std::size(ggmlqnn_k_op_caps);
 }
 
 size_t ggmlqnn_get_op_index(const ggml_tensor * tensor) {
@@ -1165,8 +1165,8 @@ size_t ggmlqnn_get_op_index(const ggml_tensor * tensor) {
 
 static size_t ggmlqnn_get_op_input_param_count(const ggml_tensor * op) {
     auto op_index = ggmlqnn_get_op_index(op);
-    GGML_ASSERT(op_index < std::size(k_op_caps));
-    return k_op_caps[op_index].input_param_count;
+    GGML_ASSERT(op_index < std::size(ggmlqnn_k_op_caps));
+    return ggmlqnn_k_op_caps[op_index].input_param_count;
 }
 
 void ggmlqnn_get_graphkey_from_op(const ggml_tensor * op, std::string & output) {
@@ -1701,7 +1701,7 @@ static void ggml_qnn_logcallback(const char * fmt,
         std::lock_guard<std::mutex> lock(log_mutex);
         memset(s_ggml_qnn_logbuf, 0, GGML_QNN_LOGBUF_LEN);
         vsnprintf(reinterpret_cast<char *const>(s_ggml_qnn_logbuf), GGML_QNN_LOGBUF_LEN, fmt, argp);
-        GGMLQNN_LOG_INFO("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggml_qnn_logbuf);
+        GGMLQNN_LOG_DEBUG("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggml_qnn_logbuf);
     }
 }
 #else
