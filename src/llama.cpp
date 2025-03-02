@@ -9813,6 +9813,7 @@ struct llama_context * llama_init_from_model(
                 model->n_devices() > 1 &&
                 model->params.n_gpu_layers > (int)model->hparams.n_layer &&
                 model->params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
+                model->params.tensor_buft_overrides == nullptr &&
                 params.offload_kqv;
 
             // pipeline parallelism requires support for async compute and events in all devices
