@@ -99,7 +99,7 @@ void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char 
 #else
 #define GGMLQNN_DEBUG                           1  // for troubleshooting QNN backend
 #define ENABLE_QNNBACKEND_PERF                  0  // enable/disable op's perf info
-#define GGMLQNN_PRINT_QNN_INTERNAL_LOG          0  // enable/disable QNN's internal log
+#define GGMLQNN_PRINT_QNN_INTERNAL_LOG          1  // enable/disable QNN's internal log
 #define GGMLQNN_PRINT_OP_ADD_LOG                0  // GGML_OP_ADD already verified with QNN-CPU / QNN-GPU / QNN-NPU
 #define GGMLQNN_PRINT_OP_MUL_MAT_LOG            1
 #endif
@@ -226,7 +226,7 @@ struct qnn_op_caps_t {
     const size_t input_param_count  = 0;
     const char * qnn_param_name     = nullptr;
 };
-extern const qnn_op_caps_t k_op_caps[];
+extern const qnn_op_caps_t ggmlqnn_k_op_caps[];
 
 #if ENABLE_QNNBACKEND_PERF
 class qnn_perf {
