@@ -2277,7 +2277,7 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
             return false;
         if (src0_rank < 2) // QNN's limitation, make QNN SDK happy
             return false;
-        if (4 == src0_rank) //TODO: 4D matrix mulmat
+        if (4 == src0_rank) //TODO: 4D matrix mulmat in CT
             return false;
         if ((src1->ne[2] != src0->ne[2]) || (src1->ne[3] != src0->ne[3])) // make QNN SDK happy
             return false;
