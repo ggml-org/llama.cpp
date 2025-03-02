@@ -332,37 +332,36 @@ int main(int argc, char * argv[]) {
     std::vector<ggml_backend_ptr> backends;
     std::vector<std::pair<ggml_backend_t, ggml_backend_set_n_threads_t>> set_n_threads_fns;
     printf("Testing %zu devices\n\n", ggml_backend_dev_count());
-    //for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-    for (size_t i = 0; i < 2; i++) {
-            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-            printf("Backend %zu/%zu: %s\n", i + 1, ggml_backend_dev_count(),
-                   ggml_backend_dev_name(dev));
+        printf("Backend %zu/%zu: %s\n", i + 1, ggml_backend_dev_count(),
+               ggml_backend_dev_name(dev));
 
-            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
-                printf("  Skipping CPU backend\n");
-                continue;
-            }
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            printf("  Skipping CPU backend\n");
+            continue;
+        }
 
-            backend = ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i));
-            GGML_ASSERT(backend != NULL);
-            if (backend != nullptr) {
-                printf("%s: initialize %s backend\n", __func__, ggml_backend_dev_name(dev));
-            }
-            backends.emplace_back(backend);
+        backend = ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i));
+        GGML_ASSERT(backend != NULL);
+        if (backend != nullptr) {
+            printf("%s: initialize %s backend\n", __func__, ggml_backend_dev_name(dev));
+        }
+        backends.emplace_back(backend);
 
-            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(
-                    reg, "ggml_backend_set_n_threads");
-            if (ggml_backend_set_n_threads_fn) {
-                ggml_backend_set_n_threads_fn(backend, std::thread::hardware_concurrency());
-            }
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(
+                reg, "ggml_backend_set_n_threads");
+        if (ggml_backend_set_n_threads_fn) {
+            ggml_backend_set_n_threads_fn(backend, std::thread::hardware_concurrency());
+        }
 
-            printf("  Device description: %s\n", ggml_backend_dev_description(dev));
-            size_t free, total;
-            ggml_backend_dev_memory(dev, &free, &total);
-            printf("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
-            printf("\n");
+        printf("  Device description: %s\n", ggml_backend_dev_description(dev));
+        size_t free, total;
+        ggml_backend_dev_memory(dev, &free, &total);
+        printf("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
+        printf("\n");
     }
 
     ggml_backend_t backend_cpu = nullptr;
