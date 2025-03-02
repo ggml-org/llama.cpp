@@ -50,6 +50,7 @@ struct block_q4_0_packed16
 #if defined(DATA_A_Q4_0)
 #define QUANT_K QUANT_K_Q4_0
 #define QUANT_R QUANT_R_Q4_0
+#define QUANT_AUXF 1
 #define A_TYPE block_q4_0
 #define A_TYPE_PACKED16 block_q4_0_packed16
 #endif
@@ -74,6 +75,7 @@ struct block_q4_1_packed16
 #if defined(DATA_A_Q4_1)
 #define QUANT_K QUANT_K_Q4_1
 #define QUANT_R QUANT_R_Q4_1
+#define QUANT_AUXF 2
 #define A_TYPE block_q4_1
 #define A_TYPE_PACKED16 block_q4_1_packed16
 #endif
@@ -98,6 +100,7 @@ struct block_q5_0_packed16
 #if defined(DATA_A_Q5_0)
 #define QUANT_K QUANT_K_Q5_0
 #define QUANT_R QUANT_R_Q5_0
+#define QUANT_AUXF 1
 #define A_TYPE block_q5_0
 #define A_TYPE_PACKED16 block_q5_0_packed16
 #endif
@@ -124,6 +127,7 @@ struct block_q5_1_packed16
 #if defined(DATA_A_Q5_1)
 #define QUANT_K QUANT_K_Q5_1
 #define QUANT_R QUANT_R_Q5_1
+#define QUANT_AUXF 2
 #define A_TYPE block_q5_1
 #define A_TYPE_PACKED16 block_q5_1_packed16
 #endif

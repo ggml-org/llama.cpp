@@ -81,12 +81,12 @@ layout (constant_id = 10) const uint WARP = 32;
 
 // Assumption: BK == 32
 struct block_q8_0_internal {
-    FLOAT_TYPE ds;
+    FLOAT_TYPE d;
     int32_t qs[BK / 4];
 };
 
 struct block_q8_1_internal {
-    FLOAT_TYPE_VEC2 ds;
+    FLOAT_TYPE_VEC2 dm;
     int32_t qs[BK / 4];
 };
 
@@ -97,9 +97,10 @@ shared block_q8_0_internal buf_a[BM];
 shared block_q8_1_internal buf_a[BM];
 #endif
 
-shared block_q8_1_internal buf_b[BN];
+shared block_q8_0_internal buf_b[BN];
 
-#define LOAD_VEC 4
+#define LOAD_VEC_A (4 * QUANT_R)
+#define LOAD_VEC_B 4
 
 #ifdef MUL_MAT_ID
 shared u16vec2 row_ids[3072];
@@ -110,6 +111,8 @@ shared u16vec2 row_ids[3072];
 #ifdef COOPMAT
 shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
 #endif
+
+#include "dequant_funcs_mmq.comp"
 
 void main() {
 #if defined(DATA_A_IQ4_NL)
@@ -162,10 +165,13 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-    const uint loadr = gl_LocalInvocationID.x % (BK / LOAD_VEC);
-    const uint loadc = gl_LocalInvocationID.x / (BK / LOAD_VEC);
+    const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
+    const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
+    const uint loadr_b = gl_LocalInvocationID.x % (BK / LOAD_VEC_B);
+    const uint loadc_b = gl_LocalInvocationID.x / (BK / LOAD_VEC_B);
 
-    const uint loadstride = BLOCK_SIZE * LOAD_VEC / BK;
+    const uint loadstride_a = BLOCK_SIZE * LOAD_VEC_A / BK;
+    const uint loadstride_b = BLOCK_SIZE * LOAD_VEC_B / BK;
 
 #ifdef MUL_MAT_ID
     uint _ne1 = 0;
@@ -222,7 +228,7 @@ void main() {
     block_q8_1_internal cache_a[WMITER * TM];
 #endif
 
-    block_q8_1_internal cache_b[TN];
+    block_q8_0_internal cache_b[TN];
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
         sums[i] = ACC_TYPE(0.0f);
@@ -230,38 +236,44 @@ void main() {
 #endif
 
     for (uint block = start_k; block < end_k; block += BK) {
-        [[unroll]] for (uint l = 0; loadc + l < BM; l += loadstride) {
-#if defined(DATA_A_Q8_0)
-            const uint ib = pos_a_ib + (loadc + l) * p.stride_a / BK;
-            const uint iqs = loadr;
+        [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
+            const uint ib = pos_a_ib + (loadc_a + l) * p.stride_a / BK;
+            const uint iqs = loadr_a;
 
-            const uint buf_ib = loadc + l;
+            const uint buf_ib = loadc_a + l;
 
             // Should ds be gated to a single thread?
             if (iqs == 0) {
-                buf_a[buf_ib].ds = FLOAT_TYPE(data_a[ib].d);
+#if QUANT_AUXF == 1
+                buf_a[buf_ib].d = get_d(ib);
+#else
+                buf_a[buf_ib].dm = get_dm(ib, 0);
+#endif
             }
-            const int16_t v0 = data_a[ib].qs[iqs * 2    ];
-            const int16_t v1 = data_a[ib].qs[iqs * 2 + 1];
-            buf_a[buf_ib].qs[iqs] = pack32(i16vec2(v1, v0));
+#if QUANT_R == 1
+            buf_a[buf_ib].qs[iqs] = repack(ib, iqs);
+#else
+            const i32vec2 vals = repack(ib, iqs);
+            buf_a[buf_ib].qs[iqs] = vals.x;
+            buf_a[buf_ib].qs[iqs + 4] = vals.y;
 #endif
         }
-        [[unroll]] for (uint l = 0; loadc + l < BN; l += loadstride) {
+        [[unroll]] for (uint l = 0; loadc_b + l < BN; l += loadstride_b) {
 #ifdef MUL_MAT_ID
-            const u16vec2 row_idx = row_ids[ic * BN + loadc + l];
-            const uint idx = pos_b_ib + row_idx.y * p.batch_stride_b / LOAD_VEC + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC + loadr;
+            const u16vec2 row_idx = row_ids[ic * BN + loadc_b + l];
+            const uint idx = pos_b_ib + row_idx.y * p.batch_stride_b / LOAD_VEC_B + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC_B + loadr_b;
             const uint ib = idx / 8;
             const uint iqs = idx & 0x7;
 #else
-            const uint ib = pos_b_ib + (loadc + l) * p.stride_b / BK;
-            const uint iqs = loadr;
+            const uint ib = pos_b_ib + (loadc_b + l) * p.stride_b / BK;
+            const uint iqs = loadr_b;
 #endif
 
-            const uint buf_ib = loadc + l;
+            const uint buf_ib = loadc_b + l;
 
             // Should ds be gated to a single thread?
             if (iqs == 0) {
-                buf_b[buf_ib].ds = FLOAT_TYPE_VEC2(data_b[ib].ds);
+                buf_b[buf_ib].d = FLOAT_TYPE(data_b[ib].ds.x);
             }
             const int32_t v0 = int32_t(data_b[ib].qs[iqs * 2    ]);
             const int32_t v1 = int32_t(data_b[ib].qs[iqs * 2 + 1]);
@@ -311,7 +323,12 @@ void main() {
                             q_sum = dotPacked4x8AccSatEXT(cache_a[cache_a_idx].qs[idx_k], cache_b[cc].qs[idx_k], q_sum);
                         }
 
-                        const float factor = float(cache_a[cache_a_idx].ds) * float(cache_b[cc].ds.x);
+#if QUANT_AUXF == 1
+                        const float factor = float(cache_a[cache_a_idx].d) * float(cache_b[cc].d);
+#else
+                        // TODO
+                        // const float factor = float(cache_a[cache_a_idx].d) * float(cache_b[cc].d);
+#endif
 
                         sums[sums_idx] = ACC_TYPE(fma(float(q_sum), factor, float(sums[sums_idx])));
                     }
