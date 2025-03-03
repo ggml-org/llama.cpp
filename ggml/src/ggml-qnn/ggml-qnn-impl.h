@@ -255,7 +255,9 @@ private:
 #else
 class qnn_perf {
 public:
-    qnn_perf(const std::string & perf_name) {}
+    qnn_perf(const std::string & perf_name) {
+        GGML_UNUSED(perf_name);
+    }
     qnn_perf() = delete;
     qnn_perf(const qnn_perf & ) = delete;
     qnn_perf & operator= (const qnn_perf & ) = delete;
@@ -287,86 +289,86 @@ public:
     qnn_interface() = default;
 
     // QnnBackend
-    DEFINE_SHIM_FUNCTION_INTERFACE(backend_create, backendCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_create, backendCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(backend_free, backendFree);
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_free, backendFree)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(backend_register_op_package, backendRegisterOpPackage);
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_register_op_package, backendRegisterOpPackage)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(backend_validate_op_config, backendValidateOpConfig);
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_validate_op_config, backendValidateOpConfig)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(backend_get_api_version, backendGetApiVersion);
+    DEFINE_SHIM_FUNCTION_INTERFACE(backend_get_api_version, backendGetApiVersion)
 
     // QnnDevice
-    DEFINE_SHIM_FUNCTION_INTERFACE(device_create, deviceCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_create, deviceCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(device_free, deviceFree);
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_free, deviceFree)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_infrastructure, deviceGetInfrastructure);
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_infrastructure, deviceGetInfrastructure)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_platform_info, deviceGetPlatformInfo);
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_platform_info, deviceGetPlatformInfo)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_info, deviceGetInfo);
+    DEFINE_SHIM_FUNCTION_INTERFACE(device_get_info, deviceGetInfo)
 
     // QnnContext
-    DEFINE_SHIM_FUNCTION_INTERFACE(context_create, contextCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_create, contextCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary_size, contextGetBinarySize);
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary_size, contextGetBinarySize)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary, contextGetBinary);
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary, contextGetBinary)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(context_create_from_binary, contextCreateFromBinary);
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_create_from_binary, contextCreateFromBinary)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(context_free, contextFree);
+    DEFINE_SHIM_FUNCTION_INTERFACE(context_free, contextFree)
 
     // QnnGraph
-    DEFINE_SHIM_FUNCTION_INTERFACE(graph_create, graphCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_create, graphCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(graph_add_node, graphAddNode);
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_add_node, graphAddNode)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(graph_finalize, graphFinalize);
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_finalize, graphFinalize)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(graph_execute, graphExecute);
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_execute, graphExecute)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(graph_retrieve, graphRetrieve);
+    DEFINE_SHIM_FUNCTION_INTERFACE(graph_retrieve, graphRetrieve)
 
     // QnnLog
-    DEFINE_SHIM_FUNCTION_INTERFACE(log_create, logCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_create, logCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(log_free, logFree);
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_free, logFree)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(log_set_log_level, logSetLogLevel);
+    DEFINE_SHIM_FUNCTION_INTERFACE(log_set_log_level, logSetLogLevel)
 
     // QnnProfile
-    DEFINE_SHIM_FUNCTION_INTERFACE(profile_create, profileCreate);
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_create, profileCreate)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_events, profileGetEvents);
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_events, profileGetEvents)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_sub_events, profileGetSubEvents);
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_sub_events, profileGetSubEvents)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_event_data, profileGetEventData);
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_event_data, profileGetEventData)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(profile_free, profileFree);
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_free, profileFree)
 
     // QnnMem
-    DEFINE_SHIM_FUNCTION_INTERFACE(mem_register, memRegister);
+    DEFINE_SHIM_FUNCTION_INTERFACE(mem_register, memRegister)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(mem_de_register, memDeRegister);
+    DEFINE_SHIM_FUNCTION_INTERFACE(mem_de_register, memDeRegister)
 
     // QnnProperty
-    DEFINE_SHIM_FUNCTION_INTERFACE(property_has_capability, propertyHasCapability);
+    DEFINE_SHIM_FUNCTION_INTERFACE(property_has_capability, propertyHasCapability)
 
     // QnnTensor
-    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_context_tensor, tensorCreateContextTensor);
+    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_context_tensor, tensorCreateContextTensor)
 
-    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_graph_tensor, tensorCreateGraphTensor);
+    DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_graph_tensor, tensorCreateGraphTensor)
 
     // QnnSystem
-    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_create, systemContextCreate);
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_create, systemContextCreate)
 
-    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_get_binary_info, systemContextGetBinaryInfo);
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_get_binary_info, systemContextGetBinaryInfo)
 
-    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_free, systemContextFree);
+    DEFINE_SHIM_FUNCTION_SYS_INTERFACE(system_context_free, systemContextFree)
 
     void set_qnn_interface(const QnnInterface_t * qnn_interface) {
         _qnn_interface = qnn_interface;
@@ -398,7 +400,7 @@ public:
                           const std::string & model_name) :
             _lib_path(std::move(lib_path)),
             _backend_name(std::move(backend_name)),
-            _model_name(std::move(model_name)) {};
+            _model_name(std::move(model_name)) {}
 
     ~qnn_instance() {
     }
@@ -428,19 +430,19 @@ public:
         return _qnn_raw_system_interface;
     }
 
-    const Qnn_LogHandle_t get_qnn_log_handle() { return _qnn_log_handle; }
+    Qnn_LogHandle_t get_qnn_log_handle() { return _qnn_log_handle; }
 
-    const Qnn_ProfileHandle_t get_qnn_profile_handle() { return _qnn_profile_handle; }
+    Qnn_ProfileHandle_t get_qnn_profile_handle() { return _qnn_profile_handle; }
 
-    const Qnn_DeviceHandle_t get_qnn_device_handle() { return _qnn_device_handle; }
+    Qnn_DeviceHandle_t get_qnn_device_handle() { return _qnn_device_handle; }
 
-    const Qnn_BackendHandle_t get_qnn_backend_handle() { return _qnn_backend_handle; }
+    Qnn_BackendHandle_t get_qnn_backend_handle() { return _qnn_backend_handle; }
 
-    const Qnn_ContextHandle_t get_qnn_context_handle() { return _qnn_context_handle; }
+    Qnn_ContextHandle_t get_qnn_context_handle() { return _qnn_context_handle; }
 
-    const QnnSystemContext_Handle_t get_qnn_system_handle() { return _qnn_system_handle; }
+    QnnSystemContext_Handle_t get_qnn_system_handle() { return _qnn_system_handle; }
 
-    const Qnn_GraphHandle_t get_qnn_graph_handle() { return _qnn_graph_handle; }
+    Qnn_GraphHandle_t get_qnn_graph_handle() { return _qnn_graph_handle; }
 
     int init_qnn_graph(const char * graph_name,
                        bool debug,
