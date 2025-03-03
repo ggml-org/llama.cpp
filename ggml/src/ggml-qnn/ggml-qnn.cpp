@@ -52,6 +52,7 @@ void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * 
     static std::mutex ggmlqnn_log_internal_mutex;
     static char s_ggmlqnn_log_internal_buf[GGML_QNN_LOGBUF_LEN];
 
+    GGML_UNUSED(file);
     {
         std::lock_guard<std::mutex> lock(ggmlqnn_log_internal_mutex);
         va_list args;
@@ -82,6 +83,7 @@ static const char * last_func = nullptr;
 static long last_err;
 void * dlopen(const char * dll, int flags) {
   HINSTANCE h = LoadLibraryA(dll);
+  GGML_UNUSED(flags);
   if (h == NULL) {
     last_err  = GetLastError();
     last_func = "dlopen";
@@ -174,7 +176,7 @@ static size_t ggmlqnn_memscpy(void * dst, size_t dst_size, const void * src, siz
 }
 
 static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
-    return ::strndup(source, maxlen);
+    return strndup(source, maxlen);
 }
 
 static void * ggmlqnn_host_malloc(size_t n) {
@@ -553,8 +555,9 @@ Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * package,
                            num_inputs, inputs,
                            num_outputs, outputs
     };
+    Qnn_OpConfig_t opcfg = {QNN_OPCONFIG_VERSION_1, {v1}};
 
-    return (Qnn_OpConfig_t){QNN_OPCONFIG_VERSION_1, .v1 = v1};
+    return opcfg;
 }
 
 // =================================================================================================
@@ -1069,9 +1072,6 @@ void * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     GGML_ASSERT(nb00 == ggml_type_size(src0_type));
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
 
-    // broadcast factors
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
     const int64_t ne_plane = ne01 * ne00;
     const size_t desired_size = ((GGML_TYPE_F32 == src0_type) ? 0 : ne03 * ne02 * ne_plane * sizeof(float));
     ctx->desired_size   = desired_size;
@@ -1157,7 +1157,7 @@ size_t ggmlqnn_get_opcaps_size() {
 
 size_t ggmlqnn_get_op_index(const ggml_tensor * tensor) {
     if (tensor->op == GGML_OP_UNARY) {
-        return GGML_OP_COUNT + ggml_get_unary_op(tensor);
+        return static_cast<size_t>(GGML_OP_COUNT) + static_cast<size_t>(ggml_get_unary_op(tensor));
     }
 
     return tensor->op;
@@ -1280,8 +1280,6 @@ void qnn_instance::free_rpcmem(void * buf) {
 }
 
 void qnn_instance::free_rpcmem() {
-    Qnn_ErrorHandle_t error = QNN_SUCCESS;
-
     if (_rpcmem_store_map.empty()) {
         GGMLQNN_LOG_WARN("no rpcmem allocated\n");
         return;
@@ -1709,6 +1707,10 @@ static void ggml_qnn_logcallback(const char * fmt,
                                  QnnLog_Level_t level,
                                  uint64_t timestamp,
                                  va_list argp) {
+    GGML_UNUSED(fmt);
+    GGML_UNUSED(level);
+    GGML_UNUSED(timestamp);
+    GGML_UNUSED(argp);
 }
 #endif
 
@@ -1851,7 +1853,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         _qnn_raw_interface.deviceGetPlatformInfo(nullptr, &p_info);
         GGMLQNN_LOG_INFO("device counts %d", p_info->v1.numHwDevices);
         QnnDevice_HardwareDeviceInfo_t * infos = p_info->v1.hwDevices;
-        for (int i = 0; i < p_info->v1.numHwDevices; i++) {
+        for (size_t i = 0; i < p_info->v1.numHwDevices; i++) {
             GGMLQNN_LOG_INFO("deviceID:%d, deviceType:%d, numCores %d", infos[i].v1.deviceId,
                          infos[i].v1.deviceType, infos[i].v1.numCores);
             QnnDevice_DeviceInfoExtension_t devinfo = infos[i].v1.deviceInfoExtension;
@@ -1863,7 +1865,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
                              chipinfo.socModel, qnn_get_socmodel_desc(chipinfo.socModel), \
                              htp_arch, qnn_get_htparch_desc(htp_arch), chipinfo.vtcmSize);
             struct qcom_socinfo * socinfo = qnn_get_socinfo_from_socmodel(chipinfo.socModel);
-            g_qnn_mgr[QNN_BACKEND_NPU].socinfo = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize };
+            g_qnn_mgr[QNN_BACKEND_NPU].socinfo = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize, {}};
             if (nullptr != socinfo) {
                 memcpy(g_qnn_mgr[QNN_BACKEND_NPU].socinfo.soc_desc, socinfo->soc_desc, sizeof(socinfo->soc_desc));
                 GGMLQNN_LOG_INFO("soc info:%s", socinfo->soc_desc);
@@ -2259,6 +2261,11 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
 
     const uint32_t src0_rank = ggml_n_dims(src0);
     const uint32_t src1_rank = ggml_n_dims(src1);
+    GGML_UNUSED(ne01);
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne11);
+    GGML_UNUSED(ne0);
+    GGML_UNUSED(ne1);
 
     if (tensor->op == GGML_OP_ADD) {
         //dump_op_info(tensor);
@@ -2470,14 +2477,12 @@ static void ggml_backend_qnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
 static void * ggml_backend_qnn_buffer_get_base(ggml_backend_buffer_t buffer) {
     ggml_backend_qnn_buffer_context * ctx = (ggml_backend_qnn_buffer_context *)buffer->context;
-
     return ctx->buffer;
 }
 
 static void ggml_backend_qnn_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    Qnn_ErrorHandle_t error = QNN_SUCCESS;
     ggml_backend_qnn_buffer_context * ctx = (ggml_backend_qnn_buffer_context *)buffer->context;
-    GGML_UNUSED(error);
+    GGML_UNUSED(tensor);
     GGML_UNUSED(ctx);
     return;
 }
@@ -2534,6 +2539,7 @@ static ggml_backend_buffer_i ggml_backend_qnn_buffer_interface = {
 };
 
 static const char * ggml_backend_qnn_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
     return "qnn-buffer";
 }
 
@@ -2541,7 +2547,13 @@ static ggml_backend_buffer_t ggml_backend_qnn_buffer_type_alloc_buffer(
                                   ggml_backend_buffer_type_t buft, size_t size) {
     ggml_backend_qnn_buffer_context * ctx = new ggml_backend_qnn_buffer_context;
 
+#if defined(__ANDROID__) || defined(__linux__)
     size_t size_page = sysconf(_SC_PAGESIZE);
+#elif defined(_WIN32)
+    SYSTEM_INFO systeminfo;
+    GetSystemInfo(&systeminfo);
+    size_t size_page = systeminfo.dwPageSize;
+#endif
     size_t size_aligned = size;
     if ((size_aligned % size_page) != 0) {
         size_aligned += (size_page - (size_aligned % size_page));
@@ -2561,11 +2573,11 @@ static size_t ggml_backend_qnn_buffer_type_get_alignment(ggml_backend_buffer_typ
     return 32;
 }
 
-//FIXME: this value is an experimental value on Snapdragon 8 Gen3 based phone
+//TODO:not used currently
 static size_t ggml_backend_qnn_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
 
-    return (2 * (1 << 30));
+    return (2 * (1 << 20));
 }
 
 static bool ggml_backend_qnn_buffer_is_host(ggml_backend_buffer_type_t buft) {
@@ -2645,6 +2657,7 @@ static const char * ggml_backend_qnn_device_get_name(ggml_backend_dev_t dev) {
 
 static const char * ggml_backend_qnn_device_get_description(ggml_backend_dev_t dev) {
     struct ggml_backend_qnn_context * ctx = static_cast<ggml_backend_qnn_context *>(dev->context);
+    static char qnn_device_desc[256];
     if (nullptr == ctx) {
         GGMLQNN_LOG_ERROR("pls check why ctx is null");
         return "unknown";
@@ -2655,7 +2668,9 @@ static const char * ggml_backend_qnn_device_get_description(ggml_backend_dev_t d
         std::string dev_desc = std::string(ctx->desc)
                 + std::string(soc_info) + "_" + std::string(htp_arch)
                 + "," + std::string(ctx->socinfo.soc_desc);
-        return dev_desc.c_str();
+        memset(qnn_device_desc, 0, 256);
+        memcpy(qnn_device_desc, dev_desc.c_str(), strlen(dev_desc.c_str()));
+        return qnn_device_desc;
     } else {
         return ctx->desc;
     }
@@ -2717,7 +2732,7 @@ static ggml_backend_t ggml_backend_qnn_device_init_backend(ggml_backend_dev_t de
 
 }
 
-ggml_backend_buffer_type_t ggml_backend_qnn_buffer_type(size_t device_index) {
+static ggml_backend_buffer_type_t ggml_backend_qnn_buffer_type(size_t device_index) {
     if (device_index >= GGML_QNN_MAX_DEVICES) {
         GGMLQNN_LOG_DEBUG("ggml_backend_qnn_buffer_type error: device_index:%d is out of range [0, %d]\n",
                       device_index, GGML_QNN_MAX_DEVICES - 1);
@@ -2733,6 +2748,7 @@ ggml_backend_buffer_type_t ggml_backend_qnn_buffer_type(size_t device_index) {
                                      /* .get_alloc_size   = */ nullptr,// defaults to ggml_nbytes
                                      /* .is_host          = */ ggml_backend_qnn_buffer_is_host
                              },
+            /* .device  = */ nullptr,
             /* .context = */ nullptr,
     };
 
