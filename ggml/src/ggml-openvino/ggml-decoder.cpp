@@ -20,6 +20,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
 
     std::string src0_name = std::string(node->src[0]->name);
     std::string node_name = std::string(node->name);
+
     switch (node->op) {
         // Unary OPs 
         case GGML_OP_UNARY:
@@ -110,7 +111,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_output_names.push_back(node_name);
                 m_continuous = true;
 
-                ov::Shape src_shape(node->src[0]->ne, node->src[0]->ne + 4);
+                ov::Shape src_shape(node->src[0]->ne, node->src[0]->ne + 3);
                 auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
                 m_params.push_back(input_param);
                 break;
@@ -217,6 +218,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             m_node_op_name[src0_name] = ggml_op_name(node->op);
             m_output_names.push_back(node_name);
             if (node->src[1]) {
+                // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
                 // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
                 std::string src1_name = std::string(node->src[1]->name);
                 inputs[src1_name] = node->src[1];
@@ -228,6 +230,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // OPs with 3 inputs:
         case GGML_OP_ROPE:
         {
+            // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs) + "_input_" + ggml_op_name(node->src[1]->op);
             // std::string src1_name = std::string(node->src[1]->name) + "_" + std::to_string(node->src[1]->view_offs);
             std::string src1_name = std::string(node->src[1]->name);
             inputs[src0_name] = node->src[0];
@@ -239,6 +242,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             outputs[node_name] = node;
             m_output_names.push_back(node_name);
             if (node->src[2]) {
+                // std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs) + "_input_" + ggml_op_name(node->src[2]->op);
                 // std::string src2_name = std::string(node->src[2]->name) + "_" + std::to_string(node->src[2]->view_offs);
                 std::string src2_name = std::string(node->src[2]->name);
                 inputs[src2_name] = node->src[2];
@@ -253,7 +257,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
 }
 
 void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
-    std::ofstream file("2_graph_node_src_op_name.txt");
+    std::ofstream file("01_nodes.txt");
     if (!file.is_open()) {
         std::cerr << "Failed to open file" << std::endl;
         return;
@@ -262,6 +266,13 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
     file << "=== GRAPH ===\n";
 
     file << "n_nodes = " << cgraph->n_nodes << "\n";
+    file << " " << std::setw(3) << "nodes"
+                <<  std::setw(15) << "shape"
+                << std::setw(16) << "op"
+                << std::setw(20) << "name"
+                << std::setw(3) << "    "
+                << std::setw(50) << "stride"
+                << "\n";
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
@@ -269,9 +280,14 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
              << std::setw(5) << node->ne[0] << ", "
              << std::setw(5) << node->ne[1] << ", "
              << std::setw(5) << node->ne[2] << "] "
-             << std::left << std::setw(16) << ggml_op_name(node->op) << std::right << " "
-             << "    " << node->name
-             << ((node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" : node->grad ? "g" : " ") << "\n";
+             << std::left << std::setw(20) << ggml_op_name(node->op) << std::right << " "
+             << std::left << std::setw(44) << node->name << std::right
+             << ((node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" : node->grad ? "g" : " ")
+             << std::setw(2) << "[ "
+             << std::setw(0) << node->nb[0] << ", "
+             << std::setw(5) << node->nb[1] << ", "
+             << std::setw(5) << node->nb[2] << "] "
+             << "\n";
 
         if (node->src[0]) {
             file << std::setw(10) << " [ "
@@ -279,15 +295,19 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(5) << node->src[0]->ne[1] << ", "
             << std::setw(5) << node->src[0]->ne[2] << "] "
             << std::setw(12)
-            << "0: " << ggml_op_name(node->src[0]->op) << "     ";
+            << "0: " << std::left << std::setw(12) << ggml_op_name(node->src[0]->op) << std::right;
             // // Custom logic to handle '\000'
             // const char* name_ptr = node->src[0]->name;
             // while (*name_ptr != '\0' || *(name_ptr + 1) != '\0' || *(name_ptr + 2) != '\0') {
             //     file << *name_ptr;
             //     name_ptr++;
             // }
-            file << node->src[0]->name;
-            file << "\n";
+            file << std::left << std::setw(30) << node->src[0]->name << std::right
+            << std::setw(16) << "[ "
+            << std::setw(0) << node->src[0]->nb[0] << ", "
+            << std::setw(5) << node->src[0]->nb[1] << ", "
+            << std::setw(5) << node->src[0]->nb[2] << "] "
+            << "\n";
         }
         if (node->src[1]) {
             file << std::setw(10) << " [ "
@@ -295,15 +315,19 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(5) << node->src[1]->ne[1] << ", "
             << std::setw(5) << node->src[1]->ne[2] << "] "
             << std::setw(12)
-            << "1: " << ggml_op_name(node->src[1]->op) << "     ";
+            << "1: " << std::left << std::setw(12) << ggml_op_name(node->src[1]->op) << std::right;
             // // Custom logic to handle '\000'
             // const char* name_ptr = node->src[1]->name;
             // while (*name_ptr != '\0' || *(name_ptr + 1) != '\0' || *(name_ptr + 2) != '\0') {
             //     file << *name_ptr;
             //     name_ptr++;
             // }
-            file << node->src[1]->name;
-            file << "\n";
+            file << std::left << std::setw(30) << node->src[1]->name << std::right
+            << std::setw(16) << "[ "
+            << std::setw(0) << node->src[1]->nb[0] << ", "
+            << std::setw(5) << node->src[1]->nb[1] << ", "
+            << std::setw(5) << node->src[1]->nb[2] << "] "
+            << "\n";
         }
     }
 

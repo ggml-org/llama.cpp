@@ -121,7 +121,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Convert InputModel -> ov::Model 
     std::shared_ptr<ov::Model> model = front_end->convert(input_model);
-    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
+    ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
     
     if (!model) {
         GGML_LOG_ERROR("Model is not converted \n");
@@ -145,6 +145,14 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     // Set input tensor
     for (size_t i = 0; i < input_names.size(); i++) {
         infer_request.set_input_tensor(i, input_tensors[input_names[i]]);        
+
+        // auto input_tensor = infer_request.get_input_tensor(i);
+        // auto input_shape = input_tensor.get_shape();
+        // std::cout << "Input tensor " << i << " shape: ";
+        // for (const auto& dim : input_shape) {
+        //     std::cout << dim << " ";
+        // }
+        // std::cout << std::endl;
     }
 
     infer_request.infer();
@@ -155,6 +163,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     for (size_t i = 0; i < output_names.size(); i++) {
         // std::string op_name = ggml_decoder->get_node_op_name(output_names[i]);
         auto output_tensor = infer_request.get_output_tensor(i);
+        // output_tensor.get_shape();
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
         #ifdef GGML_OPENVINO_DEBUG
             printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
