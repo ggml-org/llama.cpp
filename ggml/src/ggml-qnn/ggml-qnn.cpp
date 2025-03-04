@@ -1023,16 +1023,21 @@ Qnn_Tensor_t * ggmlqnn_create_general_tensor(const ggml_tensor * tensor, const c
     return p_qnn_tensor;
 }
 
-Qnn_Tensor_t * ggmlqnn_create_compute_tensor(const ggml_tensor * tensor) {
-    uint32_t dimensions[] = {(uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1],
-                             (uint32_t) tensor->ne[2], (uint32_t) tensor->ne[3]};
+Qnn_Tensor_t * ggmlqnn_create_compute_tensor(qnn_instance * instance, Qnn_GraphHandle_t graph_handle, const ggml_tensor * tensor, Qnn_TensorType_t tensor_type) {
+    Qnn_ErrorHandle_t error = QNN_SUCCESS;
+    uint32_t dimensions[]   = {(uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1],
+                               (uint32_t) tensor->ne[2], (uint32_t) tensor->ne[3]};
     Qnn_DataType_t qnn_data_type = QNN_DATATYPE_FLOAT_32;
     Qnn_TensorType_t qnn_tensor_type = QNN_TENSOR_TYPE_APP_WRITE;
 
-    if (tensor->flags & GGML_TENSOR_FLAG_INPUT) {
-        qnn_tensor_type = QNN_TENSOR_TYPE_APP_WRITE;
-    } else if (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) {
-        qnn_tensor_type = QNN_TENSOR_TYPE_APP_READ;
+    if (0 == tensor->flags) {
+        qnn_tensor_type = tensor_type;
+    } else {
+        if (tensor->flags & GGML_TENSOR_FLAG_INPUT) {
+            qnn_tensor_type = QNN_TENSOR_TYPE_APP_WRITE;
+        } else if (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            qnn_tensor_type = QNN_TENSOR_TYPE_APP_READ;
+        }
     }
 
     qnn_data_type = ggmlqnn_datatype_from_ggml_datatype(tensor->type);
@@ -1040,6 +1045,14 @@ Qnn_Tensor_t * ggmlqnn_create_compute_tensor(const ggml_tensor * tensor) {
                                   qnn_tensor_type, qnn_data_type,
                                   ggml_n_dims(tensor), dimensions,
                                   nullptr, 0);
+
+    bool enable_npu_rpc = (instance->enable_qnn_rpc() && instance->get_device_id() == QNN_BACKEND_NPU);
+    if (enable_npu_rpc) {
+        QNN_VER_PTR(*p_qnn_tensor)->memType = QNN_TENSORMEMTYPE_MEMHANDLE;
+        QNN_VER_PTR(*p_qnn_tensor)->clientBuf = {.data=nullptr, .dataSize=0};
+    }
+    QNN_INTERFACE_VER_TYPE qnn_raw_interface    = instance->get_qnn_raw_interface();
+    CHECK_QNN_API(error, qnn_raw_interface.tensorCreateGraphTensor(graph_handle, p_qnn_tensor));
 
     return p_qnn_tensor;
 }
