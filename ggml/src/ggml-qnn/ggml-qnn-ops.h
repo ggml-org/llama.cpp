@@ -24,13 +24,8 @@
 #include "ggml-qnn-impl.h"
 void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 void ggml_qnn_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
-<<<<<<< HEAD
 
 void ggml_qnn_repeat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
-=======
-void ggml_qnn_repeat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
-void ggml_qnn_add(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
->>>>>>> ggml-qnn: refine source code structure to make code more clearly
 void ggml_qnn_div(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 void ggml_qnn_leaky_relu(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 void ggml_qnn_concat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
