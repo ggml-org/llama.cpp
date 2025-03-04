@@ -919,19 +919,6 @@ static ggml_type ggml_datatype_from_qnn_datatype(Qnn_DataType_t qnn_type) {
     return GGML_TYPE_COUNT;
 }
 
-//TODO: add more ops
-static const char * qnn_opname_from_ggmlop(enum ggml_op ggmlop) {
-    switch (ggmlop) {
-        case GGML_OP_ADD:
-            return QNN_OP_ELEMENT_WISE_ADD;
-        case GGML_OP_MUL_MAT:
-            return QNN_OP_MAT_MUL;
-        default:
-            break;
-    }
-    return nullptr;
-}
-
 static void get_qnn_dimensions_from_ggml_dimensions(uint32_t * qnn_dimensions, const uint32_t * ggml_dimensions, uint32_t rank) {
     if (rank > GGML_MAX_DIMS) {
         GGMLQNN_LOG_WARN("invalid params");
@@ -1007,14 +994,13 @@ Qnn_Tensor_t * ggmlqnn_create_general_tensor(const ggml_tensor * tensor, const c
                     .type = qnn_tensor_type,
                     .dataFormat = QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER,
                     .dataType = qnn_data_type,
-                    .quantizeParams = {QNN_DEFINITION_UNDEFINED,
-                                       QNN_QUANTIZATION_ENCODING_UNDEFINED,
+                    .quantizeParams = {.encodingDefinition = QNN_DEFINITION_UNDEFINED,
+                                       .quantizationEncoding = QNN_QUANTIZATION_ENCODING_UNDEFINED,
                                        {.scaleOffsetEncoding = {.scale = 0.0000000000000000f, .offset = 0}}},
                     .rank = rank,
                     .dimensions = tensor_dims,
                     .memType = QNN_TENSORMEMTYPE_RAW,
-                    {.clientBuf = {nullptr, 0}
-                    }
+                    .clientBuf = {.data = nullptr, .dataSize = 0}
             }
             }
     };
