@@ -2244,8 +2244,7 @@ static bool ggml_qnn_can_handle_op(const ggml_backend_qnn_context * ctx, const s
         }
         if (ne00 < 32)
             return false;
-        return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)
-               && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+        return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32);
     }
 
     if (tensor->op == GGML_OP_MUL_MAT) {
