@@ -1704,6 +1704,17 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         }
     }
 
+    _device_id = QNN_BACKEND_CPU;
+    if (_backend_name.find("QnnCpu") != std::string::npos) {
+        _device_id = QNN_BACKEND_CPU;
+    }
+    if (_backend_name.find("QnnGpu") != std::string::npos) {
+        _device_id = QNN_BACKEND_GPU;
+    }
+    if (_backend_name.find("QnnHtp") != std::string::npos) {
+        _device_id = QNN_BACKEND_NPU;
+    }
+
     backend_id = _lib_path_to_backend_id[backend_lib_path];
     if (0 == _loaded_backend.count(backend_id) ||
         0 == _loaded_lib_handle.count(backend_id)) {
