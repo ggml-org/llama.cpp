@@ -65,14 +65,12 @@ static inline bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const
 */
 void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
     Qnn_ErrorHandle_t error                     = QNN_SUCCESS;
-    enum ggml_status result                     = GGML_STATUS_SUCCESS;
     bool graph_initialized                      = false;
     qnn_instance * instance                     = nullptr;
     Qnn_GraphHandle_t graph_handle              = nullptr;
     Qnn_Tensor_t * p_tensor0                    = nullptr;
     Qnn_Tensor_t * p_tensor1                    = nullptr;
     Qnn_Tensor_t * p_tensor2                    = nullptr;
-    Qnn_Param_t qnn_params[]                    = {};
     const ggml_tensor * src0                    = op->src[0];
     const ggml_tensor * src1                    = op->src[1];
     ggml_tensor * dst                           = op;
@@ -170,7 +168,7 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
                         QNN_OP_PACKAGE_NAME_QTI_AISW,
                         qnn_op_name,
                         0,
-                        qnn_params,
+                        nullptr,
                         2,
                         tensor_inputs,
                         1,
