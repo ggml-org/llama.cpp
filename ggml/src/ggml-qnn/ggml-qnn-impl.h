@@ -498,6 +498,10 @@ public:
         return _enable_qnn_rpc;
     }
 
+    QNNBackend get_device_id() {
+        return _device_id;
+    }
+
 public:
     std::map<std::string, std::tuple<Qnn_GraphHandle_t, std::vector< Qnn_Tensor_t *>>> _qnn_graph_map;
 
