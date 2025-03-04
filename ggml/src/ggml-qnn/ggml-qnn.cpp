@@ -947,7 +947,7 @@ Qnn_Tensor_t * ggmlqnn_create_general_tensor(const ggml_tensor * tensor, const c
     char tensor_name[GGML_MAX_NAME] = {};
 
     //ensure the tensor name is unique
-    if (nullptr != name) {
+    if (nullptr == name) {
         snprintf(tensor_name, GGML_MAX_NAME, "tensor_%-8d", get_idx());
     } else {
         snprintf(tensor_name, GGML_MAX_NAME, "tensor_%s%-8d", name, get_idx());
@@ -1856,6 +1856,12 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         }
         if (0 != set_high_performance_mode()) {
             GGMLQNN_LOG_WARN("set HTP high performance mode failure");
+        }
+
+        if (enable_qnn_rpc()) {
+            GGMLQNN_LOG_INFO("NPU RPC feature enabled");
+        } else {
+            GGMLQNN_LOG_INFO("NPU RPC feature disabled");
         }
     }
 
