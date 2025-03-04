@@ -595,12 +595,12 @@ private:
 
 size_t         ggmlqnn_get_opcaps_size(void);
 size_t         ggmlqnn_get_op_index(const ggml_tensor * tensor);
-Qnn_Tensor_t * ggmlqnn_create_compute_tensor(const ggml_tensor * tensor);
 const char   * ggmlqnn_get_error_string(Qnn_ErrorHandle_t qnn_error_code);
 Qnn_DataType_t ggmlqnn_datatype_from_ggml_datatype(enum ggml_type ggmltype);
 void         * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
 void           ggmlqnn_get_graphkey_from_op(const ggml_tensor * op, std::string & output);
 uint8_t      * ggmlqnn_create_rpc_buffer(qnn_instance * instance, const ggml_tensor * ggml_tensor, Qnn_Tensor_t * qnn_tensor, bool b_copydata);
+Qnn_Tensor_t * ggmlqnn_create_compute_tensor(qnn_instance * instance, Qnn_GraphHandle_t handle, const ggml_tensor * tensor, Qnn_TensorType_t tensor_type);
 void           ggmlqnn_print_tensors_info(const char * func_name, ggml_backend_qnn_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
 Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * package, const char * type,
