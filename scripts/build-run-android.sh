@@ -168,13 +168,45 @@ function run_llamabench()
 }
 
 
-function run_test-backend-ops()
+function run_test-ops()
 {
     prepare_run_on_phone test-backend-ops
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
                && ${REMOTE_PATH}/test-backend-ops test"
+
+}
+
+function run_test-op()
+{
+    prepare_run_on_phone test-backend-ops
+
+    qnnbackendname=qnn-cpu
+    case $qnnbackend in
+        0)
+        qnnbackendname=qnn-cpu
+        ;;
+        1)
+        qnnbackendname=qnn-gpu
+        ;;
+        2)
+        qnnbackendname=qnn-npu
+        ;;
+        *)
+        qnnbackendname=qnn-cpu
+        ;;
+    esac
+
+    #debug
+    echo "adb shell cd ${REMOTE_PATH} \
+               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
+
+    echo "\n"
+    adb shell "cd ${REMOTE_PATH} \
+               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
 
 }
 
@@ -208,18 +240,101 @@ function run_ut_mul()
 
 }
 
+function print_oplist()
+{
+oplist="DUP
+    ADD
+    ADD1
+    ACC
+    SUB
+    MUL
+    DIV
+    SQR
+    SQRT
+    LOG
+    SIN
+    COS
+    SUM
+    SUM_ROWS
+    MEAN
+    ARGMAX
+    COUNT_EQUAL
+    REPEAT
+    REPEAT_BACK
+    CONCAT
+    SILU_BACK
+    NORM
+    RMS_NORM
+    RMS_NORM_BACK
+    GROUP_NORM
+
+    MUL_MAT
+    MUL_MAT_ID
+    OUT_PROD
+
+    SCALE
+    SET
+    CPY
+    CONT
+    RESHAPE
+    VIEW
+    PERMUTE
+    TRANSPOSE
+    GET_ROWS
+    GET_ROWS_BACK
+    DIAG
+    DIAG_MASK_INF
+    DIAG_MASK_ZERO
+    SOFT_MAX
+    SOFT_MAX_BACK
+    ROPE
+    ROPE_BACK
+    CLAMP
+    CONV_TRANSPOSE_1D
+    IM2COL
+    IM2COL_BACK
+    CONV_TRANSPOSE_2D
+    POOL_1D
+    POOL_2D
+    POOL_2D_BACK
+    UPSCALE
+    PAD
+    PAD_REFLECT_1D
+    ARANGE
+    TIMESTEP_EMBEDDING
+    ARGSORT
+    LEAKY_RELU
+
+    FLASH_ATTN_EXT
+    FLASH_ATTN_BACK
+    SSM_CONV
+    SSM_SCAN
+    WIN_PART
+    WIN_UNPART
+    GET_REL_POS
+    ADD_REL_POS
+    RWKV_WKV6
+    GATED_LINEAR_ATTN"
+
+echo "opname list: "
+echo ${oplist}
+}
 
 function show_usage()
 {
     echo "Usage:"
+    echo "  $0 help"
+    echo "  $0 print_oplist"
     echo "  $0 build"
     echo "  $0 updateqnnlib"
-    echo "  $0 run_testop"
-    echo "  $0 run_ut_add       0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_ut_mulmat    0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_ut_mul       0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_llamacli     0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_llamabench   0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_testops"
+    echo "  $0 run_testop          [ADD/MUL/MUL_MAT]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
+    echo "  $0 run_ut_add          0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_ut_mulmat       0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_ut_mul          0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_llamacli        0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_llamabench      0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+
     echo -e "\n\n\n"
 }
 
@@ -238,12 +353,14 @@ elif [ $# == 1 ]; then
     elif [ "$1" == "help" ]; then
         show_usage
         exit 1
+    elif [ "$1" == "print_oplist" ]; then
+        print_oplist
+        exit 1
     elif [ "$1" == "build" ]; then
         build_ggml_qnn
         exit 0
-
-    elif [ "$1" == "run_testop" ]; then
-        run_test-backend-ops
+    elif [ "$1" == "run_testops" ]; then
+        run_test-ops
         exit 0
 
     elif [ "$1" == "updateqnnlib" ]; then
@@ -276,6 +393,107 @@ elif [ $# == 2 ]; then
         run_ut_mul
         exit 0
     fi
+elif [ $# == 3 ]; then
+    opname=$2
+#TODO: check opname in oplist
+#opname can be found via print_oplist:
+#    DUP
+#    ADD
+#    ADD1
+#    ACC
+#    SUB
+#    MUL
+#    DIV
+#    SQR
+#    SQRT
+#    LOG
+#    SIN
+#    COS
+#    SUM
+#    SUM_ROWS
+#    MEAN
+#    ARGMAX
+#    COUNT_EQUAL
+#    REPEAT
+#    REPEAT_BACK
+#    CONCAT
+#    SILU_BACK
+#    NORM
+#    RMS_NORM
+#    RMS_NORM_BACK
+#    GROUP_NORM
+#
+#    MUL_MAT
+#    MUL_MAT_ID
+#    OUT_PROD
+#
+#    SCALE
+#    SET
+#    CPY
+#    CONT
+#    RESHAPE
+#    VIEW
+#    PERMUTE
+#    TRANSPOSE
+#    GET_ROWS
+#    GET_ROWS_BACK
+#    DIAG
+#    DIAG_MASK_INF
+#    DIAG_MASK_ZERO
+#    SOFT_MAX
+#    SOFT_MAX_BACK
+#    ROPE
+#    ROPE_BACK
+#    CLAMP
+#    CONV_TRANSPOSE_1D
+#    IM2COL
+#    IM2COL_BACK
+#    CONV_TRANSPOSE_2D
+#    POOL_1D
+#    POOL_2D
+#    POOL_2D_BACK
+#    UPSCALE
+#    PAD
+#    PAD_REFLECT_1D
+#    ARANGE
+#    TIMESTEP_EMBEDDING
+#    ARGSORT
+#    LEAKY_RELU
+#
+#    FLASH_ATTN_EXT
+#    FLASH_ATTN_BACK
+#    SSM_CONV
+#    SSM_SCAN
+#    WIN_PART
+#    WIN_UNPART
+#    GET_REL_POS
+#    ADD_REL_POS
+#    RWKV_WKV6
+#    GATED_LINEAR_ATTN
+#
+#    UNARY
+#
+#    MAP_UNARY
+#    MAP_BINARY
+#
+#    MAP_CUSTOM1_F32
+#    MAP_CUSTOM2_F32
+#    MAP_CUSTOM3_F32
+#
+#    MAP_CUSTOM1
+#    MAP_CUSTOM2
+#    MAP_CUSTOM3
+#
+#    CROSS_ENTROPY_LOSS
+#    CROSS_ENTROPY_LOSS_BACK
+#    OPT_STEP_ADAMW
+    qnnbackend=$3
+    if [ ${qnnbackend} -gt 3 ]; then
+        show_usage
+        exit 1
+    fi
+    run_test-op
+    exit 0
 else
     show_usage
     exit 1
