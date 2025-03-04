@@ -118,6 +118,7 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
 
     if (!graph_initialized) {
         GGMLQNN_LOG_DEBUG("graph name %s", graph_name.c_str());
+        GGML_ASSERT(instance->get_device_id() == ctx->device);
         error = instance->init_qnn_graph(graph_name, static_cast<QNNBackend>(ctx->device), 8);
         if (QNN_SUCCESS != error) {
             GGMLQNN_LOG_INFO("can't create qnn graph handle with graph name %s, error = %d\n", graph_name.c_str(), error);
