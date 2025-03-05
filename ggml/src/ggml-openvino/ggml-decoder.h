@@ -72,7 +72,7 @@ public:
     }
 
     virtual const std::string& get_node_op_name(const std::string& name) const override;
-    // virtual const std::string& get_node_op_info(const std::string& name) const override;
+    std::string& get_op_node_name(const std::string& key_name, const int index) override;
 
     virtual const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& get_params() const override;
 
@@ -92,5 +92,6 @@ private:
     bool m_continuous;
     std::map<std::string, std::string> m_node_op_name;
     std::vector<std::shared_ptr<ov::op::v0::Parameter>> m_params;
+    std::vector<std::pair<std::string, std::string>> m_op_node_name;
 };
 
