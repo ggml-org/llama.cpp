@@ -91,6 +91,7 @@ int wram2mram(__mram_ptr void *pmram,void *pwram,uint32_t size)
 }
 
 
+// set psumf to global value for each thread access
 static float *psumf = NULL;
 
 void init(unsigned int tasklet_id) {
@@ -99,13 +100,11 @@ void init(unsigned int tasklet_id) {
 #endif
     if (tasklet_id == 0){ // Initialize once the cycle counter
         mem_reset(); // Reset the heap
-
+        // first thread set fp32->fp16 table
         ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
     }
     // Barrier
     barrier_wait(&my_barrier);
-
-    // ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
 }
 
 // main
@@ -115,8 +114,7 @@ int main() {
     
     init(tasklet_id);
     
-    //fp32->fp16 table
-    ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
+    //set fp32->fp16 table configure
     uint32_t table_f32_f16_len = (1 << 16)*sizeof(float);
     uint32_t offset = table_f32_f16_len;
     int input_row_size = 0;
@@ -141,7 +139,7 @@ int main() {
         cache_meta->layer_num,cache_meta->weight_type,cache_meta->rows_per_dpu,cache_meta->rest_rows,cache_meta->input_offset);
 #endif
 
-    // 先不考虑尾行
+    // set sart line, end line and line number in each thread
     uint16_t weight_rows_per_thread = cache_meta->rows_per_dpu / NR_TASKLETS;
     uint16_t weight_start_row = tasklet_id * weight_rows_per_thread;
     uint16_t weight_end_row = weight_start_row + weight_rows_per_thread;
@@ -159,14 +157,17 @@ int main() {
 
     //input metadata
     offset += (cache_meta->layer_len * cache_meta->layer_num);
+
 #if PRINT
     printf("layer_len=%d, input metadata offset=%d\n",cache_meta->layer_len,offset);
 #endif
+
     uint32_t inputmetadatabase = weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len * cache_meta->layer_num;
     pim_matrix_des *pinputcache = (pim_matrix_des *) mem_alloc(sizeof(pim_matrix_des));
     mram_read((__mram_ptr void const*) (inputmetadatabase), pinputcache, sizeof(pim_matrix_des));
     input_cols = pinputcache->ne[1];
     assert(input_cols == 1 && "Only support vector as input.");
+
 #if PRINT
     printf("input_type=%d, layerID=%d\n",pinputcache->type,pinputcache->layerid);
     for(int nn=0;nn<GGML_MAX_DIMS;nn++) {
@@ -175,6 +176,7 @@ int main() {
 #endif
 
     assert(cache_meta->weight_type == ((uint16_t)GGML_TYPE_Q4_0) && "Only support Q4_0 weight.");
+
     //weight info: GGML_TYPE_Q4_0 default
     if (cache_meta->weight_type == ((uint16_t)GGML_TYPE_Q4_0)) {
         if (pinputcache->type != GGML_TYPE_Q8_0) {
@@ -194,6 +196,7 @@ int main() {
 
         // psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
         memset(psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
+        
 #if PRINT
         printf("input_cols=%d, rows_cur_thread=%d, nb=%d, input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
 #endif
