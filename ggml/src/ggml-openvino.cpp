@@ -531,14 +531,25 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
         auto B = reshape_src1;
 
         auto batched_matmul = std::make_shared<ov::op::v0::MatMul>(B, A, false, false);
-        auto model = std::make_shared<ov::Model>(ov::NodeVector{ batched_matmul },
+
+        std::vector<int64_t> final_output_shape = {static_cast<int64_t>(dst->ne[2]),
+                                                    static_cast<int64_t>(dst->ne[1]),
+                                                    static_cast<int64_t>(dst->ne[0])};
+
+        auto reshape_output = std::make_shared<ov::op::v1::Reshape>(
+            batched_matmul,
+            ov::op::v0::Constant::create(ov::element::i64, {3}, final_output_shape),
+            false
+        );
+
+        auto model = std::make_shared<ov::Model>(ov::NodeVector{ reshape_output },
                                                  ov::ParameterVector{ param_src0, param_src1 });
 
         ov::Tensor tensor_src0{ ov::element::f16, orig_shape_src0, src0->data };
         ov::Tensor tensor_src1{ ov::element::f32, orig_shape_src1, src1->data };
-        ov::Shape output_shape = { static_cast<size_t>(dst->ne[0]),
+        ov::Shape output_shape = { static_cast<size_t>(dst->ne[2]),
                                      static_cast<size_t>(dst->ne[1]),
-                                     static_cast<size_t>(dst->ne[2]) };
+                                     static_cast<size_t>(dst->ne[0]) };
         ov::Tensor tensor_dst(ov::element::f32, output_shape, dst->data);
 
         ov::Core core;
