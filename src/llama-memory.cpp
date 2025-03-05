@@ -122,7 +122,7 @@ bool llama_kv_cache_unified::init(
     return true;
 }
 
-int32_t llama_kv_cache_unified::get_n_tokens() const {
+int32_t llama_kv_cache_unified::n_tokens() const {
     int32_t result = 0;
 
     for (uint32_t i = 0; i < size; i++) {
@@ -132,7 +132,7 @@ int32_t llama_kv_cache_unified::get_n_tokens() const {
     return result;
 }
 
-uint32_t llama_kv_cache_unified::get_used_cells() const {
+uint32_t llama_kv_cache_unified::used_cells() const {
     return used;
 }
 
@@ -1091,7 +1091,7 @@ int32_t llama_kv_cache_n_tokens(const llama_kv_cache * kv) {
         return 0;
     }
 
-    return kv->get_n_tokens();
+    return kv->n_tokens();
 }
 
 int32_t llama_kv_cache_used_cells(const llama_kv_cache * kv) {
@@ -1099,7 +1099,7 @@ int32_t llama_kv_cache_used_cells(const llama_kv_cache * kv) {
         return 0;
     }
 
-    return kv->get_used_cells();
+    return kv->used_cells();
 }
 
 void llama_kv_cache_clear(llama_kv_cache * kv) {

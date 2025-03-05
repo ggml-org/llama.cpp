@@ -91,7 +91,7 @@ bool llama_adapter_cvec::init(const llama_model & model) {
     return true;
 }
 
-int32_t llama_adapter_cvec::apply(
+bool llama_adapter_cvec::apply(
         const llama_model & model,
         const float * data,
         size_t len,
@@ -104,17 +104,17 @@ int32_t llama_adapter_cvec::apply(
         // disable the current control vector (but leave allocated for later)
         layer_start = -1;
         layer_end   = -1;
-        return 0;
+        return true;
     }
 
     if (n_embd != (int) hparams.n_embd) {
         LLAMA_LOG_ERROR("%s: control vector n_embd does not match model\n", __func__);
-        return 1;
+        return false;
     }
 
     if (tensors.empty()) {
         if (!init(model)) {
-            return 1;
+            return false;
         }
     }
 
@@ -130,7 +130,7 @@ int32_t llama_adapter_cvec::apply(
         }
     }
 
-    return 0;
+    return true;
 }
 
 // lora

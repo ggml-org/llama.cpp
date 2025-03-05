@@ -3,6 +3,7 @@
 #include "llama.h"
 #include "llama-arch.h"
 #include "llama-hparams.h"
+#include "llama-graph.h"
 #include "llama-vocab.h"
 
 #include <memory>
@@ -10,6 +11,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct llama_cparams;
+struct llama_ubatch;
 struct llama_model_loader;
 
 // available models
@@ -347,7 +350,7 @@ struct llama_model {
     std::string desc() const;
 
     size_t size() const;
-    size_t max_nodes() const;
+    size_t n_tensors() const;
     size_t n_devices() const;
 
     // total number of parameters in the model
@@ -361,6 +364,13 @@ struct llama_model {
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    llama_graph_result_ptr build_graph(
+              ggml_context * ctx,
+               ggml_cgraph * gf,
+             llama_graph_i * lgf,
+       const llama_cparams & cparams,
+       const llama_ubatch  & ubatch) const;
 
 private:
     struct impl;
