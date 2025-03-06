@@ -241,7 +241,9 @@ namespace console {
         (void)codepoint;
         return 1;
 #else
-        return wcwidth(codepoint);
+        //return wcwidth(codepoint);
+        (void)codepoint;
+        return 1;
 #endif
     }
 
