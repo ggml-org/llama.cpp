@@ -124,7 +124,7 @@ void ggml_qnn_general_node(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
                 *p_tensor2
         };
         Qnn_OpConfig_t op_config = {
-                QNN_OPCONFIG_VERSION_1, .v1 = {
+                QNN_OPCONFIG_VERSION_1, {
                         ggml_op_name,
                         QNN_OP_PACKAGE_NAME_QTI_AISW,
                         qnn_op_name,

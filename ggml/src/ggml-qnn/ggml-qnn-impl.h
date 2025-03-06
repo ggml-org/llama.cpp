@@ -64,8 +64,9 @@
 #include "android/log.h"
 #endif
 
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
 #include <wchar.h>
+#include <malloc.h>
 #include <Windows.h>
 #endif
 
@@ -141,7 +142,8 @@ void   ggmlqnn_log_internal(ggml_log_level level, const char * file, const char 
 
 #define GQCGT                                   ggmlqnn_create_general_tensor
 
-#if defined(_WIN32)
+//#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
 #define RTLD_GLOBAL 0x100
 #define RTLD_LOCAL  0x000
 #define RTLD_LAZY   0x000
@@ -188,7 +190,7 @@ enum qcom_chipset_soc_model {
     SM8550 = 43,  // v73, SD 8 Gen 2
     SM8650 = 57,  // v75, SD 8 Gen 3
     SM8750 = 69,  // v79, SD 8 Gen 4
-#if defined(_MSC_VER)
+#if !defined(__ANDROID__) && !defined(__linux__)
     SC7280X     = 44,
     SC8280X     = 37,
     SC8380XP    = 60,
