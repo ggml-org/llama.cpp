@@ -913,7 +913,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
                     const int col = std::max(0, std::min((int) k_colors.size() - 1, (int) ((3*p)*float(k_colors.size()))));
 
-                    LOG_CNT("%s%d%s", k_colors[col].c_str(), i, "\033[0m");
+                    LOG_CNT("%s%d%s", k_colors[col].c_str(), i, LOG_COL_DEFAULT);
                     //LOG_CNT("%d", i);
                 }
 

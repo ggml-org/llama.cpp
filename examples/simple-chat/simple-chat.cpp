@@ -1,4 +1,5 @@
 #include "llama.h"
+#include "log.h"
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -115,7 +116,7 @@ int main(int argc, char ** argv) {
             int n_ctx = llama_n_ctx(ctx);
             int n_ctx_used = llama_get_kv_cache_used_cells(ctx);
             if (n_ctx_used + batch.n_tokens > n_ctx) {
-                printf("\033[0m\n");
+                printf(LOG_COL_DEFAULT "\n");
                 fprintf(stderr, "context size exceeded\n");
                 exit(0);
             }
@@ -155,7 +156,7 @@ int main(int argc, char ** argv) {
     int prev_len = 0;
     while (true) {
         // get user input
-        printf("\033[32m> \033[0m");
+        printf(LOG_COL_GREEN "> " LOG_COL_DEFAULT);
         std::string user;
         std::getline(std::cin, user);
 
@@ -181,9 +182,9 @@ int main(int argc, char ** argv) {
         std::string prompt(formatted.begin() + prev_len, formatted.begin() + new_len);
 
         // generate a response
-        printf("\033[33m");
+        printf(LOG_COL_YELLOW);
         std::string response = generate(prompt);
-        printf("\n\033[0m");
+        printf("\n" LOG_COL_DEFAULT);
 
         // add the response to the messages
         messages.push_back({"assistant", strdup(response.c_str())});

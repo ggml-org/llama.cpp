@@ -296,7 +296,7 @@ int main(int argc, char ** argv) {
                     LOG("%s", token_str.c_str());
                 } else {
                     // print light cyan
-                    LOG("\033[0;96m%s\033[0m", token_str.c_str());
+                    LOG("\033[0;96m%s" LOG_COL_DEFAULT, token_str.c_str());
                 }
                 fflush(stdout);
 

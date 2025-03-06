@@ -1,5 +1,6 @@
 #include "unicode.h"
 #include "llama-grammar.h"
+#include "log.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -47,7 +48,7 @@ static void print_error_message(const std::string & input_str, size_t error_pos,
         if (error_pos+1 < input_str.size()) {
             fprintf(stdout, "\033[0;31m%s", input_str.substr(error_pos+1).c_str());
         }
-        fprintf(stdout, "\033[0m\n");
+        fprintf(stdout, LOG_COL_DEFAULT "\n");
     }
 }
 
