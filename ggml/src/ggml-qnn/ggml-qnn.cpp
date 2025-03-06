@@ -53,6 +53,9 @@ void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * 
     static char s_ggmlqnn_log_internal_buf[GGML_QNN_LOGBUF_LEN];
 
     GGML_UNUSED(file);
+#if !(defined __ANDROID__) || !(defined ANDROID)
+    GGML_UNUSED(level);
+#endif
     {
         std::lock_guard<std::mutex> lock(ggmlqnn_log_internal_mutex);
         va_list args;
@@ -78,7 +81,7 @@ void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * 
 // =================================================================================================
 //  section-3: general helper macro / data structure / function
 // =================================================================================================
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
 static const char * last_func = nullptr;
 static long last_err;
 void * dlopen(const char * dll, int flags) {
@@ -121,6 +124,42 @@ const char * dlerror(void) {
 }
 #endif
 
+#define GGMLQNN_MEM_ADD(alignment)              (sizeof (size_t) + alignment)
+#define GGMLQNN_MEM_MASK(alignment)             ((uintptr_t)alignment - 1)
+static void * ggmlqnn_mallocz_aligned(size_t size, size_t alignment) {
+    uint8_t * buffer    = NULL;
+    size_t * sp         = NULL;
+    buffer = static_cast<uint8_t *>(calloc(1, size + GGMLQNN_MEM_ADD(alignment)));
+    if (!buffer)
+        return NULL;
+    sp = (size_t *)buffer;
+    *sp = size;
+    buffer = (uint8_t *)(((uintptr_t) buffer + GGMLQNN_MEM_ADD(alignment)) & ~GGMLQNN_MEM_MASK(alignment));
+    buffer[-1] = buffer - (uint8_t *)sp;
+    return buffer;
+}
+
+static void * ggmlqnn_malloc_aligned(size_t size, size_t alignment) {
+    uint8_t * buffer = NULL;
+    size_t * sp = NULL;
+    buffer = static_cast<uint8_t *>(malloc(size + GGMLQNN_MEM_ADD(alignment)));
+    if (!buffer)
+        return NULL;
+    sp = (size_t *)buffer;
+    *sp = size;
+    buffer = (uint8_t *)(((uintptr_t) buffer + GGMLQNN_MEM_ADD(alignment)) & ~GGMLQNN_MEM_MASK(alignment));
+    buffer[-1] = buffer - (uint8_t *)sp;
+    return buffer;
+}
+
+static void ggmqnn_free_aligned(void * ptr) {
+    uint8_t * old = (uint8_t *)ptr;
+    if (!old)
+        return;
+    old -= old[-1];
+    free(old);
+}
+
 static intptr_t ggmlqnn_align_to(size_t alignment, intptr_t offset) {
     return offset % alignment == 0 ? offset
                                    : offset +
@@ -134,15 +173,20 @@ static size_t get_system_total_memory_in_bytes() {
     if (0 == sysinfo(&info)) {
         return (info.totalram + info.totalswap) * info.mem_unit;
     }
-    auto pages = (size_t)sysconf(_SC_PHYS_PAGES);
-    auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
+    size_t pages      = (size_t)sysconf(_SC_PHYS_PAGES);
+    size_t page_size  = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return pages * page_size;
-#elif defined(_WIN32)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    return 0;
 #else
-#error "ggml-qnn only support WoA, Android, Linux"
+    //FIXME: Snapdragon based WoA(Windows on ARM)
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+    if (GlobalMemoryStatusEx(&statex)) {
+        GGMLQNN_LOG_INFO("total physical mem:%llu Mb", statex.ullTotalPhys >> 20);
+        GGMLQNN_LOG_INFO("avail physical mem:%llu Mb", statex.ullAvailPhys >> 20);
+        return statex.ullTotalPhys;
+    }
+    return 0;
 #endif
 }
 
@@ -152,15 +196,20 @@ static size_t get_system_free_memory_in_bytes() {
     if (0 == sysinfo(&info)) {
         return (info.freeram + info.freeswap) * info.mem_unit;
     }
-    auto avail_pages = (size_t)sysconf(_SC_AVPHYS_PAGES);
-    auto page_size = (size_t)sysconf(_SC_PAGE_SIZE);
+    size_t avail_pages = (size_t)sysconf(_SC_AVPHYS_PAGES);
+    size_t page_size   = (size_t)sysconf(_SC_PAGE_SIZE);
 
     return avail_pages * page_size;
-#elif defined(_WIN32)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    return 0;
 #else
-#error "ggml-qnn only support WoA, Android, Linux"
+    //FIXME: Snapdragon based WoA(Windows on ARM)
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+    if (GlobalMemoryStatusEx(&statex)) {
+        GGMLQNN_LOG_INFO("total physical mem:%llu Mb", statex.ullTotalPhys >> 20);
+        GGMLQNN_LOG_INFO("avail physical mem:%llu Mb", statex.ullAvailPhys >> 20);
+        return statex.ullAvailPhys;
+    }
+    return 0;
 #endif
 }
 
@@ -176,22 +225,29 @@ static size_t ggmlqnn_memscpy(void * dst, size_t dst_size, const void * src, siz
 }
 
 static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
+#if defined(__ANDROID__) || defined(__linux__)
     return strndup(source, maxlen);
+#else
+    //FIXME:behaviour is not exactly same to Android&Linux
+    GGML_UNUSED(maxlen);
+    return strdup(source);
+#endif
 }
 
-static void * ggmlqnn_host_malloc(size_t n) {
-#if defined(__ANDROID__) || defined(__linux__)
+static void * ggmlqnn_host_malloc(size_t buffer_size, size_t page_size) {
     void * data = nullptr;
-    int result = posix_memalign((void **)&data, sysconf(_SC_PAGESIZE), n);
+#if defined(__ANDROID__) || defined(__linux__)
+    int result = posix_memalign((void **)&data, page_size, buffer_size);
     if (result != 0) {
         GGMLQNN_LOG_WARN("%s: error: posix_memalign failed\n", __func__);
         return nullptr;
     }
-#elif defined(_WIN32)
-    //TODO: Snapdragon based WoA(Windows on ARM)
-    return nullptr;
 #else
-#error "ggml-qnn only support WoA, Android, Linux"
+    //GGMLQNN_LOG_DEBUG("buffer_size %d, page_size %d\n", buffer_size, page_size);
+    data = ggmlqnn_malloc_aligned(buffer_size, page_size);
+    if (nullptr == data) {
+        GGMLQNN_LOG_WARN("%s: error: host_malloc failed\n", __func__);
+    }
 #endif
 
     return data;
@@ -566,71 +622,71 @@ Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * package,
 //file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/overview.html#tbl-supported-snapdragon-devices
 static struct qcom_socinfo g_qnn_soc_info_table[] = {
         /* Qualcomm SnapDragon 7 Gen 1 */
-        [SM7450] = {
+        {
                 .soc_model         = SM7450,
                 .htp_arch          = V69,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 7 Gen 1"},
 
         /* Qualcomm SnapDragon 888 */
-        [SM8350] = {
+        {
                 .soc_model         = SM8350,
                 .htp_arch          = V68,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 888 "},
 
         /* Qualcomm SnapDragon 8 Gen 1 */
-        [SM8450] = {
+        {
                 .soc_model         = SM8450,
                 .htp_arch          = V69,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 1"},
 
         /* Qualcomm SnapDragon 8 Gen 1+ */
-        [SM8475] = {
+        {
                 .soc_model         = SM8475,
                 .htp_arch          = V69,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 1+"},
 
         /* Qualcomm SnapDragon 8 Gen 2 */
-        [SM8550] = {
+        {
                 .soc_model         = SM8550,
                 .htp_arch          = V73,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 2"},
 
         /* Qualcomm SnapDragon 8 Gen 3 */
-        [SM8650] = {
+        {
                 .soc_model         = SM8650,
                 .htp_arch          = V75,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 3 "},
 
         /* Qualcomm SnapDragon 8 Gen 4 */
-        [SM8750] = {
+        {
                 .soc_model         = SM8750,
                 .htp_arch          = V79,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8 Gen 4"},
 
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
         /* Qualcomm SnapDragon 7c Gen 2 */
-        [SC7280X] = {
+        {
                 .soc_model         = SC7280X,
                 .htp_arch          = V68,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 7c Gen 2"},
 
         /* Qualcomm SnapDragon 8cx Gen 3 */
-        [SC8280X] = {
+        {
                 .soc_model         = SC8280X,
                 .htp_arch          = V68,
                 .vtcm_size_in_mb   = 8,
                 .soc_desc          = "Qualcomm SnapDragon 8cx Gen 3"},
 
         /* Qualcomm SnapDragon 8cx Gen 4 */
-        [SC8380XP] = {
+        {
                 .soc_model         = SC8380XP,
                 .htp_arch          = V73,
                 .vtcm_size_in_mb   = 8,
@@ -639,6 +695,16 @@ static struct qcom_socinfo g_qnn_soc_info_table[] = {
 
 };
 
+
+#if defined(__ANDROID__)
+static const char * g_qnn_runtimelib_path = "/data/local/tmp/";
+#elif defined(__linux__)
+static const char * g_qnn_runtimelib_path = "/tmp/";
+#elif defined(_WIN32)
+static const char * g_qnn_runtimelib_path = "C:\\";
+#else //cygwin on Windows
+static const char * g_qnn_runtimelib_path = "/cygdrive/c/";
+#endif
 //the following helper funcs are used to ensure every QNN tensor name is unique
 static std::atomic<int32_t>  g_ggmltensor_idx(0);
 static void reset_idx() {
@@ -664,7 +730,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-cpu",
                 .desc                 = "Qualcomm Kryo CPU",
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
                 .lib                  = "QnnCpu.dll",
 #else
                 .lib                  = "libQnnCpu.so",
@@ -679,7 +745,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-gpu",
                 .desc                 = "Qualcomm Adreno GPU",
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
                 .lib                  = "QnnGpu.dll",
 #else
                 .lib                  = "libQnnGpu.so",
@@ -694,7 +760,7 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .threads              = 1,
                 .name                 = "qnn-npu",
                 .desc                 = "Qualcomm NPU(Hexagon Tensor Processor)",
-#if defined(_WIN32)
+#if !defined(__ANDROID__) && !defined(__linux__)
                 .lib                  = "QnnHtp.dll",
 #else
                 .lib                  = "libQnnHtp.so",
@@ -856,7 +922,7 @@ static const char * qnn_get_htparch_desc(size_t htp_arch) {
     }
 }
 
-static struct qcom_socinfo * qnn_get_socinfo_from_socmodel(uint32_t soc_model) {
+static struct qcom_socinfo * ggmlqnn_get_socinfo_from_socmodel(uint32_t soc_model) {
     size_t items = sizeof(g_qnn_soc_info_table) / sizeof(g_qnn_soc_info_table[0]);
     for (size_t idx = 0; idx < items; idx++) {
         if (soc_model == g_qnn_soc_info_table[idx].soc_model) {
@@ -1538,7 +1604,7 @@ int qnn_instance::unload_backend() {
 int qnn_instance::load_system() {
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
 
-#ifdef _WIN32
+#if !defined(__ANDROID__) && !defined(__linux__)
     std::string system_lib_path = _lib_path + "QnnSystem.dll";
 #else
     std::string system_lib_path = _lib_path + "libQnnSystem.so";
@@ -1549,8 +1615,8 @@ int qnn_instance::load_system() {
     if (nullptr == _system_lib_handle) {
         GGMLQNN_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
         //re-try with default path of QNN binary runtime lib
-        _lib_path = "/data/local/tmp/";
-#ifdef _WIN32
+        _lib_path = std::string(g_qnn_runtimelib_path);
+#if !defined(__ANDROID__) && !defined(__linux__)
         system_lib_path = _lib_path + "QnnSystem.dll";
 #else
         system_lib_path = _lib_path + "libQnnSystem.so";
@@ -1804,10 +1870,8 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
 
 #if defined(__ANDROID__) || defined(__linux__)
     _rpc_lib_handle = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_LOCAL);
-#elif defined(_WIN32)
-    _rpc_lib_handle = dlopen("libcdsprpc.dll", RTLD_NOW | RTLD_LOCAL);
 #else
-#error "ggml-qnn only support WoA, Android, Linux"
+    _rpc_lib_handle = dlopen("libcdsprpc.dll", RTLD_NOW | RTLD_LOCAL);
 #endif
     if (nullptr == _rpc_lib_handle) {
         GGMLQNN_LOG_WARN("failed to load qualcomm's rpc lib, error:%s\n", dlerror());
@@ -1842,7 +1906,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         GGMLQNN_LOG_DEBUG("initialize qnn context successfully\n");
     }
 
-    if (_backend_name.find("Htp") != std::variant_npos) {
+    if (_backend_name.find("Htp") != std::string::npos) {
         const QnnDevice_PlatformInfo_t * p_info = nullptr;
         _qnn_raw_interface.deviceGetPlatformInfo(nullptr, &p_info);
         GGMLQNN_LOG_INFO("device counts %d", p_info->v1.numHwDevices);
@@ -1858,7 +1922,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
             GGMLQNN_LOG_INFO("qualcomm soc_model:%d(%s), htp_arch:%d(%s), vtcm_size:%d MB", \
                              chipinfo.socModel, qnn_get_socmodel_desc(chipinfo.socModel), \
                              htp_arch, qnn_get_htparch_desc(htp_arch), chipinfo.vtcmSize);
-            struct qcom_socinfo * socinfo = qnn_get_socinfo_from_socmodel(chipinfo.socModel);
+            struct qcom_socinfo * socinfo = ggmlqnn_get_socinfo_from_socmodel(chipinfo.socModel);
             g_qnn_mgr[QNN_BACKEND_NPU].socinfo = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize, {}};
             if (nullptr != socinfo) {
                 memcpy(g_qnn_mgr[QNN_BACKEND_NPU].socinfo.soc_desc, socinfo->soc_desc, sizeof(socinfo->soc_desc));
@@ -2546,22 +2610,25 @@ static ggml_backend_buffer_t ggml_backend_qnn_buffer_type_alloc_buffer(
                                   ggml_backend_buffer_type_t buft, size_t size) {
     ggml_backend_qnn_buffer_context * ctx = new ggml_backend_qnn_buffer_context;
 
+    size_t size_page = 0;
 #if defined(__ANDROID__) || defined(__linux__)
-    size_t size_page = sysconf(_SC_PAGESIZE);
-#elif defined(_WIN32)
+    size_page = sysconf(_SC_PAGESIZE);
+#else
     SYSTEM_INFO systeminfo;
     GetSystemInfo(&systeminfo);
-    size_t size_page = systeminfo.dwPageSize;
+    size_page = systeminfo.dwPageSize;
 #endif
     size_t size_aligned = size;
     if ((size_aligned % size_page) != 0) {
         size_aligned += (size_page - (size_aligned % size_page));
     }
-    ctx->buffer         = ggmlqnn_host_malloc(size_aligned);
+    ctx->buffer         = ggmlqnn_host_malloc(size_aligned, size_page);
     ctx->buffer_size    = size_aligned;
     if (nullptr == ctx->buffer) {
-        GGMLQNN_LOG_WARN("%s: failed to allocate %.2f MiB\n", __func__, size / (1 << 20));
+        GGMLQNN_LOG_WARN("%s: failed to allocate %d MiB\n", __func__, size / (1 << 20));
         return nullptr;
+    } else {
+        GGMLQNN_LOG_DEBUG("%s: allocate %d MiB\n", __func__, size_aligned / (1 << 20));
     }
 
     return ggml_backend_buffer_init(buft, ggml_backend_qnn_buffer_interface, ctx, size);
@@ -2572,11 +2639,10 @@ static size_t ggml_backend_qnn_buffer_type_get_alignment(ggml_backend_buffer_typ
     return 32;
 }
 
-//TODO:not used currently
 static size_t ggml_backend_qnn_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
 
-    return (2 * (1 << 20));
+    return (2 * (1 << 29));
 }
 
 static bool ggml_backend_qnn_buffer_is_host(ggml_backend_buffer_type_t buft) {
@@ -2724,8 +2790,7 @@ static ggml_backend_t ggml_backend_qnn_device_init_backend(ggml_backend_dev_t de
     if (nullptr == params) {
         params = 0;
     }
-    ggml_backend_t qnn_backend = ggml_backend_qnn_init((int) (intptr_t) params,
-                                                       "/data/local/tmp/");
+    ggml_backend_t qnn_backend = ggml_backend_qnn_init((int)(intptr_t)params, g_qnn_runtimelib_path);
 
     return qnn_backend;
 
@@ -2867,7 +2932,7 @@ static void * ggml_backend_qnn_reg_get_proc_address(ggml_backend_reg_t reg, cons
 
     const char * slot_name =  "ggml_backend_set_n_threads";
     //avoid buffer attack rather than strcmp
-    if (0 == std::memcmp(name, slot_name, strlen(slot_name))) {
+    if (0 == memcmp(name, slot_name, strlen(slot_name))) {
         return (void *)ggml_backend_qnn_set_n_threads;
     }
     return nullptr;
