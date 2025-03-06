@@ -482,12 +482,10 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
 
         ov::Shape orig_shape_src0 = { static_cast<size_t>(src0->ne[0]),
                                         static_cast<size_t>(src0->ne[1]),
-                                        static_cast<size_t>(src0->ne[2]),
-                                        static_cast<size_t>(src0->ne[3]) };
+                                        static_cast<size_t>(src0->ne[2])};
         ov::Shape orig_shape_src1 = { static_cast<size_t>(src1->ne[0]),
                                         static_cast<size_t>(src1->ne[1]),
-                                        static_cast<size_t>(src1->ne[2]),
-                                        static_cast<size_t>(src1->ne[3]) };
+                                        static_cast<size_t>(src1->ne[2])};
 
         auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, orig_shape_src0);
         auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, orig_shape_src1);
@@ -577,13 +575,10 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
 
     ov::Shape orig_shape_src0 = { static_cast<size_t>(src0->ne[0]),
                                     static_cast<size_t>(src0->ne[1]),
-                                    static_cast<size_t>(src0->ne[2]),
-                                    static_cast<size_t>(src0->ne[3]) };
+                                    static_cast<size_t>(src0->ne[2])};
     ov::Shape orig_shape_src1 = { static_cast<size_t>(src1->ne[0]),
                                     static_cast<size_t>(src1->ne[1]),
-                                    static_cast<size_t>(src1->ne[2]),
-                                    static_cast<size_t>(src1->ne[3]) };
-
+                                    static_cast<size_t>(src1->ne[2])};
     auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, orig_shape_src0);
     auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, orig_shape_src1);
 
@@ -697,10 +692,9 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
     // Case 1: Both tensors are contiguous
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
         ov::Shape input_shape = {
-            static_cast<size_t>(src0->ne[0]),
-            static_cast<size_t>(src0->ne[1]),
             static_cast<size_t>(src0->ne[2]),
-            static_cast<size_t>(src0->ne[3])
+            static_cast<size_t>(src0->ne[1]),
+            static_cast<size_t>(src0->ne[0])
         };
         size_t num_elements = 1;
         for (auto d : input_shape) {
@@ -764,7 +758,7 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
             std::copy(src_row, src_row + valid_elems, dst_row);
         }
 
-        ov::Shape logical_shape = { valid_elems, num_rows, dim2, dim3 };
+        ov::Shape logical_shape = { dim2, num_rows, valid_elems};
         auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, logical_shape);
         auto identity_const = ov::op::v0::Constant::create(ov::element::i64,
                                     { logical_shape.size() },
@@ -828,12 +822,16 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
             }
         }
 
-        ov::Shape input_shape = { dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2] };
+        // ov::Shape input_shape = { dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2] };
+        ov::Shape input_shape = { dst->src[0]->ne[2], dst->src[0]->ne[1], dst->src[0]->ne[0]};
         auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
 
-        ov::Shape target_shape = { dst->ne[0], dst->ne[1], dst->ne[2] };
-        std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[0]),
-            static_cast<int64_t>(dst->ne[1]), dst->ne[2]};
+        // ov::Shape target_shape = { dst->ne[0], dst->ne[1], dst->ne[2] };
+        // std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[0]),
+        //     static_cast<int64_t>(dst->ne[1]), dst->ne[2]};
+        ov::Shape target_shape = { dst->ne[2], dst->ne[1], dst->ne[0] };
+        std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[2]),
+            static_cast<int64_t>(dst->ne[1]), dst->ne[0]};
         auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, {3}, target_shape_vec);
         auto reshaped = std::make_shared<ov::op::v1::Reshape>(input_param, reshape_const, false);
 
