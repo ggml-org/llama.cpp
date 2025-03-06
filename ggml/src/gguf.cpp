@@ -214,16 +214,22 @@ struct gguf_context {
     size_t size      = 0; // size of `data` in bytes
 
     void * data = nullptr;
+    bool needs_byteswap = false; // only for reading, writing in non-native endianness is not supported
 };
 
 struct gguf_reader {
     FILE * file;
+    bool do_byteswap = false;
 
     gguf_reader(FILE * file) : file(file) {}
 
     template <typename T>
     bool read(T & dst) const {
-        return fread(&dst, 1, sizeof(dst), file) == sizeof(dst);
+        auto res = fread(&dst, 1, sizeof(dst), file);
+        if (do_byteswap) {
+            ggml_bswap(&dst);
+        }
+        return res == sizeof(dst);
     }
 
     template <typename T>
@@ -317,7 +323,7 @@ bool gguf_read_emplace_helper(const struct gguf_reader & gr, std::vector<struct 
 }
 
 struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params) {
-    const struct gguf_reader gr(file);
+    struct gguf_reader gr(file);
     struct gguf_context * ctx = new gguf_context;
 
     bool ok = true;
@@ -347,6 +353,13 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     int64_t n_tensors = 0;
 
     if (ok && gr.read(ctx->version)) {
+        if (((ctx->version & 0x0000FFFF) == 0) && ((ctx->version & 0xFFFF0000) != 0)) {
+            // most likely different endianness, do byteswapping
+            gr.do_byteswap = true;
+            ctx->needs_byteswap = true;
+            ggml_bswap(&(ctx->version));
+        }
+
         if (ctx->version == 1) {
             fprintf(stderr, "%s: GGUFv1 is no longer supported, please use a more up-to-date version\n", __func__);
             ok = false;
@@ -1326,4 +1339,8 @@ void gguf_get_meta_data(const struct gguf_context * ctx, void * data) {
     std::vector<int8_t> buf;
     gguf_write_to_buf(ctx, buf, /*only_meta =*/ true);
     memcpy(data, buf.data(), buf.size());
+}
+
+bool gguf_needs_byteswap(const struct gguf_context * ctx) {
+    return ctx->needs_byteswap;
 }

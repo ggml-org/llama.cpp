@@ -28,6 +28,14 @@
 #include <immintrin.h>
 #endif
 
+#if defined(__gnu_linux__)
+#include <byteswap.h>
+#else // defined(__gnu_linux__)
+#define bswap_16(x) (x)
+#define bswap_32(x) (x)
+#define bswap_64(x) (x)
+#endif // defined(__gnu_linux__)
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -553,12 +561,47 @@ static inline ggml_bf16_t ggml_compute_fp32_to_bf16(float s) {
 #define GGML_FP32_TO_BF16(x) ggml_compute_fp32_to_bf16(x)
 #define GGML_BF16_TO_FP32(x) ggml_compute_bf16_to_fp32(x)
 
+// endianness conversion
+static inline void ggml_bswap16(void * value) {
+    *((uint16_t*)value) = bswap_16(*((uint16_t*)value));
+}
+
+static inline void ggml_bswap32(void * value) {
+    *((uint32_t*)value) = bswap_32(*((uint32_t*)value));
+}
+
+static inline void ggml_bswap64(void * value) {
+    *((uint64_t*)value) = bswap_64(*((uint64_t*)value));
+}
+
 #ifdef __cplusplus
 }
 #endif
 
 #ifdef __cplusplus
 #include <vector>
+#include <type_traits>
+
+template <typename T, std::enable_if_t<sizeof(T) == 1, int> = 0>
+static inline void ggml_bswap(T * value)
+{
+    GGML_UNUSED(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 2, int> = 0>
+static inline void ggml_bswap(T * value) {
+    ggml_bswap16(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 4, int> = 0>
+static inline void ggml_bswap(T * value) {
+    ggml_bswap32(value);
+}
+
+template <typename T, std::enable_if_t<sizeof(T) == 8, int> = 0>
+static inline void ggml_bswap(T * value) {
+    ggml_bswap64(value);
+}
 
 // expose GGUF internals for test code
 GGML_API size_t gguf_type_size(enum gguf_type type);
