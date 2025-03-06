@@ -161,11 +161,11 @@ endif()
 # Somehow in OpenBSD whenever POSIX conformance is specified
 # some string functions rely on locale_t availability,
 # which was introduced in POSIX.1-2008, forcing us to go higher
-if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
-    add_compile_definitions(_XOPEN_SOURCE=700)
-else()
-    add_compile_definitions(_XOPEN_SOURCE=600)
-endif()
+#if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
+#    add_compile_definitions(_XOPEN_SOURCE=700)
+#else()
+#    add_compile_definitions(_XOPEN_SOURCE=600)
+#endif()
 
 # Data types, macros and functions related to controlling CPU affinity and
 # some memory allocation are available on Linux through GNU extensions in libc
