@@ -308,6 +308,7 @@ class MODEL_ARCH(IntEnum):
     GRANITE_MOE      = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
+    COGVLM           = auto()
     # vision models
     VISION_LLAVA     = auto()
     VISION_MOBILEVLM = auto()
@@ -441,6 +442,19 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    ATTN_TXT_QKV         = auto()
+    ATTN_IMG_QKV         = auto()
+    ATTN_TXT_DENSE       = auto()
+    ATTN_IMG_DENSE       = auto()
+    CROSS_ATTN_Q         = auto()
+    CROSS_ATTN_KV        = auto()
+    CROSS_ATTN_DENSE     = auto()
+    FFN_TXT_UP           = auto()
+    FFN_TXT_GATE         = auto()
+    FFN_TXT_DOWN         = auto()
+    FFN_IMG_UP           = auto()
+    FFN_IMG_GATE         = auto()
+    FFN_IMG_DOWN         = auto()
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -533,6 +547,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE:          "granite",
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.CHAMELEON:        "chameleon",
+    MODEL_ARCH.COGVLM:           "cogvlm",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     # vision
     MODEL_ARCH.VISION_LLAVA:     "llava",
@@ -666,6 +681,19 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    MODEL_TENSOR.ATTN_TXT_QKV:              "blk.{bid}.attn_txt_qkv",
+    MODEL_TENSOR.ATTN_IMG_QKV:              "blk.{bid}.attn_img_qkv",
+    MODEL_TENSOR.ATTN_TXT_DENSE:            "blk.{bid}.attn_txt_dense",
+    MODEL_TENSOR.ATTN_IMG_DENSE:            "blk.{bid}.attn_img_dense",
+    MODEL_TENSOR.CROSS_ATTN_Q:              "blk.{bid}.cross_attn_q",
+    MODEL_TENSOR.CROSS_ATTN_KV:             "blk.{bid}.cross_attn_kv",
+    MODEL_TENSOR.CROSS_ATTN_DENSE:          "blk.{bid}.cross_attn_dense",
+    MODEL_TENSOR.FFN_TXT_UP:                "blk.{bid}.ffn_txt_up",
+    MODEL_TENSOR.FFN_TXT_GATE:              "blk.{bid}.ffn_txt_gate",
+    MODEL_TENSOR.FFN_TXT_DOWN:              "blk.{bid}.ffn_txt_down",
+    MODEL_TENSOR.FFN_IMG_UP:                "blk.{bid}.ffn_img_up",
+    MODEL_TENSOR.FFN_IMG_GATE:              "blk.{bid}.ffn_img_gate",
+    MODEL_TENSOR.FFN_IMG_DOWN:              "blk.{bid}.ffn_img_down",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "v.mmproj_{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "v.mmproj.fc",
@@ -1620,6 +1648,27 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.COGVLM: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_TXT_QKV,
+        MODEL_TENSOR.ATTN_IMG_QKV,
+        MODEL_TENSOR.ATTN_TXT_DENSE,
+        MODEL_TENSOR.ATTN_IMG_DENSE,
+        MODEL_TENSOR.ATTN_NORM_2,
+        MODEL_TENSOR.CROSS_ATTN_Q,
+        MODEL_TENSOR.CROSS_ATTN_KV,
+        MODEL_TENSOR.CROSS_ATTN_DENSE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_TXT_UP,
+        MODEL_TENSOR.FFN_TXT_GATE,
+        MODEL_TENSOR.FFN_TXT_DOWN,
+        MODEL_TENSOR.FFN_IMG_UP,
+        MODEL_TENSOR.FFN_IMG_GATE,
+        MODEL_TENSOR.FFN_IMG_DOWN,
     ],
     MODEL_ARCH.WAVTOKENIZER_DEC: [
         MODEL_TENSOR.TOKEN_EMBD,

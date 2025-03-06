@@ -577,9 +577,7 @@ class Model:
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        # DEBIAN_FRONTEND=noninteractive means that the script is running in a non-interactive environment (i.e. CI), so we cannot answer Y/N when it asks for user input
-        is_cli_non_interactive = os.environ.get("DEBIAN_FRONTEND", "") == "noninteractive"
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=is_cli_non_interactive)
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
@@ -5185,6 +5183,58 @@ class ChameleonModel(Model):
         data_torch = data_torch[0].view(2, head_dim // 2).t().reshape(1, -1)
         data_torch = data_torch.repeat_interleave(n_heads, 0)
         return data_torch
+
+@Model.register("CogAgentForCausalLM")
+class CogVLMModel(Model):
+    model_arch = gguf.MODEL_ARCH.COGVLM
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ftype = gguf.LlamaFileType.ALL_F32
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip boi and eoi tensors for now
+        if name.endswith("boi"):
+            return []
+        if name.endswith("eoi"):
+            return []
+        if name.startswith("model.vision"):
+            return []
+        if name.startswith("model.cross_vision"):
+            return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+    
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained('lmsys/vicuna-7b-v1.5')
+        vocab_size = len(tokenizer.vocab.items())
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if tokenizer.added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("llama")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
 
 
 ###### CONVERSION LOGIC ######

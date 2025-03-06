@@ -28,6 +28,7 @@ class TensorNameMap:
             "transformer.token_embeddings",              # openelm
             "shared",                                    # t5
             "rwkv.embeddings",                           # rwkv
+            "model.embed_tokens",                        # cogvlm
         ),
 
         # Token type embeddings
@@ -55,7 +56,7 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
-            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe cogvlm
             "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
@@ -68,7 +69,7 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
-            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe
+            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe nemotron cogvlm
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
             "ln_f",                                    # refact bloom qwen gpt2
@@ -80,7 +81,6 @@ class TensorNameMap:
             "transformer.rms_norm",                    # Grok
             "encoder.final_layernorm",                 # chatglm
             "transformer.norm",                        # openelm
-            "model.norm",                              # nemotron
             "rwkv.ln_out",                             # rwkv
             "backbone.final_layer_norm",               # wavtokenizer
         ),
@@ -108,7 +108,7 @@ class TensorNameMap:
             "transformer.h.{bid}.input_layernorm",                  # falcon7b
             "h.{bid}.input_layernorm",                              # bloom
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
-            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe cogvlm
             "layers.{bid}.attention_norm",                          # llama-pth
             "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
             "model.layers.{bid}.ln1",                               # yi
@@ -127,9 +127,10 @@ class TensorNameMap:
 
         # Attention norm 2
         MODEL_TENSOR.ATTN_NORM_2: (
-            "transformer.h.{bid}.ln_attn",                  # falcon40b
-            "encoder.layer.{bid}.layer_norm_1",             # jina-v2-code
-            "rwkv.blocks.{bid}.ln2",                        # rwkv
+            "transformer.h.{bid}.ln_attn",                       # falcon40b
+            "encoder.layer.{bid}.layer_norm_1",                  # jina-v2-code
+            "rwkv.blocks.{bid}.ln2",                             # rwkv
+            "model.layers.{bid}.post_cross_attention_layernorm", # cogvlm
         ),
 
         # Attention query-key-value
@@ -242,7 +243,7 @@ class TensorNameMap:
             "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
             "h.{bid}.post_attention_layernorm",                              # bloom
             "transformer.blocks.{bid}.norm_2",                               # mpt
-            "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe phimoe cogvlm
             "layers.{bid}.ffn_norm",                                         # llama-pth
             "language_model.encoder.layers.{bid}.post_attention_layernorm",  # persimmon
             "model.layers.{bid}.ln2",                                        # yi
@@ -786,6 +787,58 @@ class TensorNameMap:
 
         MODEL_TENSOR.POSNET_ATTN_OUT: (
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
+        ),
+
+        MODEL_TENSOR.ATTN_TXT_QKV: (
+            "model.layers.{bid}.self_attn.language_expert_query_key_value", #cogvlm
+        ),
+
+        MODEL_TENSOR.ATTN_IMG_QKV: (
+            "model.layers.{bid}.self_attn.vision_expert_query_key_value", #cogvlm
+        ),
+
+        MODEL_TENSOR.ATTN_TXT_DENSE: (
+            "model.layers.{bid}.self_attn.language_expert_dense", #cogvlm
+        ),
+
+        MODEL_TENSOR.ATTN_IMG_DENSE: (
+            "model.layers.{bid}.self_attn.vision_expert_dense", #cogvlm
+        ),
+
+        MODEL_TENSOR.CROSS_ATTN_Q: (
+            "model.layers.{bid}.cross_attn.query", # cogvlm
+        ),
+
+        MODEL_TENSOR.CROSS_ATTN_KV: (
+            "model.layers.{bid}.cross_attn.key_value", # cogvlm
+        ),
+
+        MODEL_TENSOR.CROSS_ATTN_DENSE: (
+            "model.layers.{bid}.cross_attn.dense", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_TXT_UP: (
+            "model.layers.{bid}.mlp.language_mlp.up_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_TXT_GATE: (
+            "model.layers.{bid}.mlp.language_mlp.gate_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_TXT_DOWN: (
+            "model.layers.{bid}.mlp.language_mlp.down_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_IMG_UP: (
+            "model.layers.{bid}.mlp.vision_mlp.up_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_IMG_GATE: (
+            "model.layers.{bid}.mlp.vision_mlp.gate_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.FFN_IMG_DOWN: (
+            "model.layers.{bid}.mlp.vision_mlp.down_proj", # cogvlm
         ),
 
         #############################################################################

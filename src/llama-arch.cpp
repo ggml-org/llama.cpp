@@ -1302,25 +1302,25 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
     {
         LLM_ARCH_COGVLM,
         {
-            { LLM_TENSOR_TOKEN_EMBD,         "embed_tokens" },
-            { LLM_TENSOR_OUTPUT_NORM,        "norm" },
-            { LLM_TENSOR_OUTPUT,             "lm_head" },
-            { LLM_TENSOR_ATTN_NORM,          "layers.%d.input_layernorm" },  // input_norm_w
-            { LLM_TENSOR_ATTN_TXT_QKV,       "layers.%d.self_attn.language_expert_query_key_value" },  // language_qkv_w
-            { LLM_TENSOR_ATTN_IMG_QKV,       "layers.%d.self_attn.vision_expert_query_key_value" },  // vision_qkv_w
-            { LLM_TENSOR_ATTN_TXT_DENSE,     "layers.%d.self_attn.language_expert_dense" },  // language_dense_w
-            { LLM_TENSOR_ATTN_IMG_DENSE,     "layers.%d.self_attn.vision_expert_dense" },  // vision_dense_w
-            { LLM_TENSOR_ATTN_NORM_2,        "layers.%d.post_cross_attention_layernorm" },  // self_attn_norm_w
-            { LLM_TENSOR_CROSS_ATTN_Q,       "layers.%d.cross_attn.query" },  // cross_query_w
-            { LLM_TENSOR_CROSS_ATTN_KV,      "layers.%d.cross_attn.key_value" },  // cross_query_kv
-            { LLM_TENSOR_CROSS_ATTN_DENSE,   "layers.%d.cross_attn.dense" },  // cross_dense_w
-            { LLM_TENSOR_FFN_NORM,           "layers.%d.post_attention_layernorm" },  // attn_norm_w
-            { LLM_TENSOR_FFN_TXT_UP,         "layers.%d.mlp.language_mlp.up_proj" },  // language_up_proj_w
-            { LLM_TENSOR_FFN_TXT_GATE,       "layers.%d.mlp.language_mlp.gate_proj" },  // language_gate_proj_w
-            { LLM_TENSOR_FFN_TXT_DOWN,       "layers.%d.mlp.language_mlp.down_proj" },  // language_down_proj_w
-            { LLM_TENSOR_FFN_IMG_UP,         "layers.%d.mlp.vision_mlp.up_proj" },  // vision_up_proj_w
-            { LLM_TENSOR_FFN_IMG_GATE,       "layers.%d.mlp.vision_mlp.gate_proj" },  // vision_gate_proj_w
-            { LLM_TENSOR_FFN_IMG_DOWN,       "layers.%d.mlp.vision_mlp.down_proj" }  // vision_down_proj_w
+            { LLM_TENSOR_TOKEN_EMBD,         "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
+            { LLM_TENSOR_OUTPUT,             "output" },
+            { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },  // input_norm_w
+            { LLM_TENSOR_ATTN_TXT_QKV,       "blk.%d.attn_txt_qkv" },  // language_qkv_w
+            { LLM_TENSOR_ATTN_IMG_QKV,       "blk.%d.attn_img_qkv" },  // vision_qkv_w
+            { LLM_TENSOR_ATTN_TXT_DENSE,     "blk.%d.attn_txt_dense" },  // language_dense_w
+            { LLM_TENSOR_ATTN_IMG_DENSE,     "blk.%d.attn_img_dense" },  // vision_dense_w
+            { LLM_TENSOR_ATTN_NORM_2,        "blk.%d.attn_norm_2" },  // self_attn_norm_w
+            { LLM_TENSOR_CROSS_ATTN_Q,       "blk.%d.cross_attn_q" },  // cross_query_w
+            { LLM_TENSOR_CROSS_ATTN_KV,      "blk.%d.cross_attn_kv" },  // cross_query_kv
+            { LLM_TENSOR_CROSS_ATTN_DENSE,   "blk.%d.cross_attn_dense" },  // cross_dense_w
+            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },  // attn_norm_w
+            { LLM_TENSOR_FFN_TXT_UP,         "blk.%d.ffn_txt_up" },  // language_up_proj_w
+            { LLM_TENSOR_FFN_TXT_GATE,       "blk.%d.ffn_txt_gate" },  // language_gate_proj_w
+            { LLM_TENSOR_FFN_TXT_DOWN,       "blk.%d.ffn_txt_down" },  // language_down_proj_w
+            { LLM_TENSOR_FFN_IMG_UP,         "blk.%d.ffn_img_up" },  // vision_up_proj_w
+            { LLM_TENSOR_FFN_IMG_GATE,       "blk.%d.ffn_img_gate" },  // vision_gate_proj_w
+            { LLM_TENSOR_FFN_IMG_DOWN,       "blk.%d.ffn_img_down" }  // vision_down_proj_w
         },
     },
     {
