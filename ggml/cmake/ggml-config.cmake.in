@@ -78,7 +78,7 @@ if (NOT GGML_SHARED_LIB)
 
     if (GGML_SYCL)
         find_package(DNNL)
-        if (${DNNL_FOUND} AND GGML_SYCL_TARGET STREQUAL "INTEL")
+        if (${DNNL_FOUND} AND GGML_SYCL_TARGET MATCHES "INTEL.*")
             list(APPEND GGML_SYCL_INTERFACE_LINK_LIBRARIES DNNL::dnnl)
         endif()
         if (WIN32)
