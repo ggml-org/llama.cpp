@@ -1,4 +1,4 @@
-#define CL_TARGET_OPENCL_VERSION 220
+#define CL_TARGET_OPENCL_VERSION GGML_OPENCL_TARGET_VERSION
 #define CL_USE_DEPRECATED_OPENCL_1_2_APIS
 
 // suppress warnings in CL headers for GCC and Clang
@@ -25,6 +25,8 @@
 #include <vector>
 #include <string>
 #include <cmath>
+#include <memory>
+#include <charconv>
 
 #undef MIN
 #undef MAX
@@ -61,6 +63,97 @@ enum ADRENO_GPU_GEN {
     A8X,
     X1E,
 };
+
+struct ggml_cl_version {
+    cl_uint major = 0;
+    cl_uint minor = 0;
+};
+
+// Parses a version string of form "XX.YY ". On an error returns ggml_cl_version with all zeroes.
+static ggml_cl_version parse_cl_version(std::string_view str) {
+    size_t major_str_begin = 0;
+    size_t major_str_end   = str.find(".", major_str_begin);
+    if (major_str_end == std::string::npos) {
+        return {};
+    }
+
+    size_t minor_str_begin = major_str_end + 1;
+    size_t minor_str_end   = str.find(" ", minor_str_begin);
+    if (minor_str_end == std::string::npos) {
+        return {};
+    }
+
+    cl_uint version_major;
+    if (std::from_chars(str.data() + major_str_begin, str.data() + major_str_end, version_major).ec != std::errc{}) {
+        return {};
+    }
+
+    cl_uint version_minor;
+    if (std::from_chars(str.data() + minor_str_begin, str.data() + minor_str_end, version_minor).ec != std::errc{}) {
+        return {};
+    }
+    return { version_major, version_minor };
+}
+
+// Returns OpenCL platform's version. On an error returns ggml_cl_version with all zeroes.
+static ggml_cl_version get_opencl_platform_version(cl_platform_id platform) {
+    size_t param_size;
+    CL_CHECK(clGetPlatformInfo(platform, CL_PLATFORM_VERSION, 0, nullptr, &param_size));
+    std::unique_ptr<char[]> param_storage(new char[param_size]);
+    CL_CHECK(clGetPlatformInfo(platform, CL_PLATFORM_VERSION, param_size, param_storage.get(), nullptr));
+
+    auto              param_value    = std::string_view(param_storage.get(), param_size);
+    const std::string version_prefix = "OpenCL ";  // Suffix: "XX.YY <platform-specific-info>"
+    if (param_value.find(version_prefix) != 0) {
+        return {};
+    }
+    param_value.remove_prefix(version_prefix.length());
+    return parse_cl_version(param_value);
+}
+
+// Return a version to use in OpenCL C compilation. On an error returns ggml_cl_version with all zeroes.
+static ggml_cl_version get_opencl_c_version(ggml_cl_version platform_version, cl_device_id device) {
+    size_t param_size;
+
+#if CL_TARGET_OPENCL_VERSION >= 300
+    if (platform_version.major >= 3) {
+        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, 0, nullptr, &param_size));
+        if (!param_size) {
+            return {};
+        }
+
+        std::unique_ptr<cl_name_version[]> versions(new cl_name_version[param_size]);
+        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_ALL_VERSIONS, param_size, versions.get(), nullptr));
+        unsigned versions_count = param_size / sizeof(cl_name_version);
+
+        cl_version version_max = 0;
+        for (unsigned i = 0; i < versions_count; i++) {
+            version_max = std::max<cl_version>(versions[i].version, version_max);
+        }
+
+        return { CL_VERSION_MAJOR(version_max), CL_VERSION_MINOR(version_max) };
+    }
+#else
+    GGML_UNUSED(platform_version);
+#endif  // CL_TARGET_OPENCL_VERSION >= 300
+
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, 0, nullptr, &param_size));
+    if (!param_size) {
+        return {};
+    }
+
+    std::unique_ptr<char[]> param_storage(new char[param_size]);
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_OPENCL_C_VERSION, param_size, param_storage.get(), nullptr));
+    auto param_value = std::string_view(param_storage.get(), param_size);
+
+    const std::string version_prefix = "OpenCL C ";  // Suffix: "XX.YY <platform-specific-info>"
+    if (param_value.find(version_prefix) != 0) {
+        return {};
+    }
+    param_value.remove_prefix(version_prefix.length());
+
+    return parse_cl_version(param_value);
+}
 
 static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
     if (strstr(device_name, "730") ||
@@ -470,16 +563,11 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // A local ref of cl_device_id for convenience
     cl_device_id device = backend_ctx->device;
 
-    // Check device OpenCL version, OpenCL 2.0 or above is required
-    size_t device_ver_str_size;
-    clGetDeviceInfo(device, CL_DEVICE_VERSION, 0, NULL, &device_ver_str_size);
-    char *device_ver_buffer = (char *)alloca(device_ver_str_size + 1);
-    clGetDeviceInfo(device, CL_DEVICE_VERSION, device_ver_str_size, device_ver_buffer, NULL);
-    device_ver_buffer[device_ver_str_size] = '\0';
-    GGML_LOG_INFO("ggml_opencl: device OpenCL version: %s\n", device_ver_buffer);
+    ggml_cl_version platform_version = get_opencl_platform_version(default_device->platform->id);
 
-    if (strstr(device_ver_buffer, "OpenCL 2") == NULL &&
-        strstr(device_ver_buffer, "OpenCL 3") == NULL) {
+    // Check device OpenCL version, OpenCL 2.0 or above is required
+    ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, device);
+    if (opencl_c_version.major < 2) {
         GGML_LOG_ERROR("ggml_opencl: OpenCL 2.0 or above is required\n");
         return backend_ctx;
     }
@@ -516,8 +604,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 
     // If OpenCL 3.0 is supported, then check for cl_khr_subgroups, which becomes
     // optional in OpenCL 3.0 (cl_khr_subgroup is mandatory in OpenCL 2.x)
-    if (strstr(device_ver_buffer, "OpenCL 3") &&
-        strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
+    if (opencl_c_version.major == 3 && strstr(ext_buffer, "cl_khr_subgroups") == NULL &&
         strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
         GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
             "(note that subgroups is an optional feature in OpenCL 3.0)\n");
@@ -581,9 +668,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     const std::string kernel_src = read_file("ggml-opencl.cl");
 #endif
 
-    std::string compile_opts =
-        "-cl-std=CL2.0 -cl-mad-enable -cl-unsafe-math-optimizations "
-        "-cl-finite-math-only -cl-fast-relaxed-math ";
+    auto opencl_c_std =
+        std::string("CL") + std::to_string(opencl_c_version.major) + "." + std::to_string(opencl_c_version.minor);
+
+    std::string compile_opts = std::string("-cl-std=") + opencl_c_std +
+                               " -cl-mad-enable -cl-unsafe-math-optimizations"
+                               " -cl-finite-math-only -cl-fast-relaxed-math";
     backend_ctx->program = build_program_from_source(context, device, kernel_src.c_str(), compile_opts);
 
     // Non matmul kernels.
@@ -693,10 +783,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->kernel_transpose_16 = clCreateKernel(backend_ctx->program_transpose_16, "kernel_transpose_16", &err), err));
 
     // Gemv general
-    std::string CL_gemv_compile_opts =
-        " -cl-std=CL2.0 "
-        " -cl-mad-enable "
-        " -DSIMDGROUP_WIDTH=" + std::to_string(backend_ctx->adreno_wave_size);
+    std::string CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
+                                       " -cl-mad-enable "
+                                       " -DSIMDGROUP_WIDTH=" +
+                                       std::to_string(backend_ctx->adreno_wave_size);
     if (has_vector_subgroup_broadcast) {
         CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
     }
@@ -713,12 +803,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_general = clCreateKernel(backend_ctx->program_CL_gemv_general, "kernel_gemv_noshuffle", &err), err));
 
     // Gemv 2048, 16384
-    CL_gemv_compile_opts =
-        " -cl-std=CL2.0 "
-        " -cl-mad-enable "
-        " -DLINE_STRIDE_A=2048 "
-        " -DBLOCK_STRIDE_A=16384 "
-        " -DSIMDGROUP_WIDTH=" + std::to_string(backend_ctx->adreno_wave_size);
+    CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
+                           " -cl-mad-enable "
+                           " -DLINE_STRIDE_A=2048 "
+                           " -DBLOCK_STRIDE_A=16384 "
+                           " -DSIMDGROUP_WIDTH=" +
+                           std::to_string(backend_ctx->adreno_wave_size);
     if (has_vector_subgroup_broadcast) {
         CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
     }
@@ -735,12 +825,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_4096 = clCreateKernel(backend_ctx->program_CL_gemv_4096_1_4096, "kernel_gemv_noshuffle", &err), err));
 
     // Gemv 2048, 16384
-    CL_gemv_compile_opts =
-        " -cl-std=CL2.0 "
-        " -cl-mad-enable "
-        " -DLINE_STRIDE_A=2048 "
-        " -DBLOCK_STRIDE_A=16384 "
-        " -DSIMDGROUP_WIDTH=" + std::to_string(backend_ctx->adreno_wave_size);
+    CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
+                           " -cl-mad-enable "
+                           " -DLINE_STRIDE_A=2048 "
+                           " -DBLOCK_STRIDE_A=16384 "
+                           " -DSIMDGROUP_WIDTH=" +
+                           std::to_string(backend_ctx->adreno_wave_size);
     if (has_vector_subgroup_broadcast) {
         CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
     }
@@ -750,12 +840,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_4096_1_11008 = clCreateKernel(backend_ctx->program_CL_gemv_4096_1_11008, "kernel_gemv_noshuffle", &err), err));
 
     // Gemv 5504, 44032
-    CL_gemv_compile_opts =
-        " -cl-std=CL2.0 "
-        " -cl-mad-enable "
-        " -DLINE_STRIDE_A=5504 "
-        " -DBLOCK_STRIDE_A=44032 "
-        " -DSIMDGROUP_WIDTH=" + std::to_string(backend_ctx->adreno_wave_size);
+    CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
+                           " -cl-mad-enable "
+                           " -DLINE_STRIDE_A=5504 "
+                           " -DBLOCK_STRIDE_A=44032 "
+                           " -DSIMDGROUP_WIDTH=" +
+                           std::to_string(backend_ctx->adreno_wave_size);
     if (has_vector_subgroup_broadcast) {
         CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
     }
@@ -765,12 +855,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->CL_mul_mat_vec_q4_0_f32_1d_4x_flat_11008_1_4096 = clCreateKernel(backend_ctx->program_CL_gemv_11008_1_4096, "kernel_gemv_noshuffle", &err), err));
 
     // Gemv 16000, 128000
-    CL_gemv_compile_opts =
-        " -cl-std=CL2.0 "
-        " -cl-mad-enable "
-        " -DLINE_STRIDE_A=16000 "
-        " -DBLOCK_STRIDE_A=128000 "
-        " -DSIMDGROUP_WIDTH=" + std::to_string(backend_ctx->adreno_wave_size);
+    CL_gemv_compile_opts = std::string("-cl-std=") + opencl_c_std +
+                           " -cl-mad-enable "
+                           " -DLINE_STRIDE_A=16000 "
+                           " -DBLOCK_STRIDE_A=128000 "
+                           " -DSIMDGROUP_WIDTH=" +
+                           std::to_string(backend_ctx->adreno_wave_size);
     if (has_vector_subgroup_broadcast) {
         CL_gemv_compile_opts += " -DVECTOR_SUB_GROUP_BROADCAT ";
     }
