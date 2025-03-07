@@ -45,7 +45,8 @@ typedef void (* fattn_kernel_t)(
         const int ne0,
         const int ne1,
         const int ne2,
-        const int ne3);
+        const int ne3,
+        const int parallel_blocks);
 
 typedef half (*vec_dot_KQ_f16_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -612,14 +613,15 @@ static __global__ void flash_attn_stream_k_fixup(
     *dst = dst_val / rowsum;
 }
 
-template<int D, int parallel_blocks> // D == head size
+template<int D> // D == head size
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
 __launch_bounds__(D, 1)
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
 static __global__ void flash_attn_combine_results(
         const float  * __restrict__ VKQ_parts,
         const float2 * __restrict__ VKQ_meta,
-        float * __restrict__ dst) {
+        float * __restrict__ dst,
+        const int parallel_blocks) {
     VKQ_parts += parallel_blocks*D * gridDim.y*blockIdx.x;
     VKQ_meta  += parallel_blocks   * gridDim.y*blockIdx.x;
     dst       +=                 D * gridDim.y*blockIdx.x;
@@ -627,7 +629,7 @@ static __global__ void flash_attn_combine_results(
     const int tid = threadIdx.x;
     __builtin_assume(tid < D);
 
-    __shared__ float2 meta[parallel_blocks];
+    extern __shared__ float2 meta[];
     if (tid < 2*parallel_blocks) {
         ((float *) meta)[threadIdx.x] = ((const float *)VKQ_meta) [blockIdx.y*(2*parallel_blocks) + tid];
     }
@@ -635,14 +637,12 @@ static __global__ void flash_attn_combine_results(
     __syncthreads();
 
     float kqmax = meta[0].x;
-#pragma unroll
     for (int l = 1; l < parallel_blocks; ++l) {
         kqmax = max(kqmax, meta[l].x);
     }
 
     float VKQ_numerator   = 0.0f;
     float VKQ_denominator = 0.0f;
-#pragma unroll
     for (int l = 0; l < parallel_blocks; ++l) {
         const float diff = meta[l].x - kqmax;
         const float KQ_max_scale = expf(diff);
@@ -677,11 +677,10 @@ static void on_no_fattn_vec_case(const int D) {
     }
 }
 
-// parallel_blocks == 0 is stream-k decomposition
-template <int D, int ncols1, int ncols2, int parallel_blocks, int KQ_stride>
+template <int D, int ncols1, int ncols2, int KQ_stride>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel,
-    const int nwarps, const size_t nbytes_shared, const bool need_f16_K, const bool need_f16_V
+    const int nwarps, const size_t nbytes_shared, const bool need_f16_K, const bool need_f16_V, const bool stream_k
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -703,6 +702,9 @@ void launch_fattn(
     GGML_ASSERT(K->ne[1] % FATTN_KQ_STRIDE == 0 && "Incorrect KV cache padding.");
 
     GGML_ASSERT(Q->ne[3] == 1);
+
+    GGML_ASSERT(stream_k || ncols2 == 1);
+    const bool use_parallel_blocks = !stream_k && (Q->ne[1] <= ncols1) ? true : false;
 
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
@@ -755,12 +757,14 @@ void launch_fattn(
         nb23 = nb23*bs*sizeof(half)/ts;
     }
 
+    int parallel_blocks = 1;
+
     const int ntiles_x = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int ntiles_total = ntiles_x * (Q->ne[2] / ncols2) * Q->ne[3];
 
     const dim3 block_dim(warp_size, nwarps, 1);
     dim3 blocks_num;
-    if (parallel_blocks == 0) {
+    if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = 2*nsm;
         const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
@@ -776,6 +780,21 @@ void launch_fattn(
 
         dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + D) * sizeof(float));
     } else {
+        if (use_parallel_blocks) {
+            const int num_blocks_base = ntiles_x*Q->ne[2]*Q->ne[3];
+            const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+            const int seqlen_tiles = (K->ne[1] + D - 1) / D;
+
+            // Determine the number of active blocks per SM
+            int numActiveBlocks = 1;
+            CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numActiveBlocks, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
+
+            // we want to keep at least `numActiveBlocks` blocks per SM to improve occupancy.
+            // this kernel operates on `D` tile of seq length. We need to consider how many `D` tiles can be processed in parallel.
+            // If there are not enough tiles to process, we can reduce the number of blocks
+            parallel_blocks = std::max(std::min((nsm * numActiveBlocks) / num_blocks_base, seqlen_tiles), 1);
+        }
+
         blocks_num.x = parallel_blocks*ntiles_x;
         blocks_num.y = Q->ne[2];
         blocks_num.z = Q->ne[3];
@@ -811,7 +830,7 @@ void launch_fattn(
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
-        (parallel_blocks) > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+        !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3],
@@ -819,11 +838,12 @@ void launch_fattn(
         Q->nb[1], Q->nb[2], Q->nb[3],
         nb11, nb12, nb13,
         nb21, nb22, nb23,
-        KQV->ne[0], KQV->ne[1], KQV->ne[2], KQV->ne[3]
+        KQV->ne[0], KQV->ne[1], KQV->ne[2], KQV->ne[3],
+        parallel_blocks
     );
     CUDA_CHECK(cudaGetLastError());
 
-    if constexpr (parallel_blocks == 0) {
+    if (stream_k) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
             const dim3 block_dim_combine(D, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
@@ -832,13 +852,14 @@ void launch_fattn(
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
                 ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], K->ne[1]);
         }
-    } else if constexpr (parallel_blocks > 1) {
+    } else if (parallel_blocks > 1) {
         const dim3 block_dim_combine(D, 1, 1);
         const dim3 blocks_num_combine(Q->ne[1], blocks_num.y, blocks_num.z);
+        const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
-        flash_attn_combine_results<D, parallel_blocks>
-            <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data);
+        flash_attn_combine_results<D>
+            <<<blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream>>>
+            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
 }
