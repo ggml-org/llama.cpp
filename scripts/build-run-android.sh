@@ -1,4 +1,5 @@
 #!/bin/bash
+# build llama.cpp + ggml-qnn for Snapdragon mobile SoC equipped Android phone on Linux
 
 set -e
 
