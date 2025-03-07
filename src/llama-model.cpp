@@ -3845,6 +3845,11 @@ int32_t llama_model_n_head_kv(const struct llama_model * model) {
     return model->hparams.n_head_kv();
 }
 
+const ggml_backend_dev_t * llama_model_get_devices(const struct llama_model * model, size_t * out_len) {
+    *out_len = model->devices.size();
+    return model->devices.data();
+}
+
 // deprecated
 int32_t llama_n_ctx_train(const struct llama_model * model) {
     return llama_model_n_ctx_train(model);

@@ -610,6 +610,18 @@ enum llama_pooling_type llama_pooling_type(const struct llama_context * ctx) {
     return ctx->cparams.pooling_type;
 }
 
+size_t llama_n_backends(const struct llama_context * ctx) {
+    return ctx->backends.size();
+}
+
+size_t llama_get_backends(const struct llama_context * ctx, ggml_backend_t * out, size_t out_len) {
+    size_t return_len = std::min(ctx->backends.size(), out_len);
+    for (size_t i = 0; i < return_len; i++) {
+        out[i] = ctx->backends[i].get();
+    }
+    return return_len;
+}
+
 void llama_attach_threadpool(
              struct llama_context * ctx,
         ggml_threadpool_t   threadpool,
