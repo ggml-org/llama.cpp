@@ -1,10 +1,16 @@
 #!/bin/bash
+# build llama.cpp or llama.cpp + ggml-qnn for Windows with cygwin on Windows
+# build llama.cpp + ggml-qnn for Snapdragon desktop SoC equipped WoA(Windows on ARM) with cygwin on Windows
+
+# items marked TODO has not verified yet
 
 set -e
+
 
 PWD=`pwd`
 PREFIX_PATH=/cygdrive/c
 GGUF_MODEL_NAME=${PREFIX_PATH}/qwen1_5-1_8b-chat-q4_0.gguf
+PROJECT_HOME_PATH=`pwd`
 
 #QNN SDK could be found at:
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
@@ -38,7 +44,7 @@ function check_qnn_sdk()
 function build_windows_x86
 {
     echo "build_windows_x86-without-qnn"
-    cmake -H. -B./out/windows_x86 -DCMAKE_BUILD_TYPE=Release
+    cmake -H. -B./out/windows_x86 -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF
     cd out/windows_x86
     make -j16
     show_pwd
@@ -49,7 +55,7 @@ function build_windows_x86
 function build_windows_x86_qnn
 {
     echo "build_windows_x86-with-qnn"
-    cmake -H. -B./out/windows_x86_qnn -DCMAKE_BUILD_TYPE=Release -DGGML_USE_QNN=ON -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
+    cmake -H. -B./out/windows_x86_qnn -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
     cd out/windows_x86_qnn
     make -j16
     show_pwd
@@ -57,10 +63,18 @@ function build_windows_x86_qnn
     cd -
 }
 
+#TODO
 function build_windows_arm64_qnn
 {
     echo "build_windows_arm64 not supported now"
-    #cmake -H. -B./out/windows_arm64_qnn -DCMAKE_BUILD_TYPE=Release -DGGML_USE_QNN=ON -DCMAKE_TOOLCHAIN_FILE=${MSSDK}/cmake/arm64-windows-llvm.cmake -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
+    return 0
+    echo "cmake source dir:${PROJECT_HOME_PATH}"
+    cmake -H. -B./out/windows_arm64_qnn -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DGGML_QNN=ON -DCMAKE_TOOLCHAIN_FILE=${PROJECT_HOME_PATH}/cmake/arm64-windows-llvm.cmake -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
+    cd out/windows_arm64_qnn
+    make -j16
+    show_pwd
+
+    cd -
 }
 
 
