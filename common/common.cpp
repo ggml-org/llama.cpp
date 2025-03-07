@@ -582,6 +582,7 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
     return buf.str();
 }
 
+/*
 std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch) {
     std::stringstream buf;
 
@@ -616,6 +617,7 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
 
     return buf.str();
 }
+*/
 
 void string_process_escapes(std::string & input) {
     std::size_t input_len = input.length();
@@ -1049,7 +1051,8 @@ struct common_init_result common_init_from_params(common_params & params) {
         }
 
         if (llama_model_has_encoder(model)) {
-            llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size()));
+            llama_batch_ext_ptr batch(llama_batch_ext_init_from_text(tmp.data(), tmp.size(), 0, 0));
+            llama_encode_ext(lctx, batch.get());
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
             if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
                 decoder_start_token_id = bos;
@@ -1058,7 +1061,8 @@ struct common_init_result common_init_from_params(common_params & params) {
             tmp.push_back(decoder_start_token_id);
         }
         if (llama_model_has_decoder(model)) {
-            llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch)));
+            llama_batch_ext_ptr batch(llama_batch_ext_init_from_text(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch), 0, 0));
+            llama_decode_ext(lctx, batch.get());
         }
         llama_kv_cache_clear(lctx);
         llama_synchronize(lctx);
@@ -1610,10 +1614,12 @@ std::pair<std::string, std::string> common_get_hf_file(const std::string &, cons
 // Batch utils
 //
 
+// DEPRECATED
 void common_batch_clear(struct llama_batch & batch) {
     batch.n_tokens = 0;
 }
 
+// DEPRECATED
 void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,
