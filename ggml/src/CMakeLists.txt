@@ -74,8 +74,19 @@ if (GGML_ALL_WARNINGS)
 
         add_compile_options("$<$<COMPILE_LANGUAGE:C>:${C_FLAGS};${GF_C_FLAGS}>"
                             "$<$<COMPILE_LANGUAGE:CXX>:${CXX_FLAGS};${GF_CXX_FLAGS}>")
+    elseif(MSVC)
+        # MSVC
+        list(APPEND MSVC_WARNING_FLAGS
+            /W4       # Comprehensive warnings (similar to -Wall and some of -Wextra)
+            /we4456   # declaration hides previous local declaration
+            /we4457   # declaration hides function parameter
+            /we4458   # declaration hides class member
+            /wd4100   # unreferenced formal parameter (too noisy)
+            /wd4324   # structure was padded due to alignment specifier
+        )
+
+        add_compile_options(${MSVC_WARNING_FLAGS})
     else()
-        # todo : msvc
         set(C_FLAGS   "")
         set(CXX_FLAGS "")
     endif()
