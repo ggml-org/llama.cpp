@@ -482,15 +482,16 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
 }
 
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    static std::vector<uint8_t> input{};
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     // input serialization format: | rpc_tensor | offset (8 bytes) | data (size bytes) |
     size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
-    std::vector<uint8_t> input(input_size, 0);
+    input.resize(input_size);
     rpc_tensor rpc_tensor = serialize_tensor(tensor);
     memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
     memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
     memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
-    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size(), nullptr, 0);
+    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input_size, nullptr, 0);
     GGML_ASSERT(status);
 }
 
@@ -1149,6 +1150,8 @@ rpc_server::~rpc_server() {
 }
 
 static void rpc_serve_client(ggml_backend_t backend, sockfd_t sockfd, size_t free_mem, size_t total_mem) {
+    std::vector<uint8_t> set_tensor_vec;
+    set_tensor_vec.reserve(100);
     rpc_server server(backend);
     while (true) {
         uint8_t cmd;
@@ -1248,11 +1251,10 @@ static void rpc_serve_client(ggml_backend_t backend, sockfd_t sockfd, size_t fre
                 break;
             }
             case RPC_CMD_SET_TENSOR: {
-                std::vector<uint8_t> input;
-                if (!recv_msg(sockfd, input)) {
+                if (!recv_msg(sockfd, set_tensor_vec)) {
                     return;
                 }
-                if (!server.set_tensor(input)) {
+                if (!server.set_tensor(set_tensor_vec)) {
                     return;
                 }
                 if (!send_msg(sockfd, nullptr, 0)) {
