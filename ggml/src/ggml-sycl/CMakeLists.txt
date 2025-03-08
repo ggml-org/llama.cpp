@@ -77,7 +77,7 @@ else()
             message(ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
         endif()
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=amdgcn-amd-amdhsa")
-        target_link_libraries(ggml-sycl PRIVATE sycl pthread m dl onemkl)
+        target_link_libraries(ggml-sycl PRIVATE sycl pthread m dl onemath_blas_rocblas)
     endif()
 
     if (GGML_SYCL_DEVICE_ARCH)
