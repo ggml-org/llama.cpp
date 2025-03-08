@@ -111,7 +111,9 @@ std::string common_chat_format_single(
         const std::vector<common_chat_msg> & past_msg,
         const common_chat_msg & new_msg,
         bool add_ass,
-        bool use_jinja);
+        bool use_jinja,
+        const struct common_chat_templates_inputs * input_extra = nullptr,
+        struct common_chat_params * out_params = nullptr);
 
 // Returns an example of formatted chat
 std::string common_chat_format_example(
