@@ -5,6 +5,7 @@ Checks: >
     -bugprone-implicit-widening-of-multiplication-result,
     -bugprone-misplaced-widening-cast,
     -bugprone-narrowing-conversions,
+    -bugprone-branch-clone,
     readability-*,
     -readability-avoid-unconditional-preprocessor-if,
     -readability-function-cognitive-complexity,
