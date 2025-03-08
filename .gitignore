@@ -1,3 +1,6 @@
+# NOTES
+NOTES-*
+
 # Extensions
 
 *.a
@@ -33,7 +36,7 @@
 .vs/
 .vscode/
 nppBackup
-
+*.code-workspace
 
 # Coverage
 

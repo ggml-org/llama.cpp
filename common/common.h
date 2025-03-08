@@ -426,7 +426,9 @@ struct common_params {
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
+    // default output filenames
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
+    std::string ttss_outfile = "output.wav";
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;

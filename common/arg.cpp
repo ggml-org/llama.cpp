@@ -1865,20 +1865,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.i_pos = value;
         }
     ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+
+    // retrieving the right default output filename,
+    // depending on the example program...
+    const char * default_out_file;
+
+    if (ex == LLAMA_EXAMPLE_EXPORT_LORA) {
+        default_out_file = params.lora_outfile.c_str();
+    } else if (ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR) {
+        default_out_file = params.cvector_outfile.c_str();
+    } else if (ex == LLAMA_EXAMPLE_TTS) {
+        default_out_file = params.ttss_outfile.c_str();
+    } else // currently coded as "imatrix.dat", see common.h
+        default_out_file = params.out_file.c_str();
+
     add_opt(common_arg(
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')",
-            ex == LLAMA_EXAMPLE_EXPORT_LORA
-                ? params.lora_outfile.c_str()
-                : ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR
-                    ? params.cvector_outfile.c_str()
-                    : params.out_file.c_str()),
+            default_out_file),
         [](common_params & params, const std::string & value) {
             params.out_file = value;
             params.cvector_outfile = value;
             params.lora_outfile = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
