@@ -277,6 +277,8 @@ enum llm_tensor {
     LLM_TENSOR_ATTN_Q_B,
     LLM_TENSOR_ATTN_KV_A_MQA,
     LLM_TENSOR_ATTN_KV_B,
+    LLM_TENSOR_ATTN_K_B, // deepseek2-mla: split into attn_k_b
+    LLM_TENSOR_ATTN_V_B, // deepseek2-mla: and (transposed) attn_v_b
     LLM_TENSOR_ATTN_Q_A_NORM,
     LLM_TENSOR_ATTN_KV_A_NORM,
     LLM_TENSOR_ATTN_SUB_NORM,

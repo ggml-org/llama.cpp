@@ -161,6 +161,8 @@ struct llama_layer {
     struct ggml_tensor * wq_b      = nullptr;
     struct ggml_tensor * wkv_a_mqa = nullptr;
     struct ggml_tensor * wkv_b     = nullptr;
+    struct ggml_tensor * wk_b      = nullptr; // deepseek2-mla: split into attn_k_b
+    struct ggml_tensor * wv_b      = nullptr; // deepseek2-mla: and (transposed) attn_v_b
     struct ggml_tensor * wq_cross  = nullptr;
     struct ggml_tensor * wk_cross  = nullptr;
     struct ggml_tensor * wv_cross  = nullptr;

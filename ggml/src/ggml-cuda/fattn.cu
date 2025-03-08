@@ -153,6 +153,8 @@ static void ggml_cuda_flash_attn_ext_vec_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_F16_CASE(128, GGML_TYPE_F16,  GGML_TYPE_F16)
 
     FATTN_VEC_F16_CASE(256, GGML_TYPE_F16, GGML_TYPE_F16)
+
+    FATTN_VEC_F16_CASE(576, GGML_TYPE_F16, GGML_TYPE_F16) // deepseek2-mla: for large 576 embedding to work
 #else
     FATTN_VEC_F16_CASE(128, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
 
@@ -161,6 +163,8 @@ static void ggml_cuda_flash_attn_ext_vec_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_F16_CASE( 64, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F16_CASE(128, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F16_CASE(256, GGML_TYPE_F16, GGML_TYPE_F16)
+
+    FATTN_VEC_F16_CASE(576, GGML_TYPE_F16, GGML_TYPE_F16) // deepseek2-mla: for large 576 embedding to work
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     on_no_fattn_vec_case(Q->ne[0]);
@@ -228,6 +232,8 @@ static void ggml_cuda_flash_attn_ext_vec_f32(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_F32_CASE(128, GGML_TYPE_F16,  GGML_TYPE_F16)
 
     FATTN_VEC_F32_CASE(256, GGML_TYPE_F16, GGML_TYPE_F16)
+
+    FATTN_VEC_F32_CASE(576, GGML_TYPE_F16, GGML_TYPE_F16) // deepseek2-mla: for large 576 embedding to work
 #else
     FATTN_VEC_F32_CASE(128, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
 
@@ -236,6 +242,8 @@ static void ggml_cuda_flash_attn_ext_vec_f32(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_F32_CASE( 64, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F32_CASE(128, GGML_TYPE_F16, GGML_TYPE_F16)
     FATTN_VEC_F32_CASE(256, GGML_TYPE_F16, GGML_TYPE_F16)
+
+    FATTN_VEC_F32_CASE(576, GGML_TYPE_F16, GGML_TYPE_F16) // deepseek2-mla: for large 576 embedding to work
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
     on_no_fattn_vec_case(Q->ne[0]);
@@ -252,6 +260,16 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(KQV);
+
+    // deepseek2-mla: special case to get the large 576 embedding to work
+    if (Q->ne[0] == 576) {
+        if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
+            ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
+        } else {
+            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
+        }
+        return;
+    }
 
     if (cc >= GGML_CUDA_CC_OFFSET_AMD) {
 #if defined(GGML_HIP_ROCWMMA_FATTN)
