@@ -46,6 +46,7 @@ static struct ggml_backend_device g_ggml_backend_metal_device;
 static struct ggml_backend_metal_device_context {
     id<MTLDevice> mtl_device;
     int           mtl_device_ref_count;
+    id<MTLLibrary> mtl_library;
 
     bool has_simdgroup_reduction;
     bool has_simdgroup_mm;
@@ -57,6 +58,7 @@ static struct ggml_backend_metal_device_context {
 } g_ggml_ctx_dev_main = {
     /*.mtl_device              =*/ nil,
     /*.mtl_device_ref_count    =*/ 0,
+    /*.mtl_library             =*/ nil,
     /*.has_simdgroup_reduction =*/ false,
     /*.has_simdgroup_mm        =*/ false,
     /*.has_residency_sets      =*/ false,
