@@ -2398,9 +2398,23 @@ class Phi2Model(Model):
         self.gguf_writer.add_add_bos_token(False)
 
 
-@Model.register("Phi3ForCausalLM")
+@Model.register("Phi3ForCausalLM", "Phi4MMForCausalLM")
 class Phi3MiniModel(Model):
     model_arch = gguf.MODEL_ARCH.PHI3
+    has_vision: bool = False
+
+    # we need to merge the text_config into the root level of hparams
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if "vision_lora" in self.hparams:
+            logger.info("Detected vision encoder, but it will be ignored")
+            self.has_vision = True
+
+    def write(self):
+        super().write()
+        if self.has_vision:
+            logger.info("NOTE: this script only convert the language model to GGUF")
+            logger.info("      for the vision model, please use phi4mm_convert_encoder_to_gguf.py")
 
     def set_vocab(self):
         # Phi-4 model uses GPT2Tokenizer
@@ -2409,7 +2423,7 @@ class Phi3MiniModel(Model):
             with open(tokenizer_config_file, "r", encoding="utf-8") as f:
                 tokenizer_config_json = json.load(f)
                 tokenizer_class = tokenizer_config_json['tokenizer_class']
-                if tokenizer_class == 'GPT2Tokenizer':
+                if tokenizer_class == 'GPT2Tokenizer' or tokenizer_class == 'GPT2TokenizerFast':
                     return self._set_vocab_gpt2()
 
         from sentencepiece import SentencePieceProcessor
@@ -2574,6 +2588,14 @@ class Phi3MiniModel(Model):
 
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_LONG), torch.tensor(long_factors, dtype=torch.float32))
         yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FACTORS_SHORT), torch.tensor(short_factors, dtype=torch.float32))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if self.has_vision:
+            if name.startswith("model.embed_tokens_extend") or "lora_" in name:
+                return []
+            name = name.replace(".base_layer", "")
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @Model.register("PhiMoEForCausalLM")

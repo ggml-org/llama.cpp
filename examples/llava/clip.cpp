@@ -878,6 +878,24 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         }
     }
 
+    // FIXME: phi-4, wrap this into an "if" condition
+    int n_tokens = embeddings->ne[1];
+    int n_tokens_sqrt = sqrtf(n_tokens);
+    printf("embeddings shape: %d %d %d %d\n", embeddings->ne[0], embeddings->ne[1], embeddings->ne[2], embeddings->ne[3]);
+    embeddings = ggml_cont(ctx0, ggml_transpose(ctx0, embeddings));
+    embeddings = ggml_reshape_4d(ctx0, embeddings, n_tokens_sqrt, n_tokens_sqrt, hidden_size, batch_size);
+    embeddings = ggml_pool_2d(ctx0, embeddings, GGML_OP_POOL_AVG, 2, 2, 2, 2, 0, 0);
+    embeddings = ggml_reshape_3d(ctx0, embeddings, hidden_size, n_tokens / 4, batch_size);
+    printf("embeddings shape: %d %d %d %d\n", embeddings->ne[0], embeddings->ne[1], embeddings->ne[2], embeddings->ne[3]);
+    // mlp
+    embeddings = ggml_mul_mat(ctx0, model.mm_0_w, embeddings);
+    embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
+
+    embeddings = ggml_gelu(ctx0, embeddings);
+    embeddings = ggml_mul_mat(ctx0, model.mm_2_w, embeddings);
+    embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
+    printf("embeddings shape: %d %d %d %d\n", embeddings->ne[0], embeddings->ne[1], embeddings->ne[2], embeddings->ne[3]);
+
     // llava projector
     if (ctx->has_llava_projector) {
         embeddings = ggml_reshape_2d(ctx0, embeddings, embeddings->ne[0], embeddings->ne[1]);
@@ -2758,7 +2776,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
             free(positions_data);
 
-            if (!ctx->has_glm_projector) {
+            /*if (!ctx->has_glm_projector) {
                 struct ggml_tensor * patches = ggml_graph_get_tensor(gf, "patches");
                 // The patches vector is used to get rows to index into the embeds with;
                 // we should skip dim 0 only if we have CLS to avoid going out of bounds
@@ -2770,7 +2788,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
                 ggml_backend_tensor_set(patches, patches_data, 0, ggml_nbytes(patches));
                 free(patches_data);
-            }
+            }*/
         }
     }
 
