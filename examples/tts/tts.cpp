@@ -1078,7 +1078,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     if (save_wav16(params.out_file, audio, n_sr)) {
         LOG_INF("%s: audio written to file '%s'\n", __func__, params.out_file.c_str());
     } else {
-        retval=ENOENT;
+        retval = ENOENT;
         LOG_ERR("Check path exists, directory write permissions, free disk space.\n");
     }
 

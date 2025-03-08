@@ -1870,13 +1870,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     // depending on the example program...
     const char * default_out_file;
 
-    if (ex == LLAMA_EXAMPLE_EXPORT_LORA)
+    if (ex == LLAMA_EXAMPLE_EXPORT_LORA) {
         default_out_file = params.lora_outfile.c_str();
-    else if (ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR)
+    } else if (ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR) {
         default_out_file = params.cvector_outfile.c_str();
-    else if (ex == LLAMA_EXAMPLE_TTS)
+    } else if (ex == LLAMA_EXAMPLE_TTS) {
         default_out_file = params.ttss_outfile.c_str();
-    else // currently coded as "imatrix.dat", see common.h
+    } else // currently coded as "imatrix.dat", see common.h
         default_out_file = params.out_file.c_str();
 
     add_opt(common_arg(
