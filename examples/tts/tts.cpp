@@ -1073,13 +1073,11 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     LOG_INF("%s: time for spectral ops: %.3f ms\n", __func__, (ggml_time_us() - t_spec_start) / 1000.0f);
     LOG_INF("%s: total time:            %.3f ms\n", __func__, (ggml_time_us() - t_main_start) / 1000.0f);
 
-    int retval(0);
+    int retval = 0;
 
     if (save_wav16(params.out_file, audio, n_sr)) {
         LOG_INF("%s: audio written to file '%s'\n", __func__, params.out_file.c_str());
-    }
-
-    else {
+    } else {
         retval=ENOENT;
         LOG_ERR("Check path exists, directory write permissions, free disk space.\n");
     }

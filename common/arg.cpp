@@ -1868,24 +1868,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
     // retrieving the right default output filename,
     // depending on the example program...
-    std::string * out_file_ptr;
+    const char * default_out_file;
 
     if (ex == LLAMA_EXAMPLE_EXPORT_LORA)
-        out_file_ptr = & params.lora_outfile;
-
+        default_out_file = params.lora_outfile.c_str();
     else if (ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR)
-        out_file_ptr = & params.cvector_outfile;
-
+        default_out_file = params.cvector_outfile.c_str();
     else if (ex == LLAMA_EXAMPLE_TTS)
-        out_file_ptr = & params.ttss_outfile;
-
+        default_out_file = params.ttss_outfile.c_str();
     else // currently coded as "imatrix.dat", see common.h
-        out_file_ptr = & params.out_file;
+        default_out_file = params.out_file.c_str();
 
     add_opt(common_arg(
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')",
-            out_file_ptr->c_str()),
+            default_out_file),
         [](common_params & params, const std::string & value) {
             params.out_file = value;
             params.cvector_outfile = value;
