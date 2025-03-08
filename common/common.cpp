@@ -33,6 +33,13 @@
 #include <vector>
 
 #if defined(__APPLE__) && defined(__MACH__)
+#include <TargetConditionals.h>
+#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
+// VisionOS lacks some legacy types definitions
+typedef unsigned int u_int;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+#endif
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #endif
