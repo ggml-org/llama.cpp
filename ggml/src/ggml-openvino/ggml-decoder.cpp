@@ -46,24 +46,20 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_node_op_name[src0_name] = ggml_op_name(node->op);
                 m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
                 m_output_names.push_back(node_name);
+
+                ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
+                                            static_cast<size_t>(node->src[0]->ne[1]),
+                                            static_cast<size_t>(node->src[0]->ne[0])};
+                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+                m_params.push_back(input_param);
+
                 m_continuous = true;
-
-                // ov::Shape flat_shape = { static_cast<size_t>(ggml_nelements(node)) };
-                // auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape);
-                // m_params.push_back(input_param);
-
                 break;
             }
 
             if (node->src[0]->type == node->type && node->src[0]->ne[0] == node->ne[0] &&
                 node->src[0]->nb[0] == ggml_type_size(node->src[0]->type) &&
                 node->nb[0] == ggml_type_size(node->src[0]->type)) {
-
-                // for (size_t i01 = 0; i01 < node->src[0]->ne[1]; ++i01) {
-                //     const char *src_row = reinterpret_cast<const char *>(node->src[0]->data) + i01 * node->src[0]->nb[1];
-                //     char *dst_row = reinterpret_cast<char *>(node->data) + i01 * node->nb[1];
-                //     std::memcpy(dst_row, src_row, node->src[0]->ne[0]  * ggml_type_size(node->src[0]->type));
-                // }
 
                 inputs[src0_name] = node->src[0];
                 outputs[node_name] = node;
@@ -72,15 +68,16 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
                 m_output_names.push_back(node_name);
 
-                // const size_t element_size = ggml_type_size(node->src[0]->type);
-                // size_t valid_elems = static_cast<size_t>(node->src[0]->ne[0]); // 3072
-                // size_t num_rows    = static_cast<size_t>(node->src[0]->ne[1]); // 7
-                // size_t phys_stride = static_cast<size_t>(node->src[0]->nb[1]) / element_size; // 9216
-                // // size_t total_phys = (num_rows - 1) * phys_stride + valid_elems; // 6*9216 + 3072 = 58368
-                // size_t total_phys = num_rows * phys_stride; // 7 * 9216 = 64512
-                // ov::Shape flat_input_shape = { total_phys };
-                // auto flat_input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_input_shape);
-                // m_params.push_back(flat_input_param);
+                const size_t element_size = ggml_type_size(node->src[0]->type);
+                size_t valid_elems = static_cast<size_t>(node->src[0]->ne[0]); // 3072
+                size_t num_rows    = static_cast<size_t>(node->src[0]->ne[1]); // 7
+                size_t dim2        = static_cast<size_t>(node->src[0]->ne[2]);  // 1
+                size_t phys_stride = static_cast<size_t>(node->src[0]->nb[1]) / element_size; // 9216
+                // size_t total_phys = (num_rows - 1) * phys_stride + valid_elems; // 6*9216 + 3072 = 58368
+                size_t total_phys = num_rows * phys_stride; // 7 * 9216 = 64512
+                ov::Shape input_shape = { dim2, num_rows, phys_stride };
+                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+                m_params.push_back(input_param);
 
                 m_continuous = false;
                 break;
@@ -94,13 +91,11 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
                 m_output_names.push_back(node_name);
 
-                // size_t valid_i = static_cast<size_t>(node->src[0]->ne[0]); // 96
-                // size_t valid_j = static_cast<size_t>(node->src[0]->ne[1]); // 32
-                // size_t valid_k = static_cast<size_t>(node->src[0]->ne[2]); // 7
-                // size_t total_valid = valid_i * valid_j * valid_k; // 96 * 32 * 7 = 21504
-                // ov::Shape flat_input_shape = { total_valid };
-                // auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_input_shape);
-                // m_params.push_back(input_param);
+                ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
+                                            static_cast<size_t>(node->src[0]->ne[1]),
+                                            static_cast<size_t>(node->src[0]->ne[0])};
+                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+                m_params.push_back(input_param);
 
                 m_continuous = false;
                 break;
@@ -117,9 +112,9 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_output_names.push_back(node_name);
                 m_continuous = true;
 
-                ov::Shape src_shape(node->src[0]->ne, node->src[0]->ne + 3);
-                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
-                m_params.push_back(input_param);
+                // ov::Shape src_shape(node->src[0]->ne, node->src[0]->ne + 3);
+                // auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
+                // m_params.push_back(input_param);
                 break;
             } else {
                 for (int64_t i1 = 0; i1 < node->ne[1]; ++i1) {       // ne[1] = 3072
@@ -139,27 +134,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
                 m_output_names.push_back(node_name);
                 m_continuous = false;
-                break;
-
-                // inputs[src0_name] = node->src[0];
-                // std::string temp_name = src0_name + std::string("_cpy_tmp");
-                // inputs[temp_name] = node;
-
-                // outputs[node_name] = node;
-                // m_input_names.push_back(src0_name);
-                // m_input_names.push_back(temp_name);
-                // m_node_op_name[src0_name] = ggml_op_name(node->op);
-                // m_node_op_name[temp_name] = ggml_op_name(node->op);
-                // m_output_names.push_back(node_name);
-                // m_continuous = false;
-
-                // ov::Shape flat_src0_shape = {node->src[0]->nb[2]};
-                // auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
-                // m_params.push_back(param_src0);
-
-                // ov::Shape flat_dst_shape = {node->nb[2], 1};
-                // auto param_dst_base = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
-                // m_params.push_back(param_dst_base);
 
                 break;
             }
@@ -167,8 +141,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // For view, input is node itself
         case GGML_OP_VIEW:
         {
-            // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs) + "_output_" + ggml_op_name(node->op);
-            // std::string node_name = std::string(node->name) + "_" + std::to_string(node->view_offs);
             inputs[node_name] = node;
             outputs[node_name] = node;
             m_input_names.push_back(node_name);
@@ -190,12 +162,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         }
         case GGML_OP_MUL_MAT:
         {
-            // ov::Shape flat_shape_src0 = { node->src[0]->ne[0]*node->src[0]->ne[1]*node->src[0]->ne[2] };
-            // ov::Shape flat_shape_src1 = { node->src[1]->ne[0]*node->src[1]->ne[1]*node->src[1]->ne[2] };
-            // auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_shape_src0);
-            // auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_shape_src1);
-            // m_params.push_back(param_src0);
-            // m_params.push_back(param_src1);
             if (!ggml_is_contiguous(node->src[1]) || node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
                 m_continuous = false;
             } else {
@@ -376,8 +342,8 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
     if (m_node) {
         set_input_output(m_node, m_inputs, m_outputs);
     } else {
-        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
-        // for (int node_n = start_index; node_n <= end_index; node_n++) {
+        // for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+        for (int node_n = start_index; node_n <= end_index; node_n++) {
             auto cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
             // Init model input and output

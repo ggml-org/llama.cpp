@@ -10,8 +10,10 @@ std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, con
     return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, start_index, end_index);
 }
 
-std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
-    std::map<std::string, ov::Tensor> input_tensors;
+// std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
+std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder, bool flag) {
+    // std::map<std::string, ov::Tensor> input_tensors;
+    std::vector<std::pair<std::string, ov::Tensor>> input_tensors;
     auto input_names = ggml_decoder->get_input_names();
     // auto node_name = ggml_decoder->get_op_name();
     size_t op_iter = 0;
@@ -19,10 +21,7 @@ std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<G
         auto name = input_names[inp];
         std::string op_node_name = ggml_decoder->get_op_node_name(name, op_iter++);
         // auto node_op_name = ggml_decoder->get_node_op_name(name);
-        ov::element::Type input_type = ggml_decoder->get_input_type(name);
-        size_t element_size = input_type.size();
         auto input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
-        std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
         #ifdef GGML_OPENVINO_DEBUG
             printf("Subgraph input %d: %g\n", inp, *(double*)(input_data));
         #endif
@@ -31,58 +30,22 @@ std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<G
         // if (node_op_name == "CPY" && (input_shape[0] != 7)) {
         //     input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), {80000}, input_data);
 
-        if (op_node_name == "CONT" && !ggml_decoder->check_if_continuous() && input_shape[0] == 1) {
-            const size_t valid_elems = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[2]);
+        if (flag & op_node_name == "CONT" && input_shape[0] == 1 && input_shape[1] != 1) {
+            std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
+            ov::element::Type input_type = ggml_decoder->get_input_type(name);
+            size_t element_size = input_type.size();
+            // const size_t valid_elems = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[2]);
             const size_t num_rows    = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[1]);
             const size_t dim2        = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[0]);
             size_t phys_stride = static_cast<size_t>(input_stride[1]) / element_size;
-            size_t total_logical = valid_elems * num_rows * dim2;
-
-            std::vector<float> contiguous_data(total_logical);
-
-            for (size_t j = 0; j < num_rows; j++) {
-                const float *src_row = reinterpret_cast<const float*>(input_data) + j * phys_stride;
-                float *dst_row = contiguous_data.data() + j * valid_elems;
-                std::copy(src_row, src_row + valid_elems, dst_row);
-            }
-            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name),
-                                        ggml_decoder->get_input_shape(name).to_shape(),
-                                        contiguous_data.data());
-        } else if (op_node_name == "CONT" && !ggml_decoder->check_if_continuous()){
-            size_t valid_i = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[2]); // 96
-            size_t valid_j = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[1]); // 32
-            size_t valid_k = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[0]); // 7
-
-            size_t total_valid = valid_i * valid_j * valid_k; // 96 * 32 * 7 = 21504
-            size_t stride_j = static_cast<size_t>(input_stride[1]) / element_size; // 672
-            size_t stride_k = static_cast<size_t>(input_stride[0]) / element_size; // 96
-
-            std::vector<float> contiguous_data(total_valid);
-            const float *src_data = reinterpret_cast<const float*>(input_data);
-            for (size_t k = 0; k < valid_k; k++) {
-                for (size_t j = 0; j < valid_j; j++) {
-                    for (size_t i = 0; i < valid_i; i++) {
-                        size_t out_index = k * (valid_i * valid_j) + j * valid_i + i;
-                        size_t src_index = j * stride_j + k * stride_k + i;
-                        contiguous_data[out_index] = src_data[src_index];
-                    }
-                }
-            }
-            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name),
-                                        ggml_decoder->get_input_shape(name).to_shape(),
-                                        contiguous_data.data());
-        // } else if (op_node_name == "MUL_MAT") {
-        //     ov::Shape flat_shape = { ggml_decoder->get_input_shape(name).to_shape()[0] *
-        //         ggml_decoder->get_input_shape(name).to_shape()[1] *
-        //         ggml_decoder->get_input_shape(name).to_shape()[2] };
-        //     input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), flat_shape, input_data);
+            ov::Shape input_shape = { dim2, num_rows, phys_stride }; // {1, 7, 9216 }
+            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
         } else {
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
         }
-        // input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
-        // }
 
-        input_tensors[name] = input_tensor;
+        // input_tensors[name] = input_tensor;
+        input_tensors.emplace_back(name, input_tensor);
     }
     return input_tensors;
 }
@@ -114,11 +77,11 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     return front_end;
 }
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index) {
-    ov::Core core;
-    auto devices = core.get_available_devices();
+enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index, bool flag) {
+    static ov::Core core;
+    // auto devices = core.get_available_devices();
     // Get GGML Frontend 
-    auto front_end = get_ggml_frontend();
+    static auto front_end = get_ggml_frontend();
     if (!front_end) {
         GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
         return GGML_STATUS_FAILED;
@@ -161,11 +124,12 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Get input tensor
     auto input_names = ggml_decoder->get_input_names();
-    auto input_tensors = get_ggml_graph_input_tensors(ggml_decoder);
+    auto input_tensors = get_ggml_graph_input_tensors(ggml_decoder, flag);
 
     // Set input tensor
     for (size_t i = 0; i < input_names.size(); i++) {
-        infer_request.set_input_tensor(i, input_tensors[input_names[i]]);
+        // infer_request.set_input_tensor(i, input_tensors[input_names[i]]);
+        infer_request.set_input_tensor(i, input_tensors.at(i).second);
 
         // auto input_tensor = infer_request.get_input_tensor(i);
         // auto input_shape = input_tensor.get_shape();
