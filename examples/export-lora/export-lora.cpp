@@ -148,7 +148,7 @@ struct lora_merge_ctx {
 
         ctx_out = gguf_init_empty();
         struct ggml_init_params params = {
-            /*.mem_size   =*/ static_cast<size_t>(gguf_get_n_tensors(base_model.ctx_gguf)*ggml_tensor_overhead()),
+            /*.mem_size   =*/ gguf_get_n_tensors(base_model.ctx_gguf)*ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc   =*/ true,
         };
