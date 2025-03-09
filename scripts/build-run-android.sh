@@ -147,6 +147,7 @@ function prepare_run_on_phone()
     adb shell chmod +x ${REMOTE_PATH}/${program}
 }
 
+
 function run_llamacli()
 {
     prepare_run_on_phone llama-cli
@@ -212,35 +213,6 @@ function run_test-op()
 
 }
 
-function run_ut_add()
-{
-    prepare_run_on_phone ggml-qnn-ut
-
-    adb shell "cd ${REMOTE_PATH} \
-               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/ggml-qnn-ut -t GGML_OP_ADD -b $qnnbackend"
-
-}
-
-function run_ut_mulmat()
-{
-    prepare_run_on_phone ggml-qnn-ut
-
-    adb shell "cd ${REMOTE_PATH} \
-               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/ggml-qnn-ut -t GGML_OP_MUL_MAT -b $qnnbackend"
-
-}
-
-function run_ut_mul()
-{
-    prepare_run_on_phone ggml-qnn-ut
-
-    adb shell "cd ${REMOTE_PATH} \
-               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/ggml-qnn-ut -t GGML_OP_MUL -b $qnnbackend"
-
-}
 
 function print_oplist()
 {
@@ -330,10 +302,7 @@ function show_usage()
     echo "  $0 build"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
-    echo "  $0 run_testop          [ADD/MUL/MUL_MAT]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
-    echo "  $0 run_ut_add          0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_ut_mulmat       0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_ut_mul          0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_testop          [ADD/MUL/MUL_MAT/...(op from print_oplist)]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
     echo "  $0 run_llamacli        0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
     echo "  $0 run_llamabench      0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
 
@@ -374,31 +343,20 @@ elif [ $# == 1 ]; then
     fi
 elif [ $# == 2 ]; then
     qnnbackend=$2
-    if [ ${qnnbackend} -gt 3 ]; then
-        show_usage
-        exit 1
-    fi
-
     if [ "$1" == "run_llamacli" ]; then
         run_llamacli
         exit 0
     elif [ "$1" == "run_llamabench" ]; then
         run_llamabench
         exit 0
-    elif [ "$1" == "run_ut_add" ]; then
-        run_ut_add
         exit 0
-    elif [ "$1" == "run_ut_mulmat" ]; then
-        run_ut_mulmat
-        exit 0
-    elif [ "$1" == "run_ut_mul" ]; then
-        run_ut_mul
-        exit 0
+    else
+        show_usage
+        exit 1
     fi
 elif [ $# == 3 ]; then
+    #opname can be found via print_oplist:
     opname=$2
-#TODO: check opname in oplist
-#opname can be found via print_oplist:
 
     qnnbackend=$3
     if [ ${qnnbackend} -gt 3 ]; then
