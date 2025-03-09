@@ -481,10 +481,10 @@ struct llama_mlock::impl {
         // Skip resource limit checks on visionOS/tvOS
         suggest = false;
 #else
-        struct rlimit lock_limit = {};
-        //if (suggest && getrlimit(RLIMIT_MEMLOCK, &lock_limit)) {
-        //    suggest = false;
-        //}
+        struct rlimit lock_limit;
+        if (suggest && getrlimit(RLIMIT_MEMLOCK, &lock_limit)) {
+            suggest = false;
+        }
         if (suggest && (lock_limit.rlim_max > lock_limit.rlim_cur + size)) {
             suggest = false;
         }
