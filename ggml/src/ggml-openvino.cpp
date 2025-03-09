@@ -537,8 +537,7 @@ void ggml_backend_openvino_mul_mat(struct ggml_tensor * dst) {
         auto reshape_output = std::make_shared<ov::op::v1::Reshape>(
             batched_matmul,
             ov::op::v0::Constant::create(ov::element::i64, {3}, final_output_shape),
-            false
-        );
+            false);
 
         auto model = std::make_shared<ov::Model>(ov::NodeVector{ reshape_output },
                                                  ov::ParameterVector{ param_src0, param_src1 });
@@ -659,6 +658,7 @@ void ggml_backend_openvino_view(ggml_tensor *dst) {
                                                         false);
 
     auto model = std::make_shared<ov::Model>(ov::NodeVector{reshaped}, ov::ParameterVector{param});
+    // auto model = std::make_shared<ov::Model>(ov::NodeVector{param}, ov::ParameterVector{param});
     // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/003_backend_view_model.xml");
 
     auto compiled_model = core.compile_model(model, "CPU");
@@ -742,106 +742,91 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
     const size_t nb0 = dst->nb[0];
 
     if (src0->type == dst->type && ne00 == dst->ne[0] && nb00 == element_size && nb0 == element_size) {
-        const size_t valid_elems = static_cast<size_t>(src0->ne[0]);
-        const size_t num_rows    = static_cast<size_t>(src0->ne[1]);
-        const size_t dim2        = static_cast<size_t>(src0->ne[2]);
-        const size_t dim3        = static_cast<size_t>(src0->ne[3]);
+        const size_t valid_elems = static_cast<size_t>(src0->ne[0]);  // 3072
+        const size_t num_rows    = static_cast<size_t>(src0->ne[1]);  // 7
+        const size_t dim2        = static_cast<size_t>(src0->ne[2]);  // 1
 
-        size_t phys_stride = static_cast<size_t>(src0->nb[1]) / element_size;
-        size_t total_logical = valid_elems * num_rows * dim2 * dim3;
+        size_t phys_stride = static_cast<size_t>(src0->nb[1]) / element_size; // 9216
 
-        std::vector<float> contiguous_data(total_logical);
+        ov::Shape input_shape = { dim2, num_rows, phys_stride }; // 如 {1, 7, 9216 }
+        ov::Shape logical_shape = { dim2, num_rows, valid_elems }; // {1, 7, 3072}
 
-        for (size_t j = 0; j < num_rows; j++) {
-            const float *src_row = reinterpret_cast<const float*>(src0->data) + j * phys_stride;
-            float *dst_row = contiguous_data.data() + j * valid_elems;
-            std::copy(src_row, src_row + valid_elems, dst_row);
-        }
+        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
 
-        ov::Shape logical_shape = { dim2, num_rows, valid_elems};
-        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, logical_shape);
-        auto identity_const = ov::op::v0::Constant::create(ov::element::i64,
-                                    { logical_shape.size() },
-                                    std::vector<int64_t>(logical_shape.begin(), logical_shape.end()));
-        auto identity_op = std::make_shared<ov::op::v1::Reshape>(input_param, identity_const, false);
+        std::vector<int64_t> begin = { 0, 0, 0 };
+        std::vector<int64_t> end   = { static_cast<int64_t>(dim2),
+                                        static_cast<int64_t>(num_rows),
+                                        static_cast<int64_t>(valid_elems) };
+        std::vector<int64_t> strides = { 1, 1, 1 };
 
-        auto model = std::make_shared<ov::Model>(ov::OutputVector{identity_op},
-                                                 ov::ParameterVector{input_param});
+        auto begin_const = ov::op::v0::Constant::create(ov::element::i64, { begin.size() }, begin);
+        auto end_const   = ov::op::v0::Constant::create(ov::element::i64, { end.size() }, end);
+        auto strides_const = ov::op::v0::Constant::create(ov::element::i64, { strides.size() }, strides);
+
+        std::vector<int64_t> begin_mask = {0, 0, 0};
+        std::vector<int64_t> end_mask   = {0, 0, 0};
+        auto slice = std::make_shared<ov::op::v1::StridedSlice>(
+            input_param, 
+            begin_const, 
+            end_const, 
+            strides_const, 
+            begin_mask, 
+            end_mask
+        );
+
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{ slice },
+                                                 ov::ParameterVector{ input_param });
 
         ov::Core core;
         auto compiled_model = core.compile_model(model, "CPU");
         auto infer_request = compiled_model.create_infer_request();
 
-        ov::Tensor input_tensor(ov::element::f32, logical_shape, contiguous_data.data());
+        //[NOTE]: input_shape should be {1, 7, 9216} not the original shap of src0.
+        ov::Tensor input_tensor(ov::element::f32, input_shape, src0->data);
         infer_request.set_input_tensor(0, input_tensor);
 
         ov::Tensor output_tensor(ov::element::f32, logical_shape, dst->data);
         infer_request.set_output_tensor(0, output_tensor);
 
         infer_request.infer();
-        /*
-        for (size_t i01 = 0; i01 < ne01; ++i01) {
-            const char *src_row = reinterpret_cast<const char *>(src0->data) + i01 * nb01;
-            char *dst_row = reinterpret_cast<char *>(dst->data) + i01 * dst->nb[1];
-
-            ov::Tensor src_row_tensor(ov::element::f32, {ne00}, const_cast<void *>(reinterpret_cast<const void *>(src_row)));
-            ov::Tensor dst_row_tensor(ov::element::f32, {ne00}, reinterpret_cast<void *>(dst_row));
-
-            std::memcpy(dst_row_tensor.data<float>(), src_row_tensor.data<float>(), ne00 * sizeof(float));
-        }*/
         return;
     }
 
     // Case 3: Non-contiguous source, contiguous destination
-    const int64_t ne02 = src0->ne[2];
-    const int64_t ne03 = src0->ne[3];
-    const int64_t nb02 = src0->nb[2];
-    const int64_t nb03 = src0->nb[3];
-
     // dst->ne        =[3072,7,1,1],       dst->nb =[4,12288,86016,86016],          dst->type=GGML_TYPE_F32
     // dst->src[0]->ne=[96,32,7,1], dst->src[0]->nb=[4,2688,384,86016],     dst->src[0]->type=GGML_TYPE_F32
     if (ggml_is_contiguous(dst)) {
         size_t valid_i = static_cast<size_t>(src0->ne[0]); // 96
         size_t valid_j = static_cast<size_t>(src0->ne[1]); // 32
         size_t valid_k = static_cast<size_t>(src0->ne[2]); // 7
-        size_t valid_l = static_cast<size_t>(src0->ne[3]); // 1
 
-        size_t total_valid = valid_i * valid_j * valid_k; // 96 * 32 * 7 = 21504
-        size_t stride_j = static_cast<size_t>(src0->nb[1]) / element_size; // 672
-        size_t stride_k = static_cast<size_t>(src0->nb[2]) / element_size; // 96
+        ov::Shape src_shape = { valid_k, valid_j, valid_i }; //  {7, 32, 96};
+        auto src_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src_shape);
 
-        std::vector<float> contiguous_data(total_valid);
-        const float *src_data = reinterpret_cast<const float*>(src0->data);
-        for (size_t k = 0; k < valid_k; k++) {
-            for (size_t j = 0; j < valid_j; j++) {
-                for (size_t i = 0; i < valid_i; i++) {
-                    size_t out_index = k * (valid_i * valid_j) + j * valid_i + i;
-                    size_t src_index = j * stride_j + k * stride_k + i;
-                    contiguous_data[out_index] = src_data[src_index];
-                }
-            }
-        }
+        ov::Shape input_shape = { valid_j, valid_k, valid_i }; //  {32, 7, 96}
+        auto tmp_param = ov::op::v0::Constant::create(ov::element::i64, { input_shape.size() }, input_shape);
+        auto input_param = std::make_shared<ov::op::v1::Reshape>(src_param, tmp_param, false);
 
-        // ov::Shape input_shape = { dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2] };
-        ov::Shape input_shape = { dst->src[0]->ne[2], dst->src[0]->ne[1], dst->src[0]->ne[0]};
-        auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+        // 添加 Transpose 节点，将 {32,7,96} 变换为 {7,32,96}，恢复逻辑顺序
+        // 这里交换第 0 与第 1 维，即 permutation = {1, 0, 2}
+        std::vector<int64_t> order = {1, 0, 2};
+        auto order_const = ov::op::v0::Constant::create(ov::element::i64, {order.size()}, order);
+        auto transpose = std::make_shared<ov::op::v1::Transpose>(input_param, order_const);
 
-        // ov::Shape target_shape = { dst->ne[0], dst->ne[1], dst->ne[2] };
-        // std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[0]),
-        //     static_cast<int64_t>(dst->ne[1]), dst->ne[2]};
-        ov::Shape target_shape = { dst->ne[2], dst->ne[1], dst->ne[0] };
+        ov::Shape target_shape = { dst->ne[2], dst->ne[1], dst->ne[0] }; // {1, 7, 3072}
         std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[2]),
-            static_cast<int64_t>(dst->ne[1]), dst->ne[0]};
-        auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, {3}, target_shape_vec);
-        auto reshaped = std::make_shared<ov::op::v1::Reshape>(input_param, reshape_const, false);
+                                                  static_cast<int64_t>(dst->ne[1]),
+                                                  static_cast<int64_t>(dst->ne[0]) };
+        auto reshape_const = ov::op::v0::Constant::create(ov::element::i64, { target_shape_vec.size() }, target_shape_vec);
+        auto reshaped = std::make_shared<ov::op::v1::Reshape>(transpose, reshape_const, false);
 
-        auto model = std::make_shared<ov::Model>(ov::OutputVector{reshaped}, ov::ParameterVector{input_param});
-
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{ reshaped },
+                                                 ov::ParameterVector{ src_param });
         ov::Core core;
         auto compiled_model = core.compile_model(model, "CPU");
         auto infer_request = compiled_model.create_infer_request();
 
-        ov::Tensor input_tensor(ov::element::f32, input_shape, contiguous_data.data());
+        ov::Tensor input_tensor(ov::element::f32, src_shape, src0->data);
         infer_request.set_input_tensor(0, input_tensor);
 
         ov::Tensor output_tensor(ov::element::f32, target_shape, dst->data);
@@ -998,40 +983,48 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
         }
     }
 
-    int end_node = cgraph->n_nodes - 1;
-    openvino_frontend_compute(backend, cgraph, 0, end_node);
-    // openvino_frontend_compute(backend, cgraph);
+
     // Process nodes in order
-    // for (int i = 0; i < cgraph->n_nodes; i++) {
-    //     if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
-    //         ggml_backend_openvino_permute(cgraph->nodes[i]);
-    //     } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
-    //        ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
-    //     } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
-    //         ggml_backend_openvino_view(cgraph->nodes[i]);
-    //     } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
-    //        ggml_backend_openvino_cpy(cgraph->nodes[i]);
-    //     } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {
-    //         ggml_backend_openvino_transpose(cgraph->nodes[i]);
-    //     } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
-    //         ggml_backend_openvino_reshape(cgraph->nodes[i]);
-    //     } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
-    //         ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
-    //     } else {
-    //         // Process a range of nodes with openvino_frontend_compute
-    //         int start_index = i;
-    //         while (i < cgraph->n_nodes
-    //                 && std::find(view_indices.begin(), view_indices.end(), i) == view_indices.end()
-    //                 && std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end()
-    //                 && std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end()
-    //                 && std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()
-    //                 ) {
-    //             i++;
-    //         }
-    //         if (start_index < i) {
-    //                 openvino_frontend_compute(backend, cgraph, start_index, --i);
-    //         }
-    //     }
+
+    // if (cgraph->nodes[0]->ne[1] == 1) {
+    //     bool prompt_process_flag = false;
+    //     int end_node = cgraph->n_nodes - 1;
+    //     openvino_frontend_compute(backend, cgraph, 0, end_node, prompt_process_flag);
+    // } else {
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
+            // ggml_backend_openvino_permute(cgraph->nodes[i]);
+        // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
+        //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
+        } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
+            ggml_backend_openvino_view(cgraph->nodes[i]);
+        // } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
+        //     ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
+        // } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {
+        //     ggml_backend_openvino_transpose(cgraph->nodes[i]);
+        // } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
+        //     ggml_backend_openvino_reshape(cgraph->nodes[i]);
+        // } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
+        //     ggml_backend_openvino_cpy(cgraph->nodes[i]);
+        } else {
+            // Process a range of nodes with openvino_frontend_compute
+            int start_index = i;
+            while (i < cgraph->n_nodes
+                    // && std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()
+                    && std::find(view_indices.begin(), view_indices.end(), i) == view_indices.end()
+                    // && std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end()
+                    // && std::find(reshape_indices.begin(), reshape_indices.end(), i) == reshape_indices.end()
+                    // && std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end()
+                    ) {
+                i++;
+            }
+            if (start_index < i) {
+                    openvino_frontend_compute(backend, cgraph, start_index, --i);
+            }
+        }
+    }
+
     // }
 
     return GGML_STATUS_SUCCESS;
