@@ -71,6 +71,13 @@ bool llama_kv_cache_init(
     cache.k_l.reserve(n_layer);
     cache.v_l.reserve(n_layer);
 
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU));
+    auto * is_numa_fn = (decltype(ggml_is_numa) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_is_numa");
+    bool is_numa = is_numa_fn();
+    if (!offload && is_numa) {
+        LLAMA_LOG_INFO("%s: NUMA usage detected, using NUMA-aware buffer for KV cache\n", __func__);
+    }
+
     for (int i = 0; i < n_layer; i++) {
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
@@ -82,7 +89,11 @@ bool llama_kv_cache_init(
             auto * dev = model.dev_layer(i);
             buft = ggml_backend_dev_buffer_type(dev);
         } else {
-            buft = ggml_backend_cpu_buffer_type();
+            if (is_numa) {
+                buft = ggml_backend_numa_buffer_type();
+            } else {
+                buft = ggml_backend_cpu_buffer_type();
+            }
         }
         ggml_context * ctx = ctx_for_buft(buft);
 
