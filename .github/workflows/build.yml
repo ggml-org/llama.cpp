@@ -774,7 +774,7 @@ jobs:
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.3.261.1
+      VULKAN_VERSION: 1.4.304.1
 
     strategy:
       matrix:
