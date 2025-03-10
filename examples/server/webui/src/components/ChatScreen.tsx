@@ -99,12 +99,15 @@ export default function ChatScreen() {
     canvasData,
     replaceMessageAndGenerate,
   } = useAppContext();
-  const [inputMsg, setInputMsg] = useState(prefilledMsg.content());
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const { extraContext, clearExtraContext } = useVSCodeContext(
     inputRef,
-    setInputMsg
+    (msg) => {
+      if (inputRef?.current) {
+        inputRef.current.value = msg;
+      }
+    }
   );
   // TODO: improve this when we have "upload file" feature
   const currExtra: Message['extra'] = extraContext ? [extraContext] : undefined;
@@ -135,9 +138,14 @@ export default function ChatScreen() {
   };
 
   const sendNewMessage = async () => {
-    if (inputMsg.trim().length === 0 || isGenerating(currConvId ?? '')) return;
-    const lastInpMsg = inputMsg;
-    setInputMsg('');
+    if (
+      !inputRef.current ||
+      inputRef.current.value.trim().length === 0 ||
+      isGenerating(currConvId ?? '')
+    )
+      return;
+    const inputValue = inputRef.current.value;
+    inputRef.current.value = '';
     scrollToBottom(false);
     setCurrNodeId(-1);
     // get the last message node
@@ -146,13 +154,13 @@ export default function ChatScreen() {
       !(await sendMessage(
         currConvId,
         lastMsgNodeId,
-        inputMsg,
+        inputValue,
         currExtra,
         onChunk
       ))
     ) {
       // restore the input message if failed
-      setInputMsg(lastInpMsg);
+      inputRef.current.value = inputValue;
     }
     // OK
     clearExtraContext();
@@ -259,8 +267,7 @@ export default function ChatScreen() {
             className="textarea textarea-bordered w-full"
             placeholder="Type a message (Shift+Enter to add a new line)"
             ref={inputRef}
-            value={inputMsg}
-            onChange={(e) => setInputMsg(e.target.value)}
+            defaultValue={prefilledMsg.content()}
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter' && e.shiftKey) return;
@@ -280,11 +287,7 @@ export default function ChatScreen() {
               Stop
             </button>
           ) : (
-            <button
-              className="btn btn-primary ml-2"
-              onClick={sendNewMessage}
-              disabled={inputMsg.trim().length === 0}
-            >
+            <button className="btn btn-primary ml-2" onClick={sendNewMessage}>
               Send
             </button>
           )}
