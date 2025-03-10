@@ -245,6 +245,12 @@ struct vk_device_struct {
     uint32_t coopmat_m;
     uint32_t coopmat_n;
     uint32_t coopmat_k;
+
+    bool coopmat_int_support;
+    uint32_t coopmat_int_m;
+    uint32_t coopmat_int_n;
+    uint32_t coopmat_int_k;
+
     bool coopmat2;
 
     size_t idx;
@@ -263,8 +269,6 @@ struct vk_device_struct {
     vk_matmul_pipeline pipeline_matmul_f32_f16 {};
     vk_matmul_pipeline2 pipeline_matmul_f16;
     vk_matmul_pipeline2 pipeline_matmul_f16_f32;
-    vk_pipeline pipeline_matmul_split_k_reduce;
-    vk_pipeline pipeline_quantize_q8_1;
 
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat[GGML_TYPE_COUNT];
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_f16[GGML_TYPE_COUNT];
@@ -275,6 +279,9 @@ struct vk_device_struct {
     vk_matmul_pipeline2 pipeline_matmul_id_f16_f32;
 
     vk_matmul_pipeline2 pipeline_dequant_mul_mat_mat_id[GGML_TYPE_COUNT];
+
+    vk_pipeline pipeline_matmul_split_k_reduce;
+    vk_pipeline pipeline_quantize_q8_1;
 
     vk_pipeline pipeline_dequant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_dequant_mul_mat_vec_f32_f32[GGML_TYPE_COUNT][mul_mat_vec_max_cols];
@@ -1600,6 +1607,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // mulmat
     std::vector<uint32_t> l_warptile, m_warptile, s_warptile,
                           l_warptile_mmq, m_warptile_mmq, s_warptile_mmq,
+                          l_warptile_mmq_int, m_warptile_mmq_int, s_warptile_mmq_int,
                           l_warptile_mmq_k, m_warptile_mmq_k, s_warptile_mmq_k,
                           l_warptile_mmqid, m_warptile_mmqid, s_warptile_mmqid;
     std::array<uint32_t, 3> l_wg_denoms, m_wg_denoms, s_wg_denoms,
@@ -1663,6 +1671,20 @@ static void ggml_vk_load_shaders(vk_device& device) {
         l_warptile_mmq = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
         m_warptile_mmq = { 128,  64,  64, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32, 32, 32, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
+
+        const uint32_t tm_int_l = device->coopmat_int_support ? device->coopmat_int_m : 4;
+        const uint32_t tm_int_m = device->coopmat_int_support ? device->coopmat_int_m : 4;
+        const uint32_t tm_int_s = device->coopmat_int_support ? device->coopmat_int_m : 2;
+        const uint32_t tn_int_l = device->coopmat_int_support ? device->coopmat_int_n : 4;
+        const uint32_t tn_int_m = device->coopmat_int_support ? device->coopmat_int_n : 2;
+        const uint32_t tn_int_s = device->coopmat_int_support ? device->coopmat_int_n : 2;
+        const uint32_t tk_int_l = device->coopmat_int_support ? device->coopmat_int_k : 1;
+        const uint32_t tk_int_m = device->coopmat_int_support ? device->coopmat_int_k : 1;
+        const uint32_t tk_int_s = device->coopmat_int_support ? device->coopmat_int_k : 1;
+
+        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_int_l, tn_int_l, tk_int_l, subgroup_size_8 };
+        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8, 32, 2,     tm_int_m, tn_int_m, tk_int_m, subgroup_size_8 };
+        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32, 32, 2,       tm_int_s, tn_int_s, tk_int_s, subgroup_size_8 };
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
@@ -1877,6 +1899,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
         if (device->mul_mat ## ID ## _s[TYPE]) \
             ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->a_s, #NAMELC #F16ACC "_aligned_s", NAMELC ## _aligned ## F16ACC ## _coopmat_len, NAMELC ## _aligned ## F16ACC ## _coopmat_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, s_align, false, true);   \
 
+#define CREATE_MMQ(TYPE, PIPELINE_NAME, NAMELC, F16ACC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
+        if (device->mul_mat ## ID ## _l[TYPE]) \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->l, #NAMELC #F16ACC "_l", NAMELC ## F16ACC ## _coopmat_len, NAMELC ## F16ACC ## _coopmat_data, "main", PARAMCOUNT, sizeof(PUSHCONST), l_ ## WG_DENOMS, l_ ## WARPTILE, 1);   \
+        if (device->mul_mat ## ID ## _m[TYPE]) \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->m, #NAMELC #F16ACC "_m", NAMELC ## F16ACC ## _coopmat_len, NAMELC ## F16ACC ## _coopmat_data, "main", PARAMCOUNT, sizeof(PUSHCONST), m_ ## WG_DENOMS, m_ ## WARPTILE, 1);   \
+        if (device->mul_mat ## ID ## _s[TYPE]) \
+            ggml_vk_create_pipeline(device, device-> PIPELINE_NAME ->s, #NAMELC #F16ACC "_s", NAMELC ## F16ACC ## _coopmat_len, NAMELC ## F16ACC ## _coopmat_data, "main", PARAMCOUNT, sizeof(PUSHCONST), s_ ## WG_DENOMS, s_ ## WARPTILE, 1);   \
+
         // Create 2 variants, {f16,f32} accumulator
 #define CREATE_MM2(TYPE, PIPELINE_NAME, NAMELC, WG_DENOMS, WARPTILE, PUSHCONST, PARAMCOUNT, ID) \
         if (device->coopmat_acc_f16_support) { \
@@ -1935,6 +1965,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f16acc,  matmul_iq4_nl_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         }
 
+        if (device->coopmat_int_support) {
+            CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f16acc, matmul_q4_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
+            CREATE_MMQ(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0].f16acc, matmul_q8_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
+        }
+
         CREATE_MM(GGML_TYPE_F32, pipeline_matmul_id_f32, matmul_id_f32_f32, , wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_id_f16, matmul_id_f16, wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_id_f16_f32, matmul_id_f16_f32, wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
@@ -1983,6 +2018,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat_id[GGML_TYPE_IQ4_NL].f16acc,  matmul_id_iq4_nl_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, 4, _id);
         }
 #undef CREATE_MM2
+#undef CREATE_MMQ
 #undef CREATE_MM
     } else
 #endif  // defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
@@ -2041,8 +2077,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM(GGML_TYPE_IQ4_XS,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_XS].f16acc,  matmul_iq4_xs_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f16acc,  matmul_iq4_nl_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
 
-        CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f16acc, matmul_q4_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
-        CREATE_MMQ(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0].f16acc, matmul_q8_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+        CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f16acc, matmul_q4_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
+        CREATE_MMQ(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0].f16acc, matmul_q8_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
 
         CREATE_MM(GGML_TYPE_F32, pipeline_matmul_id_f32, matmul_id_f32_f32, , wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_id_f16, matmul_id_f16, wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
@@ -2069,6 +2105,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM(GGML_TYPE_IQ4_XS,  pipeline_dequant_mul_mat_mat_id[GGML_TYPE_IQ4_XS].f16acc,  matmul_id_iq4_xs_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, 4, _id);
         CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat_id[GGML_TYPE_IQ4_NL].f16acc,  matmul_id_iq4_nl_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_id_push_constants, 4, _id);
 #undef CREATE_MM2
+#undef CREATE_MMQ
 #undef CREATE_MM
     } else {
         // Create 6 variants, {s,m,l}x{unaligned,aligned}
@@ -2501,7 +2538,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk::PhysicalDeviceShaderCoreProperties2AMD amd_shader_core_properties2_props;
         vk::PhysicalDeviceVulkan12Properties vk12_props;
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
-        vk::PhysicalDeviceShaderIntegerDotProductProperties shader_integer_dot_product_props;
+        vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR shader_integer_dot_product_props;
 
         props2.pNext = &props3;
         props3.pNext = &subgroup_props;
@@ -2677,8 +2714,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_maintenance4");
         }
 
-        VkPhysicalDeviceShaderIntegerDotProductFeatures shader_integer_dot_product_features {};
-        shader_integer_dot_product_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES;
+        VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR shader_integer_dot_product_features {};
+        shader_integer_dot_product_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
         if (device->integer_dot_product) {
             last_struct->pNext = (VkBaseOutStructure *)&shader_integer_dot_product_features;
             last_struct = (VkBaseOutStructure *)&shader_integer_dot_product_features;
@@ -2854,6 +2891,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
                             device->coopmat_acc_f16_support = true;
                         }
                     }
+                } else if ((vk::ComponentTypeKHR)prop.AType      == vk::ComponentTypeKHR::eSint8 &&
+                           (vk::ComponentTypeKHR)prop.BType      == vk::ComponentTypeKHR::eSint8 &&
+                           (vk::ComponentTypeKHR)prop.CType      == vk::ComponentTypeKHR::eSint32 &&
+                           (vk::ComponentTypeKHR)prop.ResultType == vk::ComponentTypeKHR::eSint32 &&
+                           (vk::ScopeKHR)prop.scope == vk::ScopeKHR::eSubgroup &&
+                           device->coopmat_int_m == 0
+                ) {
+                    device->coopmat_int_support = true;
+                    device->coopmat_int_m = prop.MSize;
+                    device->coopmat_int_n = prop.NSize;
+                    device->coopmat_int_k = prop.KSize;
                 }
             }
 
@@ -2958,25 +3006,11 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     vk::PhysicalDevice physical_device = devices[dev_num];
     std::vector<vk::ExtensionProperties> ext_props = physical_device.enumerateDeviceExtensionProperties();
 
-    vk::PhysicalDeviceProperties2 props2;
-    vk::PhysicalDeviceMaintenance3Properties props3;
-    vk::PhysicalDeviceSubgroupProperties subgroup_props;
-    vk::PhysicalDeviceDriverProperties driver_props;
-    props2.pNext = &props3;
-    props3.pNext = &subgroup_props;
-    subgroup_props.pNext = &driver_props;
-    physical_device.getProperties2(&props2);
-
-    vk_device_architecture arch = get_device_architecture(physical_device);
-    uint32_t default_subgroup_size = get_subgroup_size("", arch);
-    const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
-
-    const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
-
     bool fp16_storage = false;
     bool fp16_compute = false;
     bool coopmat_support = false;
     bool coopmat2_support = false;
+    bool integer_dot_product = false;
 
     for (auto properties : ext_props) {
         if (strcmp("VK_KHR_16bit_storage", properties.extensionName) == 0) {
@@ -2993,26 +3027,41 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                    !getenv("GGML_VK_DISABLE_COOPMAT2")) {
             coopmat2_support = true;
 #endif
+        } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0 &&
+                    !getenv("GGML_VK_DISABLE_INTEGER_DOT_PRODUCT")) {
+            integer_dot_product = true;
         }
     }
 
     const vk_device_architecture device_architecture = get_device_architecture(physical_device);
-
-    if (!ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props, device_architecture)) {
-        coopmat_support = false;
-    }
 
     const char* GGML_VK_DISABLE_F16 = getenv("GGML_VK_DISABLE_F16");
     bool force_disable_f16 = GGML_VK_DISABLE_F16 != nullptr;
 
     bool fp16 = !force_disable_f16 && fp16_storage && fp16_compute;
 
-    vk::PhysicalDeviceFeatures device_features = physical_device.getFeatures();
+    vk::PhysicalDeviceProperties2 props2;
+    vk::PhysicalDeviceMaintenance3Properties props3;
+    vk::PhysicalDeviceSubgroupProperties subgroup_props;
+    vk::PhysicalDeviceDriverProperties driver_props;
+    vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR shader_integer_dot_product_props;
+    props2.pNext = &props3;
+    props3.pNext = &subgroup_props;
+    subgroup_props.pNext = &driver_props;
+
+    // Pointer to the last chain element
+    VkBaseOutStructure * last_struct = (VkBaseOutStructure *)&driver_props;
+
+    if (integer_dot_product) {
+        last_struct->pNext = (VkBaseOutStructure *)&shader_integer_dot_product_props;
+        last_struct = (VkBaseOutStructure *)&shader_integer_dot_product_props;
+    }
+
+    physical_device.getProperties2(&props2);
 
     VkPhysicalDeviceFeatures2 device_features2;
     device_features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
     device_features2.pNext = nullptr;
-    device_features2.features = (VkPhysicalDeviceFeatures)device_features;
 
     VkPhysicalDeviceVulkan11Features vk11_features;
     vk11_features.pNext = nullptr;
@@ -3025,7 +3074,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     vk11_features.pNext = &vk12_features;
 
     // Pointer to the last chain element
-    VkBaseOutStructure * last_struct = (VkBaseOutStructure *)&vk12_features;
+    last_struct = (VkBaseOutStructure *)&vk12_features;
 
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopmat_features;
@@ -3037,20 +3086,37 @@ static void ggml_vk_print_gpu_info(size_t idx) {
         last_struct->pNext = (VkBaseOutStructure *)&coopmat_features;
         last_struct = (VkBaseOutStructure *)&coopmat_features;
     }
+#endif
+
+    VkPhysicalDeviceShaderIntegerDotProductFeaturesKHR shader_integer_dot_product_features {};
+    shader_integer_dot_product_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES_KHR;
+    if (integer_dot_product) {
+        last_struct->pNext = (VkBaseOutStructure *)&shader_integer_dot_product_features;
+        last_struct = (VkBaseOutStructure *)&shader_integer_dot_product_features;
+    }
 
     vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
 
     fp16 = fp16 && vk12_features.shaderFloat16;
 
-    coopmat_support = coopmat_support && coopmat_features.cooperativeMatrix;
-#endif
+    uint32_t default_subgroup_size = get_subgroup_size("", device_architecture);
+    const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+    const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
+
+    integer_dot_product = integer_dot_product
+                       && shader_integer_dot_product_props.integerDotProduct4x8BitPackedSignedAccelerated
+                       && shader_integer_dot_product_features.shaderIntegerDotProduct;
+
+    coopmat_support = coopmat_support
+                   && coopmat_features.cooperativeMatrix
+                   && ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props, device_architecture);
 
     std::string matrix_cores = coopmat2_support ? "NV_coopmat2" : coopmat_support ? "KHR_coopmat" : "none";
 
     std::string device_name = props2.properties.deviceName.data();
-    GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %d | warp size: %zu | shared memory: %d | matrix cores: %s\n",
+    GGML_LOG_DEBUG("ggml_vulkan: %zu = %s (%s) | uma: %d | fp16: %d | warp size: %zu | shared memory: %d | int dot: %d | matrix cores: %s\n",
               idx, device_name.c_str(), driver_props.driverName.data(), uma, fp16, subgroup_size,
-              props2.properties.limits.maxComputeSharedMemorySize, matrix_cores.c_str());
+              props2.properties.limits.maxComputeSharedMemorySize, integer_dot_product, matrix_cores.c_str());
 
     if (props2.properties.deviceType == vk::PhysicalDeviceType::eCpu) {
         GGML_LOG_DEBUG("ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.\n");
@@ -4052,7 +4118,7 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, int m, int 
     return split_k;
 }
 
-static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, int m, int n, bool aligned, ggml_type src0_type, ggml_type src1_type) {
+static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, uint32_t m, uint32_t n, bool aligned, ggml_type src0_type, ggml_type src1_type) {
     VK_LOG_DEBUG("ggml_vk_guess_matmul_pipeline(" << m << ", " << n << ", " << aligned << ", " << ggml_type_name(src0_type) << ", " << ggml_type_name(src1_type) << ")");
 
     if (ctx->device->coopmat2) {
@@ -4108,7 +4174,7 @@ static void ggml_vk_matmul(
     ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { split_k_buffer, d }, pc2.size() * sizeof(uint32_t), pc2.data(), { m * n * batch, 1, 1 });
 }
 
-static vk_pipeline ggml_vk_guess_matmul_id_pipeline(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, int m, int n, bool aligned, ggml_type src0_type) {
+static vk_pipeline ggml_vk_guess_matmul_id_pipeline(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, uint32_t m, uint32_t n, bool aligned, ggml_type src0_type) {
     VK_LOG_DEBUG("ggml_vk_guess_matmul_id_pipeline(" << m << ", " << n << ", " << aligned << ", " << ggml_type_name(src0_type) << ")");
 
     if (ctx->device->coopmat2) {
@@ -4320,7 +4386,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 
     const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
 
-    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1);
+    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0;
 
     // Check for mmq first
     vk_matmul_pipeline mmp = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
@@ -4348,7 +4414,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline(ctx, mmp, ne01, ne11, aligned, qx_needs_dequant ? GGML_TYPE_F16 : src0->type, quantize_y ? GGML_TYPE_Q8_1 : (y_f32_kernel ? GGML_TYPE_F32 : src1->type));
 
     // Reserve extra storage in the N dimension for the Y matrix, so we can avoid bounds-checking
-    uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) :ne11;
+    uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) : ne11;
     const int x_ne = ne01 * ne00;
     const int y_ne = padded_n * ne10;
     const int d_ne = ne11 * ne01;
@@ -7487,7 +7553,9 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     float * d_chk = (float *) malloc(d_sz);
 
     for (size_t i = 0; i < x_ne; i++) {
-        x[i] = (rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        // x[i] = (rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        x[i] = (i % k == i / k) ? 1.0f : 0.0f;
+        // x[i] = i % k;
     }
 
     ggml_vk_quantize_data(x, qx, x_ne, quant);
@@ -7495,6 +7563,7 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     for (size_t i = 0; i < y_ne; i++) {
         // y[i] = (rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         y[i] = (i % k == i / k) ? 1.0f : 0.0f;
+        // y[i] = i % k;
     }
 
     ggml_pipeline_request_descriptor_sets(ctx->device, p, num_it);
@@ -7668,9 +7737,9 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
     };
     const size_t num_it = 100;
 
-    ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 0, GGML_TYPE_Q4_0, true);
-    ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 1, GGML_TYPE_Q4_0, true);
-    ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 2, GGML_TYPE_Q4_0, true);
+    ggml_vk_test_dequant_matmul(ctx, 16, 16, 32, 2, 1, 1, 0, GGML_TYPE_Q8_0, true);
+    ggml_vk_test_dequant_matmul(ctx, 16, 16, 32, 2, 1, 1, 1, GGML_TYPE_Q8_0, true);
+    ggml_vk_test_dequant_matmul(ctx, 16, 16, 32, 2, 1, 1, 2, GGML_TYPE_Q8_0, true);
 
     abort();
 
@@ -9293,7 +9362,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
         // Intel drivers don't support coopmat properly yet
-        return false;
+        return true;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
