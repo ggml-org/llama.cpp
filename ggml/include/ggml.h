@@ -2148,6 +2148,7 @@ extern "C" {
 #endif
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
+    typedef void (*ggml_byteswap_t)  (      void  * GGML_RESTRICT buffer, size_t elements);
 
     struct ggml_type_traits {
         const char             * type_name;
@@ -2157,6 +2158,7 @@ extern "C" {
         bool                     is_quantized;
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
+        ggml_byteswap_t          byteswap;
     };
 
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);

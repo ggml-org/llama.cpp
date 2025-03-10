@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import struct
+import sys
 import tempfile
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -451,6 +452,12 @@ class GGUFWriter:
                 for ti in tensors.values():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
+
+                    if (self.endianess == GGUFEndian.BIG and sys.byteorder == 'little') or \
+                       (self.endianess == GGUFEndian.LITTLE and sys.byteorder == 'big'):
+                        # ti.tensor.byteswap(inplace=True) just didn't work here
+                        ti.tensor = ti.tensor.byteswap()
+
                     ti.tensor.tofile(fout)
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
