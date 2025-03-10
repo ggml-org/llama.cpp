@@ -4,6 +4,7 @@
 #include "llama-arch.h"
 #include "llama-hparams.h"
 #include "llama-vocab.h"
+#include "llama-vision.h"
 
 #include <memory>
 #include <string>
@@ -361,6 +362,10 @@ struct llama_model {
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    // vision
+    bool has_vision = false;
+    llama_vision_model vit;
 
 private:
     struct impl;
