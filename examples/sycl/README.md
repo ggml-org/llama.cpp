@@ -14,7 +14,7 @@ List all SYCL devices with ID, compute capability, max work group size, ect.
 
 1. Build the llama.cpp for SYCL for the specified target *(using GGML_SYCL_TARGET)*.
 
-2. Enable oneAPI running environment *(if GGML_SYCL_TARGET is set to INTEL -default-)*
+2. Enable oneAPI running environment *(if GGML_SYCL_TARGET is set to INTEL -default-, INTEL_CPU or INTEL_GPU)*
 
 ```
 source /opt/intel/oneapi/setvars.sh
