@@ -3111,7 +3111,7 @@ static void ggml_compute_forward_dup_same_cont(
     const int nth = params->nth; // number of threads
 
     // parallelize by elements
-    const int ne = ggml_nelements(dst);
+    const int ne = ggml_nelements(src0)/ggml_blck_size(src0->type);
     const int dr = (ne + nth - 1) / nth;
     const int ie0 = dr * ith;
     const int ie1 = MIN(ie0 + dr, ne);
@@ -4055,7 +4055,6 @@ static void ggml_compute_forward_dup_f32(
 static void ggml_compute_forward_dup_bytes(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
@@ -4069,9 +4068,9 @@ static void ggml_compute_forward_dup_bytes(
     }
 
     const size_t type_size = ggml_type_size(src0->type);
+
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
-
 
     // parallelize by rows
     const int nr = ne01;
@@ -4082,10 +4081,10 @@ static void ggml_compute_forward_dup_bytes(
     const int ir1 = MIN(ir0 + dr, nr);
 
     if (src0->type == dst->type &&
-        ne00 == ne0 &&
+        ggml_are_same_shape(src0, dst) &&
         nb00 == type_size && nb0 == type_size) {
         // copy by rows
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -4146,9 +4145,12 @@ static void ggml_compute_forward_dup_bytes(
     int64_t i12 = 0;
     int64_t i13 = 0;
 
+    // number of blocks in a row
+    const int64_t nb = ne00/ggml_blck_size(src0->type);
+
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            i10 += ne00 * ir0;
+            i10 += nb * ir0;
             while (i10 >= ne0) {
                 i10 -= ne0;
                 if (++i11 == ne1) {
@@ -4162,7 +4164,7 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
             for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                for (int64_t i00 = 0; i00 < nb; i00++) {
                     const char * src0_ptr = ((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
                           char * dst_ptr  = ((char *)  dst->data + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
 
@@ -4182,7 +4184,7 @@ static void ggml_compute_forward_dup_bytes(
                     }
                 }
             }
-            i10 += ne00 * (ne01 - ir1);
+            i10 += nb * (ne01 - ir1);
             while (i10 >= ne0) {
                 i10 -= ne0;
                 if (++i11 == ne1) {
@@ -14067,7 +14069,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     }
 
     // extra_buffer op?
-    if (ggml_cpu_extra_compute_forward(params, tensor)) return;
+    if (ggml_cpu_extra_compute_forward(params, tensor)) {
+        return;
+    }
 
     switch (tensor->op) {
         case GGML_OP_DUP:
