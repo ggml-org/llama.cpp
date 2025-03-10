@@ -50,10 +50,18 @@ struct llama_kv_cache {
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
+    ggml_type type_kr = GGML_TYPE_F16;
+    ggml_type type_kv = GGML_TYPE_F16;
+
     std::vector<llama_kv_cell> cells;
 
     std::vector<struct ggml_tensor *> k_l; // per layer
     std::vector<struct ggml_tensor *> v_l;
+
+    // DeepSeek MLA
+    std::vector<struct ggml_tensor *> kr_l; // per layer
+    std::vector<struct ggml_tensor *> kv_l;
+    std::vector<struct ggml_tensor *> kvt_l;
 
     std::vector<ggml_context_ptr> ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
