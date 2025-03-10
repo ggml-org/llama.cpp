@@ -245,6 +245,123 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 
+## Software architecture
+```mermaid
+block-beta
+columns 1
+
+block:llamacpp
+  llamacpp["llama_cpp"]
+  style llamacpp        fill:#3c3,color:#000,stroke:#000
+end
+
+block:ggml_backend
+ggml_backend["GGML backend subsystem"]
+  style ggml_backend    fill:#3c3,color:#000,stroke:#000
+
+block:ggmlbackends
+ ggml_cpu["ggml-cpu"]
+   ggml_metal["ggml-metal"]
+   ggml_sycl["ggml-sycl"]
+   ggml_cuda["ggml-cuda"]
+   ggml_hip["ggml-hip"]
+   ggml_vulkan["ggml-vulkan"]
+   ggml_cann["ggml-cann"]
+   ggml_opencl["ggml-opencl"]
+   ggml_qnn["ggml-qnn"]
+   ggml_nnpa["ggml-nnpa"]
+   ggml_ane["ggml-ane"]
+
+   style ggml_cpu       fill:#888,color:#000,stroke:#000
+   style ggml_metal     fill:#888,color:#000,stroke:#000
+   style ggml_sycl      fill:#888,color:#000,stroke:#000
+   style ggml_cuda      fill:#888,color:#000,stroke:#000
+   style ggml_hip       fill:#888,color:#000,stroke:#000
+   style ggml_vulkan    fill:#888,color:#000,stroke:#000
+   style ggml_cann      fill:#888,color:#000,stroke:#000
+
+   style ggml_opencl    fill:#cc3,color:#000,stroke:#000
+   style ggml_qnn       fill:#cc3,color:#000,stroke:#000
+   style ggml_ane       fill:#fff,color:#000,stroke:#f00,stroke-width:2,stroke-dasharray:5
+   style ggml_nnpa      fill:#cc3,color:#000,stroke:#000
+  end
+end
+
+block:ggml_backendsubsystem
+  ggml_backendsubsystem["GGML backend subsystem"]
+  style ggml_backendsubsystem fill:#3c3,color:#000,stroke:#000
+end
+
+block:group1：2
+  columns 2
+  block:ggml_tensor
+  ggml_tensor["GGML tensor"]
+  style ggml_tensor fill:#3c3,color:#000,stroke:#000
+  end
+
+  block:ggml_cgraph
+  ggml_cgraph["GGML cgraph"]
+  style ggml_cgraph  fill:#3c3,color:#000,stroke:#000
+  end
+end
+
+block:OS
+    Windows
+    Linux
+    Android
+    QNX
+end
+
+block:hardware_vendors
+    Intel
+    AMD
+    Apple
+    Nvidia
+    Huawei
+    Loongson
+    Qualcomm
+    IBM
+
+    ggml_metal  --> Apple
+    ggml_cuda   --> Nvidia
+    ggml_hip    --> AMD
+    ggml_cann   --> Huawei
+    ggml_sycl   --> Intel
+    ggml_opencl --> Qualcomm
+    ggml_qnn    --> Qualcomm
+    ggml_ane    --> Apple
+    ggml_nnpa   --> IBM
+end
+
+block:hardware_types
+    CPU
+    GPU
+    NPU
+    DSP
+end
+
+block:hardware_archs
+    x86
+    arm
+    risc
+    loongson
+end
+```
+
+```mermaid
+%%{init: {"flowchart": {"htmlLabels": false, 'nodeSpacing': 30, 'rankSpacing': 30}} }%%
+flowchart LR
+    classDef EXIST fill:#888,color:#000,stroke:#000
+    classDef DONE fill:#3c3,color:#000,stroke:#000
+    classDef WIP fill:#cc3,color:#000,stroke:#000
+    classDef NEW fill:#fff,color:#000,stroke:#f00,stroke-width:2,stroke-dasharray:5
+    subgraph Legend
+      direction LR
+      EXIST:::EXIST ~~~ WIP:::WIP ~~~ DONE:::DONE ~~~ NEW:::NEW
+    end
+```
+
+
 ## Building the project
 
 The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
