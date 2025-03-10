@@ -11,6 +11,7 @@
 #include <cstring>
 #include <functional>
 #include <map>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
 
@@ -1468,9 +1469,26 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
             }
 
-            ggml_backend_buffer_type_t buft = select_weight_buft(hparams, t_meta, op, *buft_list);
+            ggml_backend_buffer_type_t buft = nullptr;
+
+            // check overrides
+            if (ml.tensor_buft_overrides) {
+                std::string tensor_name = tn.str();
+                for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                    std::regex pattern(overrides->pattern);
+                    if (std::regex_search(tensor_name, pattern)) {
+                        LLAMA_LOG_DEBUG("tensor %s buffer type overriden to %s\n", tensor_name.c_str(), ggml_backend_buft_name(overrides->buft));
+                        buft = overrides->buft;
+                        break;
+                    }
+                }
+            }
+
             if (!buft) {
-                throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+                buft = select_weight_buft(hparams, t_meta, op, *buft_list);
+                if (!buft) {
+                    throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
+                }
             }
 
             // avoid using a host buffer when using mmap
@@ -3792,6 +3810,7 @@ const struct ggml_tensor * llama_model::get_tensor(const char * name) const {
 struct llama_model_params llama_model_default_params() {
     struct llama_model_params result = {
         /*.devices                     =*/ nullptr,
+        /*.tensor_buft_overrides       =*/ nullptr,
         /*.n_gpu_layers                =*/ 0,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.main_gpu                    =*/ 0,
