@@ -21,7 +21,7 @@ if (MUSAToolkit_FOUND)
     message(STATUS "MUSA Toolkit found")
 
     if (NOT DEFINED MUSA_ARCHITECTURES)
-        set(MUSA_ARCHITECTURES "21;22")
+        set(MUSA_ARCHITECTURES "21;22;31")
     endif()
     message(STATUS "Using MUSA architectures: ${MUSA_ARCHITECTURES}")
 

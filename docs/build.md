@@ -197,28 +197,52 @@ The following compilation options are also available to tweak performance:
 
 ## MUSA
 
-This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GPU. Make sure to have the MUSA SDK installed. You can download it from here: [MUSA SDK](https://developer.mthreads.com/sdk/download/musa).
+This provides GPU acceleration using a Moore Threads GPU. Make sure to have the [MUSA SDK](https://developer.mthreads.com/musa/musa-sdk) installed.
 
-- Using `CMake`:
+#### Download directly from Moore Threads
 
-  ```bash
-  cmake -B build -DGGML_MUSA=ON
-  cmake --build build --config Release
+You may find the official downloads here: [Moore Threads developer site](https://developer.mthreads.com/sdk/download/musa).
+
+### Compilation
+
+```bash
+cmake -B build -DGGML_MUSA=ON
+cmake --build build --config Release
+```
+
+#### Override Compute Capability Specifications
+
+By default, all supported compute capabilities are enabled. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
+
+```bash
+cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+```
+
+This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
+
+#### Compilation options
+
+Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
+
+- For static builds, add `-DBUILD_SHARED_LIBS=OFF` and `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`:
   ```
-
-  For static build:
-
-  ```bash
   cmake -B build -DGGML_MUSA=ON \
     -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   cmake --build build --config Release
   ```
 
-The environment variable [`MUSA_VISIBLE_DEVICES`](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) can be used to specify which GPU(s) will be used.
+### Runtime MUSA environmental variables
+
+You may set the [musa environmental variables](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) at runtime.
+
+```bash
+# Use `MUSA_VISIBLE_DEVICES` to hide the first compute device.
+MUSA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
+```
+
+### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted.
-
-Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
 
 ## HIP
 
