@@ -2,4 +2,9 @@ set(TARGET llama-cli)
 add_executable(${TARGET} main.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
+
+if (LLAMA_TOOLCALL)
+    target_link_libraries(${TARGET} PRIVATE toolcall)
+endif()
+
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
