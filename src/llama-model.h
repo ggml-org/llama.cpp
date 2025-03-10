@@ -2,7 +2,9 @@
 
 #include "llama.h"
 #include "llama-arch.h"
+#include "llama-graph.h"
 #include "llama-hparams.h"
+#include "llama-memory.h"
 #include "llama-vocab.h"
 
 #include <memory>
@@ -10,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct llama_cparams;
+struct llama_ubatch;
 struct llama_model_loader;
 
 // available models
@@ -347,7 +351,7 @@ struct llama_model {
     std::string desc() const;
 
     size_t size() const;
-    size_t max_nodes() const;
+    size_t n_tensors() const;
     size_t n_devices() const;
 
     // total number of parameters in the model
@@ -362,9 +366,22 @@ struct llama_model {
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 
+    // TODO: move this to new llm_arch_model_i interface
+    llama_memory_i * create_memory() const; // TODO: params
+
+    // TODO: move this to new llm_arch_model_i interface
+    llm_graph_result_ptr build_graph(
+            const llm_graph_params & params,
+                       ggml_cgraph * gf,
+                    llm_graph_type   type) const;
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
 
 const char * llm_type_name(llm_type type);
+
+// For internal test use
+// TODO: remove
+const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);

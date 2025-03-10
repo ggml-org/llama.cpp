@@ -15,7 +15,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    print_build_info();
+    common_init();
 
     if (params.n_predict < 0) {
         params.n_predict = 16;
@@ -196,7 +196,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         // erase whole kv
-        llama_kv_cache_clear(ctx3);
+        llama_kv_self_clear(ctx3);
         fprintf(stderr, "%s : kv cache cleared\n", __func__);
 
         // restore kv into seq 1
