@@ -849,6 +849,7 @@ static void ggml_backend_openvino_permute(const struct ggml_tensor * dst) {
 
 void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
     const struct ggml_tensor *src0 = dst->src[0];
+    const struct ggml_tensor *src1 = dst->src[1];
     assert(src0 != nullptr);
     assert(ggml_nelements(dst) == ggml_nelements(src0));
 
@@ -889,64 +890,81 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
         infer_request.set_output_tensor(0, dst_tensor);
         infer_request.infer();
     } else {
-        std::vector<int64_t> gather_idx;
-        for (int row = 0; row < dst->src[0]->ne[1]; row++) {
-            for (int col = 0; col < dst->src[0]->ne[0]; col++) {
-                gather_idx.push_back((row*dst->src[0]->nb[1]+col*dst->src[0]->nb[0])/4);
-            }
-        }
-        size_t N = gather_idx.size();
-        ov::Shape gather_idx_shape = {N, 1};
-        std::vector<int64_t> scatter_idx;
-        for (int row = 0; row < dst->ne[1]; row++) {
-            for (int col = 0; col < dst->ne[0]; col++) {
-                scatter_idx.push_back(row * dst->nb[1] / 2 + col);
-            }
-        }
-        ov::Shape scatter_idx_shape = {N, 1};
+        int src0_elem_size = ggml_type_size(src0->type);
+        int src1_elem_size = ggml_type_size(src1->type);
 
-        // param_src0 shape => 1D, rank=1, size is large enough. For example, row*col= 21504 + some padding, e.g. 80000
-        // ov::Shape flat_src0_shape = {80000};
-        ov::Shape flat_src0_shape = {dst->src[0]->nb[2]};
-        auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
-        // auto param_src00 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, flat_src0_shape);
+        int src0_logical_cols = src0->ne[0];
+        int src0_logical_rows = src0->ne[1];
+        int src1_logical_cols = src1->ne[0];
+        int src1_logical_rows = src1->ne[1];
+
+        int src0_phys_cols = src0->nb[0] / src0_elem_size;
+        int src0_phys_rows = src0_logical_rows;
+
+        int src1_phys_cols = src1->nb[1] / src1_elem_size;
+        int src1_phys_rows = src1_logical_rows;
+
+        ov::Shape src0_phys_shape = {1, static_cast<size_t>(src0_phys_rows), static_cast<size_t>(src0_phys_cols) };
+        ov::Shape src1_phys_shape = {1, static_cast<size_t>(src1_phys_rows), static_cast<size_t>(src1_phys_cols) };
+
+        size_t logical_elems = static_cast<size_t>(src0_logical_cols * src0_logical_rows);
+        size_t src_flat_size = 1 * src0_phys_cols * src0_phys_rows;
+        size_t dst_flat_size = 1 * src1_phys_rows * src1_phys_cols;
+
+        ov::Core core;
+
+        std::vector<int64_t> gather_idx;
+        gather_idx.reserve(logical_elems);
+        for (int row = 0; row < src0_logical_rows; row++) {
+            for (int col = 0; col < src0_logical_cols; col++) {
+                gather_idx.push_back(static_cast<int64_t>(row + col * src0_phys_rows));
+            }
+        }
+        ov::Shape gather_idx_shape = { logical_elems };
+
+        std::vector<int64_t> scatter_idx;
+        scatter_idx.reserve(logical_elems);
+        for (int row = 0; row < src1_logical_rows; row++) {
+            for (int col = 0; col < src1_logical_cols; col++) {
+                scatter_idx.push_back(static_cast<int64_t>(row * src1_phys_cols + col));
+            }
+        }
+        ov::Shape scatter_idx_shape = { logical_elems, 1 };
+
+        auto param_src0 = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src0_phys_shape);
+        auto param_src1 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, src1_phys_shape);
+
+        auto src_flat_shape_const = ov::op::v0::Constant::create(ov::element::i64, {1},
+                                      { static_cast<int64_t>(src_flat_size) });
+        auto reshape_src = std::make_shared<ov::op::v1::Reshape>(param_src0, src_flat_shape_const, false);
+        auto dst_flat_shape_const = ov::op::v0::Constant::create(ov::element::i64, {1},
+                                      { static_cast<int64_t>(dst_flat_size) });
+        auto reshape_dst = std::make_shared<ov::op::v1::Reshape>(param_src1, dst_flat_shape_const, false);
 
         auto gather_indices_const = ov::op::v0::Constant::create(ov::element::i64, gather_idx_shape, gather_idx);
-        auto gather_axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        auto gathered = std::make_shared<ov::op::v8::Gather>(
-            param_src0, gather_indices_const, gather_axis_const);
-
+        auto axis_const = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto gathered = std::make_shared<ov::op::v8::Gather>(reshape_src, gather_indices_const, axis_const);
         auto converted = std::make_shared<ov::op::v0::Convert>(gathered, ov::element::f16);
 
-        // param_dst_base shape => 1D, rank=1, size够大, e.g. row=3072 => i up to 3071 => offset i*64=196544 + j*2, e.g.200000
-        // ov::Shape flat_dst_shape = {200000, 1};
-        ov::Shape flat_dst_shape = {dst->nb[2], 1};
-        auto param_dst_base = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
-        // auto param_dst_base11 = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, flat_dst_shape);
-
         auto scatter_indices_const = ov::op::v0::Constant::create(ov::element::i64, scatter_idx_shape, scatter_idx);
+        auto scatter = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshape_dst, scatter_indices_const, converted);
 
-        // ScatterNDUpdate( base, scatter_indices, updates )
-        // scatter_indices last dimension = 1 => each index is 1D coordinate
-        auto scatter = std::make_shared<ov::op::v3::ScatterNDUpdate>(
-            param_dst_base, scatter_indices_const, converted
-        );
+        std::vector<int64_t> dst_phys_shape_vec = {1, static_cast<int64_t>(src1_phys_rows),
+                                                    static_cast<int64_t>(src1_phys_cols) };
+        auto dst_phys_shape_const = ov::op::v0::Constant::create(ov::element::i64, {3}, dst_phys_shape_vec);
+        auto final_output = std::make_shared<ov::op::v1::Reshape>(scatter, dst_phys_shape_const, false);
 
-        ov::ParameterVector params = { param_src0, param_dst_base };
-        // ov::ParameterVector params = { param_src0};
-        // ov::ParameterVector params = { param_src00, param_dst_base11};
-        auto model = std::make_shared<ov::Model>(ov::OutputVector{ scatter }, params);
-
+        ov::ParameterVector params = { param_src0, param_src1 };
+        auto model = std::make_shared<ov::Model>(ov::OutputVector{ final_output }, params);
         auto compiled_model = core.compile_model(model, "CPU");
         auto infer_request = compiled_model.create_infer_request();
 
-        ov::Tensor tensor_src0(ov::element::f32, flat_src0_shape, src0->data);
-        ov::Tensor tensor_dst_base(ov::element::f16, flat_dst_shape, dst->data);
+        ov::Tensor tensor_src(ov::element::f32, src0_phys_shape, src0->data);
+        ov::Tensor tensor_dst(ov::element::f16, src1_phys_shape, src1->data);
+        infer_request.set_input_tensor(0, tensor_src);
+        infer_request.set_input_tensor(1, tensor_dst);
 
-        infer_request.set_input_tensor(0, tensor_src0);
-        infer_request.set_input_tensor(1, tensor_dst_base);
-
-        ov::Tensor out_tensor(ov::element::f16, flat_dst_shape, dst->data);
+        ov::Tensor out_tensor(ov::element::f16, src1_phys_shape, dst->data);
         infer_request.set_output_tensor(0, out_tensor);
 
         infer_request.infer();
@@ -986,15 +1004,17 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
 
     // Process nodes in order
 
-    // if (cgraph->nodes[0]->ne[1] == 1) {
-    //     bool prompt_process_flag = false;
+    bool prompt_process_flag = true;
+    if (cgraph->nodes[0]->ne[1] == 1) {
+        prompt_process_flag = false;
+    }
     //     int end_node = cgraph->n_nodes - 1;
     //     openvino_frontend_compute(backend, cgraph, 0, end_node, prompt_process_flag);
     // } else {
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
-            // ggml_backend_openvino_permute(cgraph->nodes[i]);
+            ggml_backend_openvino_permute(cgraph->nodes[i]);
         // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
         //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
         } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
@@ -1020,7 +1040,7 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
                 i++;
             }
             if (start_index < i) {
-                    openvino_frontend_compute(backend, cgraph, start_index, --i);
+                    openvino_frontend_compute(backend, cgraph, start_index, --i, prompt_process_flag);
             }
         }
     }

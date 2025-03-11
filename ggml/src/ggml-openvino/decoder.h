@@ -36,8 +36,6 @@ public:
 
     virtual std::vector<std::string> get_input_names() const = 0;
 
-    virtual const std::string& get_node_op_name(const std::string& name) const = 0;
-
     virtual std::string& get_op_node_name(const std::string& name, const int index = -1) = 0;
 
     // virtual const struct tensor_info get_node_op_info(const std::string& name) const = 0;

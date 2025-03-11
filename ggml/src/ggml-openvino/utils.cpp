@@ -22,24 +22,35 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
         std::string op_node_name = ggml_decoder->get_op_node_name(name, op_iter++);
         // auto node_op_name = ggml_decoder->get_node_op_name(name);
         auto input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
+        auto check_if_contiguous = ggml_is_contiguous(ggml_decoder->get_input_ggml_tensor(name));
         #ifdef GGML_OPENVINO_DEBUG
             printf("Subgraph input %d: %g\n", inp, *(double*)(input_data));
         #endif
         ov::Tensor input_tensor;
         auto input_shape = ggml_decoder->get_input_shape(name).to_shape();
-        // if (node_op_name == "CPY" && (input_shape[0] != 7)) {
-        //     input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), {80000}, input_data);
 
         if (flag & op_node_name == "CONT" && input_shape[0] == 1 && input_shape[1] != 1) {
             std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
             ov::element::Type input_type = ggml_decoder->get_input_type(name);
             size_t element_size = input_type.size();
-            // const size_t valid_elems = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[2]);
             const size_t num_rows    = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[1]);
             const size_t dim2        = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[0]);
             size_t phys_stride = static_cast<size_t>(input_stride[1]) / element_size;
             ov::Shape input_shape = { dim2, num_rows, phys_stride }; // {1, 7, 9216 }
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
+        } else if (op_node_name == "CPY" && (!check_if_contiguous || input_shape[2] == 1)) { //[TODO]: Temporarily determine whether the node corresponding to the input tensor of the Phi-3 model CPY is continuous
+            std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
+            ov::element::Type input_type = ggml_decoder->get_input_type(name);
+            size_t element_size = input_type.size();
+            ov::Shape phys_shape;
+            static int iter = 0;
+            if (iter++ % 2 == 0) {
+                phys_shape = {1, input_shape[1], input_stride[2] / element_size};
+                input_tensor = ov::Tensor(ov::element::f32, phys_shape, input_data);
+            } else {
+                phys_shape = {1, input_shape[1], input_stride[1] / element_size};
+                input_tensor = ov::Tensor(ov::element::f16, phys_shape, input_data);
+            }
         } else {
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
         }
@@ -105,7 +116,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Convert InputModel -> ov::Model 
     std::shared_ptr<ov::Model> model = front_end->convert(input_model);
-    ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
+    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
     
     if (!model) {
         GGML_LOG_ERROR("Model is not converted \n");
@@ -117,7 +128,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     //  Loading a model to the device
     ov::CompiledModel compiled_model = core.compile_model(model);
-    ov::save_model(compiled_model.get_runtime_model(), "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_compile_model.xml");
+    // ov::save_model(compiled_model.get_runtime_model(), "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_compile_model.xml");
 
     // Create infer request
     ov::InferRequest infer_request = compiled_model.create_infer_request();
