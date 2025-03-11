@@ -9702,7 +9702,15 @@ struct llama_context * llama_init_from_model(
     if (!hparams.vocab_only) {
         // GPU backends
         for (auto * dev : model->devices) {
-            ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+            ggml_backend_t backend = nullptr;
+#ifdef GGML_USE_QNN
+            if (QNN_BACKEND_GGML == model->params.main_gpu) {
+                break;
+            }
+            backend = ggml_backend_dev_init(dev, reinterpret_cast<const char *>(model->params.main_gpu));
+#else
+            backend = ggml_backend_dev_init(dev, nullptr);
+#endif
             if (backend == nullptr) {
                 LLAMA_LOG_ERROR("%s: failed to initialize %s backend\n", __func__, ggml_backend_dev_name(dev));
                 llama_free(ctx);
@@ -9715,7 +9723,7 @@ struct llama_context * llama_init_from_model(
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-#ifdef GGML_USE_QNN // avoid side-effect to other backends
+#ifdef GGML_USE_QNN
             if (QNN_BACKEND_GGML == model->params.main_gpu) {
                 break;
             }
