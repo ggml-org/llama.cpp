@@ -813,7 +813,7 @@ void ggml_backend_openvino_dup_bytes(struct ggml_tensor *dst) {
         auto order_const = ov::op::v0::Constant::create(ov::element::i64, {order.size()}, order);
         auto transpose = std::make_shared<ov::op::v1::Transpose>(input_param, order_const);
 
-        ov::Shape target_shape = { dst->ne[2], dst->ne[1], dst->ne[0] }; // {1, 7, 3072}
+        ov::Shape target_shape = { static_cast<size_t>(dst->ne[2]), static_cast<size_t>(dst->ne[1]), static_cast<size_t>(dst->ne[0]) }; // {1, 7, 3072}
         std::vector<int64_t> target_shape_vec = { static_cast<int64_t>(dst->ne[2]),
                                                   static_cast<int64_t>(dst->ne[1]),
                                                   static_cast<int64_t>(dst->ne[0]) };
@@ -866,7 +866,7 @@ void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
     std::shared_ptr<ov::Model> model;
     if (ggml_is_contiguous(dst)) {
         // Contiguous Case: Flatten src and reshape to dst shape
-        ov::Shape flattened_shape = {ggml_nelements(src0)};
+        ov::Shape flattened_shape = {static_cast<size_t>(ggml_nelements(src0))};
         auto flatten = std::make_shared<ov::op::v1::Reshape>(
             src_input, ov::op::v0::Constant::create(ov::element::i64, {1}, flattened_shape), false);
 
@@ -1013,12 +1013,12 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
     // } else {
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
-            ggml_backend_openvino_permute(cgraph->nodes[i]);
+        if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
+            ggml_backend_openvino_view(cgraph->nodes[i]);
         // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
         //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
-        } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
-            ggml_backend_openvino_view(cgraph->nodes[i]);
+        // } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
+        //     ggml_backend_openvino_permute(cgraph->nodes[i]);
         // } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
         //     ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
         // } else if (std::find(transpose_indices.begin(), transpose_indices.end(), i) != transpose_indices.end()) {

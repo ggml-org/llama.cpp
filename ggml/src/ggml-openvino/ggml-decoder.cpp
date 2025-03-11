@@ -231,7 +231,7 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
     file << "n_nodes = " << cgraph->n_nodes << "\n";
     file << " " << std::setw(3) << "nodes"
                 <<  std::setw(15) << "shape"
-                << std::setw(16) << "op"
+                << std::setw(20) << "op"
                 << std::setw(20) << "name"
                 << std::setw(3) << "    "
                 << std::setw(50) << "stride"
@@ -242,21 +242,24 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
         file << " - " << std::setw(3) << i << ": [ "
              << std::setw(5) << node->ne[0] << ", "
              << std::setw(5) << node->ne[1] << ", "
-             << std::setw(5) << node->ne[2] << "] "
+             << std::setw(5) << node->ne[2] << ", "
+             << std::setw(5) << node->ne[3] << "] "
              << std::left << std::setw(20) << ggml_op_name(node->op) << std::right << " "
              << std::left << std::setw(44) << node->name << std::right
              << ((node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" : node->grad ? "g" : " ")
              << std::setw(2) << "[ "
              << std::setw(0) << node->nb[0] << ", "
              << std::setw(5) << node->nb[1] << ", "
-             << std::setw(5) << node->nb[2] << "] "
+             << std::setw(5) << node->nb[2] << ", "
+             << std::setw(5) << node->nb[3] << "] "
              << "\n";
 
         if (node->src[0]) {
             file << std::setw(10) << " [ "
             << std::setw(5) << node->src[0]->ne[0] << ", "
             << std::setw(5) << node->src[0]->ne[1] << ", "
-            << std::setw(5) << node->src[0]->ne[2] << "] "
+            << std::setw(5) << node->src[0]->ne[2] << ", "
+            << std::setw(5) << node->src[0]->ne[3] << "] "
             << std::setw(12)
             << "0: " << std::left << std::setw(12) << ggml_op_name(node->src[0]->op) << std::right;
             // // Custom logic to handle '\000'
@@ -269,14 +272,16 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(16) << "[ "
             << std::setw(0) << node->src[0]->nb[0] << ", "
             << std::setw(5) << node->src[0]->nb[1] << ", "
-            << std::setw(5) << node->src[0]->nb[2] << "] "
+            << std::setw(5) << node->src[0]->nb[2] << ", "
+            << std::setw(5) << node->src[0]->nb[3] << "] "
             << "\n";
         }
         if (node->src[1]) {
             file << std::setw(10) << " [ "
             << std::setw(5) << node->src[1]->ne[0] << ", "
             << std::setw(5) << node->src[1]->ne[1] << ", "
-            << std::setw(5) << node->src[1]->ne[2] << "] "
+            << std::setw(5) << node->src[1]->ne[2] << ", "
+            << std::setw(5) << node->src[1]->ne[3] << "] "
             << std::setw(12)
             << "1: " << std::left << std::setw(12) << ggml_op_name(node->src[1]->op) << std::right;
             // // Custom logic to handle '\000'
@@ -289,7 +294,8 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(16) << "[ "
             << std::setw(0) << node->src[1]->nb[0] << ", "
             << std::setw(5) << node->src[1]->nb[1] << ", "
-            << std::setw(5) << node->src[1]->nb[2] << "] "
+            << std::setw(5) << node->src[1]->nb[2] << ", "
+            << std::setw(5) << node->src[1]->nb[3] << "] "
             << "\n";
         }
     }
