@@ -14,7 +14,9 @@ GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 #https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
 QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
-QNN_SDK_PATH=/opt/qcom/aistack/qairt/2.31.0.250130/
+QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
+QNN_SDK_VERSION=2.32.0.250228
+QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
 #default is QNN NPU
 qnnbackend=2
@@ -32,11 +34,35 @@ function show_pwd()
 }
 
 
-function check_qnn_sdk()
+function check_and_download_qnn_sdk()
 {
+    is_qnn_sdk_exist=1
+
     if [ ! -d ${QNN_SDK_PATH} ]; then
-        echo -e "QNN_SDK_PATH ${QNN_SDK_PATH} not exist, pls check or download it from ${QNN_SDK_URL}...\n"
-        exit 1
+        echo -e "QNN_SDK_PATH ${QNN_SDK_PATH} not exist, download it from ${QNN_SDK_URL}...\n"
+        is_qnn_sdk_exist=0
+    fi
+
+    if [ ! -f ${QNN_SDK_PATH}/sdk.yaml ]; then
+        is_qnn_sdk_exist=0
+    fi
+
+    if [ ${is_qnn_sdk_exist} -eq 0 ]; then
+        echo "sudo mkdir -p ${QNN_SDK_INSTALL_PATH}"
+        sudo mkdir -p ${QNN_SDK_INSTALL_PATH}
+        if [ ! -f v${QNN_SDK_VERSION}.zip ]; then
+            wget --no-config --quiet --show-progress -O v${QNN_SDK_VERSION}.zip https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/${QNN_SDK_VERSION}/v${QNN_SDK_VERSION}.zip
+        fi
+        unzip v${QNN_SDK_VERSION}.zip
+        if [ $? -ne 0 ]; then
+            printf "failed to download Qualcomm QNN SDK to %s \n" "${QNN_SDK_PATH}"
+            exit 1
+        fi
+        sudo mv qairt/${QNN_SDK_VERSION} ${QNN_SDK_INSTALL_PATH}/
+        printf "Qualcomm QNN SDK saved to ${QNN_SDK_PATH} \n\n"
+        sudo rm -rf qairt
+    else
+        printf "Qualcomm QNN SDK already exist:${QNN_SDK_PATH} \n\n"
     fi
 }
 
@@ -75,7 +101,7 @@ function check_and_download_ndk()
 
 function build_arm64
 {
-    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_USE_QNN=ON -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
     cd out/android
     make -j16
     show_pwd
@@ -97,11 +123,14 @@ function check_qnn_libs()
 {
     #reuse the cached qnn libs on Android phone
     adb shell ls ${REMOTE_PATH}/libQnnCpu.so
+    adb shell ls ${REMOTE_PATH}/libQnnGpu.so
+    adb shell ls ${REMOTE_PATH}/libQnnHtp.so
     if [ $? -eq 0 ]; then
         printf "QNN libs already exist on Android phone\n"
     else
         update_qnn_libs
     fi
+    update_qnn_cfg
 }
 
 
@@ -119,11 +148,17 @@ function update_qnn_libs()
 }
 
 
+function update_qnn_cfg()
+{
+    adb push ./scripts/ggml-qnn.cfg ${REMOTE_PATH}/
+}
+
+
 function build_ggml_qnn()
 {
     show_pwd
     check_and_download_ndk
-    check_qnn_sdk
+    check_and_download_qnn_sdk
     dump_vars
     remove_temp_dir
     build_arm64
@@ -140,13 +175,12 @@ function prepare_run_on_phone()
 
     check_qnn_libs
 
-    if [ -f ./out/android/bin/libggml-qnn.so ]; then
+    if [ -f ./out/android/bin/libggml-cpu.so ]; then
         adb push ./out/android/bin/*.so ${REMOTE_PATH}/
     fi
     adb push ./out/android/bin/${program} ${REMOTE_PATH}/
     adb shell chmod +x ${REMOTE_PATH}/${program}
 }
-
 
 function run_llamacli()
 {
@@ -154,7 +188,7 @@ function run_llamacli()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-cli -mg ${qnnbackend} -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
+               && ${REMOTE_PATH}/llama-cli -mg ${qnnbackend} -ngl 99 -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
 
 }
 
@@ -212,7 +246,6 @@ function run_test-op()
                && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
 
 }
-
 
 function print_oplist()
 {
@@ -302,7 +335,7 @@ function show_usage()
     echo "  $0 build"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
-    echo "  $0 run_testop          [ADD/MUL/MUL_MAT/...(op from print_oplist)]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
+    echo "  $0 run_testop          [ADD/MUL/MUL_MAT......(op from print_oplist)]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
     echo "  $0 run_llamacli        0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
     echo "  $0 run_llamabench      0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
 
@@ -312,7 +345,8 @@ function show_usage()
 
 show_pwd
 
-check_qnn_sdk
+check_and_download_ndk
+check_and_download_qnn_sdk
 
 if [ $# == 0 ]; then
     show_usage
@@ -343,20 +377,22 @@ elif [ $# == 1 ]; then
     fi
 elif [ $# == 2 ]; then
     qnnbackend=$2
+    if [ ${qnnbackend} -gt 3 ]; then
+        show_usage
+        exit 1
+    fi
+
     if [ "$1" == "run_llamacli" ]; then
         run_llamacli
         exit 0
     elif [ "$1" == "run_llamabench" ]; then
         run_llamabench
         exit 0
-        exit 0
-    else
-        show_usage
-        exit 1
     fi
 elif [ $# == 3 ]; then
-    #opname can be found via print_oplist:
     opname=$2
+#TODO: check opname in oplist
+#opname can be found via print_oplist:
 
     qnnbackend=$3
     if [ ${qnnbackend} -gt 3 ]; then
