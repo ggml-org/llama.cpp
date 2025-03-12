@@ -141,6 +141,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "layers.{bid}.attention.wqkv",
         ),
 
         # Attention query
@@ -563,10 +564,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
             "model.layers.{bid}.self_attn.inner_attn_ln",  # bitnet
+            "layers.{bid}.attention.attn_sub_norm",  # bitnet
+            "model.layers.{bid}.self_attn.attn_sub_norm",
         ),
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
+            "layers.{bid}.feed_forward.ffn_sub_norm", # bitnet
+            "model.layers.{bid}.mlp.ffn_sub_norm",
         ),
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
