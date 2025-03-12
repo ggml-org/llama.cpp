@@ -43,6 +43,8 @@ public:
 
     virtual ov::element::Type get_output_type(const std::string& name) const override;
 
+    virtual int32_t* get_input_op_params(const std::string& name) const override;
+
     virtual int32_t* get_output_op_params(const std::string& name) const override;
 
     virtual std::string& get_output_name(size_t index) const override;

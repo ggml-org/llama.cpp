@@ -138,11 +138,28 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         // For view, input is node itself
         case GGML_OP_VIEW:
         {
-            inputs[node_name] = node;
+            inputs[src0_name] = node->src[0];
             outputs[node_name] = node;
-            m_input_names.push_back(node_name);
-            m_op_node_name.emplace_back(node_name, ggml_op_name(node->op));
+            m_input_names.push_back(src0_name);
+            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
             m_output_names.push_back(node_name);
+
+            // ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
+            //                             static_cast<size_t>(node->src[0]->ne[1]),
+            //                             static_cast<size_t>(node->src[0]->ne[0])};
+            // auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+            // m_params.push_back(input_param);
+
+            // if (node->ne[0] > node->ne[1] && (node->ne[0] * node->nb[0] != node->nb[1]) && node->ne[2] == 1) {
+            //     m_continuous = false;
+            // } else {
+            //     m_continuous = true;
+
+            // }
+            // m_continuous = false;
+
+            // [TODO]: multiple cases
+
             break;
         }
         // SCALE
@@ -465,6 +482,10 @@ ov::element::Type GgmlOvDecoder::get_output_type(const std::string& name) const 
             break;
     }
     return type;
+}
+
+int32_t* GgmlOvDecoder::get_input_op_params(const std::string& name) const{
+    return m_inputs.at(name)->op_params;
 }
 
 int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const{
