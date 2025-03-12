@@ -736,26 +736,28 @@ static struct ggml_tensor * llm_build_cross_kv(
     // L = number of tokens
     // B = batch size
     const int64_t num_heads = lctx.model.hparams.n_head();
-    const float cross_attn_scale = 1.0f / sqrtf(float(qcur->ne[0]));
+    const float cross_attn_scale = 1.0f / sqrtf(float(qcur->ne[0] / num_heads));
     // Only add the computation of K and V if
     // the cache doesn't already have the data
-    if (!kv.cache_filled) {
-        // Add computation of K, V to the graph
-        ggml_build_forward_expand(graph, kcur);
-        ggml_build_forward_expand(graph, vcur);
-        // Copy K and V to the cross KV cache
-        ggml_build_forward_expand(graph, ggml_cpy(ctx, kcur, kv.k_l[il]));
-        ggml_build_forward_expand(graph, ggml_cpy(ctx, vcur, kv.v_l[il]));
-    }
-    struct ggml_tensor * k = kv.k_l[il];
-    struct ggml_tensor * v = kv.v_l[il];
+    //if (!kv.cache_filled) {
+    //    // Add computation of K, V to the graph
+    //    ggml_build_forward_expand(graph, kcur);
+    //    ggml_build_forward_expand(graph, vcur);
+    //    // Copy K and V to the cross KV cache
+    //    ggml_build_forward_expand(graph, ggml_cpy(ctx, kcur, kv.k_l[il]));
+    //    ggml_build_forward_expand(graph, ggml_cpy(ctx, vcur, kv.v_l[il]));
+    //}
+    struct ggml_tensor * k = kcur;
+    struct ggml_tensor * v = vcur;
     // Compute cross attention score
     struct ggml_tensor * q = ggml_reshape_4d(ctx, qcur, qcur->ne[0] / num_heads,
         num_heads, qcur->ne[1], qcur->ne[2]);
     k = ggml_reshape_3d(ctx, k, 1024 / num_heads, num_heads, 6400);
     v = ggml_reshape_3d(ctx, v, 1024 / num_heads, num_heads, 6400);
+    // K x L x H x B
     q = ggml_permute(ctx, q, 0, 2, 1, 3);
     k = ggml_permute(ctx, k, 0, 2, 1, 3);
+    // L x K x H x B
     v = ggml_permute(ctx, v, 1, 2, 0, 3);
     q = ggml_cont(ctx, q);
     k = ggml_cont(ctx, k);
@@ -8284,6 +8286,8 @@ struct llm_build_context {
             struct ggml_tensor * cross_attn = llm_build_cross_kv(ctx0, lctx,
                 qt, kt, vt, gf, il);
 
+            cross_attn = ggml_mul_mat(ctx0, cur_layer.wdense_cross, cross_attn);
+
             inpSA = ggml_add(ctx0, inpSA, cross_attn);
 
             if (il == n_layer - 1) {
@@ -8791,6 +8795,30 @@ static int llama_prepare_ubatch(
     }
 
     return 0;
+}
+
+void save_tensor_desperate(struct ggml_tensor * input_tensor, std::string filename) {
+    std::string prefix = "/home/tianyue/myworkspace/";
+    filename = prefix + filename;
+    gguf_context * gguf_ctx = gguf_init_empty();
+    gguf_set_val_str(gguf_ctx, "model.architecture", "cogagent");
+    gguf_set_val_u32(gguf_ctx, "general.file_type", GGML_TYPE_F32);
+
+    struct ggml_init_params params = {
+        ggml_nbytes(input_tensor) + 1000000,  // Memory to allocate
+        nullptr,  // Buffer location
+        false,  // Allocate tensor data
+    };
+    struct ggml_context * tensor_ctx = ggml_init(params);
+    struct ggml_tensor * tensor_with_data = ggml_dup(tensor_ctx, input_tensor);
+    ggml_backend_tensor_get(input_tensor, tensor_with_data->data,
+        0, ggml_nbytes(input_tensor));
+
+    ggml_set_name(tensor_with_data, "output_tensor");
+    gguf_add_tensor(gguf_ctx, tensor_with_data);
+    gguf_write_to_file(gguf_ctx, filename.c_str(), false);
+    gguf_free(gguf_ctx);
+    ggml_free(tensor_ctx);
 }
 
 // decode a batch of tokens by evaluating the transformer
