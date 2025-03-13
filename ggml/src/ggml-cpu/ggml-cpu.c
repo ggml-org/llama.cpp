@@ -2598,6 +2598,13 @@ bool ggml_is_numa(void) {
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/auxv.h>
 #elif defined(__APPLE__)
+#include <TargetConditionals.h>
+#if defined(TARGET_OS_VISION) && TARGET_OS_VISION
+// VisionOS lacks some legacy types definitions
+typedef unsigned int u_int;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
+#endif
 #include <sys/sysctl.h>
 #endif
 
