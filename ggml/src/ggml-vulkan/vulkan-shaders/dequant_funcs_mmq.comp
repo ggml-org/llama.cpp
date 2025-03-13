@@ -1,0 +1,37 @@
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+
+#include "types.comp"
+
+// Each iqs value maps to a 32-bit integer
+
+#if defined(DATA_A_Q4_0)
+i32vec2 repack(uint ib, uint iqs) {
+    const u16vec2 quants = u16vec2(data_a[ib].qs[iqs * 2 + 1],
+                                   data_a[ib].qs[iqs * 2    ]);
+    const uint32_t vui = pack32(quants);
+    return i32vec2(pack32(i8vec4(i16vec4(unpack8( vui       & 0x0F0F0F0F)) - int16_t(8))),
+                   pack32(i8vec4(i16vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - int16_t(8))));
+}
+#endif
+
+#if defined(DATA_A_Q8_0)
+int32_t repack(uint ib, uint iqs) {
+    const int16_t v0 = data_a[ib].qs[iqs * 2    ];
+    const int16_t v1 = data_a[ib].qs[iqs * 2 + 1];
+    return pack32(i16vec2(v1, v0));
+}
+#endif
+
+#if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+FLOAT_TYPE get_d(uint ib) {
+    return FLOAT_TYPE(data_a[ib].d);
+}
+#endif
+
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+FLOAT_TYPE_VEC2 get_dm(uint ib) {
+    return FLOAT_TYPE_VEC2(data_a[ib].d, data_a[ib].m);
+}
+#endif
