@@ -21,6 +21,8 @@ struct llama_ubatch {
     int32_t      *  n_seq_id; // [n_seqs]
     llama_seq_id ** seq_id;   // [n_seqs]
     int8_t       *  output;   // [n_tokens]
+
+    struct ggml_tensor * embd_tensor;
 };
 
 struct llama_sbatch_seq {

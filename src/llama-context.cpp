@@ -73,7 +73,7 @@ void llama_set_inputs(llama_context & lctx, const llama_ubatch & ubatch) {
         ggml_backend_tensor_set(lctx.inp_tokens, ubatch.token, 0, n_tokens*ggml_element_size(lctx.inp_tokens));
     }
 
-    if (ubatch.embd) {
+    if (ubatch.embd && !ubatch.embd_tensor) {
         const int64_t n_embd   = hparams.n_embd;
         const int64_t n_tokens = ubatch.n_tokens;
 
