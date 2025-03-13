@@ -277,6 +277,78 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
+        } else if (strcmp(argv[arg_idx], "--attention-q-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.attn_q_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.attn_q_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--attention-k-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.attn_k_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.attn_k_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--attention-v-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.attn_v_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.attn_v_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--attention-qkv-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.attn_qkv_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.attn_qkv_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--attention-output-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.attn_output_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.attn_output_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--feedforward-up-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.ffn_up_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.ffn_up_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--feedforward-gate-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.ffn_gate_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.ffn_gate_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--feedforward-down-type") == 0) {
+            if (arg_idx < argc-1) {
+                params.ffn_down_tensor_type = parse_ggml_type(argv[++arg_idx]);
+                if (params.ffn_down_tensor_type == GGML_TYPE_COUNT) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
             if (arg_idx == argc-1 || !string_parse_kv_override(argv[++arg_idx], kv_overrides)) {
                 usage(argv[0]);
