@@ -726,6 +726,7 @@ bool llama_cross_kv_cache_init(struct llama_cross_kv_cache & cache,
                                                       bool   offload) {
     const struct llama_hparams & hparams = model.hparams;
     const int32_t n_layer = hparams.n_layer;
+    cache.cache_filled = false;
 
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;

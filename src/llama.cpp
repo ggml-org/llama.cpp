@@ -739,16 +739,19 @@ static struct ggml_tensor * llm_build_cross_kv(
     const float cross_attn_scale = 1.0f / sqrtf(float(qcur->ne[0] / num_heads));
     // Only add the computation of K and V if
     // the cache doesn't already have the data
-    //if (!kv.cache_filled) {
-    //    // Add computation of K, V to the graph
-    //    ggml_build_forward_expand(graph, kcur);
-    //    ggml_build_forward_expand(graph, vcur);
-    //    // Copy K and V to the cross KV cache
-    //    ggml_build_forward_expand(graph, ggml_cpy(ctx, kcur, kv.k_l[il]));
-    //    ggml_build_forward_expand(graph, ggml_cpy(ctx, vcur, kv.v_l[il]));
-    //}
-    struct ggml_tensor * k = kcur;
-    struct ggml_tensor * v = vcur;
+    if (!kv.cache_filled) {
+        // Add computation of K, V to the graph
+        ggml_build_forward_expand(graph, kcur);
+        ggml_build_forward_expand(graph, vcur);
+        // Copy K and V to the cross KV cache
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, kcur, kv.k_l[il]));
+        ggml_build_forward_expand(graph, ggml_cpy(ctx, vcur, kv.v_l[il]));
+        if (il == 0) {
+            printf("Copying KV values to the cross KV cache\n");
+        }
+    }
+    struct ggml_tensor * k = kv.k_l[il];
+    struct ggml_tensor * v = kv.v_l[il];
     // Compute cross attention score
     struct ggml_tensor * q = ggml_reshape_4d(ctx, qcur, qcur->ne[0] / num_heads,
         num_heads, qcur->ne[1], qcur->ne[2]);
@@ -8320,7 +8323,6 @@ struct llm_build_context {
 
             inpSA = ggml_add(ctx0, inpSA, cur);
         }
-        lctx.kv_cross.cache_filled = true;
 
         cur = ggml_rms_norm(ctx0, inpSA, hparams.f_norm_rms_eps);
         cur = ggml_mul(ctx0, cur, model.output_norm);
@@ -8934,6 +8936,10 @@ static int llama_decode_impl(
                 default:
                     return -3;
             }
+        }
+
+        if (llama_model_has_cross_kv(&lctx.model)) {
+            lctx.kv_cross.cache_filled = true;
         }
 
         // update the kv ring buffer
