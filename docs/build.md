@@ -433,6 +433,26 @@ llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
 
+## Arm® KleidiAI™
+KleidiAI is a library of optimized microkernels for AI workloads, specifically designed for Arm CPUs. These microkernels enhance performance and can be enabled for use by the CPU backend.
+
+To enable KleidiAI, go to the llama.cpp directory and build using CMake
+```bash
+cmake -B build -DGGML_CPU_KLEIDIAI=ON
+cmake --build build --config Release
+```
+You can verify that KleidiAI is being used by running
+```bash
+./build/bin/llama-cli -m PATH_TO_MODEL -p "What is a car?"
+```
+If KleidiAI is enabled, the ouput will contain a line similar to:
+```
+load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
+```
+KleidiAI's microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm and SME. llama.cpp selects the most efficient kernel based on runtime CPU feature detection. However, on platforms that support SME, you must manually enable SME microkernels by setting the environment variable `GGML_KLEIDIAI_SME=1`.
+
+Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
+
 ## Android
 
 To read documentation for how to build on Android, [click here](./android.md)
