@@ -914,6 +914,14 @@ struct llama_model_quantize_params llama_model_quantize_default_params() {
         /*.keep_split                  =*/ false,
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.attn_q_tensor_type          =*/ GGML_TYPE_COUNT,
+        /*.attn_k_tensor_type          =*/ GGML_TYPE_COUNT,
+        /*.attn_v_tensor_type          =*/ GGML_TYPE_COUNT,
+        /*.attn_qkv_tensor_type        =*/ GGML_TYPE_COUNT,
+        /*.attn_output_tensor_type     =*/ GGML_TYPE_COUNT,
+        /*.ffn_up_tensor_type          =*/ GGML_TYPE_COUNT,
+        /*.ffn_gate_tensor_type        =*/ GGML_TYPE_COUNT,
+        /*.ffn_down_tensor_type        =*/ GGML_TYPE_COUNT,
     };
 
     return result;
