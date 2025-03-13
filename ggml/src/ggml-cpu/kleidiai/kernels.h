@@ -40,7 +40,6 @@ struct lhs_packing_info {
     size_t (*packed_size)(size_t m, size_t k, size_t bl, size_t mr, size_t kr, size_t sr);
     void (*pack_func)(size_t m, size_t k, size_t bl, size_t mr, size_t kr, size_t sr, size_t m_idx_start, const float* lhs,
                       size_t lhs_stride, void* lhs_packed);
-    bool require_aligned_m_idx;
 };
 
 struct rhs_packing_info {
