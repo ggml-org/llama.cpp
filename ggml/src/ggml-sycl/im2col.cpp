@@ -85,7 +85,7 @@ static void im2col_sycl(
 void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
-        
+
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
