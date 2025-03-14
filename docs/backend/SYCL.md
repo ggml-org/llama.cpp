@@ -247,7 +247,7 @@ cmake --build buildWithCublas --config Release
 git clone https://github.com/oneapi-src/oneMKL
 cd oneMKL
 # Find your HIPTARGET with rocminfo, under the key 'Name:'
-cmake -B buildWithrocBLAS -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENABLE_MKLGPU_BACKEND=OFF -DENABLE_MKLCPU_BACKEND=OFF -DENABLE_ROCBLAS_BACKEND=ON -DHIPTARGETS=${HIPTARGET} -DTARGET_DOMAINS=blas
+cmake -B buildWithrocBLAS -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENABLE_MKLGPU_BACKEND=OFF -DENABLE_MKLCPU_BACKEND=OFF -DENABLE_ROCBLAS_BACKEND=ON -DHIP_TARGETS=${HIPTARGET} -DTARGET_DOMAINS=blas
 cmake --build buildWithrocBLAS --config Release
 ```
 
@@ -340,9 +340,10 @@ cmake --build build --config Release -j -v
 
 ```sh
 # Export relevant ENV variables
-export LD_LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LD_LIBRARY_PATH
-export LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LIBRARY_PATH
-export CPLUS_INCLUDE_DIR=/path/to/oneMKL/buildWithrocBLAS/include:$CPLUS_INCLUDE_DIR
+export MKL_ROCBLAS=/path/to/oneMKL/buildWithrocmBLAS/lib
+export LD_LIBRARY_PATH=$MKL_ROCBLAS:$LD_LIBRARY_PATH
+export LIBRARY_PATH=$MKL_ROCBLAS:$LIBRARY_PATH
+export CPLUS_INCLUDE_DIR=$MKL_ROCBLAS:$CPLUS_INCLUDE_DIR
 
 # Build LLAMA with rocBLAS acceleration through SYCL
 
@@ -350,7 +351,8 @@ export CPLUS_INCLUDE_DIR=/path/to/oneMKL/buildWithrocBLAS/include:$CPLUS_INCLUDE
 # Use FP32, FP16 is not supported
 # Find your GGML_SYCL_DEVICE_ARCH with rocminfo, under the key 'Name:'
 GGML_SYCL_DEVICE_ARCH=gfx90a # Example architecture
-cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=AMD -DGGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=AMD -DGGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_SHARED_LINKER_FLAGS="-L$MKL_ROCBLAS -L/opt/intel/oneapi/mkl/latest/lib/intel64 -lonemath_blas_rocblas -Wl,--no-as-needed -lmkl_sycl -lmkl_intel_ilp64 -lmkl_sequential -lmkl_core"
+
 
 # build all binary
 cmake --build build --config Release -j -v
