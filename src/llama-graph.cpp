@@ -1311,29 +1311,23 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified(
-                bool   causal,
-                bool   swa) const {
+llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified() const {
     const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, kv_self);
 
     const auto n_kv = kv_self->n;
 
-    inp->self_kq_mask = causal
-        ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-        : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
     //cb(inp->self_kq_mask, "KQ_mask", -1);
     ggml_set_input(inp->self_kq_mask);
 
     inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
 
-    if (swa) {
+    if (hparams.n_swa_pattern > 1) {
         GGML_ASSERT(hparams.n_swa > 0);
 
-        inp->self_kq_mask_swa = causal
-            ? ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv,     GGML_PAD(n_tokens, GGML_KQ_MASK_PAD))
-            : ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        inp->self_kq_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         //cb(inp->self_kq_mask_swa, "KQ_mask_swa", -1);
         ggml_set_input(inp->self_kq_mask_swa);
 

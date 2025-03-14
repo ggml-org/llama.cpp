@@ -509,9 +509,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    llm_graph_input_attn_kv_unified * build_attn_inp_kv_unified(
-            bool causal,
-            bool swa) const;
+    llm_graph_input_attn_kv_unified * build_attn_inp_kv_unified() const;
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv_unified * inp,
