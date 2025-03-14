@@ -149,6 +149,66 @@ static void ggml_vk_destroy_buffer(vk_buffer& buf);
 
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
 
+enum vk_device_architecture {
+    OTHER,
+    AMD_GCN,
+    AMD_RDNA1,
+    AMD_RDNA2,
+    AMD_RDNA3,
+};
+
+static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
+    vk::PhysicalDeviceProperties props = device.getProperties();
+
+    if (props.vendorID == VK_VENDOR_ID_AMD) {
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool amd_shader_core_properties = false;
+        bool integer_dot_product = false;
+        bool subgroup_size_control = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
+                amd_shader_core_properties = true;
+            } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0) {
+                integer_dot_product = true;
+            } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
+                subgroup_size_control = true;
+            }
+        }
+
+        if (!amd_shader_core_properties || !integer_dot_product || !subgroup_size_control) {
+            return vk_device_architecture::OTHER;
+        }
+
+        vk::PhysicalDeviceProperties2 props2;
+        vk::PhysicalDeviceShaderCorePropertiesAMD shader_core_props_amd;
+        vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR integer_dot_props;
+        vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+
+        props2.pNext = &shader_core_props_amd;
+        shader_core_props_amd.pNext = &integer_dot_props;
+        integer_dot_props.pNext = &subgroup_size_control_props;
+
+        device.getProperties2(&props2);
+
+        if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 64) {
+            return vk_device_architecture::AMD_GCN;
+        }
+        if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 32) {
+            // RDNA
+            if (shader_core_props_amd.wavefrontsPerSimd == 20) {
+                return vk_device_architecture::AMD_RDNA1;
+            }
+            if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
+                return vk_device_architecture::AMD_RDNA3;
+            }
+            return vk_device_architecture::AMD_RDNA2;
+        }
+    }
+    return vk_device_architecture::OTHER;
+}
+
 struct vk_device_struct {
     std::mutex mutex;
 
@@ -161,6 +221,7 @@ struct vk_device_struct {
     bool pipeline_robustness;
     vk::Device device;
     uint32_t vendor_id;
+    vk_device_architecture architecture;
     vk_queue compute_queue;
     vk_queue transfer_queue;
     bool single_queue;
@@ -1445,6 +1506,73 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     return supported;
 }
 
+struct GpuPipelineConfig {
+    // GPU architecture identifier.
+    // Example: vk_device_architecture::AMD_GCN
+    vk_device_architecture arch;
+
+    // Mapping of pipeline names to their specific subgroup sizes.
+    // Example: {"soft_max_f32", 64}
+    std::unordered_map<std::string, uint32_t> pipelines;
+
+    // Default subgroup size for this GPU.
+    // Defaults to 0 if not explicitly provided.
+    uint32_t default_subgroup_size = 0;
+};
+
+// Common pipeline configuration for RDNA GPUs.
+static const std::unordered_map<std::string, uint32_t> rdna_common_pipelines = {
+    {"soft_max", 64}, {"im2col", 64},
+};
+
+// RDNA1 pipeline configuration.
+static std::unordered_map<std::string, uint32_t> rdna1_pipelines = rdna_common_pipelines;
+static const bool rdna1_initialized = (rdna1_pipelines.insert({
+    {"argmax", 64}, {"mul_mat_vec", 64},
+    {"mul_mat_vec_f16", 32}, {"mul_mat_vec_f32_f16", 32}
+}), true);
+
+static constexpr uint32_t RDNA_DEFAULT_SUBGROUP_SIZE = 32;
+
+// Define configurations for different GPUs.
+static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
+    {
+        vk_device_architecture::AMD_RDNA1,
+        {
+            rdna1_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+    {
+        vk_device_architecture::AMD_RDNA2,
+        {
+            rdna_common_pipelines,
+        },
+        RDNA_DEFAULT_SUBGROUP_SIZE
+    },
+};
+
+static uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_device_architecture &arch) {
+    for (const auto &config : gpu_pipeline_configs) {
+        if (config.arch == arch) {
+            auto pipIt = config.pipelines.find(pipeline_name);
+            if (pipIt != config.pipelines.end()) {
+                return pipIt->second;
+            }
+            std::vector<std::pair<std::string, uint32_t>> sorted_pipelines(config.pipelines.begin(), config.pipelines.end());
+            std::sort(sorted_pipelines.begin(), sorted_pipelines.end(),
+                      [](const auto &a, const auto &b) { return a.first.size() > b.first.size(); });
+            for (const auto &entry : sorted_pipelines) {
+                if (pipeline_name.find(entry.first) != std::string::npos) {
+                    return entry.second;
+                }
+            }
+            return config.default_subgroup_size;
+        }
+    }
+    return 0; // If no matching configuration is found
+}
+
 static void ggml_vk_load_shaders(vk_device& device) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
@@ -1570,6 +1698,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
     auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& pipeline, const std::string &name, size_t spv_size, const void* spv_data, const std::string &entrypoint,
                                               uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
                                               uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
+
+        if (!require_full_subgroups && required_subgroup_size == 0) {
+            required_subgroup_size = get_subgroup_size(name, device->architecture);
+        }
 
         if (!pipeline) {
             pipeline = std::make_shared<vk_pipeline_struct>();
@@ -2247,7 +2379,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     device->need_compiles = false;
 }
 
-static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props);
+static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch);
 
 static vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
@@ -2276,6 +2408,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->physical_device = physical_devices[dev_num];
         const std::vector<vk::ExtensionProperties> ext_props = device->physical_device.enumerateDeviceExtensionProperties();
 
+        device->architecture = get_device_architecture(device->physical_device);
+
         const char* GGML_VK_PREFER_HOST_MEMORY = getenv("GGML_VK_PREFER_HOST_MEMORY");
         device->prefer_host_memory = GGML_VK_PREFER_HOST_MEMORY != nullptr;
 
@@ -2288,7 +2422,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool coopmat2_support = false;
         device->coopmat_support = false;
 
-        // Check if maintenance4 is supported
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
                 maintenance4_support = true;
@@ -2401,7 +2534,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         device->fp16 = !force_disable_f16 && fp16_storage && fp16_compute;
 
-        if (!ggml_vk_khr_cooperative_matrix_support(device->properties, driver_props)) {
+        if (!ggml_vk_khr_cooperative_matrix_support(device->properties, driver_props, device->architecture)) {
             device->coopmat_support = false;
         }
 
@@ -2779,7 +2912,10 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     subgroup_props.pNext = &driver_props;
     physical_device.getProperties2(&props2);
 
-    const size_t subgroup_size = subgroup_props.subgroupSize;
+    vk_device_architecture arch = get_device_architecture(physical_device);
+    uint32_t default_subgroup_size = get_subgroup_size("", arch);
+    const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
+
     const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
     bool fp16_storage = false;
@@ -2805,7 +2941,9 @@ static void ggml_vk_print_gpu_info(size_t idx) {
         }
     }
 
-    if (!ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props)) {
+    const vk_device_architecture device_architecture = get_device_architecture(physical_device);
+
+    if (!ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props, device_architecture)) {
         coopmat_support = false;
     }
 
@@ -8826,7 +8964,7 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
     UNUSED(instance_extensions);
 }
 
-static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props) {
+static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
         // Intel drivers don't support coopmat properly yet
@@ -8834,10 +8972,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
-            const std::string name = props.deviceName;
-            return name.rfind("AMD Radeon RX 7", 0) == 0   || name.rfind("AMD Radeon(TM) RX 7", 0) == 0   || // RDNA 3 consumer GPUs
-                   name.rfind("AMD Radeon PRO W7", 0) == 0 || name.rfind("AMD Radeon(TM) PRO W7", 0) == 0 || // RDNA 3 workstation GPUs
-                   name.rfind("AMD Radeon 7", 0) == 0      || name.rfind("AMD Radeon(TM) 7", 0) == 0;        // RDNA 3 APUs
+            return arch == vk_device_architecture::AMD_RDNA3;
         }
         return true;
     default:
