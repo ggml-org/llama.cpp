@@ -356,24 +356,24 @@ extern "C" {
     // model quantization parameters
     typedef struct llama_model_quantize_params {
         int32_t nthread;                            // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
-        enum llama_ftype ftype;                     // quantize to this llama_ftype
-        enum ggml_type output_tensor_type;          // output tensor type
-        enum ggml_type token_embedding_type;        // token embeddings tensor type
-        bool allow_requantize;                      // allow quantizing non-f32/f16 tensors
-        bool quantize_output_tensor;                // quantize output.weight
-        bool only_copy;                             // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
-        bool pure;                                  // quantize all tensors to the default type
-        bool keep_split;                            // quantize to the same number of shards
-        void * imatrix;                             // pointer to importance matrix data
-        void * kv_overrides;                        // pointer to vector containing overrides
-        enum ggml_type attn_q_tensor_type;          // attention query tensor type
-        enum ggml_type attn_k_tensor_type;          // attention key tensor type
-        enum ggml_type attn_v_tensor_type;          // attention value tensor type
-        enum ggml_type attn_qkv_tensor_type;        // attention query, key and value tensor type
-        enum ggml_type attn_output_tensor_type;     // attention output tensor type
-        enum ggml_type ffn_up_tensor_type;          // feedforward up tensor type
-        enum ggml_type ffn_gate_tensor_type;        // feedforward gate tensor type
-        enum ggml_type ffn_down_tensor_type;        // feedforward down tensor type
+        llama_ftype ftype;                    // quantize to this llama_ftype
+        ggml_type output_tensor_type;         // output tensor type
+        ggml_type token_embedding_type;       // token embeddings tensor type
+        bool allow_requantize;                // allow quantizing non-f32/f16 tensors
+        bool quantize_output_tensor;          // quantize output.weight
+        bool only_copy;                       // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
+        bool pure;                            // quantize all tensors to the default type
+        bool keep_split;                      // quantize to the same number of shards
+        void * imatrix;                       // pointer to importance matrix data
+        void * kv_overrides;                  // pointer to vector containing overrides
+        ggml_type attn_q_tensor_type;         // attention query tensor type
+        ggml_type attn_k_tensor_type;         // attention key tensor type
+        ggml_type attn_v_tensor_type;         // attention value tensor type
+        ggml_type attn_qkv_tensor_type;       // attention query, key and value tensor type
+        ggml_type attn_output_tensor_type;    // attention output tensor type
+        ggml_type ffn_up_tensor_type;         // feedforward up tensor type
+        ggml_type ffn_gate_tensor_type;       // feedforward gate tensor type
+        ggml_type ffn_down_tensor_type;       // feedforward down tensor type
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
