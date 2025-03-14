@@ -830,6 +830,11 @@ struct server_task_result_cmpl_final : server_task_result {
             ret.push_back({"timings", timings.to_json()});
         }
 
+        // extra fields for debugging purposes
+        if (verbose) {
+            ret["__verbose"] = to_json_non_oaicompat();
+        }
+
         return ret;
     }
 };
