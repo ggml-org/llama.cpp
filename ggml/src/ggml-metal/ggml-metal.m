@@ -1205,6 +1205,18 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
             }
         }
     }
+    // TODO: remove once proper support is added.
+    for (size_t i = 0, n = 3; i < n; ++i) {
+        if (op->src[i] != NULL) {
+            switch (op->src[i]->type) {
+                case GGML_TYPE_TQ1_0:
+                case GGML_TYPE_TQ2_0:
+                    return false;
+                default:
+                    break;
+            }
+        }
+    }
 
     switch (op->op) {
         case GGML_OP_UNARY:
