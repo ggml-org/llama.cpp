@@ -82,8 +82,12 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    // deprecated
     int encode(llama_batch & inp_batch);
     int decode(llama_batch & inp_batch);
+
+    int encode(llama_batch_ext & inp_batch);
+    int decode(llama_batch_ext & inp_batch);
 
     //
     // state save/load

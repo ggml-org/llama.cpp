@@ -66,17 +66,11 @@ static bool qwen2vl_eval_image_embed(llama_context * ctx_llama, const struct lla
         memcpy(&batch_mrope_pos[n_eval * 2], &mrope_pos[img_tokens * 2 + processed], n_eval * sizeof(llama_pos));
         memcpy(&batch_mrope_pos[n_eval * 3], &mrope_pos[img_tokens * 3 + processed], n_eval * sizeof(llama_pos));
 
-        llama_batch batch = {
-            int32_t(n_eval),                // n_tokens
-            nullptr,                        // token
-            (image_embed->embed+i*n_embd),  // embed
-            batch_mrope_pos.data(),         // pos
-            nullptr,  // n_seq_id
-            nullptr,  // seq_id
-            nullptr,  // logits
-        };
+        float * batch_embd = image_embed->embed+i*n_embd;
+        auto batch = llama_batch_ext_ptr::init_from_embd(batch_embd, n_eval, n_embd, 0, 0);
+        llama_batch_ext_set_pos(batch.get(), batch_mrope_pos.data(), n_eval);
 
-        if (llama_decode(ctx_llama, batch)) {
+        if (llama_decode_ext(ctx_llama, batch.get())) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return false;
         }
@@ -95,16 +89,24 @@ static bool eval_tokens(struct llama_context * ctx_llama, std::vector<llama_toke
         if (n_eval > n_batch) {
             n_eval = n_batch;
         }
-        auto batch = llama_batch_get_one(&tokens[i], n_eval);
-        // TODO: add mrope pos ids somewhere else
-        pos.resize(batch.n_tokens * 4);
-        std::fill(pos.begin(), pos.end(), 0);
-        for (int j = 0; j < batch.n_tokens * 3; j ++) {
-            pos[j] = *st_pos_id + (j % batch.n_tokens);
-        }
-        batch.pos = pos.data();
 
-        if (llama_decode(ctx_llama, batch)) {
+        // TODO: add mrope pos ids somewhere else
+        int n_tokens = n_eval;
+        pos.resize(n_tokens * 4);
+        std::fill(pos.begin(), pos.end(), 0);
+        for (int j = 0; j < n_tokens * 3; j ++) {
+            pos[j] = *st_pos_id + (j % n_tokens);
+        }
+
+        llama_batch_ext_ptr batch(llama_batch_ext_init(n_eval, 1));
+        for (int j = 0; j < n_eval; j++) {
+            llama_token token = tokens[i + j];
+            llama_seq_id seq_id = 0;
+            llama_batch_ext_add_text(batch.get(), token, pos[j], &seq_id, 1, false);
+        }
+        llama_batch_ext_set_output_last(batch.get());
+
+        if (llama_decode_ext(ctx_llama, batch.get())) {
             LOG_ERR("%s : failed to eval. token %d/%d (batch size %d, n_past %d)\n", __func__, i, N, n_batch, *n_past);
             return false;
         }

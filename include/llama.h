@@ -234,6 +234,9 @@ extern "C" {
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
     // Input data for llama_decode
+    //
+    // WARN: This struct is DEPRECATED and will be removed in the future, use llama_batch_ext instead
+    //
     // A llama_batch object can contain input about one or many sequences
     // The provided arrays (i.e. token, embd, pos, etc.) must have size of n_tokens
     //
@@ -256,6 +259,10 @@ extern "C" {
         llama_seq_id ** seq_id;
         int8_t       *  logits; // TODO: rename this to "output"
     } llama_batch;
+
+    // Input data for llama_decode / llama_encode
+    // It can contain text tokens and embeddings for one or many sequences
+    struct llama_batch_ext;
 
     enum llama_model_kv_override_type {
         LLAMA_KV_OVERRIDE_TYPE_INT,
@@ -891,9 +898,9 @@ extern "C" {
     //
     // NOTE: this is a helper function to facilitate transition to the new batch API - avoid using it
     //
-    LLAMA_API struct llama_batch llama_batch_get_one(
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_get_one(
                   llama_token * tokens,
-                      int32_t   n_tokens);
+                      int32_t   n_tokens), "use llama_batch_ext_init_from_text instead");
 
     // Allocates a batch of tokens on the heap that can hold a maximum of n_tokens
     // Each token can be assigned up to n_seq_max sequence ids
@@ -902,13 +909,98 @@ extern "C" {
     // Otherwise, llama_batch.token will be allocated to store n_tokens llama_token
     // The rest of the llama_batch members are allocated with size n_tokens
     // All members are left uninitialized
-    LLAMA_API struct llama_batch llama_batch_init(
-            int32_t n_tokens,
-            int32_t embd,
-            int32_t n_seq_max);
+    DEPRECATED(LLAMA_API struct llama_batch llama_batch_init(
+                    int32_t n_tokens,
+                    int32_t embd,
+                    int32_t n_seq_max), "use llama_batch_ext_init instead");
 
     // Frees a batch of tokens allocated with llama_batch_init()
-    LLAMA_API void llama_batch_free(struct llama_batch batch);
+    DEPRECATED(LLAMA_API void llama_batch_free(struct llama_batch batch),
+            "use llama_batch_ext API instead");
+
+    // Allocates a batch of tokens on the heap that can hold a maximum of n_tokens
+    // Each token can be assigned up to n_seq_max sequence ids
+    // The batch has to be freed with llama_batch_ext_free()
+    LLAMA_API struct llama_batch_ext * llama_batch_ext_init(
+            int32_t n_tokens,
+            int32_t n_seq_max);
+
+    // Same with llama_batch_init, but initializes the batch with the provided text tokens
+    // First token will be at position pos0
+    // The sequence ID will be fixed to seq_id
+    // If output_last is true, the last token will have output set
+    // The batch has to be freed with llama_batch_ext_free()
+    LLAMA_API struct llama_batch_ext * llama_batch_ext_init_from_text(
+            llama_token * tokens,
+                int32_t   n_tokens,
+                int32_t   pos0,
+                int32_t   seq_id,
+                   bool   output_last);
+
+    // Same with llama_batch_init, but initializes the batch with the provided raw embeddings
+    // Size of embd should be n_tokens * n_embd
+    // n_embd is the number of embeddings per token, can be obtained from llama_model_n_embd()
+    // First token will be at position pos0
+    // The sequence ID will be fixed to seq_id
+    // The batch has to be freed with llama_batch_ext_free()
+    LLAMA_API struct llama_batch_ext * llama_batch_ext_init_from_embd(
+              float * embd,
+            size_t    n_tokens,
+            size_t    n_embd,
+            int32_t   pos0,
+            int32_t   seq_id);
+
+    // Set arbitrary token to the embeddings batch
+    // Note: this is only to be used in conjunction with llama_batch_ext_init_from_embd()
+    // n_pos must match the n_tokens of the batch
+    // Returns -1 if n_pos does not match the n_tokens of the batch
+    LLAMA_API int32_t llama_batch_ext_set_pos(struct llama_batch_ext * batch, llama_pos * pos, size_t n_pos);
+
+    // Get the number of tokens in the batch
+    LLAMA_API int32_t llama_batch_ext_get_n_tokens(const struct llama_batch_ext * batch);
+
+    // Add text tokens to the batch
+    // Return values:
+    // -1 : not enough space in the batch
+    // -2 : embd is already set, cannot add text tokens
+    // otherwise, returns the output ID
+    LLAMA_API int32_t llama_batch_ext_add_text(
+        struct llama_batch_ext * batch,
+                   llama_token   token,
+                     llama_pos   pos,
+            const llama_seq_id * seq_ids,
+                        size_t   n_seq_ids,
+                          bool   output);
+
+    // Set output (logits/embeddings) for the token in the ith sequence
+    // If pos == -1, output will be set for the all tokens
+    // Return values:
+    // -1 : the token is not in the batch
+    // otherwise, returns the output ID
+    LLAMA_API int32_t llama_batch_ext_set_output(
+        struct llama_batch_ext * batch,
+                     llama_pos   pos,
+                  llama_seq_id   seq_id);
+
+    // Set output (logits/embeddings) for the last added token
+    // Return values:
+    // -1 : the batch is empty
+    // otherwise, returns the output ID
+    LLAMA_API int32_t llama_batch_ext_set_output_last(struct llama_batch_ext * batch);
+
+    // Get a "view" from a number of tokens offset
+    // Return returned batch must be freed with llama_batch_ext_free()
+    LLAMA_API struct llama_batch_ext * llama_batch_ext_get_view(
+        struct llama_batch_ext * batch,
+                       int32_t   offset,
+                       int32_t   n_tokens);
+
+    // Remove everything from the batch
+    LLAMA_API void llama_batch_ext_clear(struct llama_batch_ext * batch);
+
+    // Frees a batch of tokens allocated with llama_batch_ext_init()
+    // If this is a view, the original batch is not freed
+    LLAMA_API void llama_batch_ext_free(struct llama_batch_ext * batch);
 
     // Processes a batch of tokens with the ecoder part of the encoder-decoder model.
     // Stores the encoder output internally for later use by the decoder cross-attention layers.
@@ -918,13 +1010,21 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    LLAMA_API int32_t llama_encode_ext(
+            struct llama_context * ctx,
+          struct llama_batch_ext * batch);
+
     // Positive return values does not mean a fatal error, but rather a warning.
     //   0 - success
     //   1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)
     // < 0 - error. the KV cache state is restored to the state before this call
     LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
-              struct llama_batch   batch);
+              struct llama_batch batch);
+
+    LLAMA_API int32_t llama_decode_ext(
+            struct llama_context * ctx,
+          struct llama_batch_ext * batch);
 
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
