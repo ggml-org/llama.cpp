@@ -23,6 +23,9 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <limits>
+#include <cassert>
+#include <cmath>
 
 
 static bool qwen2vl_eval_image_embed(llama_context * ctx_llama, const struct llava_image_embed * image_embed,
@@ -483,32 +486,430 @@ static void debug_test_mrope_2d() {
     ggml_backend_free(backend);
 }
 
-static void debug_dump_img_embed(struct llava_context * ctx_llava) {
-    int n_embd  = llama_model_n_embd(llama_get_model(ctx_llava->ctx_llama));
-    int ne = n_embd * 4;
-    float vals[56 * 56 * 3];
+static void debug_patch_layout() {
+    // 1. Initialize backend
+    ggml_backend_t backend = NULL;
+    std::string backend_name = "";
+#ifdef GGML_USE_CUDA
+    fprintf(stderr, "%s: using CUDA backend\n", __func__);
+    backend = ggml_backend_cuda_init(0); // init device 0
+    backend_name = "cuda";
+    if (!backend) {
+        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+    }
+#endif
+    // if there aren't GPU Backends fallback to CPU backend
+    if (!backend) {
+        backend = ggml_backend_cpu_init();
+        backend_name = "cpu";
+    }
+
+    // Calculate the size needed to allocate
+    size_t ctx_size = 0;
+    ctx_size += 2 * ggml_tensor_overhead(); // tensors
+    // no need to allocate anything else!
+
+    // 2. Allocate `ggml_context` to store tensor data
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ ctx_size,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_backend_alloc_ctx_tensors()
+    };
+    struct ggml_context * ctx = ggml_init(params);
+
+    const int patches_w = 14;
+    const int patches_h = 10;
+    const int c = 2;
+    const int batch_size = 1;
+    struct ggml_tensor * inp_raw = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, patches_w, patches_h, c, batch_size);
+    ggml_set_name(inp_raw, "inp_raw");
+    ggml_set_input(inp_raw);
+
+
+    std::vector<float> dummy_q;
+    dummy_q.resize(patches_w * patches_h * c * batch_size);
+    for (size_t i = 0; i < patches_h * patches_w * c; i++)
+    {
+        dummy_q[i] = i;
+    }
+
+    // std::fill(dummy_q.begin(), dummy_q.end(), 0.1);
+    // memcpy(inp_raw->data, dummy_q.data(), 128 * 12 * 30 * ggml_element_size(inp_raw));
+
+    // 4. Allocate a `ggml_backend_buffer` to store all tensors
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    // 5. Copy tensor data from main memory (RAM) to backend buffer
+    ggml_backend_tensor_set(inp_raw, dummy_q.data(), 0, ggml_nbytes(inp_raw));
+
+    // 6. Create a `ggml_cgraph` for mul_mat operation
+    struct ggml_cgraph * gf = NULL;
+    struct ggml_context * ctx0 = NULL;
+
+    // create a temporally context to build the graph
+    struct ggml_init_params params0 = {
+        /*.mem_size   =*/ ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_gallocr_alloc_graph()
+    };
+    ctx0 = ggml_init(params0);
+    gf = ggml_new_graph(ctx0);
+    /*
+        Compute graph
+    */
+    struct ggml_tensor * inp = ggml_cont(ctx0, ggml_permute(ctx0, inp_raw, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
+
+    inp = ggml_reshape_4d(
+        ctx0, inp,
+        c * 2, patches_w / 2, patches_h, batch_size);
+    inp = ggml_reshape_4d(
+        ctx0, inp,
+        c * 2, patches_w / 2, 2, batch_size * (patches_h / 2));
+    inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
+    inp = ggml_reshape_3d(
+        ctx0, inp,
+        c, patches_w * patches_h, batch_size);
+
+    // Add "result" tensor and all of its dependencies to the cgraph
+    ggml_build_forward_expand(gf, inp);
+
+    // 7. Create a `ggml_gallocr` for cgraph computation
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    ggml_gallocr_alloc_graph(allocr, gf);
+
+    // 9. Run the computation
+    int n_threads = 1; // Optional: number of threads to perform some operations with multi-threading
+    if (ggml_backend_is_cpu(backend)) {
+        ggml_backend_cpu_set_n_threads(backend, n_threads);
+    }
+    ggml_backend_graph_compute(backend, gf);
+
+    // 10. Retrieve results (output tensors)
+    // in this example, output tensor is always the last tensor in the graph
+    struct ggml_tensor * result = inp;
+    // struct ggml_tensor * result = gf->nodes[gf->n_nodes - 1];
+    float * result_data = (float *)malloc(ggml_nbytes(result));
+    // because the tensor data is stored in device buffer, we need to copy it back to RAM
+    ggml_backend_tensor_get(result, result_data, 0, ggml_nbytes(result));
+    const std::string bin_file = "patch_layout_" + backend_name +".bin";
+    std::ofstream outFile(bin_file, std::ios::binary);
+
+    if (outFile.is_open()) {
+        outFile.write(reinterpret_cast<const char*>(result_data), ggml_nbytes(result));
+        outFile.close();
+        std::cout << "Data successfully written to " + bin_file << std::endl;
+    } else {
+        std::cerr << "Error opening file!" << std::endl;
+    }
+
+    free(result_data);
+    // 11. Free memory and exit
+    ggml_free(ctx0);
+    ggml_gallocr_free(allocr);
+    ggml_free(ctx);
+    ggml_backend_buffer_free(buffer);
+    ggml_backend_free(backend);
+}
+
+static void debug_test_get_rows() {
+    // 1. Initialize backend
+    ggml_backend_t backend = NULL;
+    std::string backend_name = "";
+#ifdef GGML_USE_CUDA
+    fprintf(stderr, "%s: using CUDA backend\n", __func__);
+    backend = ggml_backend_cuda_init(0); // init device 0
+    backend_name = "cuda";
+    if (!backend) {
+        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+    }
+#endif
+    // if there aren't GPU Backends fallback to CPU backend
+    if (!backend) {
+        backend = ggml_backend_cpu_init();
+        backend_name = "cpu";
+    }
+
+    // Calculate the size needed to allocate
+    size_t ctx_size = 0;
+    ctx_size += 128 * ggml_tensor_overhead(); // tensors
+    // no need to allocate anything else!
+
+    // 2. Allocate `ggml_context` to store tensor data
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ ctx_size,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_backend_alloc_ctx_tensors()
+    };
+    struct ggml_context * ctx = ggml_init(params);
+
+    const int tokens = 30;
+    struct ggml_tensor * inp_raw = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 128, 3, tokens * 2);
+    ggml_set_name(inp_raw, "inp_raw");
+    ggml_set_input(inp_raw);
+
+    struct ggml_tensor * pos = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 4, tokens);
+    // struct ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens * 4);
+    ggml_set_name(pos, "pos");
+    ggml_set_input(pos);
+
+    struct ggml_tensor * ind = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens);
+    ggml_set_name(ind, "ind");
+    ggml_set_input(ind);
+
+    struct ggml_tensor * ind_2d = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 1, tokens);
+    ggml_set_name(ind_2d, "ind_2d");
+    ggml_set_input(ind_2d);
+
+    std::vector<float> dummy_q;
+    dummy_q.resize(128 * 3 * inp_raw->ne[2]);
+    for (int i = 0; i < inp_raw->ne[2]; i ++) {
+        for (int j = 0; j < 3; j ++) {
+            int offset = i * 128 * 3 + j * 128;
+            std::fill(dummy_q.begin() + offset, dummy_q.begin() + offset + 128, 0.1 * i);
+        }
+    }
+    // std::fill(dummy_q.begin(), dummy_q.end(), 0.1);
+    // memcpy(inp_raw->data, dummy_q.data(), 128 * 12 * 30 * ggml_element_size(inp_raw));
+
+    std::vector<int> pos_id;
+    pos_id.resize(tokens * 4);
+    for (int i = 0; i < tokens; i ++) {
+        pos_id[i] = i;
+        pos_id[i + tokens * 1] = i + 10;
+        pos_id[i + tokens * 2] = i + 20;
+        pos_id[i + tokens * 3] = i + 30;
+    }
+
+    std::vector<int> remap_ind;
+    remap_ind.resize(tokens * 4);
+    for (int i = 0; i < tokens; i ++) {
+        remap_ind[i] = tokens - i - 1;
+    }
+
+    // 4. Allocate a `ggml_backend_buffer` to store all tensors
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+
+    // 5. Copy tensor data from main memory (RAM) to backend buffer
+    ggml_backend_tensor_set(inp_raw, dummy_q.data(), 0, ggml_nbytes(inp_raw));
+    ggml_backend_tensor_set(pos, pos_id.data(), 0, ggml_nbytes(pos));
+    ggml_backend_tensor_set(ind, remap_ind.data(), 0, ggml_nbytes(ind));
+    ggml_backend_tensor_set(ind_2d, remap_ind.data(), 0, ggml_nbytes(ind_2d));
+
+    // 6. Create a `ggml_cgraph` for mul_mat operation
+    struct ggml_cgraph * gf = NULL;
+    struct ggml_context * ctx_cgraph = NULL;
+
+    // create a temporally context to build the graph
+    struct ggml_init_params params0 = {
+        /*.mem_size   =*/ ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true, // the tensors will be allocated later by ggml_gallocr_alloc_graph()
+    };
+    ctx_cgraph = ggml_init(params0);
+    gf = ggml_new_graph(ctx_cgraph);
+
+    // ne = [128, 1, 30, 1]
+    auto x = ggml_reshape_2d(ctx_cgraph, inp_raw, 128 * 3 * 2, tokens);
+    struct ggml_tensor * result0 = ggml_get_rows(
+        ctx_cgraph, x, ind);
+    result0 = ggml_reshape_3d(ctx_cgraph, result0, 128, 3, tokens * 2);
+
+    struct ggml_tensor * result1 = ggml_get_rows(
+        ctx_cgraph, pos, ind);
+
+    // Add "result" tensor and all of its dependencies to the cgraph
+    ggml_build_forward_expand(gf, result0);
+    ggml_build_forward_expand(gf, result1);
+
+    // 7. Create a `ggml_gallocr` for cgraph computation
+    ggml_gallocr_t allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+    ggml_gallocr_alloc_graph(allocr, gf);
+
+    // 9. Run the computation
+    int n_threads = 1; // Optional: number of threads to perform some operations with multi-threading
+    if (ggml_backend_is_cpu(backend)) {
+        ggml_backend_cpu_set_n_threads(backend, n_threads);
+    }
+    ggml_backend_graph_compute(backend, gf);
+
+    // 10. Retrieve results (output tensors)
+    // in this example, output tensor is always the last tensor in the graph
+    struct ggml_tensor * result = result0;
+    // struct ggml_tensor * result = gf->nodes[gf->n_nodes - 1];
+    float * result_data = (float *)malloc(ggml_nbytes(result));
+    // because the tensor data is stored in device buffer, we need to copy it back to RAM
+    ggml_backend_tensor_get(result, result_data, 0, ggml_nbytes(result));
+    const std::string bin_file = "getrows_" + backend_name +"_0.bin";
+    std::ofstream outFile(bin_file, std::ios::binary);
+
+    if (outFile.is_open()) {
+        outFile.write(reinterpret_cast<const char*>(result_data), ggml_nbytes(result));
+        outFile.close();
+        std::cout << "Data successfully written to " + bin_file << std::endl;
+    } else {
+        std::cerr << "Error opening file!" << std::endl;
+    }
+
+    free(result_data);
+    // 11. Free memory and exit
+    ggml_free(ctx_cgraph);
+    ggml_gallocr_free(allocr);
+    ggml_free(ctx);
+    ggml_backend_buffer_free(buffer);
+    ggml_backend_free(backend);
+}
+
+
+enum model_output_type {
+    conv3d,
+    patch_embed,
+    patch_win_attn_scatter,
+    first_attn_layer,
+    last_attn_layer,
+    attn_softmax,
+    final_layer,
+};
+
+static void debug_dump_img_embed(struct llava_context * ctx_llava, model_output_type output_type) {
+    int ih = 140;
+    int iw = 196;
+    // int ih = 56;
+    // int iw = 56;
+    // int n_embd  = llama_model_n_embd(llama_get_model(ctx_llava->ctx_llama));
+    int n_embd  = 1280;
+    int merge = 1;
+    if (output_type == model_output_type::final_layer) {
+        n_embd  = 2048;
+        merge = 2;
+    }
+    else if (output_type == model_output_type::attn_softmax) {
+        merge = 1;
+        n_embd = (ih/14/merge) * (iw/14/merge) * 16;
+    }
+
+    int ne = (ih/14/merge) * (iw/14/merge) * n_embd;
+    float vals[iw * ih * 3];
     // float embd[ne];
     std::vector<float> embd;
     embd.resize(ne);
 
-    for (int i = 0; i < 56*56; i++)
+    for (int i = 0; i < iw*ih; i++)
     {
         for (int c = 0; c < 3; c++)
-            vals[i * 3 + c] = (float)(i % (56 * 56)) / (56*56);
+            vals[i * 3 + c] = (float)i / (iw*ih);
     }
 
-    clip_encode_float_image(ctx_llava->ctx_clip, 16, vals, 56, 56, embd.data());
+    clip_encode_float_image(ctx_llava->ctx_clip, 8, vals, ih, iw, embd.data());
 
-    std::ofstream outFile("img_embed.bin", std::ios::binary);
+    std::string file_postfix = "";
+    switch (output_type)
+    {
+    case model_output_type::conv3d:
+        file_postfix = "conv3d";
+        break;
+    case model_output_type::patch_embed:
+        file_postfix = "patch_embed";
+        break;
+    case model_output_type::patch_win_attn_scatter:
+        file_postfix = "scatter";
+        break;
+    case model_output_type::first_attn_layer:
+        file_postfix = "first_attn";
+        break;
+    case model_output_type::last_attn_layer:
+        file_postfix = "last_attn";
+        break;
+    case model_output_type::attn_softmax:
+        file_postfix = "attn_softmax";
+        break;
+    case model_output_type::final_layer:
+        file_postfix = "final";
+        break;
+    default:
+        break;
+    }
+    auto output_path = "img_embed_" + file_postfix + ".bin";
+
+    std::ofstream outFile(output_path, std::ios::binary);
     if (outFile.is_open()) {
         outFile.write(reinterpret_cast<const char*>(embd.data()), ne * sizeof(float));
 
         outFile.close();
-        std::cout << "Data successfully written to mrope.bin" << std::endl;
+        std::cout << "Data successfully written to ::[ " << output_path << std::endl;
     } else {
         std::cerr << "Error opening file!" << std::endl;
     }
 }
+
+
+static void dump_win_attn_mask() {
+    const int image_size_width = 196;
+    const int image_size_height = 140;
+    const int patch_size = 14;
+    const int attn_window_size = 112;
+
+    const int merge_ratio = 2;
+    const int ipw = image_size_width / patch_size;
+    const int iph = image_size_height / patch_size;
+    const int pw = image_size_width / patch_size / merge_ratio;
+    const int ph = image_size_height / patch_size / merge_ratio;
+    const int grid_window = attn_window_size / patch_size / merge_ratio;
+    /*
+    pw * ph = number of tokens output by ViT after apply patch merger
+    ipw * ipw = number of vision token been processed inside ViT
+    */
+
+    std::vector<int> idx(ph * pw);
+    std::vector<int> inv_idx(ph * pw);
+    int dst = 0;
+    // [num_vision_tokens, num_vision_tokens] attention mask tensor
+    int ne = pow(ipw * iph, 2);
+    std::vector<float> mask(ne, std::numeric_limits<float>::lowest());
+    int mask_row = 0;
+
+    for (int y = 0; y < ph; y+=grid_window)
+    {
+        for (int x = 0; x < pw; x+=grid_window)
+        {
+            const int win_h = std::min(grid_window, ph - y);
+            const int win_w = std::min(grid_window, pw - x);
+            const int dst_0 = dst;
+            // group all tokens belong to the same window togather (to a continue range)
+            for (int dy = 0; dy < win_h; dy++) {
+                for (int dx = 0; dx < win_w; dx++) {
+                    const int src = (y + dy) * pw + (x + dx);
+                    assert(src < (int)idx.size());
+                    assert(dst < (int)inv_idx.size());
+                    idx[src] = dst;
+                    inv_idx[dst] = src;
+                    dst++;
+                }
+            }
+
+            for (int r=0; r < win_h * win_w * merge_ratio * merge_ratio; r++) {
+                int row_offset = mask_row * (ipw * iph);
+                std::fill(
+                    mask.begin() + row_offset + (dst_0 * merge_ratio * merge_ratio),
+                    mask.begin() + row_offset + (dst   * merge_ratio * merge_ratio),
+                    0.0);
+                mask_row++;
+            }
+        }
+    }
+
+    auto output_path = "win_attn_mask_fp32.bin";
+
+    std::ofstream outFile(output_path, std::ios::binary);
+    if (outFile.is_open()) {
+        outFile.write(reinterpret_cast<const char*>(mask.data()), ne * sizeof(float));
+
+        outFile.close();
+        std::cout << "Data successfully written to " << output_path << std::endl;
+    } else {
+        std::cerr << "Error opening file!" << std::endl;
+    }
+}
+
 
 #endif
 
@@ -551,8 +952,12 @@ int main(int argc, char ** argv) {
     } else if (params.image[0].empty()) {
         auto ctx_llava = llava_init_context(&params, model);
 
-        debug_test_mrope_2d();
-        debug_dump_img_embed(ctx_llava);
+        // debug_test_mrope_2d();
+        debug_dump_img_embed(ctx_llava, model_output_type::final_layer);
+        // debug_dump_img_embed(ctx_llava, model_output_type::conv3d);
+        // debug_test_get_rows();
+        // dump_win_attn_mask();
+        // debug_patch_layout();
 
         llama_perf_context_print(ctx_llava->ctx_llama);
         ctx_llava->model = NULL;
