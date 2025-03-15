@@ -3,6 +3,7 @@
 
 static __global__ void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded) {
     const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+    const int warp_size = ggml_cuda_get_physical_warp_size();
 
     if (ix0 >= kx0_padded) {
         return;
@@ -21,8 +22,8 @@ static __global__ void quantize_q8_1(const float * __restrict__ x, void * __rest
     float amax = fabsf(xi);
     float sum = xi;
 
-    amax = warp_reduce_max(amax);
-    sum = warp_reduce_sum(sum);
+    amax = warp_reduce_max<warp_size, QK8_1>(amax);
+    sum = warp_reduce_sum<warp_size, QK8_1>(sum);
 
     const float d = amax / 127;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
