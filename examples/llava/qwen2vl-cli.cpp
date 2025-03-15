@@ -370,14 +370,14 @@ static void debug_test_mrope_2d() {
     // 1. Initialize backend
     ggml_backend_t backend = NULL;
     std::string backend_name = "";
-#ifdef GGML_USE_CUDA
-    fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
-    backend_name = "cuda";
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-    }
-#endif
+// #ifdef GGML_USE_CUDA
+//     fprintf(stderr, "%s: using CUDA backend\n", __func__);
+//     backend = ggml_backend_cuda_init(0); // init device 0
+//     backend_name = "cuda";
+//     if (!backend) {
+//         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+//     }
+// #endif
     // if there aren't GPU Backends fallback to CPU backend
     if (!backend) {
         backend = ggml_backend_cpu_init();
@@ -490,14 +490,14 @@ static void debug_patch_layout() {
     // 1. Initialize backend
     ggml_backend_t backend = NULL;
     std::string backend_name = "";
-#ifdef GGML_USE_CUDA
-    fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
-    backend_name = "cuda";
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-    }
-#endif
+// #ifdef GGML_USE_CUDA
+//     fprintf(stderr, "%s: using CUDA backend\n", __func__);
+//     backend = ggml_backend_cuda_init(0); // init device 0
+//     backend_name = "cuda";
+//     if (!backend) {
+//         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+//     }
+// #endif
     // if there aren't GPU Backends fallback to CPU backend
     if (!backend) {
         backend = ggml_backend_cpu_init();
@@ -615,14 +615,14 @@ static void debug_test_get_rows() {
     // 1. Initialize backend
     ggml_backend_t backend = NULL;
     std::string backend_name = "";
-#ifdef GGML_USE_CUDA
-    fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
-    backend_name = "cuda";
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-    }
-#endif
+// #ifdef GGML_USE_CUDA
+//     fprintf(stderr, "%s: using CUDA backend\n", __func__);
+//     backend = ggml_backend_cuda_init(0); // init device 0
+//     backend_name = "cuda";
+//     if (!backend) {
+//         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+//     }
+// #endif
     // if there aren't GPU Backends fallback to CPU backend
     if (!backend) {
         backend = ggml_backend_cpu_init();
