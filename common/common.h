@@ -221,6 +221,11 @@ enum common_reasoning_format {
     COMMON_REASONING_FORMAT_DEEPSEEK, // Extract thinking tag contents and return as `message.reasoning_content`
 };
 
+struct common_toolcall_params {
+    std::string tools  = "";
+    std::string choice = "auto";
+};
+
 struct common_params {
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =  4096; // context size
@@ -369,6 +374,9 @@ struct common_params {
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
+
+    struct common_toolcall_params toolcall;
+
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
 
     std::vector<std::string> api_keys;
@@ -631,6 +639,12 @@ std::string common_detokenize(
               const struct llama_vocab * vocab,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
+
+struct common_chat_params;
+void common_chat_grammar_to_sampler(const common_chat_params * src,
+                                    const llama_vocab * vocab,
+                                    common_params_sampling * sparams);
+
 
 //
 // KV cache utils

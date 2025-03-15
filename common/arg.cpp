@@ -2167,6 +2167,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::back_inserter(params.chat_template));
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+
+    add_opt(common_arg(
+        {"--tools"}, "JINJA_TOOLS",
+        "set to URI of a Model Context Protocol server, or "
+        "a JSON array containing tool definitions (requires --jinja)",
+        [](common_params &params, const std::string & value) {
+            params.toolcall.tools = value;
+
+        }).set_examples({LLAMA_EXAMPLE_MAIN}));
+
+    add_opt(common_arg(
+        {"--tool-choice"}, "JINJA_TOOL_CHOICE",
+        "set to \"auto\", \"required\", or \"none\" (default: \"auto\")",
+        [](common_params &params, const std::string & value) {
+            params.toolcall.choice = value;
+
+        }).set_examples({LLAMA_EXAMPLE_MAIN}));
+
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
