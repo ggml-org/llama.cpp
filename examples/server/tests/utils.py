@@ -291,6 +291,76 @@ class ServerProcess:
                 print("Partial response from server", json.dumps(data, indent=2))
                 yield data
 
+    def make_any_request(
+        self,
+        method: str,
+        path: str,
+        data: dict | None = None,
+        headers: dict | None = None,
+    ) -> dict:
+        stream = data.get('stream', False)
+        if stream:
+            content: list[str] = []
+            tool_calls: list[dict] = []
+            finish_reason: Optional[str] = None
+
+            content_parts = 0
+            tool_call_parts = 0
+            arguments_parts = 0
+
+            for chunk in self.make_stream_request(method, path, data, headers):
+                assert len(chunk['choices']) == 1, f'Expected 1 choice, got {len(chunk["choices"])}'
+                choice = chunk['choices'][0]
+                if choice['delta'].get('content') is not None:
+                    assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
+                    content.append(choice['delta']['content'])
+                    content_parts += 1
+                if choice['delta'].get('finish_reason') is not None:
+                    finish_reason = choice['delta']['finish_reason']
+                for tc in choice['delta'].get('tool_calls', []):
+                    if 'function' not in tc:
+                        raise ValueError(f"Expected function type, got {tc['type']}")
+                    if tc['index'] >= len(tool_calls):
+                        tool_calls.append(dict(
+                            id="",
+                            type="function",
+                            function=dict(
+                                name="",
+                                arguments="",
+                            )
+                        ))
+                    tool_call = tool_calls[tc['index']]
+                    if tc.get('id') is not None:
+                        tool_call['id'] = tc['id']
+                    fct = tc['function']
+                    if fct.get('name') is not None:
+                        tool_call['function']['name'] = fct['name']
+                    if fct.get('arguments') is not None:
+                        assert len(fct['arguments']) > 0, f'Expected non empty arguments delta!'
+                        tool_call['function']['arguments'] += fct['arguments']
+
+            print(f'Streamed response had {content_parts} content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
+            result = dict(
+                choices=[
+                    dict(
+                        index=0,
+                        finish_reason=finish_reason,
+                        message=dict(
+                            role='assistant',
+                            content=''.join(content) if content else None,
+                            tool_calls=tool_calls,
+                        ),
+                    )
+                ],
+            )
+            print("Final response from server", json.dumps(result, indent=2))
+            return result
+        else:
+            response = self.make_request(method, path, data, headers)
+            assert response.status_code == 200, f"Server returned error: {response.status_code}"
+            return response.body
+
+
 
 server_instances: Set[ServerProcess] = set()
 

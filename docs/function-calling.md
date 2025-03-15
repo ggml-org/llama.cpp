@@ -329,32 +329,58 @@ Test in CLI (or with any library / software that can use OpenAI-compatible API b
 
 ```bash
 curl http://localhost:8080/v1/chat/completions -d '{
-"model": "gpt-3.5-turbo",
-"tools": [
-    {
-    "type":"function",
-    "function":{
-        "name":"python",
-        "description":"Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
-        "parameters":{
-        "type":"object",
-        "properties":{
-            "code":{
-            "type":"string",
-            "description":"The code to run in the ipython interpreter."
+    "model": "gpt-3.5-turbo",
+    "tools": [
+        {
+        "type":"function",
+        "function":{
+            "name":"python",
+            "description":"Runs code in an ipython interpreter and returns the result of the execution after 60 seconds.",
+            "parameters":{
+            "type":"object",
+            "properties":{
+                "code":{
+                "type":"string",
+                "description":"The code to run in the ipython interpreter."
+                }
+            },
+            "required":["code"]
             }
-        },
-        "required":["code"]
         }
-    }
-    }
-],
-"messages": [
-    {
-    "role": "user",
-    "content": "Print a hello world message with python."
-    }
-]
+        }
+    ],
+    "messages": [
+        {
+        "role": "user",
+        "content": "Print a hello world message with python."
+        }
+    ]
+}'
+
+
+curl http://localhost:8080/v1/chat/completions -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+        {"role": "system", "content": "You are a chatbot that uses tools/functions. Dont overthink things."},
+        {"role": "user", "content": "What is the weather in Istanbul?"}
+    ],
+    "tools": [{
+        "type":"function",
+        "function":{
+            "name":"get_current_weather",
+            "description":"Get the current weather in a given location",
+            "parameters":{
+            "type":"object",
+            "properties":{
+                "location":{
+                "type":"string",
+                "description":"The city and country/state, e.g. `San Francisco, CA`, or `Paris, France`"
+                }
+            },
+            "required":["location"]
+            }
+        }
+    }]
 }'
 ```
 
