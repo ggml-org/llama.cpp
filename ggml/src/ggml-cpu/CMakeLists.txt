@@ -339,6 +339,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         message(STATUS "Unknown architecture")
     endif()
 
+    include(CheckSymbolExists)
+    check_symbol_exists(elf_aux_info sys/auxv.h HAVE_ELF_AUX_INFO)
+    if (HAVE_ELF_AUX_INFO)
+        add_compile_definitions(HAVE_ELF_AUX_INFO)
+    endif()
+
     if (GGML_CPU_AARCH64)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_AARCH64)
     endif()

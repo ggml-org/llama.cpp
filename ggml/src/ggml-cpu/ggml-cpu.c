@@ -2595,7 +2595,7 @@ bool ggml_is_numa(void) {
 
 #if defined(__ARM_ARCH)
 
-#if defined(__linux__) && defined(__aarch64__)
+#if (defined(__linux__) || defined(HAVE_ELF_AUX_INFO)) && defined(__aarch64__)
 #include <sys/auxv.h>
 #elif defined(__APPLE__)
 #include <sys/sysctl.h>
@@ -2610,9 +2610,16 @@ bool ggml_is_numa(void) {
 #endif
 
 static void ggml_init_arm_arch_features(void) {
-#if defined(__linux__) && defined(__aarch64__)
+#if (defined(__linux__) || defined(HAVE_ELF_AUX_INFO)) && defined(__aarch64__)
+#if defined(HAVE_ELF_AUX_INFO)
+    uint32_t hwcap = 0;
+    uint32_t hwcap2 = 0;
+    elf_aux_info(AT_HWCAP, &hwcap, sizeof(hwcap));
+    elf_aux_info(AT_HWCAP2, &hwcap2, sizeof(hwcap2));
+#else
     uint32_t hwcap = getauxval(AT_HWCAP);
     uint32_t hwcap2 = getauxval(AT_HWCAP2);
+#endif
 
     ggml_arm_arch_features.has_neon    = !!(hwcap & HWCAP_ASIMD);
     ggml_arm_arch_features.has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
