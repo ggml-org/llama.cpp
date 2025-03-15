@@ -920,6 +920,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : offending task: %s\n", __func__, hs_data[i0].context.c_str());
             return;
         }
 
@@ -1199,6 +1200,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : offending task: %s\n", __func__, data[i0].first.c_str());
             return;
         }
 
@@ -1571,6 +1573,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : offending task: %s\n", __func__, tasks[i0].question.c_str());
             return;
         }
 
