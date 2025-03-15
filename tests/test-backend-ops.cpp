@@ -1459,11 +1459,13 @@ struct test_cpy : public test_case {
     const ggml_type type_src;
     const ggml_type type_dst;
     const std::array<int64_t, 4> ne;
-    const std::array<int64_t, 4> permute;
+    const std::array<int64_t, 4> permute_src;
+    const std::array<int64_t, 4> permute_dst;
     bool _src_use_permute;
+    bool _dst_use_permute;
 
     std::string vars() override {
-        return VARS_TO_STR4(type_src, type_dst, ne, permute);
+        return VARS_TO_STR5(type_src, type_dst, ne, permute_src, permute_dst);
     }
 
     double max_nmse_err() override {
@@ -1476,9 +1478,11 @@ struct test_cpy : public test_case {
 
     test_cpy(ggml_type type_src = GGML_TYPE_F32, ggml_type type_dst = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 10, 1},
-            std::array<int64_t, 4> permute = {0, 0, 0, 0})
-        : type_src(type_src), type_dst(type_dst), ne(ne), permute(permute),
-          _src_use_permute(permute[0] + permute[1] + permute[2] + permute[3] > 0) {}
+            std::array<int64_t, 4> permute_src = {0, 0, 0, 0},
+            std::array<int64_t, 4> permute_dst = {0, 0, 0, 0})
+        : type_src(type_src), type_dst(type_dst), ne(ne), permute_src(permute_src), permute_dst(permute_dst),
+          _src_use_permute(permute_src[0] + permute_src[1] + permute_src[2] + permute_src[3] > 0),
+          _dst_use_permute(permute_dst[0] + permute_dst[1] + permute_dst[2] + permute_dst[3] > 0) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
@@ -1486,12 +1490,17 @@ struct test_cpy : public test_case {
         ggml_set_name(src, "src");
 
         if (_src_use_permute) {
-            src = ggml_permute(ctx, src, permute[0], permute[1], permute[2], permute[3]);
+            src = ggml_permute(ctx, src, permute_src[0], permute_src[1], permute_src[2], permute_src[3]);
             ggml_set_name(src, "src_permuted");
         }
 
-        ggml_tensor* dst = ggml_new_tensor(ctx, type_dst, 4, src->ne);
+        ggml_tensor * dst = ggml_new_tensor(ctx, type_dst, 4, src->ne);
         ggml_set_name(dst, "dst");
+
+        if (_dst_use_permute) {
+            dst = ggml_permute(ctx, dst, permute_dst[0], permute_dst[1], permute_dst[2], permute_dst[3]);
+            ggml_set_name(dst, "dst_permuted");
+        }
 
         ggml_tensor * out = ggml_cpy(ctx, src, dst);
         ggml_set_name(out, "out");
@@ -3929,14 +3938,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_set(GGML_TYPE_I32, GGML_TYPE_I32, {6, 5, 4, 3}, dim));
     }
 
-    for (ggml_type type_src : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+    // same-type copy
+    for (ggml_type type : all_types) {
+        const auto nk = ggml_blck_size(type);
+
+        for (int k = 1; k < 4; ++k) {
+            test_cases.emplace_back(new test_cpy(type, type, {k*nk, 2, 3, 4}));
+            test_cases.emplace_back(new test_cpy(type, type, {k*nk, 2, 3, 4}, {0, 2, 1, 3}));
+            test_cases.emplace_back(new test_cpy(type, type, {k*nk, 2, 3, 4}, {0, 3, 1, 2}, {0, 2, 1, 3}));
+        }
+    }
+
+    for (ggml_type type_src : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
         for (ggml_type type_dst : all_types) {
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 4, 4, 4}));
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {0, 2, 1, 3})); // cpy by rows
         }
     }
-    for (ggml_type type_dst : {GGML_TYPE_F32}) {
-        for (ggml_type type_src : all_types) {
+    for (ggml_type type_src : all_types) {
+        for (ggml_type type_dst : {GGML_TYPE_F32}) {
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 4, 4, 4}));
             test_cases.emplace_back(new test_cpy(type_src, type_dst, {256, 2, 3, 4}, {0, 2, 1, 3})); // cpy by rows
         }
