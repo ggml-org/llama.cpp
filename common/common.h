@@ -309,6 +309,8 @@ struct common_params {
     bool   multiple_choice  = false;  // compute TruthfulQA score over random tasks from datafile supplied in prompt
     size_t multiple_choice_tasks = 0; // number of tasks to use when computing the TruthfulQA score. If 0, all tasks will be computed
 
+    bool ctx_overflow       = false;  // ignore context window overflow during HellaSwag, WinoGrande or Multiple Choice evaluation
+
     bool   kl_divergence    = false; // compute KL divergence
 
     bool usage             = false; // print usage
