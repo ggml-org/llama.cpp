@@ -27,12 +27,12 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
             printf("Subgraph input %d: %g\n", inp, *(double*)(input_data));
         #endif
         ov::Tensor input_tensor;
-        auto input_shape = ggml_decoder->get_input_shape(name).to_shape();
+        ov::Shape input_shape = ggml_decoder->get_input_shape(name).to_shape();
 
-        if (flag & op_node_name == "CONT" && input_shape[0] == 1 && input_shape[1] != 1) {
-            std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
-            ov::element::Type input_type = ggml_decoder->get_input_type(name);
-            size_t element_size = input_type.size();
+        ov::element::Type input_type = ggml_decoder->get_input_type(name);
+        size_t element_size = input_type.size();
+        std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
+        if (op_node_name == "CONT" && input_shape[0] == 1 && (input_shape[1] != 1 && flag || input_shape[2]*element_size!=input_stride[1])) {
             const size_t num_rows    = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[1]);
             const size_t dim2        = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[0]);
             size_t phys_stride = static_cast<size_t>(input_stride[1]) / element_size;
@@ -42,14 +42,14 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
             std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
             ov::element::Type input_type = ggml_decoder->get_input_type(name);
             size_t element_size = input_type.size();
-            ov::Shape phys_shape;
+            // ov::Shape phys_shape;
             static int iter = 0;
             if (iter++ % 2 == 0) {
-                phys_shape = {1, input_shape[1], input_stride[2] / element_size};
-                input_tensor = ov::Tensor(ov::element::f32, phys_shape, input_data);
+                // phys_shape = {1, input_shape[1], input_stride[2] / element_size};
+                input_tensor = ov::Tensor(ov::element::f32, input_shape, input_data);
             } else {
-                phys_shape = {1, input_shape[1], input_stride[1] / element_size};
-                input_tensor = ov::Tensor(ov::element::f16, phys_shape, input_data);
+                ov::Shape flat_shape = {1, 1, input_stride[0] / element_size};
+                input_tensor = ov::Tensor(ov::element::f16, flat_shape, input_data);
             }
         } else {
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
@@ -161,6 +161,11 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         auto output_tensor = infer_request.get_output_tensor(i);
         // output_tensor.get_shape();
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
+        // std::cout << std::left  << "[ " << std::setw(2) << i << " ]: "
+        //             << "output_names: " << std::setw(20) << output_names[i]
+        //             << " output data: " << std::setw(15) << ((float*)output_tensor.data())[0]
+        //             << std::setw(15) << ((float*)output_tensor.data())[1] << std::right
+        //             << std::endl;
         #ifdef GGML_OPENVINO_DEBUG
             printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
         #endif

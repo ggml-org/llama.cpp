@@ -26,7 +26,9 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         }
         case GGML_OP_CONT:
         {
-            if (ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node)) {
+            if (ggml_is_contiguous(node->src[0])
+                && ggml_is_contiguous(node)
+                && (node->src[0]->ne[0] * node->src[0]->nb[0] == node->src[0]->nb[1])) {
                 inputs[src0_name] = node->src[0];
                 outputs[node_name] = node;
                 m_input_names.push_back(src0_name);
@@ -112,22 +114,31 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                 m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
                 m_output_names.push_back(node_name);
 
-                int src0_elem_size = ggml_type_size(node->src[0]->type);
-                int src1_elem_size = ggml_type_size(node->src[1]->type);
+                // int src0_elem_size = ggml_type_size(node->src[0]->type);
+                // int src1_elem_size = ggml_type_size(node->src[1]->type);
 
-                int src0_logical_rows = node->src[0]->ne[1];
-                int src1_logical_rows = node->src[1]->ne[1];
+                // int src0_logical_rows = node->src[0]->ne[1];
+                // int src1_logical_rows = node->src[1]->ne[1];
 
-                int src0_phys_cols = node->src[0]->nb[0] / src0_elem_size;
-                int src0_phys_rows = src0_logical_rows;
+                // int src0_phys_cols = node->src[0]->nb[0] / src0_elem_size;
+                // int src0_phys_rows = src0_logical_rows;
 
-                int src1_phys_cols = node->src[1]->nb[1] / src1_elem_size;
-                int src1_phys_rows = src1_logical_rows;
-                ov::Shape src0_phys_shape = {1, static_cast<size_t>(src0_phys_rows), static_cast<size_t>(src0_phys_cols) };
-                ov::Shape src1_phys_shape = {1, static_cast<size_t>(src1_phys_rows), static_cast<size_t>(src1_phys_cols) };
-                auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src0_phys_shape);
-                auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, src1_phys_shape);
+                // int src1_phys_cols = node->src[1]->nb[1] / src1_elem_size;
+                // int src1_phys_rows = src1_logical_rows;
+                // ov::Shape src0_phys_shape = {1, static_cast<size_t>(src0_phys_rows), static_cast<size_t>(src0_phys_cols) };
+                // ov::Shape src1_phys_shape = {1, static_cast<size_t>(src1_phys_rows), static_cast<size_t>(src1_phys_cols) };
+                // auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, src0_phys_shape);
+                // auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, src1_phys_shape);
+                // m_params.push_back(input0_param);
+                // m_params.push_back(input1_param);
+
+                ov::Shape input0_shape = { static_cast<size_t>(node->src[0]->ne[2]),
+                    static_cast<size_t>(node->src[0]->ne[1]),
+                    static_cast<size_t>(node->src[0]->ne[0])};
+                auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input0_shape);
                 m_params.push_back(input0_param);
+                ov::Shape input1_shape = { 1, 1, static_cast<size_t>(node->src[1]->nb[2] / node->src[1]->nb[0])};
+                auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, input1_shape);
                 m_params.push_back(input1_param);
 
                 m_continuous = false;
@@ -147,7 +158,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             // ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
             //                             static_cast<size_t>(node->src[0]->ne[1]),
             //                             static_cast<size_t>(node->src[0]->ne[0])};
-            // auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
+            // auto type = get_input_type(src0_name);
+            // auto input_param = std::make_shared<ov::op::v0::Parameter>(type, input_shape);
             // m_params.push_back(input_param);
 
             // if (node->ne[0] > node->ne[1] && (node->ne[0] * node->nb[0] != node->nb[1]) && node->ne[2] == 1) {
