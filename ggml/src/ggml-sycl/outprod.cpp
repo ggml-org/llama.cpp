@@ -1,7 +1,4 @@
-#include <sycl/sycl.hpp>
-#include <oneapi/mkl.hpp>
 #include "outprod.hpp"
-
 
 void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     const ggml_tensor *src0 = dst->src[0];
@@ -34,20 +31,13 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Handle transposition of src1
     const bool src1_T = ggml_is_transposed(src1);
-    const oneapi::mkl::transpose src1_op =
-        src1_T ? oneapi::mkl::transpose::nontrans : oneapi::mkl::transpose::trans;
+    const oneapi::math::transpose src1_op = src1_T ? oneapi::math::transpose::nontrans : oneapi::math::transpose::trans;
     const int64_t ldb = (src1_T ? nb10 : nb11) / sizeof(float);
 
     try {
-        // Perform matrix multiplication using oneMKL GEMM
-#ifdef GGML_SYCL_NVIDIA
-        oneapi::mkl::blas::column_major::gemm(oneapi::mkl::backend_selector<oneapi::mkl::backend::cublas>{ *stream },
-                                              oneapi::mkl::transpose::nontrans, src1_op, ne0, ne1, ne01, alpha, src0_d,
-                                              ne00, src1_d, ldb, beta, dst_d, ne0);
-#else
-        oneapi::mkl::blas::column_major::gemm(*stream, oneapi::mkl::transpose::nontrans, src1_op, ne0, ne1, ne01, alpha,
-                                              src0_d, ne00, src1_d, ldb, beta, dst_d, ne0);
-#endif
+        // Perform matrix multiplication using oneMath GEMM
+        oneapi::math::blas::column_major::gemm(get_onemath_backend(*stream), oneapi::math::transpose::nontrans, src1_op,
+                                               ne0, ne1, ne01, alpha, src0_d, ne00, src1_d, ldb, beta, dst_d, ne0);
     }
     catch (sycl::exception const& exc) {
         std::cerr << exc.what() << std::endl;
