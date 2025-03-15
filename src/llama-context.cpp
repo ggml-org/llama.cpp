@@ -285,10 +285,14 @@ llama_context::llama_context(
 
     // reserve worst-case graph
     if (!hparams.vocab_only) {
-        uint32_t n_seqs = 1; // TODO: worst-case number of sequences
-        uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        const uint32_t n_seqs = 1; // TODO: worst-case number of sequences
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
+
+        // restore later
+        // TODO: something cleaner
+        const auto n_outputs_save = n_outputs;
 
         // max number of outputs
         n_outputs = n_tokens;
@@ -340,6 +344,8 @@ llama_context::llama_context(
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
+
+        n_outputs = n_outputs_save;
 
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
