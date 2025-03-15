@@ -592,6 +592,11 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
 
         auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
         inp = ggml_add(ctx0, inp, inp_1);
+
+        // ggml_build_forward_expand(gf, inp);
+        // ggml_free(ctx0);
+        // return gf;
+
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
         inp = ggml_reshape_4d(
             ctx0, inp,
@@ -603,6 +608,10 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         inp = ggml_reshape_3d(
             ctx0, inp,
             hidden_size, patches_w * patches_h, batch_size);
+
+        // ggml_build_forward_expand(gf, inp);
+        // ggml_free(ctx0);
+        // return gf;
     }
     else {
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
@@ -613,10 +622,11 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         // inp = ggml_add(ctx0, inp, ggml_repeat(ctx0, model.patch_bias, inp));
         inp = ggml_add(ctx0, inp, model.patch_bias);
     }
-    struct ggml_tensor * embeddings  = inp;
-    struct ggml_tensor * pos_embed   = nullptr;
-    struct ggml_tensor * window_mask = nullptr;
-    struct ggml_tensor * window_idx  = nullptr;
+    struct ggml_tensor * embeddings     = inp;
+    struct ggml_tensor * pos_embed      = nullptr;
+    struct ggml_tensor * window_mask    = nullptr;
+    struct ggml_tensor * window_idx     = nullptr;
+    struct ggml_tensor * inv_window_idx = nullptr;
 
     if (ctx->has_llava_projector) {
         // concat class_embeddings and patch_embeddings
@@ -658,10 +668,17 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
 
     // pre-layernorm
     if (model.pre_ln_w) {
-        embeddings = ggml_norm(ctx0, embeddings, eps);
-        ggml_set_name(embeddings, "pre_ln");
+        if (ctx->use_rms_norm) {
+            embeddings = ggml_rms_norm(ctx0, embeddings, eps);
+            ggml_set_name(embeddings, "pre_ln");
 
-        embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.pre_ln_w), model.pre_ln_b);
+            embeddings = ggml_mul(ctx0, embeddings, model.pre_ln_w);
+        } else {
+            embeddings = ggml_norm(ctx0, embeddings, eps);
+            ggml_set_name(embeddings, "pre_ln");
+
+            embeddings = ggml_add(ctx0, ggml_mul(ctx0, embeddings, model.pre_ln_w), model.pre_ln_b);
+        }
     }
 
     std::vector<struct ggml_tensor *> embedding_stack;
@@ -670,10 +687,9 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
     // loop over layers
 
     if (use_window_attn) {
-        window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
-        ggml_set_name(window_idx, "window_idx");
-        ggml_set_input(window_idx);
-
+        inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
+        ggml_set_name(inv_window_idx, "inv_window_idx");
+        ggml_set_input(inv_window_idx);
         // mask for window attention
         window_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, num_positions, num_positions);
         ggml_set_name(window_mask, "window_mask");
@@ -682,12 +698,20 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         // embeddings shape: [hidden_size, patches_w * patches_h, batch_size]
         GGML_ASSERT(batch_size == 1);
         embeddings = ggml_reshape_2d(ctx0, embeddings, hidden_size * 4, patches_w * patches_h * batch_size / 4);
-        embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
+        embeddings = ggml_get_rows(ctx0, embeddings, inv_window_idx);
         embeddings = ggml_reshape_3d(ctx0, embeddings, hidden_size, patches_w * patches_h, batch_size);
 
-        positions = ggml_reshape_2d(ctx0, positions, 16, num_position_ids / 4 / 4);
-        positions = ggml_get_rows(ctx0, positions, window_idx);
+        positions = ggml_reshape_2d(ctx0, positions, num_position_ids / 4, 4);
+        positions = ggml_cont(ctx0, ggml_permute(ctx0, positions, 1, 0, 2, 3));
+        positions = ggml_reshape_2d(ctx0, positions, 16, num_position_ids / 16);
+        positions = ggml_get_rows(ctx0, positions, inv_window_idx);
+        positions = ggml_reshape_2d(ctx0, positions, 4, num_position_ids / 4);
+        positions = ggml_cont(ctx0, ggml_permute(ctx0, positions, 1, 0, 2, 3));
         positions = ggml_reshape_1d(ctx0, positions, num_position_ids);
+
+        // ggml_build_forward_expand(gf, embeddings);
+        // ggml_free(ctx0);
+        // return gf;
     }
 
     for (int il = 0; il < ctx->max_feature_layer; il++) {
@@ -711,6 +735,12 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, model.layers[il].ln_1_w),
                            model.layers[il].ln_1_b);
         }
+        // if ( il == 0) {
+        // // build the graph
+        // ggml_build_forward_expand(gf, cur);
+        // ggml_free(ctx0);
+        // return gf;
+        // }
 
         // self-attention
         {
@@ -753,7 +783,17 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
                 KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
             } else {
                 KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f, 0.0f);
+
+                // KQ = ggml_scale_inplace(ctx0, KQ, 1.0f / sqrt((float)d_head));
+                // KQ = ggml_add(ctx0, KQ, window_mask);
+                // KQ = ggml_soft_max_inplace(ctx0, KQ);
             }
+            // if ( il == 0) {
+            //     // build the graph
+            //     ggml_build_forward_expand(gf, KQ);
+            //     ggml_free(ctx0);
+            //     return gf;
+            // }
 
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
             KQV = ggml_reshape_4d(ctx0, KQV, d_head, num_positions, n_head, batch_size);
@@ -769,6 +809,12 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         cur = ggml_add(ctx0, cur, embeddings);
 
         embeddings = cur; // embeddings = residual, cur = hidden_states
+        // if ( il == 0) {
+        //     // build the graph
+        //     ggml_build_forward_expand(gf, cur);
+        //     ggml_free(ctx0);
+        //     return gf;
+        // }
 
         // layernorm2
         if (ctx->use_rms_norm) {
@@ -820,7 +866,18 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         cur = ggml_add(ctx0, embeddings, cur);
 
         embeddings = cur;
+
+        // if ( il == 0) {
+        //     // build the graph
+        //     ggml_build_forward_expand(gf, embeddings);
+        //     ggml_free(ctx0);
+        //     return gf;
+        // }
     }
+
+    // ggml_build_forward_expand(gf, embeddings);
+    // ggml_free(ctx0);
+    // return gf;
 
     // post-layernorm
     if (model.post_ln_w) {
@@ -1149,14 +1206,14 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
     }
 
     if (use_window_attn) {
-        struct ggml_tensor * inv_window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
-        ggml_set_name(inv_window_idx, "inv_window_idx");
-        ggml_set_input(inv_window_idx);
+        window_idx = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_positions / 4);
+        ggml_set_name(window_idx, "window_idx");
+        ggml_set_input(window_idx);
 
         // embeddings shape: [hidden_size, patches_w * patches_h, batch_size]
         GGML_ASSERT(batch_size == 1);
         embeddings = ggml_reshape_2d(ctx0, embeddings, hparams.projection_dim, patches_w * patches_h / 4);
-        embeddings = ggml_get_rows(ctx0, embeddings, inv_window_idx);
+        embeddings = ggml_get_rows(ctx0, embeddings, window_idx);
         embeddings = ggml_reshape_3d(ctx0, embeddings, hparams.projection_dim, patches_w * patches_h / 4, batch_size);
     }
 
@@ -2657,6 +2714,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
         if (ctx->has_qwen2vl_merger) {
             struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
+            if (positions) {
 
             const int pw = image_size_width / patch_size;
             const int ph = image_size_height / patch_size;
@@ -2681,6 +2739,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
             ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
             free(positions_data);
+            }
         }
         else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
             // do nothing
@@ -2719,7 +2778,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         const int merge_ratio = 2;
         const int pw = image_size_width / patch_size / merge_ratio;
         const int ph = image_size_height / patch_size / merge_ratio;
-        const int grid_window = hparams.attn_window_size / hparams.patch_size / merge_ratio;
+        const int grid_window = hparams.attn_window_size / patch_size / merge_ratio;
         const int ipw = image_size_width / patch_size;
         const int iph = image_size_height / patch_size;
         /*
@@ -2764,9 +2823,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
         }
 
-        ggml_backend_tensor_set(window_idx, idx.data(), 0, ggml_nbytes(window_idx));
-        ggml_backend_tensor_set(inv_window_idx, inv_idx.data(), 0, ggml_nbytes(inv_window_idx));
-        ggml_backend_tensor_set(window_mask, mask.data(), 0, ggml_nbytes(window_mask));
+
+        if (window_idx) ggml_backend_tensor_set(window_idx, idx.data(), 0, ggml_nbytes(window_idx));
+        if (inv_window_idx) ggml_backend_tensor_set(inv_window_idx, inv_idx.data(), 0, ggml_nbytes(inv_window_idx));
+        if (window_mask) ggml_backend_tensor_set(window_mask, mask.data(), 0, ggml_nbytes(window_mask));
     }
 
     ggml_backend_cpu_set_n_threads(ctx->backend_cpu, n_threads);
