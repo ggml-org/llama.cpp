@@ -1214,7 +1214,7 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
 
-        if (GGML_CUDA_CC_IS_CDNA(compute_capability)) {
+        if (GGML_CUDA_CC_IS_CDNA(compute_capability) || GGML_CUDA_CC_IS_RDNA4(compute_capability)) {
             const float alpha = 1.0f;
             const float beta = 0.0f;
             CUBLAS_CHECK(
@@ -1757,10 +1757,16 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
         beta  = &beta_f32;
     }
 
-    if (GGML_CUDA_CC_IS_CDNA(ggml_cuda_info().devices[ctx.device].cc)) {
+    const int compute_capability = ggml_cuda_info().devices[ctx.device].cc;
+    if (GGML_CUDA_CC_IS_CDNA(compute_capability)) {
         cu_compute_type = CUBLAS_COMPUTE_32F;
         alpha = &alpha_f32;
         beta  = &beta_f32;
+
+        if (GGML_CUDA_CC_IS_RDNA4(compute_capability)) {
+            dst_t = (char *) dst_ddf;
+            cu_data_type = CUDA_R_32F;
+        }
     }
 
     GGML_ASSERT(ne12 % ne02 == 0);
@@ -1834,7 +1840,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 #endif
 
-    if (dst->op_params[0] == GGML_PREC_DEFAULT) {
+    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type == CUDA_R_16F) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
         to_fp32_cuda(dst_f16.get(), dst_ddf, ne_dst, main_stream);
     }
