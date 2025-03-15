@@ -35,6 +35,7 @@ if (Vulkan_FOUND)
     else()
         message(STATUS "GL_KHR_cooperative_matrix supported by glslc")
         add_compile_definitions(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT ON)
     endif()
 
     # Compile a test shader to determine whether GL_NV_cooperative_matrix2 is supported.
@@ -49,6 +50,7 @@ if (Vulkan_FOUND)
     else()
         message(STATUS "GL_NV_cooperative_matrix2 supported by glslc")
         add_compile_definitions(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT ON)
     endif()
 
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
@@ -119,6 +121,8 @@ if (Vulkan_FOUND)
             SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
             CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE}
                     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
+                    -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT_GLSLC_SUPPORT}
+                    -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT}
             BUILD_COMMAND ${CMAKE_COMMAND} --build .
             INSTALL_COMMAND ${CMAKE_COMMAND} --install .
             INSTALL_DIR ${CMAKE_BINARY_DIR}
