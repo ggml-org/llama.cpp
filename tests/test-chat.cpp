@@ -821,6 +821,36 @@ static void test_template_output_parsers() {
                       "{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}");
     }
     {
+        auto tmpls = read_templates("models/templates/microsoft-Phi-4-mini-instruct.jinja");
+        std::vector<std::string>   end_tokens{ "<|end|>" };
+    
+        assert_equals(COMMON_CHAT_FORMAT_PHI_4, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+    
+        // Test normal message without tools
+        test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+                
+        // Test with content before tool call
+        assert_msg_equals(
+            common_chat_msg{"assistant", "I'll help with that.", {}, tool_calls, "", "", ""},
+            common_chat_parse(
+                "I'll help with that.<|tool_call|>{\"name\":\"special_function\",\"arguments\":{\"arg1\":1}}</|tool_call|>",
+                COMMON_CHAT_FORMAT_PHI_4));
+
+        // Test with content after tool call
+        assert_msg_equals(
+            common_chat_msg{"assistant", "I'll help with that.", {}, tool_calls, "", "", ""},
+            common_chat_parse(
+                "<|tool_call|>{\"name\":\"special_function\",\"arguments\":{\"arg1\":1}}</|tool_call|>I'll help with that.",
+                COMMON_CHAT_FORMAT_PHI_4));
+
+        // Test with newlines.
+        assert_msg_equals(message_assist_call, common_chat_parse(
+            "<|tool_call|>\n"
+            "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
+            "</|tool_call|>",
+            COMMON_CHAT_FORMAT_PHI_4));
+    }
+    {
         auto tmpls = read_templates("models/templates/meetkai-functionary-medium-v3.1.jinja");
         std::vector<std::string>   end_tokens{ "<|eom_id|>", "<|eot_id|>" };
 
