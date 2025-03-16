@@ -698,7 +698,7 @@ void launch_fattn(
     GGML_ASSERT(Q->ne[3] == 1);
 
     GGML_ASSERT(stream_k || ncols2 == 1);
-    const int parallel_blocks = Q->ne[1] <= ncols1 ? 4 : 1;
+    const bool use_parallel_blocks = !stream_k && (Q->ne[1] <= ncols1) ? true : false;
 
     ggml_cuda_pool & pool = ctx.pool();
     cudaStream_t main_stream = ctx.stream();
@@ -749,6 +749,8 @@ void launch_fattn(
         nb23 = nb23*bs*sizeof(half)/ts;
     }
 
+    int parallel_blocks = 1;
+
     const int ntiles_x = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int ntiles_total = ntiles_x * (Q->ne[2] / ncols2) * Q->ne[3];
 
@@ -770,6 +772,21 @@ void launch_fattn(
 
         dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + D) * sizeof(float));
     } else {
+        if (use_parallel_blocks) {
+            const int num_blocks_base = ntiles_x*Q->ne[2]*Q->ne[3];
+            const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
+            const int seqlen_tiles = (K->ne[1] + D - 1) / D;
+
+            // Determine the number of active blocks per SM
+            int numActiveBlocks = 1;
+            CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numActiveBlocks, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
+
+            // we want to keep at least `numActiveBlocks` blocks per SM to improve occupancy.
+            // this kernel operates on `D` tile of seq length. We need to consider how many `D` tiles can be processed in parallel.
+            // If there are not enough tiles to process, we can reduce the number of blocks
+            parallel_blocks = std::max(std::min((nsm * numActiveBlocks) / num_blocks_base, seqlen_tiles), 1);
+        }
+
         blocks_num.x = ntiles_x;
         blocks_num.y = parallel_blocks;
         blocks_num.z = Q->ne[2]*Q->ne[3];
