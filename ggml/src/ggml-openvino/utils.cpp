@@ -161,10 +161,18 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         auto output_tensor = infer_request.get_output_tensor(i);
         // output_tensor.get_shape();
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
+        auto tensor = ggml_decoder->get_output_ggml_tensor(output_names[i]);
         // std::cout << std::left  << "[ " << std::setw(2) << i << " ]: "
         //             << "output_names: " << std::setw(20) << output_names[i]
-        //             << " output data: " << std::setw(15) << ((float*)output_tensor.data())[0]
-        //             << std::setw(15) << ((float*)output_tensor.data())[1] << std::right
+        //             << ", shape: " << std::setw(4) << tensor->ne[0] << " " << std::setw(4) << tensor->ne[1] << " " << tensor->ne[2]
+        //             << ", address: "
+        //             << std::setw(15) << tensor->data << " "
+        //             << std::setw(15) << ((float*)output_tensor.data())[0]
+        //             << std::setw(15) << ((float*)output_tensor.data())[1]
+        //             << ", ne[0]: "
+        //             << std::setw(15) << ((float*)output_tensor.data())[tensor->ne[0]] << std::right
+        //             << std::setw(15) << ((float*)output_tensor.data())[tensor->ne[0] + 1] << std::right
+        //             << std::right
         //             << std::endl;
         #ifdef GGML_OPENVINO_DEBUG
             printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
