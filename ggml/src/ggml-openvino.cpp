@@ -419,6 +419,11 @@ void ggml_backend_openvino_rms_norm(ggml_tensor * dst) {
     }
 }
 
+static void ggml_backend_openvino_permute(const struct ggml_tensor * dst) {
+    // NOP
+    GGML_UNUSED(dst);
+}
+
 // Extracting valid shapes
 std::vector<int64_t> get_effective_shape(const ggml_tensor * t) {
     std::vector<int64_t> shape;
@@ -850,11 +855,6 @@ static void ggml_backend_openvino_transpose(ggml_tensor *dst) {
     GGML_UNUSED(dst);
 }
 
-static void ggml_backend_openvino_permute(const struct ggml_tensor * dst) {
-    // NOP
-    GGML_UNUSED(dst);
-}
-
 void ggml_backend_openvino_cpy(struct ggml_tensor *dst) {
     const struct ggml_tensor *src0 = dst->src[0];
     const struct ggml_tensor *src1 = dst->src[1];
@@ -984,6 +984,7 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
     std::vector<int> cont_indices;
     std::vector<int> reshape_indices;
     std::vector<int> view_indices;
+    std::vector<int> view_indices_prompt;
 
     std::vector<int> cpy_indices;
     std::vector<int> transpose_indices;
@@ -997,8 +998,12 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
             cont_indices.push_back(i);
         } else if (cgraph->nodes[i]->op == GGML_OP_RESHAPE) {
             reshape_indices.push_back(i);
+        // } else if (cgraph->nodes[i]->op == GGML_OP_VIEW) {
         } else if (cgraph->nodes[i]->op == GGML_OP_VIEW) {
             view_indices.push_back(i);
+            if (cgraph->nodes[i]->ne[0] == 96) {
+                view_indices_prompt.push_back(i);
+            }
         } else if (cgraph->nodes[i]->op == GGML_OP_CPY) {
             cpy_indices.push_back(i);
         } else if (cgraph->nodes[i]->op == GGML_OP_TRANSPOSE) {
@@ -1043,14 +1048,32 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
             }
         }
     } else {
+        // int end_node = cgraph->n_nodes - 1;
+        // openvino_frontend_compute(backend, cgraph, 0, end_node, prompt_process_flag);
         for (int i = 0; i < cgraph->n_nodes; i++) {
-            if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
+            if (std::find(add_indices.begin(), add_indices.end(), i) != add_indices.end()) {
+                ggml_backend_openvino_add_forward(cgraph->nodes[i]);
+            } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
                 ggml_backend_openvino_permute(cgraph->nodes[i]);
+            // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
+            //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
+            // } else if (std::find(view_indices_prompt.begin(), view_indices_prompt.end(), i) != view_indices_prompt.end()) {
+            //     ggml_backend_openvino_view(cgraph->nodes[i]);
+            // } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
+            //     ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
+            // } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
+            //     ggml_backend_openvino_reshape(cgraph->nodes[i]);
             } else {
                 // Process a range of nodes with openvino_frontend_compute
                 int start_index = i;
                 while (i < cgraph->n_nodes
+                        && std::find(add_indices.begin(), add_indices.end(), i) == add_indices.end()
                         && std::find(permute_indices.begin(), permute_indices.end(), i) == permute_indices.end()
+                        // && std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()
+                        // && std::find(view_indices.begin(), view_indices.end(), i) == view_indices.end()
+                        // && (std::find(view_indices_prompt.begin(), view_indices_prompt.end(), i) == view_indices_prompt.end())
+                        // && std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end()
+                        // && std::find(reshape_indices.begin(), reshape_indices.end(), i) == reshape_indices.end()
                         ) {
                     i++;
                 }
