@@ -7,7 +7,6 @@ PWD=`pwd`
 ANDROID_PLATFORM=android-34
 ANDROID_NDK=${PWD}/android-ndk-r26c
 REMOTE_PATH=/data/local/tmp/
-GGUF_MODEL_NAME=/sdcard/deepseek-r1-distill-qwen-1.5b-q4_0.gguf
 GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 
 #QNN SDK could be found at:
@@ -18,8 +17,7 @@ QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
-#default is QNN NPU
-qnnbackend=2
+qnnparams=" -mg 2 -ngl 99 "
 
 function dump_vars()
 {
@@ -188,7 +186,7 @@ function run_llamacli()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-cli -mg ${qnnbackend} -ngl 99 -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
+               && ${REMOTE_PATH}/llama-cli ${qnnparams} -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
 
 }
 
@@ -199,12 +197,11 @@ function run_llamabench()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-bench -mg ${qnnbackend} -m ${GGUF_MODEL_NAME}"
+               && ${REMOTE_PATH}/llama-bench ${qnnparams} -m ${GGUF_MODEL_NAME}"
 
 }
 
 
-#refer to:https://github.com/ggml-org/llama.cpp/pull/12155
 function run_test-ops()
 {
     prepare_run_on_phone test-backend-ops
@@ -215,37 +212,6 @@ function run_test-ops()
 
 }
 
-function run_test-op()
-{
-    prepare_run_on_phone test-backend-ops
-
-    qnnbackendname=qnn-cpu
-    case $qnnbackend in
-        0)
-        qnnbackendname=qnn-cpu
-        ;;
-        1)
-        qnnbackendname=qnn-gpu
-        ;;
-        2)
-        qnnbackendname=qnn-npu
-        ;;
-        *)
-        qnnbackendname=qnn-cpu
-        ;;
-    esac
-
-    #debug
-    echo "adb shell cd ${REMOTE_PATH} \
-               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
-
-    echo "\n"
-    adb shell "cd ${REMOTE_PATH} \
-               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
-
-}
 
 function print_oplist()
 {
@@ -335,9 +301,8 @@ function show_usage()
     echo "  $0 build"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
-    echo "  $0 run_testop          [ADD/MUL/MUL_MAT......(op from print_oplist)]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
-    echo "  $0 run_llamacli        0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
-    echo "  $0 run_llamabench      0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU) / 3 (ggml)"
+    echo "  $0 run_llamacli"
+    echo "  $0 run_llamabench"
 
     echo -e "\n\n\n"
 }
@@ -367,7 +332,12 @@ elif [ $# == 1 ]; then
     elif [ "$1" == "run_testops" ]; then
         run_test-ops
         exit 0
-
+    elif [ "$1" == "run_llamacli" ]; then
+        run_llamacli
+        exit 0
+    elif [ "$1" == "run_llamabench" ]; then
+        run_llamabench
+        exit 0
     elif [ "$1" == "updateqnnlib" ]; then
         update_qnn_libs
         exit 0
@@ -375,32 +345,6 @@ elif [ $# == 1 ]; then
         show_usage
         exit 1
     fi
-elif [ $# == 2 ]; then
-    qnnbackend=$2
-    if [ ${qnnbackend} -gt 3 ]; then
-        show_usage
-        exit 1
-    fi
-
-    if [ "$1" == "run_llamacli" ]; then
-        run_llamacli
-        exit 0
-    elif [ "$1" == "run_llamabench" ]; then
-        run_llamabench
-        exit 0
-    fi
-elif [ $# == 3 ]; then
-    opname=$2
-#TODO: check opname in oplist
-#opname can be found via print_oplist:
-
-    qnnbackend=$3
-    if [ ${qnnbackend} -gt 3 ]; then
-        show_usage
-        exit 1
-    fi
-    run_test-op
-    exit 0
 else
     show_usage
     exit 1
