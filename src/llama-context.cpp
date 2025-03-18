@@ -1057,12 +1057,21 @@ int llama_context::encode(llama_batch & inp_batch) {
     ggml_backend_sched_reset(sched.get());
     ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
+    const auto causal_attn_org = cparams.causal_attn;
+
+    // always use non-causal attention for encoder graphs
+    // TODO: this is a tmp solution until we have a proper way to support enc-dec models
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/12181#issuecomment-2730451223
+    cparams.causal_attn = false;
+
     auto * gf = graph_init();
     auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_ENCODER);
 
     ggml_backend_sched_alloc_graph(sched.get(), gf);
 
     res->set_inputs(&ubatch);
+
+    cparams.causal_attn = causal_attn_org;
 
     const auto compute_status = graph_compute(gf, n_tokens > 1);
     switch (compute_status) {
@@ -1133,6 +1142,8 @@ int llama_context::encode(llama_batch & inp_batch) {
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
+
+        synchronize();
 
         cross.n_embd = t_embd->ne[0];
         cross.n_enc  = t_embd->ne[1];

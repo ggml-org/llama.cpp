@@ -331,11 +331,11 @@ int main(int argc, char ** argv) {
                         }
 
                         active_seqs.erase(s);
-                        for(int i = 0; i < n_seq_dft; i++) {
+                        for (int i = 0; i < n_seq_dft; i++) {
                             if (i == s) {
                                 continue;
                             }
-                            if (drafts[i].tokens[i_dft] == drafts[s].tokens[i_dft]) {
+                            if (drafts[i].active && drafts[i].tokens[i_dft] == drafts[s].tokens[i_dft]) {
                                 // synchronize active status for sequences with the same drafted token
                                 drafts[i].active = drafts[i].active && accept;
                                 if (!drafts[i].active) {
