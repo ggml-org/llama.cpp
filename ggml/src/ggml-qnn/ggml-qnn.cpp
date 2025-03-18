@@ -2547,7 +2547,7 @@ int qnn_instance::unload_system() {
     return result;
 }
 
-static void ggmlqnn_compute_logcallback(const char * fmt,
+static void ggmlqnn_sdk_logcallback(const char * fmt,
                                  QnnLog_Level_t level,
                                  uint64_t timestamp,
                                  va_list argp) {
@@ -2556,7 +2556,7 @@ static void ggmlqnn_compute_logcallback(const char * fmt,
         return;
 
     static std::mutex log_mutex;
-    static unsigned char s_ggmlqnn_compute_logbuf[GGML_QNN_LOGBUF_LEN];
+    static unsigned char s_ggmlqnn_sdk_logbuf[GGML_QNN_LOGBUF_LEN];
 
     const char * log_level_desc = "";
     switch (level) {
@@ -2583,9 +2583,9 @@ static void ggmlqnn_compute_logcallback(const char * fmt,
     double ms = (double) timestamp / 1000000.0;
     {
         std::lock_guard<std::mutex> lock(log_mutex);
-        memset(s_ggmlqnn_compute_logbuf, 0, GGML_QNN_LOGBUF_LEN);
-        vsnprintf(reinterpret_cast<char *const>(s_ggmlqnn_compute_logbuf), GGML_QNN_LOGBUF_LEN, fmt, argp);
-        GGMLQNN_LOG_DEBUG("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggmlqnn_compute_logbuf);
+        memset(s_ggmlqnn_sdk_logbuf, 0, GGML_QNN_LOGBUF_LEN);
+        vsnprintf(reinterpret_cast<char *const>(s_ggmlqnn_sdk_logbuf), GGML_QNN_LOGBUF_LEN, fmt, argp);
+        GGMLQNN_LOG_DEBUG("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggmlqnn_sdk_logbuf);
     }
 }
 
@@ -2625,9 +2625,9 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
 
     _qnn_interface.set_qnn_interface(_loaded_backend);
 #if 1
-    _qnn_interface.qnn_log_create(ggmlqnn_compute_logcallback, _qnn_log_level, &_qnn_log_handle);
+    _qnn_interface.qnn_log_create(ggmlqnn_sdk_logcallback, _qnn_log_level, &_qnn_log_handle);
 #else
-    _qnn_raw_interface.logCreate(ggmlqnn_compute_logcallback, _qnn_log_level, &_qnn_log_handle);
+    _qnn_raw_interface.logCreate(ggmlqnn_sdk_logcallback, _qnn_log_level, &_qnn_log_handle);
 #endif
     if (nullptr == _qnn_log_handle) {
         GGMLQNN_LOG_WARN("why failed to initialize qnn log\n"); //NPU backend not work on Qualcomm SoC based low-end phone
@@ -3476,7 +3476,7 @@ static bool ggmlqnn_same_types(const ggml_backend_qnn_context * ctx, const ggml_
     return true;
 }
 
-static bool ggmlqnn_compute_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
+static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
     if (op_tensor->op == GGML_OP_NONE) {
         return true;
     }
@@ -3567,7 +3567,7 @@ static bool ggmlqnn_compute_can_handle_op(const ggml_backend_qnn_context * ctx, 
     }
 }
 
-static bool ggmlqnn_compute_compute_forward(ggml_backend_t backend, struct ggml_tensor * dst) {
+static bool ggmlqnn_compute_forward(ggml_backend_t backend, struct ggml_tensor * dst) {
     ggmlqnn_op_func_t func          = nullptr;
     ggml_backend_qnn_context * ctx  = (ggml_backend_qnn_context *)backend->context;
 
@@ -3913,7 +3913,7 @@ static enum ggml_status ggmlqnn_backend_graph_compute_general(ggml_backend_t bac
             || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
-        bool ok = ggmlqnn_compute_compute_forward(backend, node);
+        bool ok = ggmlqnn_compute_forward(backend, node);
         if (!ok) {
             GGMLQNN_LOG_DEBUG("%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
@@ -4074,7 +4074,7 @@ static ggml_backend_buffer_t ggml_backend_qnn_device_buffer_from_host_ptr(ggml_b
 
 static bool ggml_backend_qnn_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_qnn_context * ctx = (ggml_backend_qnn_context *) dev->context;
-    return (ggmlqnn_compute_can_handle_op(ctx,op));
+    return (ggmlqnn_can_handle_op(ctx,op));
 }
 
 static bool ggml_backend_qnn_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -5033,7 +5033,7 @@ static void ggmlqnn_compute_rope(ggml_backend_qnn_context * ctx, ggml_tensor * d
 static enum ggml_status ggmlqnn_backend_graph_compute_special(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     enum ggml_status ggml_result                = GGML_STATUS_SUCCESS;
     Qnn_ErrorHandle_t qnn_error                 = QNN_SUCCESS;
-    qnn_perf op_perf                            = qnn_perf("ggml_backend_qnn_graph_compute_special");
+    qnn_perf op_perf                            = qnn_perf("ggmlqnn_backend_graph_compute_special");
     qnn_instance * instance                     = nullptr;
     Qnn_GraphHandle_t graph_handle              = nullptr;
     ggml_backend_qnn_context * ctx              = (ggml_backend_qnn_context *) backend->context;
