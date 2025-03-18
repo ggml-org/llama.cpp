@@ -823,12 +823,12 @@ static void test_template_output_parsers() {
     {
         auto tmpls = read_templates("models/templates/llama-cpp-microsoft-Phi-4-mini-instruct.jinja");
         std::vector<std::string>   end_tokens{ "<|end|>" };
-    
+
         assert_equals(COMMON_CHAT_FORMAT_PHI_4, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-    
+
         // Test normal message without tools
         test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
-                
+
         // Test with content before tool call
         assert_msg_equals(
             common_chat_msg{"assistant", "I'll help with that.", {}, tool_calls, "", "", ""},

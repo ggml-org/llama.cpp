@@ -57,7 +57,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_COMMAND_R7B,
     COMMON_CHAT_FORMAT_COMMAND_R7B_EXTRACT_REASONING,
     COMMON_CHAT_FORMAT_PHI_4,
-    
+
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };
 
