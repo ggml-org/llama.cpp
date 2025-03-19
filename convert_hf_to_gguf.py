@@ -4414,7 +4414,7 @@ class DeepseekV2Model(Model):
             # flatten `list[dict[str, Tensor]]` into `list[str]`
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")       
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 @Model.register("PLMForCausalLM")
 class PLMModel(Model):
