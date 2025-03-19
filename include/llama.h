@@ -366,14 +366,27 @@ extern "C" {
         bool keep_split;                      // quantize to the same number of shards
         void * imatrix;                       // pointer to importance matrix data
         void * kv_overrides;                  // pointer to vector containing overrides
+        ggml_type attn_qkv_tensor_type;       // attention query/key/value tensor type
         ggml_type attn_q_tensor_type;         // attention query tensor type
         ggml_type attn_k_tensor_type;         // attention key tensor type
         ggml_type attn_v_tensor_type;         // attention value tensor type
-        ggml_type attn_qkv_tensor_type;       // attention query, key and value tensor type
+        ggml_type attn_qa_tensor_type;        // attention query a tensor type
+        ggml_type attn_qb_tensor_type;        // attention query b tensor type
+        ggml_type attn_kva_tensor_type;       // attention key/value a tensor type
+        ggml_type attn_kvb_tensor_type;       // attention key/value b tensor type
         ggml_type attn_output_tensor_type;    // attention output tensor type
         ggml_type ffn_up_tensor_type;         // feedforward up tensor type
         ggml_type ffn_gate_tensor_type;       // feedforward gate tensor type
         ggml_type ffn_down_tensor_type;       // feedforward down tensor type
+        ggml_type ffn_up_exp_tensor_type;     // feedforward up expert tensor type
+        ggml_type ffn_gate_exp_tensor_type;   // feedforward gate expert tensor type
+        ggml_type ffn_down_exp_tensor_type;   // feedforward down expert tensor type
+        ggml_type ffn_up_shexp_tensor_type;   // feedforward up shared expert tensor type
+        ggml_type ffn_gate_shexp_tensor_type; // feedforward gate shared expert tensor type
+        ggml_type ffn_down_shexp_tensor_type; // feedforward down shared expert tensor type
+        ggml_type cls_tensor_type;            // classifier tensor type
+        ggml_type cls_output_tensor_type;     // classifier output tensor type
+
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
