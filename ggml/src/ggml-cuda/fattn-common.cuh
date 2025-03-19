@@ -672,9 +672,8 @@ static void on_no_fattn_vec_case(const int D) {
 
 template <int D, int ncols1, int ncols2, int KQ_stride>
 void launch_fattn(
-    ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel,
-    const int nwarps, const size_t nbytes_shared, const bool need_f16_K, const bool need_f16_V, const bool stream_k,
-    const int warp_size = WARP_SIZE
+    ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
+    const int KQ_row_granularity, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -696,9 +695,6 @@ void launch_fattn(
     GGML_ASSERT(K->ne[1] % FATTN_KQ_STRIDE == 0 && "Incorrect KV cache padding.");
 
     GGML_ASSERT(Q->ne[3] == 1);
-
-    GGML_ASSERT(stream_k || ncols2 == 1);
-    const bool use_parallel_blocks = !stream_k && (Q->ne[1] <= ncols1) ? true : false;
 
     ggml_cuda_pool & pool = ctx.pool();
     cudaStream_t main_stream = ctx.stream();
@@ -772,19 +768,38 @@ void launch_fattn(
 
         dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + D) * sizeof(float));
     } else {
-        if (use_parallel_blocks) {
-            const int num_blocks_base = ntiles_x*Q->ne[2]*Q->ne[3];
-            const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
-            const int seqlen_tiles = (K->ne[1] + D - 1) / D;
+        GGML_ASSERT(K->ne[1] % KQ_row_granularity == 0);
+        const int ntiles_KQ = K->ne[1] / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.
 
-            // Determine the number of active blocks per SM
-            int numActiveBlocks = 1;
-            CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&numActiveBlocks, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
+        int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
+        CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
 
-            // we want to keep at least `numActiveBlocks` blocks per SM to improve occupancy.
-            // this kernel operates on `D` tile of seq length. We need to consider how many `D` tiles can be processed in parallel.
-            // If there are not enough tiles to process, we can reduce the number of blocks
-            parallel_blocks = std::max(std::min((nsm * numActiveBlocks) / num_blocks_base, seqlen_tiles), 1);
+        // parallel_blocks should be at least large enough to achieve max. occupancy for a single wave:
+        parallel_blocks = std::max((nsm * max_blocks_per_sm) / ntiles_total, 1);
+
+        // parallel_blocks must not be larger than what the tensor size allows:
+        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
+
+        // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
+        // Test whether parallel_blocks can be set to a higher value for better efficiency.
+        const int blocks_per_wave = nsm * max_blocks_per_sm;
+        int nwaves_best = 0;
+        int efficiency_percent_best = 0;
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+            const int nblocks_total = ntiles_total * parallel_blocks_test;
+            const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
+            const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
+
+            // Stop trying configurations with more waves if we already have good efficiency to avoid excessive overhead.
+            if (efficiency_percent_best >= 90 && nwaves > nwaves_best) {
+                break;
+            }
+
+            if (efficiency_percent > efficiency_percent_best) {
+                nwaves_best = nwaves;
+                efficiency_percent_best = efficiency_percent;
+                parallel_blocks = parallel_blocks_test;
+            }
         }
 
         blocks_num.x = ntiles_x;
