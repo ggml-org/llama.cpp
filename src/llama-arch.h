@@ -69,8 +69,8 @@ enum llm_arch {
     LLM_ARCH_GRANITE_MOE,
     LLM_ARCH_CHAMELEON,
     LLM_ARCH_WAVTOKENIZER_DEC,
-    LLM_ARCH_UNKNOWN,
     LLM_ARCH_PLM,
+    LLM_ARCH_UNKNOWN,
 };
 
 enum llm_kv {
