@@ -3299,6 +3299,12 @@ static uint8_t * ggmlqnn_create_rpc_buffer(qnn_instance * instance, const ggml_t
 }
 
 static void ggmlqnn_load_cfg() {
+    //this function can be called in various scenarios
+    static bool initialized = false;
+    if (initialized) {
+        GGMLQNN_LOG_DEBUG("qnn cfg file already loadded\n");
+        return;
+    }
     char time_string[GGML_QNN_TMPBUF_LEN];
     memset(time_string, 0, GGML_QNN_TMPBUF_LEN);
     ggmlqnn_get_timestring(time_string);
@@ -3333,6 +3339,7 @@ static void ggmlqnn_load_cfg() {
     } else {
         g_qnn_params.precision_mode = 0;
     }
+    initialized = true;
 }
 
 static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn_GraphHandle_t graph_handle,
@@ -4008,8 +4015,7 @@ static ggml_backend_t ggml_backend_qnn_device_init_backend(ggml_backend_dev_t de
     GGMLQNN_LOG_INFO("enter %s\n", __func__);
     size_t dev_index = 0;
 
-    //case-1: special scenario, such as test-backend-ops or other similar scenairo: calling ggml_backend_qnn_device_init_backend directly in user's applicaton
-    //call ggmlqnn_load_cfg accordingly in this place
+    //case-1: test-backend-ops or other similar scenairo: calling ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i)) directly in user's code
     ggmlqnn_load_cfg();
     GGMLQNN_LOG_INFO("user's specified qnn_backend in cfgfile = %d", g_qnn_params.qnn_backend);
     GGMLQNN_LOG_INFO("user's sepcified qnn runtime lib path in cfgfile = %s", g_qnn_params.qnn_runtimelib_path);
@@ -4188,8 +4194,8 @@ ggml_backend_reg_t ggml_backend_qnn_reg() {
     static ggml_backend_reg reg;
     static bool initialized = false;
     GGMLQNN_LOG_DEBUG("enter ggml_backend_qnn_reg");
+
     //case-2: normal scenario, such as llama-cli or UI applicaton
-    //call ggmlqnn_load_cfg accordingly in this place
     ggmlqnn_load_cfg();
     GGMLQNN_LOG_INFO("user's specified qnn_backend=%d", g_qnn_params.qnn_backend);
     GGMLQNN_LOG_INFO("user's sepcified qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
@@ -4238,6 +4244,8 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
     int result = 0;
 
     GGMLQNN_LOG_INFO("enter %s\n", __func__);
+    //case-3: calling ggml_backend_qnn_init() directly in user's code
+    ggmlqnn_load_cfg();
 
     if (nullptr == qnn_lib_path)
         return nullptr;
