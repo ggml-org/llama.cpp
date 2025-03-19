@@ -112,7 +112,7 @@
 #define cudaGraphExecDestroy hipGraphExecDestroy
 #define cudaGraphLaunch hipGraphLaunch
 #define cudaErrorGraphExecUpdateFailure hipErrorGraphExecUpdateFailure
-#define cudaGraphExecUpdateResultInfo hipGraphExecUpdateResult
+#define cudaGraphExecUpdateResult hipGraphExecUpdateResult
 #define cudaGraphNodeType hipGraphNodeType
 #define cudaGraphNodeTypeKernel hipGraphNodeTypeKernel
 #define cudaGraphInstantiate hipGraphInstantiate
