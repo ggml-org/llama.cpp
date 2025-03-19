@@ -394,7 +394,7 @@ def do_test_weather(server: ServerProcess, **kwargs):
 @pytest.mark.slow
 @pytest.mark.parametrize("result_override,n_predict,hf_repo,template_override", [
     (None,                                           128,  "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       "chatml"),
-    # Answers using text, not tools, complaining it wants to measure from the positive Z-axis not x-axis. 
+    # Answers using text, not tools, complaining it wants to measure from the positive Z-axis not x-axis.
     # (None,                                           128,  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M", ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
     (None,                                           128,  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M", "chatml"),
     (None,                                           128,  "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M", None),

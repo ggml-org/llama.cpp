@@ -1706,7 +1706,7 @@ static common_chat_params common_chat_templates_apply_jinja(
             return common_chat_params_init_phi_4(tmpl, params);
         } else {
             LOG_WRN("[%s] Invalid legacy Phi 4 template detected: switching to Generic tool call format. To enable native support, please restart with `--chat-template-file models/template/microsoft-Phi-4-mini-instruct.jinja`", __func__);
-        } 
+        }
     }
 
     // Plain handler (no tools)
