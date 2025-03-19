@@ -105,7 +105,12 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--attention-q-type] [--attention-k-type] [--attention-v-type] [--attention-qkv-type] [--attention-output-type] [--feedforward-up-type] [--feedforward-gate-type] [--feedforward-down-type] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type]\n", executable);
+    printf("       [--token-embedding-type] [--attention-qkv-type] [--attention-q-type] [--attention-k-type] [--attention-v-type] [--attention-qa-type]\n");
+    printf("       [--attention-qb-type] [--attention-kva-type] [--attention-kvb-type] [--attention-output-type] [--feedforward-up-type] [--feedforward-gate-type]\n");
+    printf("       [--feedforward-down-type] [--feedforward-gate-exp-type] [--feedforward-down-exp-type] [--feedforward-up-exp-type] [--feedforward-gate-shexp-type]\n");
+    printf("       [--feedforward-down-shexp-type] [--feedforward-up-shexp-type] [--classifier-type] [--classifier-output-type] [--override-kv]\n");
+    printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -114,14 +119,26 @@ static void usage(const char * executable) {
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
+    printf("  --attention-qkv-type ggml_type: use this ggml_type for the attn_qkv.weight tensor\n");
     printf("  --attention-q-type ggml_type: use this ggml_type for the attn_q.weight tensor\n");
     printf("  --attention-k-type ggml_type: use this ggml_type for the attn_k.weight tensor\n");
     printf("  --attention-v-type ggml_type: use this ggml_type for the attn_v.weight tensor\n");
-    printf("  --attention-qkv-type ggml_type: use this ggml_type for the attn_qkv.weight tensor\n");
+    printf("  --attention-qa-type ggml_type: use this ggml_type for the attn_q_a.weight tensor\n");
+    printf("  --attention-qb-type ggml_type: use this ggml_type for the attn_q_b.weight tensor\n");
+    printf("  --attention-kva-type ggml_type: use this ggml_type for the attn_kv_a_mqa.weight tensor\n");
+    printf("  --attention-kvb-type ggml_type: use this ggml_type for the attn_kv_b.weight tensor\n");
     printf("  --attention-output-type ggml_type: use this ggml_type for the attn_output.weight tensor\n");
     printf("  --feedforward-up-type ggml_type: use this ggml_type for the ffn_up.weight tensor\n");
     printf("  --feedforward-gate-type ggml_type: use this ggml_type for the ffn_gate.weight tensor\n");
     printf("  --feedforward-down-type ggml_type: use this ggml_type for the ffn_down.weight tensor\n");
+    printf("  --feedforward-up-exp-type ggml_type: use this ggml_type for the ffn_up_exp.weight tensor\n");
+    printf("  --feedforward-gate-exp-type ggml_type: use this ggml_type for the ffn_gate_exp.weight tensor\n");
+    printf("  --feedforward-down-exp-type ggml_type: use this ggml_type for the ffn_down_exp.weight tensor\n");
+    printf("  --feedforward-up-shexp-type ggml_type: use this ggml_type for the ffn_up_shexp.weight tensor\n");
+    printf("  --feedforward-gate-shexp-type ggml_type: use this ggml_type for the ffn_gate_shexp.weight tensor\n");
+    printf("  --feedforward-down-shexp-type ggml_type: use this ggml_type for the ffn_down_shexp.weight tensor\n");
+    printf("  --classifier-type ggml_type: use this ggml_type for the cls.weight tensor\n");
+    printf("  --classifier-output-type ggml_type: use this ggml_type for the cls.output.weight tensor\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
