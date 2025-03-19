@@ -7,7 +7,6 @@
 #include <string>
 #include <unordered_map>
 #include <fstream>
-#include <cmath>
 #include <cctype>
 
 struct quant_option {
@@ -16,7 +15,7 @@ struct quant_option {
     std::string desc;
 };
 
-static const std::vector<struct quant_option> QUANT_OPTIONS = {
+static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
     { "Q5_0",     LLAMA_FTYPE_MOSTLY_Q5_0,     " 5.21G, +0.1316 ppl @ Llama-3-8B",  },
