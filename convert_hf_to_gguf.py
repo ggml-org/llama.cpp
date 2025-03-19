@@ -4414,8 +4414,7 @@ class DeepseekV2Model(Model):
             # flatten `list[dict[str, Tensor]]` into `list[str]`
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
-            
+                raise ValueError(f"Unprocessed experts: {experts}")            
 
 @Model.register("PLMForCausalLM")
 class PLMModel(Model):
@@ -4426,7 +4425,6 @@ class PLMModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
         self.gguf_writer.add_key_length(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
@@ -4438,7 +4436,6 @@ class PLMModel(Model):
     
     def prepare_tensors(self):
         super().prepare_tensors()
-
 
 @Model.register("T5WithLMHeadModel")
 @Model.register("T5ForConditionalGeneration")
