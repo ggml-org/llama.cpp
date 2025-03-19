@@ -25,7 +25,7 @@
             {{- message['content'] -}}
         {%- endif -%}  
         {%- for tool_call in message.tool_calls -%}
-            {{- '<|tool_call|>' + (tool_call | tojson) + '<|/tool_call|>' -}}
+            {{- '<|tool_call|>' + (tool_call['function'] | tojson) + '<|/tool_call|>' -}}
         {%- endfor -%}
         {{- '<|end|>' -}}
     {%- endif -%}
