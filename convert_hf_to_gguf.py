@@ -180,7 +180,8 @@ class Model:
             extra = sorted(tensor_names_from_parts.difference(self.tensor_names))
             missing_files = sorted(set(weight_map[n] for n in missing if n in weight_map))
             if len(extra) == 0 and len(missing_files) > 0:
-                raise ValueError(f"Missing or incomplete model files: {missing_files}")
+                raise ValueError(f"Missing or incomplete model files: {missing_files}\n"
+                                 f"Missing tensors: {missing}")
             else:
                 raise ValueError("Mismatch between weight map and model parts for tensor names:\n"
                                  f"Missing tensors: {missing}\n"
@@ -1098,13 +1099,6 @@ class BloomModel(Model):
             logger.info("re-format attention.linear_qkv.bias")
 
         tensors.append((self.map_tensor_name(name), data_torch))
-
-        if name == "word_embeddings.weight":
-            assert self.tensor_names is not None
-
-            # TODO: tie them at runtime, don't duplicate in the model file
-            if all(s not in self.tensor_names for s in ("lm_head.weight", "output.weight")):
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), data_torch))
 
         return tensors
 
@@ -2423,10 +2417,6 @@ class GPT2Model(Model):
 
         tensors.append((new_name, data_torch))
 
-        # note: GPT2 output is tied to (same as) wte in original model
-        if new_name == self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD):
-            tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), data_torch))
-
         return tensors
 
 
@@ -2756,21 +2746,26 @@ class CodeShellModel(Model):
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
         self.gguf_writer.add_rope_scaling_factor(1.0)
 
+    _has_tok_embd = False
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
+        output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
+        tok_embd_name = self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD)
+
         new_name = self.map_tensor_name(name)
 
-        tensors: list[tuple[str, Tensor]] = [(new_name, data_torch)]
+        # assuming token_embd.weight is seen before output.weight
+        if not self._has_tok_embd and new_name == self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT):
+            # even though the tensor file(s) does not contain the word embeddings they are still in the weight map
+            if self.tensor_names and "transformer.wte.weight" in self.tensor_names:
+                logger.debug(f"{tok_embd_name} not found before {output_name}, assuming they are tied")
+                self.tensor_names.remove("transformer.wte.weight")
+        elif new_name == tok_embd_name:
+            self._has_tok_embd = True
 
-        if new_name == self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD):
-            assert self.tensor_names is not None
-
-            if all(s not in self.tensor_names for s in ("lm_head.weight", "output.weight")):
-                # copy tok_embd.weight to output.weight
-                tensors.append((self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), data_torch))
-
-        return tensors
+        return [(new_name, data_torch)]
 
 
 @Model.register("InternLM2ForCausalLM")
