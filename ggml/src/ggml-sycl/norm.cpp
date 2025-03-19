@@ -473,8 +473,13 @@ void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
     const int64_t ne00 = dst->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(dst->src[0]);
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float * dst_dd = static_cast<float *>(dst->data);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
