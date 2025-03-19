@@ -789,14 +789,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     new_type = params->token_embedding_type;
                 } else if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
                     new_type = params->output_tensor_type;
+                } else if (params->attn_qkv_tensor_type < GGML_TYPE_COUNT && name.find("attn_kqv.weight") != std::string::npos) {
+                    new_type = params->attn_qkv_tensor_type;
                 } else if (params->attn_q_tensor_type < GGML_TYPE_COUNT && name.find("attn_q.weight") != std::string::npos) {
                     new_type = params->attn_q_tensor_type;
                 } else if (params->attn_k_tensor_type < GGML_TYPE_COUNT && name.find("attn_k.weight") != std::string::npos) {
                     new_type = params->attn_k_tensor_type;
                 } else if (params->attn_v_tensor_type < GGML_TYPE_COUNT && name.find("attn_v.weight") != std::string::npos) {
                     new_type = params->attn_v_tensor_type;
-                } else if (params->attn_qkv_tensor_type < GGML_TYPE_COUNT && name.find("attn_kqv.weight") != std::string::npos) {
-                    new_type = params->attn_qkv_tensor_type;
+                } else if (params->attn_qa_tensor_type < GGML_TYPE_COUNT && name.find("attn_q_a.weight") != std::string::npos) {
+                    new_type = params->attn_qa_tensor_type;
+                } else if (params->attn_qb_tensor_type < GGML_TYPE_COUNT && name.find("attn_q_b_mqa.weight") != std::string::npos) {
+                    new_type = params->attn_qb_tensor_type;
+                } else if (params->attn_kva_tensor_type < GGML_TYPE_COUNT && name.find("attn_kv_a_mqa.weight") != std::string::npos) {
+                    new_type = params->attn_kva_tensor_type;
+                } else if (params->attn_kvb_tensor_type < GGML_TYPE_COUNT && name.find("attn_kv_b.weight") != std::string::npos) {
+                    new_type = params->attn_kvb_tensor_type;
                 } else if (params->attn_output_tensor_type < GGML_TYPE_COUNT && name.find("attn_output.weight") != std::string::npos) {
                     new_type = params->attn_output_tensor_type;
                 } else if (params->ffn_up_tensor_type < GGML_TYPE_COUNT && name.find("ffn_up.weight") != std::string::npos) {
@@ -805,6 +813,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     new_type = params->ffn_gate_tensor_type;
                 } else if (params->ffn_down_tensor_type < GGML_TYPE_COUNT && name.find("ffn_down.weight") != std::string::npos) {
                     new_type = params->ffn_down_tensor_type;
+                } else if (params->ffn_up_exp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_up_exps.weight") != std::string::npos) {
+                    new_type = params->ffn_up_exp_tensor_type;
+                } else if (params->ffn_gate_exp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_gate_exps.weight") != std::string::npos) {
+                    new_type = params->ffn_gate_exp_tensor_type;
+                } else if (params->ffn_down_exp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_down_exps.weight") != std::string::npos) {
+                    new_type = params->ffn_down_exp_tensor_type;
+                } else if (params->ffn_up_shexp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_up_shexp.weight") != std::string::npos) {
+                    new_type = params->ffn_up_shexp_tensor_type;
+                } else if (params->ffn_gate_shexp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_gate_shexp.weight") != std::string::npos) {
+                    new_type = params->ffn_gate_shexp_tensor_type;
+                } else if (params->ffn_down_shexp_tensor_type < GGML_TYPE_COUNT && name.find("ffn_down_shexp.weight") != std::string::npos) {
+                    new_type = params->ffn_down_shexp_tensor_type;
+                } else if (params->cls_tensor_type < GGML_TYPE_COUNT && name.find("cls.weight") != std::string::npos) {
+                    new_type = params->cls_tensor_type;
+                } else if (params->cls_output_tensor_type < GGML_TYPE_COUNT && name.find("cls.output.weight") != std::string::npos) {
+                    new_type = params->cls_output_tensor_type;
                 } else {
                     new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
                 }
