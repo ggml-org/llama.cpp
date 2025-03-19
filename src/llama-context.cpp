@@ -285,10 +285,14 @@ llama_context::llama_context(
 
     // reserve worst-case graph
     if (!hparams.vocab_only) {
-        uint32_t n_seqs = 1; // TODO: worst-case number of sequences
-        uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+        const uint32_t n_seqs = 1; // TODO: worst-case number of sequences
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
+
+        // restore later
+        // TODO: something cleaner
+        const auto n_outputs_save = n_outputs;
 
         // max number of outputs
         n_outputs = n_tokens;
@@ -340,6 +344,8 @@ llama_context::llama_context(
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
+
+        n_outputs = n_outputs_save;
 
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -1051,12 +1057,21 @@ int llama_context::encode(llama_batch & inp_batch) {
     ggml_backend_sched_reset(sched.get());
     ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
+    const auto causal_attn_org = cparams.causal_attn;
+
+    // always use non-causal attention for encoder graphs
+    // TODO: this is a tmp solution until we have a proper way to support enc-dec models
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/12181#issuecomment-2730451223
+    cparams.causal_attn = false;
+
     auto * gf = graph_init();
     auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_ENCODER);
 
     ggml_backend_sched_alloc_graph(sched.get(), gf);
 
     res->set_inputs(&ubatch);
+
+    cparams.causal_attn = causal_attn_org;
 
     const auto compute_status = graph_compute(gf, n_tokens > 1);
     switch (compute_status) {
@@ -1127,6 +1142,8 @@ int llama_context::encode(llama_batch & inp_batch) {
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
+
+        synchronize();
 
         cross.n_embd = t_embd->ne[0];
         cross.n_enc  = t_embd->ne[1];

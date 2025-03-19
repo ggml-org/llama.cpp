@@ -76,6 +76,10 @@ struct llama_hparams {
     uint32_t time_decay_extra_dim   = 0;
     uint32_t wkv_head_size          = 0;
     uint32_t token_shift_count      = 2;
+    uint32_t n_lora_decay           = 0;
+    uint32_t n_lora_iclr            = 0;
+    uint32_t n_lora_value_res_mix   = 0;
+    uint32_t n_lora_gate            = 0;
 
     float    rope_attn_factor = 1.0f;
     float    rope_freq_base_train;
