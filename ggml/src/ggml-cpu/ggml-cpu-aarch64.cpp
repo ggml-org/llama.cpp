@@ -46,7 +46,7 @@ using block_q8_0x4 = block<8, 4>;
 using block_q8_0x8 = block<8, 8>;
 
 
-struct block_q4_Kx8{
+struct block_q4_Kx8 {
     ggml_half d[8];      // super-block scale for quantized scales
     ggml_half dmin[8];   // super-block scale for quantized mins
     uint8_t scales[96];  // scales and mins, quantized with 6 bits
@@ -55,7 +55,7 @@ struct block_q4_Kx8{
 
 static_assert(sizeof(block_q4_Kx8) == sizeof(ggml_half) * 16 + K_SCALE_SIZE * 8 + QK_K * 4, "wrong q4_K block size/padding");
 
-struct block_q8_Kx4{
+struct block_q8_Kx4 {
     float d[4];              // delta
     int8_t qs[QK_K * 4];     // quants
     int16_t bsums[QK_K / 4]; // sum of quants in groups of 16
@@ -726,7 +726,7 @@ static void quantize_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRIC
             __m256i one = _mm256_set1_epi8(1);
             __m256i bsums_r1 = _mm256_maddubs_epi16(one, sb_h1_interleaved);
 
-            for(int l = 0; l < 3; l++) {
+            for (int l = 0; l < 3; l++) {
                 // Quants value shifted to process next two values from each sub block
                 q0 = _mm256_srli_epi64(q0, 16);
                 q2 = _mm256_srli_epi64(q2, 16);
@@ -753,7 +753,7 @@ static void quantize_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRIC
 
             __m256i bsums_r2 = _mm256_maddubs_epi16(one, sb_h2_interleaved);
 
-            for(int l = 0; l < 3; l++) {
+            for (int l = 0; l < 3; l++) {
                 // Quants value shifted to process next two values from each sub block
                 q1 = _mm256_srli_epi64(q1, 16);
                 q3 = _mm256_srli_epi64(q3, 16);
@@ -802,7 +802,7 @@ static void quantize_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRIC
             y[i].d[row_iter] = amax ? 1/iscale[row_iter] : 0;
         }
 
-        for(int j = 0; j < QK_K / 4; j++) {
+        for (int j = 0; j < QK_K / 4; j++) {
             y[i].bsums[j] = 0;
         }
 
@@ -1526,7 +1526,7 @@ static void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
             sum_minf[j] = 0.0;
         }
         for (int l = 0; l < nb; l++) {
-            for(int sb = 0; sb < 8; sb++) {
+            for (int sb = 0; sb < 8; sb++) {
                 memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
                 utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
                 const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
@@ -1553,14 +1553,14 @@ static void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
                     sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
                 }
             }
-            for(int sb = 0; sb < 8; sb++) {
+            for (int sb = 0; sb < 8; sb++) {
                 uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
-                for(int j = 0; j < ncols_interleaved; j++) {
+                for (int j = 0; j < ncols_interleaved; j++) {
                     sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) * GGML_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
                 }
             }
         }
-        for(int j = 0; j < ncols_interleaved; j++) {
+        for (int j = 0; j < ncols_interleaved; j++) {
             s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
         }
     }
@@ -4780,7 +4780,7 @@ static void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
                 }
             }
             for (int l = 0; l < nb; l++) {
-                for(int sb = 0; sb < 8; sb++) {
+                for (int sb = 0; sb < 8; sb++) {
                     memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
                     utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
                     const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
@@ -4809,7 +4809,7 @@ static void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
                         }
                     }
                 }
-                for(int sb = 0; sb < 8; sb++) {
+                for (int sb = 0; sb < 8; sb++) {
                     uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
                     for(int m = 0; m < 4; m++) {
                         const int16_t *bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
@@ -5040,8 +5040,8 @@ static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_in
     // For eg - First 12 bytes contains 8 scales and 8 mins - each of first sub block from different Q4_K structures
     uint8_t s[8], m[8];
 
-    for(int i = 0; i < 4; i++) {
-        for(int j = 0; j < 8; j++) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 8; j++) {
             s[j] = in[j].scales[i] & 63;
             m[j] = in[j].scales[i + 4] & 63;
         }
@@ -5061,8 +5061,8 @@ static block_q4_Kx8 make_block_q4_Kx8(block_q4_K * in, unsigned int blck_size_in
 
     }
 
-    for(int i = 0; i < 4; i++) {
-        for(int j = 0; j < 8; j++) {
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 8; j++) {
             s[j] = ((in[j].scales[i] & 192) >> 2) | (in[j].scales[i+8] & 15);
             m[j] = ((in[j].scales[i + 4] & 192) >> 2) | ((in[j].scales[i+8] & 240) >> 4);
         }
