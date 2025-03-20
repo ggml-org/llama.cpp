@@ -4141,30 +4141,16 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
         }
     }
     if (src->type == GGML_TYPE_F32) {
-        if (ctx->device->float_controls_rte_fp16) {
-            switch (to) {
-            case GGML_TYPE_Q4_0:
-            case GGML_TYPE_Q4_1:
-            case GGML_TYPE_Q5_0:
-            case GGML_TYPE_Q5_1:
-            case GGML_TYPE_Q8_0:
-            case GGML_TYPE_IQ4_NL:
-                return ctx->device->pipeline_cpy_f32_quant[to];
-            default:
-                break;
-            }
-        } else {
-            switch (to) {
-            case GGML_TYPE_Q4_0:
-            case GGML_TYPE_Q4_1:
-            case GGML_TYPE_Q5_0:
-            case GGML_TYPE_Q5_1:
-            case GGML_TYPE_Q8_0:
-            case GGML_TYPE_IQ4_NL:
-                return ctx->device->pipeline_cpy_f32_quant[to];
-            default:
-                break;
-            }
+        switch (to) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ4_NL:
+            return ctx->device->pipeline_cpy_f32_quant[to];
+        default:
+            break;
         }
     }
 
