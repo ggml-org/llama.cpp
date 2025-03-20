@@ -4415,7 +4415,7 @@ class DeepseekV2Model(Model):
 @Model.register("PLMForCausalLM")
 class PLMModel(Model):
     model_arch = gguf.MODEL_ARCH.PLM
-    
+
     def set_vocab(self):
         self._set_vocab_gpt2()
 
