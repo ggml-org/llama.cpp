@@ -4411,9 +4411,11 @@ class DeepseekV2Model(Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+
 @Model.register("PLMForCausalLM")
 class PLMModel(Model):
     model_arch = gguf.MODEL_ARCH.PLM
+    
     def set_vocab(self):
         self._set_vocab_gpt2()
 
@@ -4431,6 +4433,7 @@ class PLMModel(Model):
 
     def prepare_tensors(self):
         super().prepare_tensors()
+
 
 @Model.register("T5WithLMHeadModel")
 @Model.register("T5ForConditionalGeneration")
