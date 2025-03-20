@@ -901,24 +901,24 @@ inline static void __wasm_f16x4_store(ggml_fp16_t * p, v128_t x) {
 #define GGML_F16x4_FMA         GGML_F32x4_FMA
 #define GGML_F16x4_ADD         wasm_f32x4_add
 #define GGML_F16x4_MUL         wasm_f32x4_mul
-#define GGML_F16x4_REDUCE(res, x)                  \
-{                                                  \
-    int offset = GGML_F16_ARR >> 1;                \
-    for (int i = 0; i < offset; ++i) {             \
-        x[i] = wasm_f32x4_add(x[i], x[offset+i]);  \
-    }                                              \
-    offset >>= 1;                                  \
-    for (int i = 0; i < offset; ++i) {             \
-        x[i] = wasm_f32x4_add(x[i], x[offset+i]);  \
-    }                                              \
-    offset >>= 1;                                  \
-    for (int i = 0; i < offset; ++i) {             \
-        x[i] = wasm_f32x4_add(x[i], x[offset+i]);  \
-    }                                              \
-    res = wasm_f32x4_extract_lane(x[0], 0) +       \
-          wasm_f32x4_extract_lane(x[0], 1) +       \
-          wasm_f32x4_extract_lane(x[0], 2) +       \
-          wasm_f32x4_extract_lane(x[0], 3);        \
+#define GGML_F16x4_REDUCE(res, x)                           \
+{                                                           \
+    int offset = GGML_F16_ARR >> 1;                         \
+    for (int i = 0; i < offset; ++i) {                      \
+        x[i] = wasm_f32x4_add(x[i], x[offset+i]);           \
+    }                                                       \
+    offset >>= 1;                                           \
+    for (int i = 0; i < offset; ++i) {                      \
+        x[i] = wasm_f32x4_add(x[i], x[offset+i]);           \
+    }                                                       \
+    offset >>= 1;                                           \
+    for (int i = 0; i < offset; ++i) {                      \
+        x[i] = wasm_f32x4_add(x[i], x[offset+i]);           \
+    }                                                       \
+    res = (ggml_float) (wasm_f32x4_extract_lane(x[0], 0) +  \
+          wasm_f32x4_extract_lane(x[0], 1) +                \
+          wasm_f32x4_extract_lane(x[0], 2) +                \
+          wasm_f32x4_extract_lane(x[0], 3));                \
 }
 
 #define GGML_F16_VEC                GGML_F16x4
