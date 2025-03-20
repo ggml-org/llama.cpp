@@ -297,14 +297,15 @@ export interface OptimizedTextareaValue {
 // This is a workaround to prevent the textarea from re-rendering when the inner content changes
 // See https://github.com/ggml-org/llama.cpp/pull/12299
 function useOptimizedTextarea(initValue: string): OptimizedTextareaValue {
-  const [savedInitValue] = useState<string>(initValue);
+  const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (textareaRef.current) {
+    if (textareaRef.current && savedInitValue) {
       textareaRef.current.value = savedInitValue;
+      setSavedInitValue('');
     }
-  }, [textareaRef, savedInitValue]);
+  }, [textareaRef, savedInitValue, setSavedInitValue]);
 
   return {
     value: () => {
