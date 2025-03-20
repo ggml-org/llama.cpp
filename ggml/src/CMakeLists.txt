@@ -325,6 +325,10 @@ if (CMAKE_SYSTEM_NAME MATCHES "Android")
     target_link_libraries(ggml-base PRIVATE dl)
 endif()
 
+if(CMAKE_SYSTEM_NAME MATCHES "visionOS")
+    target_compile_definitions(ggml-base PUBLIC _DARWIN_C_SOURCE)
+endif()
+
 if (BUILD_SHARED_LIBS)
     foreach (target ggml-base ggml)
         set_target_properties(${target} PROPERTIES POSITION_INDEPENDENT_CODE ON)

@@ -2,6 +2,7 @@
 #if !defined(GGML_TYPES_COMP)
 #define GGML_TYPES_COMP
 
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
@@ -310,6 +311,12 @@ struct block_iq1_m {
     uint8_t  qs[QUANT_K_IQ1_M/8];
     uint8_t  qh[QUANT_K_IQ1_M/16];
     uint16_t scales[QUANT_K_IQ1_M/64];
+};
+
+struct block_iq1_m_packed64 {
+    uint64_t  qs[QUANT_K_IQ1_M/8/8];
+    uint64_t  qh[QUANT_K_IQ1_M/16/8];
+    uint64_t scales;
 };
 
 #if defined(DATA_A_IQ1_S)
