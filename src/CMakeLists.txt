@@ -15,18 +15,21 @@ add_library(llama
             llama-chat.cpp
             llama-context.cpp
             llama-grammar.cpp
+            llama-graph.cpp
             llama-hparams.cpp
             llama-impl.cpp
+            llama-io.cpp
             llama-kv-cache.cpp
+            llama-memory.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
             llama-model.cpp
             llama-quant.cpp
             llama-sampling.cpp
             llama-vocab.cpp
-            unicode.h
-            unicode.cpp
             unicode-data.cpp
+            unicode.cpp
+            unicode.h
             )
 
 target_include_directories(llama PUBLIC . ../include ../common)

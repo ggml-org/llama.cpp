@@ -7,9 +7,8 @@
     ./scripts/get_chat_template.py model_id [variant]
 
   Examples:
-    ./scripts/get_chat_template.py NousResearch/Meta-Llama-3-8B-Instruct
-    ./scripts/get_chat_template.py NousResearch/Hermes-3-Llama-3.1-8B tool_use
-    ./scripts/get_chat_template.py meta-llama/Llama-3.2-3B-Instruct
+    ./scripts/get_chat_template.py CohereForAI/c4ai-command-r-plus tool_use
+    ./scripts/get_chat_template.py microsoft/Phi-3.5-mini-instruct
 '''
 
 import json
@@ -22,7 +21,7 @@ def get_chat_template(model_id, variant=None):
         # Use huggingface_hub library if available.
         # Allows access to gated models if the user has access and ran `huggingface-cli login`.
         from huggingface_hub import hf_hub_download
-        with open(hf_hub_download(repo_id=model_id, filename="tokenizer_config.json")) as f:
+        with open(hf_hub_download(repo_id=model_id, filename="tokenizer_config.json"), encoding="utf-8") as f:
             config_str = f.read()
     except ImportError:
         import requests

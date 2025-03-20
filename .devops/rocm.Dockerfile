@@ -11,7 +11,7 @@ ARG BASE_ROCM_DEV_CONTAINER=rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-co
 FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
-# List from https://github.com/ggerganov/llama.cpp/pull/1087#issuecomment-1682807878
+# List from https://github.com/ggml-org/llama.cpp/pull/1087#issuecomment-1682807878
 # This is mostly tied to rocBLAS supported archs.
 # gfx803, gfx900, gfx1032, gfx1101, gfx1102,not officialy supported
 # gfx906 is deprecated

@@ -69,22 +69,22 @@ Several quantization methods are supported. They differ in the resulting model d
 |   13B | ms/tok @ 8th |      - |     73 |     82 |     98 |    105 |    128 |
 |   13B | bits/weight  |   16.0 |    4.5 |    5.0 |    5.5 |    6.0 |    8.5 |
 
-- [k-quants](https://github.com/ggerganov/llama.cpp/pull/1684)
+- [k-quants](https://github.com/ggml-org/llama.cpp/pull/1684)
 - recent k-quants improvements and new i-quants
-  - [#2707](https://github.com/ggerganov/llama.cpp/pull/2707)
-  - [#2807](https://github.com/ggerganov/llama.cpp/pull/2807)
-  - [#4773 - 2-bit i-quants (inference)](https://github.com/ggerganov/llama.cpp/pull/4773)
-  - [#4856 - 2-bit i-quants (inference)](https://github.com/ggerganov/llama.cpp/pull/4856)
-  - [#4861 - importance matrix](https://github.com/ggerganov/llama.cpp/pull/4861)
-  - [#4872 - MoE models](https://github.com/ggerganov/llama.cpp/pull/4872)
-  - [#4897 - 2-bit quantization](https://github.com/ggerganov/llama.cpp/pull/4897)
-  - [#4930 - imatrix for all k-quants](https://github.com/ggerganov/llama.cpp/pull/4930)
-  - [#4951 - imatrix on the GPU](https://github.com/ggerganov/llama.cpp/pull/4957)
-  - [#4969 - imatrix for legacy quants](https://github.com/ggerganov/llama.cpp/pull/4969)
-  - [#4996 - k-quants tuning](https://github.com/ggerganov/llama.cpp/pull/4996)
-  - [#5060 - Q3_K_XS](https://github.com/ggerganov/llama.cpp/pull/5060)
-  - [#5196 - 3-bit i-quants](https://github.com/ggerganov/llama.cpp/pull/5196)
-  - [quantization tuning](https://github.com/ggerganov/llama.cpp/pull/5320), [another one](https://github.com/ggerganov/llama.cpp/pull/5334), and [another one](https://github.com/ggerganov/llama.cpp/pull/5361)
+  - [#2707](https://github.com/ggml-org/llama.cpp/pull/2707)
+  - [#2807](https://github.com/ggml-org/llama.cpp/pull/2807)
+  - [#4773 - 2-bit i-quants (inference)](https://github.com/ggml-org/llama.cpp/pull/4773)
+  - [#4856 - 2-bit i-quants (inference)](https://github.com/ggml-org/llama.cpp/pull/4856)
+  - [#4861 - importance matrix](https://github.com/ggml-org/llama.cpp/pull/4861)
+  - [#4872 - MoE models](https://github.com/ggml-org/llama.cpp/pull/4872)
+  - [#4897 - 2-bit quantization](https://github.com/ggml-org/llama.cpp/pull/4897)
+  - [#4930 - imatrix for all k-quants](https://github.com/ggml-org/llama.cpp/pull/4930)
+  - [#4951 - imatrix on the GPU](https://github.com/ggml-org/llama.cpp/pull/4957)
+  - [#4969 - imatrix for legacy quants](https://github.com/ggml-org/llama.cpp/pull/4969)
+  - [#4996 - k-quants tuning](https://github.com/ggml-org/llama.cpp/pull/4996)
+  - [#5060 - Q3_K_XS](https://github.com/ggml-org/llama.cpp/pull/5060)
+  - [#5196 - 3-bit i-quants](https://github.com/ggml-org/llama.cpp/pull/5196)
+  - [quantization tuning](https://github.com/ggml-org/llama.cpp/pull/5320), [another one](https://github.com/ggml-org/llama.cpp/pull/5334), and [another one](https://github.com/ggml-org/llama.cpp/pull/5361)
 
 **Llama 2 7B**
 

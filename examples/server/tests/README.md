@@ -48,7 +48,7 @@ DEBUG=1 ./tests.sh -s -v -x
 To run all the tests in a file:
 
 ```shell
-./tests.sh unit/test_chat_completion.py.py -v -x
+./tests.sh unit/test_chat_completion.py -v -x
 ```
 
 To run a single test:

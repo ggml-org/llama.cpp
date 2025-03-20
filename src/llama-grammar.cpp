@@ -345,194 +345,194 @@ const char * llama_grammar_parser::parse_sequence(
     size_t last_sym_start = rule.size();
     const char * pos = src;
 
-        auto handle_repetitions = [&](int min_times, int max_times) {
+    auto handle_repetitions = [&](int min_times, int max_times) {
 
-            if (last_sym_start == rule.size()) {
-                throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
-            }
+        if (last_sym_start == rule.size()) {
+            throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
+        }
 
-            // apply transformation to previous symbol (last_sym_start to end) according to
-            // the following rewrite rules:
-            // S{m,n} --> S S S (m times) S'(n-m)
-            //            S'(x)   ::= S S'(x-1) |
-            //            (... n-m definitions of these S' rules ...)
-            //            S'(1)   ::= S |
-            // S{m,} -->  S S S (m times) S'
-            //            S'     ::= S S' |
-            // S*     --> S{0,}
-            //        --> S'     ::= S S' |
-            // S+     --> S{1,}
-            //        --> S S'
-            //            S'     ::= S S' |
-            // S?     --> S{0,1}
-            //        --> S'
-            //            S'     ::= S |
+        // apply transformation to previous symbol (last_sym_start to end) according to
+        // the following rewrite rules:
+        // S{m,n} --> S S S (m times) S'(n-m)
+        //            S'(x)   ::= S S'(x-1) |
+        //            (... n-m definitions of these S' rules ...)
+        //            S'(1)   ::= S |
+        // S{m,} -->  S S S (m times) S'
+        //            S'     ::= S S' |
+        // S*     --> S{0,}
+        //        --> S'     ::= S S' |
+        // S+     --> S{1,}
+        //        --> S S'
+        //            S'     ::= S S' |
+        // S?     --> S{0,1}
+        //        --> S'
+        //            S'     ::= S |
 
-            llama_grammar_rule prev_rule(rule.begin() + last_sym_start, rule.end());
-            if (min_times == 0) {
-                rule.resize(last_sym_start);
-            } else {
-                // Repeat the previous elements (min_times - 1) times
-                for (int i = 1; i < min_times; i++) {
-                    rule.insert(rule.end(), prev_rule.begin(), prev_rule.end());
-                }
-            }
-
-            uint32_t last_rec_rule_id = 0;
-            auto n_opt = max_times < 0 ? 1 : max_times - min_times;
-
-            llama_grammar_rule rec_rule(prev_rule);
-            for (int i = 0; i < n_opt; i++) {
-                rec_rule.resize(prev_rule.size());
-                uint32_t rec_rule_id = generate_symbol_id( rule_name);
-                if (i > 0 || max_times < 0) {
-                    rec_rule.push_back({LLAMA_GRETYPE_RULE_REF, max_times < 0 ? rec_rule_id : last_rec_rule_id});
-                }
-                rec_rule.push_back({LLAMA_GRETYPE_ALT, 0});
-                rec_rule.push_back({LLAMA_GRETYPE_END, 0});
-                add_rule( rec_rule_id, rec_rule);
-                last_rec_rule_id = rec_rule_id;
-            }
-            if (n_opt > 0) {
-                rule.push_back({LLAMA_GRETYPE_RULE_REF, last_rec_rule_id});
-            }
-        };
-
-        while (*pos) {
-            if (*pos == '"') { // literal string
-                pos++;
-                last_sym_start = rule.size();
-                while (*pos != '"') {
-                    if (!*pos) {
-                        throw std::runtime_error("unexpected end of input");
-                    }
-                    auto char_pair = parse_char(pos);
-                         pos       = char_pair.second;
-                    rule.push_back({LLAMA_GRETYPE_CHAR, char_pair.first});
-                }
-                pos = parse_space(pos + 1, is_nested);
-            } else if (*pos == '[') { // char range(s)
-                pos++;
-                enum llama_gretype start_type = LLAMA_GRETYPE_CHAR;
-                if (*pos == '^') {
-                    pos++;
-                    start_type = LLAMA_GRETYPE_CHAR_NOT;
-                }
-                last_sym_start = rule.size();
-                while (*pos != ']') {
-                    if (!*pos) {
-                        throw std::runtime_error("unexpected end of input");
-                    }
-                    auto char_pair = parse_char(pos);
-                         pos       = char_pair.second;
-                    enum llama_gretype type = last_sym_start < rule.size()
-                        ? LLAMA_GRETYPE_CHAR_ALT
-                        : start_type;
-
-                    rule.push_back({type, char_pair.first});
-                    if (pos[0] == '-' && pos[1] != ']') {
-                        if (!pos[1]) {
-                            throw std::runtime_error("unexpected end of input");
-                        }
-                        auto endchar_pair = parse_char(pos + 1);
-                             pos          = endchar_pair.second;
-                        rule.push_back({LLAMA_GRETYPE_CHAR_RNG_UPPER, endchar_pair.first});
-                    }
-                }
-                pos = parse_space(pos + 1, is_nested);
-            } else if (is_word_char(*pos)) { // rule reference
-                const char * name_end    = parse_name(pos);
-                uint32_t ref_rule_id = get_symbol_id(pos, name_end - pos);
-                pos = parse_space(name_end, is_nested);
-                last_sym_start = rule.size();
-                rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
-            } else if (*pos == '(') { // grouping
-                // parse nested alternates into synthesized rule
-                pos = parse_space(pos + 1, true);
-                uint32_t sub_rule_id = generate_symbol_id(rule_name);
-                pos = parse_alternates(pos, rule_name, sub_rule_id, true);
-                last_sym_start = rule.size();
-                // output reference to synthesized rule
-                rule.push_back({LLAMA_GRETYPE_RULE_REF, sub_rule_id});
-                if (*pos != ')') {
-                    throw std::runtime_error(std::string("expecting ')' at ") + pos);
-                }
-                pos = parse_space(pos + 1, is_nested);
-            } else if (*pos == '.') { // any char
-                last_sym_start = rule.size();
-                rule.push_back({LLAMA_GRETYPE_CHAR_ANY, 0});
-                pos = parse_space(pos + 1, is_nested);
-            } else if (*pos == '*') {
-                pos = parse_space(pos + 1, is_nested);
-                handle_repetitions(0, -1);
-            } else if (*pos == '+') {
-                pos = parse_space(pos + 1, is_nested);
-                handle_repetitions(1, -1);
-            } else if (*pos == '?') {
-                pos = parse_space(pos + 1, is_nested);
-                handle_repetitions(0, 1);
-            } else if (*pos == '{') {
-                pos = parse_space(pos + 1, is_nested);
-
-                if (!is_digit_char(*pos)) {
-                    throw std::runtime_error(std::string("expecting an int at ") + pos);
-                }
-                const char * int_end = parse_int(pos);
-                int min_times = std::stoul(std::string(pos, int_end - pos));
-                pos = parse_space(int_end, is_nested);
-
-                int max_times = -1;
-
-                if (*pos == '}') {
-                    max_times = min_times;
-                    pos = parse_space(pos + 1, is_nested);
-                } else if (*pos == ',') {
-                    pos = parse_space(pos + 1, is_nested);
-
-                    if (is_digit_char(*pos)) {
-                        const char * int_end = parse_int(pos);
-                        max_times = std::stoul(std::string(pos, int_end - pos));
-                        pos = parse_space(int_end, is_nested);
-                    }
-
-                    if (*pos != '}') {
-                        throw std::runtime_error(std::string("expecting '}' at ") + pos);
-                    }
-                    pos = parse_space(pos + 1, is_nested);
-                } else {
-                    throw std::runtime_error(std::string("expecting ',' at ") + pos);
-                }
-                handle_repetitions(min_times, max_times);
-            } else {
-                break;
+        llama_grammar_rule prev_rule(rule.begin() + last_sym_start, rule.end());
+        if (min_times == 0) {
+            rule.resize(last_sym_start);
+        } else {
+            // Repeat the previous elements (min_times - 1) times
+            for (int i = 1; i < min_times; i++) {
+                rule.insert(rule.end(), prev_rule.begin(), prev_rule.end());
             }
         }
-        return pos;
+
+        uint32_t last_rec_rule_id = 0;
+        auto n_opt = max_times < 0 ? 1 : max_times - min_times;
+
+        llama_grammar_rule rec_rule(prev_rule);
+        for (int i = 0; i < n_opt; i++) {
+            rec_rule.resize(prev_rule.size());
+            uint32_t rec_rule_id = generate_symbol_id( rule_name);
+            if (i > 0 || max_times < 0) {
+                rec_rule.push_back({LLAMA_GRETYPE_RULE_REF, max_times < 0 ? rec_rule_id : last_rec_rule_id});
+            }
+            rec_rule.push_back({LLAMA_GRETYPE_ALT, 0});
+            rec_rule.push_back({LLAMA_GRETYPE_END, 0});
+            add_rule( rec_rule_id, rec_rule);
+            last_rec_rule_id = rec_rule_id;
+        }
+        if (n_opt > 0) {
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, last_rec_rule_id});
+        }
+    };
+
+    while (*pos) {
+        if (*pos == '"') { // literal string
+            pos++;
+            last_sym_start = rule.size();
+            while (*pos != '"') {
+                if (!*pos) {
+                    throw std::runtime_error("unexpected end of input");
+                }
+                auto char_pair = parse_char(pos);
+                     pos       = char_pair.second;
+                rule.push_back({LLAMA_GRETYPE_CHAR, char_pair.first});
+            }
+            pos = parse_space(pos + 1, is_nested);
+        } else if (*pos == '[') { // char range(s)
+            pos++;
+            enum llama_gretype start_type = LLAMA_GRETYPE_CHAR;
+            if (*pos == '^') {
+                pos++;
+                start_type = LLAMA_GRETYPE_CHAR_NOT;
+            }
+            last_sym_start = rule.size();
+            while (*pos != ']') {
+                if (!*pos) {
+                    throw std::runtime_error("unexpected end of input");
+                }
+                auto char_pair = parse_char(pos);
+                     pos       = char_pair.second;
+                enum llama_gretype type = last_sym_start < rule.size()
+                    ? LLAMA_GRETYPE_CHAR_ALT
+                    : start_type;
+
+                rule.push_back({type, char_pair.first});
+                if (pos[0] == '-' && pos[1] != ']') {
+                    if (!pos[1]) {
+                        throw std::runtime_error("unexpected end of input");
+                    }
+                    auto endchar_pair = parse_char(pos + 1);
+                         pos          = endchar_pair.second;
+                    rule.push_back({LLAMA_GRETYPE_CHAR_RNG_UPPER, endchar_pair.first});
+                }
+            }
+            pos = parse_space(pos + 1, is_nested);
+        } else if (is_word_char(*pos)) { // rule reference
+            const char * name_end    = parse_name(pos);
+            uint32_t ref_rule_id = get_symbol_id(pos, name_end - pos);
+            pos = parse_space(name_end, is_nested);
+            last_sym_start = rule.size();
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, ref_rule_id});
+        } else if (*pos == '(') { // grouping
+            // parse nested alternates into synthesized rule
+            pos = parse_space(pos + 1, true);
+            uint32_t sub_rule_id = generate_symbol_id(rule_name);
+            pos = parse_alternates(pos, rule_name, sub_rule_id, true);
+            last_sym_start = rule.size();
+            // output reference to synthesized rule
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, sub_rule_id});
+            if (*pos != ')') {
+                throw std::runtime_error(std::string("expecting ')' at ") + pos);
+            }
+            pos = parse_space(pos + 1, is_nested);
+        } else if (*pos == '.') { // any char
+            last_sym_start = rule.size();
+            rule.push_back({LLAMA_GRETYPE_CHAR_ANY, 0});
+            pos = parse_space(pos + 1, is_nested);
+        } else if (*pos == '*') {
+            pos = parse_space(pos + 1, is_nested);
+            handle_repetitions(0, -1);
+        } else if (*pos == '+') {
+            pos = parse_space(pos + 1, is_nested);
+            handle_repetitions(1, -1);
+        } else if (*pos == '?') {
+            pos = parse_space(pos + 1, is_nested);
+            handle_repetitions(0, 1);
+        } else if (*pos == '{') {
+            pos = parse_space(pos + 1, is_nested);
+
+            if (!is_digit_char(*pos)) {
+                throw std::runtime_error(std::string("expecting an int at ") + pos);
+            }
+            const char * int_end = parse_int(pos);
+            int min_times = std::stoul(std::string(pos, int_end - pos));
+            pos = parse_space(int_end, is_nested);
+
+            int max_times = -1;
+
+            if (*pos == '}') {
+                max_times = min_times;
+                pos = parse_space(pos + 1, is_nested);
+            } else if (*pos == ',') {
+                pos = parse_space(pos + 1, is_nested);
+
+                if (is_digit_char(*pos)) {
+                    const char * int_end = parse_int(pos);
+                    max_times = std::stoul(std::string(pos, int_end - pos));
+                    pos = parse_space(int_end, is_nested);
+                }
+
+                if (*pos != '}') {
+                    throw std::runtime_error(std::string("expecting '}' at ") + pos);
+                }
+                pos = parse_space(pos + 1, is_nested);
+            } else {
+                throw std::runtime_error(std::string("expecting ',' at ") + pos);
+            }
+            handle_repetitions(min_times, max_times);
+        } else {
+            break;
+        }
     }
+    return pos;
+}
 
 const char * llama_grammar_parser::parse_rule(const char * src) {
-        const char * name_end = parse_name(src);
-        const char * pos      = parse_space(name_end, false);
-        size_t       name_len = name_end - src;
-        uint32_t     rule_id  = get_symbol_id(src, name_len);
-        const std::string name(src, name_len);
+    const char * name_end = parse_name(src);
+    const char * pos      = parse_space(name_end, false);
+    size_t       name_len = name_end - src;
+    uint32_t     rule_id  = get_symbol_id(src, name_len);
+    const std::string name(src, name_len);
 
-        if (!(pos[0] == ':' && pos[1] == ':' && pos[2] == '=')) {
-            throw std::runtime_error(std::string("expecting ::= at ") + pos);
-        }
-        pos = parse_space(pos + 3, true);
-
-        pos = parse_alternates(pos, name, rule_id, false);
-
-        if (*pos == '\r') {
-            pos += pos[1] == '\n' ? 2 : 1;
-        } else if (*pos == '\n') {
-            pos++;
-        } else if (*pos) {
-            throw std::runtime_error(std::string("expecting newline or end at ") + pos);
-        }
-        return parse_space(pos, true);
+    if (!(pos[0] == ':' && pos[1] == ':' && pos[2] == '=')) {
+        throw std::runtime_error(std::string("expecting ::= at ") + pos);
     }
+    pos = parse_space(pos + 3, true);
+
+    pos = parse_alternates(pos, name, rule_id, false);
+
+    if (*pos == '\r') {
+        pos += pos[1] == '\n' ? 2 : 1;
+    } else if (*pos == '\n') {
+        pos++;
+    } else if (*pos) {
+        throw std::runtime_error(std::string("expecting newline or end at ") + pos);
+    }
+    return parse_space(pos, true);
+}
 
 bool llama_grammar_parser::parse(const char * src) {
     try {
@@ -969,7 +969,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .awaiting_trigger = */ false,
         /* .trigger_buffer = */   "",
         /* .trigger_tokens   = */ {},
-        /* .trigger_words    = */ {},
+        /* .trigger_patterns    = */ {},
     };
 }
 
@@ -978,19 +978,15 @@ struct llama_grammar * llama_grammar_init_impl(
                       const char * grammar_str,
                       const char * grammar_root,
                               bool lazy,
-                     const char ** trigger_words,
-                            size_t num_trigger_words,
+                     const char ** trigger_patterns,
+                            size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
                             size_t num_trigger_tokens) {
     llama_grammar_parser parser;
 
     // if there is a grammar, parse it
-    if (!parser.parse(grammar_str)) {
-        return nullptr;
-    }
-
-    // will be empty (default) if there are parse errors
-    if (parser.rules.empty()) {
+    // rules will be empty (default) if there are parse errors
+    if (!parser.parse(grammar_str) || parser.rules.empty()) {
         fprintf(stderr, "%s: failed to parse grammar\n", __func__);
         return nullptr;
     }
@@ -1054,14 +1050,16 @@ struct llama_grammar * llama_grammar_init_impl(
     } while (true);
 
     std::vector<llama_token>    vec_trigger_tokens;
-    std::vector<std::string> vec_trigger_words;
+    std::vector<llama_grammar_trigger_pattern> vec_trigger_patterns;
     for (size_t i = 0; i < num_trigger_tokens; i++) {
         GGML_ASSERT(trigger_tokens != nullptr);
         vec_trigger_tokens.push_back(trigger_tokens[i]);
     }
-    for (size_t i = 0; i < num_trigger_words; i++) {
-        GGML_ASSERT(trigger_words != nullptr);
-        vec_trigger_words.push_back(trigger_words[i]);
+    for (size_t i = 0; i < num_trigger_patterns; i++) {
+        GGML_ASSERT(trigger_patterns != nullptr);
+        auto & trigger = vec_trigger_patterns.emplace_back();
+        trigger.pattern = trigger_patterns[i];
+        trigger.regex = std::regex(trigger.pattern);
     }
 
     // Important: vec_rules has to be moved here, not copied, because stacks contains
@@ -1076,7 +1074,7 @@ struct llama_grammar * llama_grammar_init_impl(
         /* .awaiting_trigger = */ lazy,
         /* .trigger_buffer = */   "",
         std::move(vec_trigger_tokens),
-        std::move(vec_trigger_words),
+        std::move(vec_trigger_patterns),
     };
 }
 
@@ -1089,7 +1087,7 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
 }
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
-    llama_grammar * result = new llama_grammar {
+    auto * result = new llama_grammar {
         grammar.vocab,
         grammar.rules,
         grammar.stacks,
@@ -1098,7 +1096,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.awaiting_trigger,
         grammar.trigger_buffer,
         grammar.trigger_tokens,
-        grammar.trigger_words,
+        grammar.trigger_patterns,
     };
 
     // redirect elements in stacks to point to new rules
@@ -1173,20 +1171,22 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
             LLAMA_LOG_DEBUG("Grammar triggered on token %u (`%s`)", token, piece.c_str());
             return;
         } else {
-            // TODO: consider a smarter incremental substring search algorithm (store last position to search from).
             grammar.trigger_buffer += piece;
-            for (const auto & word : grammar.trigger_words) {
-                auto pos = grammar.trigger_buffer.find(word);
-                if (pos != std::string::npos) {
+
+            std::smatch match;
+            for (const auto & trigger_pattern : grammar.trigger_patterns) {
+                if (std::regex_match(grammar.trigger_buffer, match, trigger_pattern.regex)) {
                     grammar.awaiting_trigger = false;
-                    auto constrained_str = grammar.trigger_buffer.substr(pos);
+                    // get from the first match to the end of the string
+                    auto constrained_str = grammar.trigger_buffer.substr(match.position(1));
+                    // std::string constrained_str(match[1].first, grammar.trigger_buffer.end());
                     grammar.trigger_buffer.clear();
                     llama_grammar_accept_str(grammar, constrained_str);
-                    LLAMA_LOG_DEBUG("Grammar triggered on word `%s`", word.c_str());
+                    LLAMA_LOG_DEBUG("Grammar triggered on regex: '%s'\n", constrained_str.c_str());
                     return;
                 }
             }
-            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`) (buffer: `%s`)\n", token, piece.c_str(), grammar.trigger_buffer.c_str());
+            LLAMA_LOG_DEBUG("Grammar still awaiting trigger after token %d (`%s`)\n", token, piece.c_str());
             return;
         }
     }

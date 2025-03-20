@@ -1,4 +1,5 @@
 include(CheckCXXCompilerFlag)
+include("../cmake/common.cmake")
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
 
@@ -23,33 +24,6 @@ if (NOT MSVC)
         link_libraries     (-fsanitize=undefined)
     endif()
 endif()
-
-function(ggml_get_flags CCID CCVER)
-    set(C_FLAGS "")
-    set(CXX_FLAGS "")
-
-    if (CCID MATCHES "Clang")
-        set(C_FLAGS   -Wunreachable-code-break -Wunreachable-code-return)
-        set(CXX_FLAGS -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi)
-
-        if (
-            (CCID STREQUAL "Clang"      AND CCVER VERSION_GREATER_EQUAL 3.8.0) OR
-            (CCID STREQUAL "AppleClang" AND CCVER VERSION_GREATER_EQUAL 7.3.0)
-        )
-            list(APPEND C_FLAGS -Wdouble-promotion)
-        endif()
-    elseif (CCID STREQUAL "GNU")
-        set(C_FLAGS   -Wdouble-promotion)
-        set(CXX_FLAGS -Wno-array-bounds)
-
-        if (CCVER VERSION_GREATER_EQUAL 8.1.0)
-            list(APPEND CXX_FLAGS -Wextra-semi)
-        endif()
-    endif()
-
-    set(GF_C_FLAGS   ${C_FLAGS}   PARENT_SCOPE)
-    set(GF_CXX_FLAGS ${CXX_FLAGS} PARENT_SCOPE)
-endfunction()
 
 if (GGML_FATAL_WARNINGS)
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -226,6 +200,9 @@ add_library(ggml-base
             gguf.cpp)
 
 target_include_directories(ggml-base PRIVATE .)
+if (GGML_BACKEND_DL)
+    target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
+endif()
 
 add_library(ggml
             ggml-backend-reg.cpp)
@@ -233,7 +210,7 @@ add_library(ggml
 target_link_libraries(ggml PUBLIC ggml-base)
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    target_link_libraries(ggml PRIVATE dl)
+    target_link_libraries(ggml PRIVATE dl stdc++fs)
 endif()
 
 function(ggml_add_backend_library backend)
@@ -286,7 +263,7 @@ function(ggml_add_cpu_backend_variant tag_name)
     set(GGML_CPU_TAG_NAME ${tag_name})
     # other: OPENMP LLAMAFILE CPU_HBM
     foreach (feat NATIVE
-                  AVX AVX2 AVX_VNNI FMA F16C
+                  AVX AVX2 BMI2 AVX_VNNI FMA F16C
                   AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16
                   AMX_TILE AMX_INT8 AMX_BF16)
         set(GGML_${feat} OFF)
@@ -306,13 +283,13 @@ if (GGML_CPU_ALL_VARIANTS)
         message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS requires GGML_BACKEND_DL")
     endif()
     ggml_add_cpu_backend_variant(sandybridge    AVX)
-    ggml_add_cpu_backend_variant(haswell        AVX F16C AVX2 FMA)
-    ggml_add_cpu_backend_variant(skylakex       AVX F16C AVX2 FMA AVX512)
-    ggml_add_cpu_backend_variant(icelake        AVX F16C AVX2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
-    ggml_add_cpu_backend_variant(alderlake      AVX F16C AVX2 FMA AVX_VNNI)
+    ggml_add_cpu_backend_variant(haswell        AVX F16C AVX2 BMI2 FMA)
+    ggml_add_cpu_backend_variant(skylakex       AVX F16C AVX2 BMI2 FMA AVX512)
+    ggml_add_cpu_backend_variant(icelake        AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
+    ggml_add_cpu_backend_variant(alderlake      AVX F16C AVX2 BMI2 FMA AVX_VNNI)
     if (NOT MSVC)
         # MSVC doesn't support AMX
-        ggml_add_cpu_backend_variant(sapphirerapids AVX F16C AVX2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
+        ggml_add_cpu_backend_variant(sapphirerapids AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
     endif()
 elseif (GGML_CPU)
     ggml_add_cpu_backend_variant_impl("")
@@ -346,6 +323,10 @@ endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Android")
     target_link_libraries(ggml-base PRIVATE dl)
+endif()
+
+if(CMAKE_SYSTEM_NAME MATCHES "visionOS")
+    target_compile_definitions(ggml-base PUBLIC _DARWIN_C_SOURCE)
 endif()
 
 if (BUILD_SHARED_LIBS)

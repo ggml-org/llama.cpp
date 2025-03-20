@@ -6,7 +6,7 @@ import re
 import torch
 import numpy as np
 from gguf import *
-from transformers import CLIPModel, CLIPProcessor, CLIPVisionModel
+from transformers import CLIPModel, CLIPProcessor, CLIPVisionModel, SiglipVisionModel
 
 TEXT = "clip.text"
 VISION = "clip.vision"
@@ -37,6 +37,18 @@ def should_skip_tensor(name: str, has_text: bool, has_vision: bool, has_llava: b
 
 
 def get_tensor_name(name: str) -> str:
+    # Standardize the transformers llava next keys for
+    # image newline / mm projector with the classes in haotian-liu LLaVA
+    if name == "image_newline":
+        return "model.image_newline"
+    if name.startswith("multi_modal_projector"):
+        name = name.replace("multi_modal_projector", "mm")
+        if "linear_1" in name:
+            name = name.replace("linear_1", "0")
+        if "linear_2" in name:
+            name = name.replace("linear_2", "2")
+        return name
+
     if "projection" in name:
         return name
     if "mm_projector" in name:
@@ -77,14 +89,21 @@ def bytes_to_unicode():
 ap = argparse.ArgumentParser()
 ap.add_argument("-m", "--model-dir", help="Path to model directory cloned from HF Hub", required=True)
 ap.add_argument("--use-f32", action="store_true", default=False, help="Use f32 instead of f16")
+ap.add_argument('--bigendian', action="store_true", default=False, help="Model is executed on big-endian machine")
 ap.add_argument("--text-only", action="store_true", required=False,
                 help="Save a text-only model. It can't be used to encode images")
 ap.add_argument("--vision-only", action="store_true", required=False,
                 help="Save a vision-only model. It can't be used to encode texts")
 ap.add_argument("--clip-model-is-vision", action="store_true", required=False,
                 help="The clip model is a pure vision model (ShareGPT4V vision extract for example)")
-ap.add_argument("--clip-model-is-openclip", action="store_true", required=False,
+
+# Selectable visual encoders that are compatible with this script
+encoder_group = ap.add_mutually_exclusive_group()
+encoder_group.add_argument("--clip-model-is-openclip", action="store_true", required=False,
                 help="The clip model is from openclip (for ViT-SO400M type))")
+encoder_group.add_argument("--clip-model-is-siglip", action="store_true", required=False,
+                help="the visual encoder is Siglip.")
+
 ap.add_argument("--llava-projector", help="Path to llava.projector file. If specified, save an image encoder for LLaVA models.")
 ap.add_argument("--projector-type", help="Type of projector. Possible values: mlp, ldp, ldpv2", choices=["mlp", "ldp", "ldpv2"], default="mlp")
 ap.add_argument("-o", "--output-dir", help="Directory to save GGUF files. Default is the original model directory", default=None)
@@ -109,7 +128,12 @@ if args.use_f32:
 # output in the same directory as the model if output_dir is None
 dir_model = args.model_dir
 
-if args.clip_model_is_vision or not os.path.exists(dir_model + "/vocab.json") or args.clip_model_is_openclip:
+if (
+    args.clip_model_is_vision or
+    not os.path.exists(dir_model + "/vocab.json") or
+    args.clip_model_is_openclip or
+    args.clip_model_is_siglip
+):
     vocab = None
     tokens = None
 else:
@@ -137,7 +161,10 @@ ftype = 1
 if args.use_f32:
     ftype = 0
 
-if args.clip_model_is_vision or args.clip_model_is_openclip:
+if args.clip_model_is_siglip:
+    model = SiglipVisionModel.from_pretrained(dir_model)
+    processor = None
+elif args.clip_model_is_vision or args.clip_model_is_openclip:
     model = CLIPVisionModel.from_pretrained(dir_model)
     processor = None
 else:
@@ -165,7 +192,7 @@ output_dir = args.output_dir if args.output_dir is not None else dir_model
 os.makedirs(output_dir, exist_ok=True)
 output_prefix = os.path.basename(output_dir).replace("ggml_", "")
 fname_out = os.path.join(output_dir, f"{fname_middle}model-{ftype_str[ftype]}.gguf")
-fout = GGUFWriter(path=fname_out, arch="clip")
+fout = GGUFWriter(path=fname_out, arch="clip", endianess=GGUFEndian.LITTLE if not args.bigendian else GGUFEndian.BIG)
 
 fout.add_bool("clip.has_text_encoder", has_text_encoder)
 fout.add_bool("clip.has_vision_encoder", has_vision_encoder)
@@ -187,26 +214,71 @@ else:
 if has_text_encoder:
     assert t_hparams is not None
     assert tokens is not None
+    if args.clip_model_is_siglip:
+        text_projection_dim = 0
+    else:
+        text_projection_dim = t_hparams.get("projection_dim", config["projection_dim"])
     # text_model hparams
     fout.add_uint32(k(KEY_CONTEXT_LENGTH, TEXT), t_hparams["max_position_embeddings"])
     fout.add_uint32(k(KEY_EMBEDDING_LENGTH, TEXT), t_hparams["hidden_size"])
     fout.add_uint32(k(KEY_FEED_FORWARD_LENGTH, TEXT), t_hparams["intermediate_size"])
-    fout.add_uint32("clip.text.projection_dim", t_hparams.get("projection_dim", config["projection_dim"]))
+    fout.add_uint32("clip.text.projection_dim", text_projection_dim)
     fout.add_uint32(k(KEY_ATTENTION_HEAD_COUNT, TEXT), t_hparams["num_attention_heads"])
     fout.add_float32(k(KEY_ATTENTION_LAYERNORM_EPS, TEXT), t_hparams["layer_norm_eps"])
     fout.add_uint32(k(KEY_BLOCK_COUNT, TEXT), t_hparams["num_hidden_layers"])
     fout.add_token_list(tokens)
 
+
+
+def get_non_negative_vision_feature_layers(v_hparams):
+    """
+    Determine the vision feature layer(s) for the llava model, which are indices into the
+    hidden states of the visual encoder. Note that the hidden states array generally takes the
+    form:
+
+        [<emb input>, <output of enc block 0>, ... <output of enc block num_hidden_layers>]
+
+    so feature indices should be offset as n+1 to get the output of encoder block n.
+    We convert all vision feature layers to non-negative so that -1 can be used in
+    the model as an unset value. If no vision feature layer is found, we leave it unset.
+    """
+    num_hidden_layers = v_hparams["num_hidden_layers"]
+    to_non_negative = lambda layer_idx: layer_idx  if layer_idx >= 0 else num_hidden_layers + layer_idx + 1
+    feature_layers_key = None
+    # Key used for llava models in transformers
+    if "vision_feature_layer" in config:
+        feature_layers_key = "vision_feature_layer"
+    # Key used for llava models in the original format
+    elif "mm_vision_select_layer" in config:
+        feature_layers_key = "mm_vision_select_layer"
+    if feature_layers_key is not None:
+        feature_layers = config[feature_layers_key]
+        if isinstance(feature_layers, int):
+            feature_layers = [feature_layers]
+        return [to_non_negative(feature_layer) for feature_layer in feature_layers]
+
+# Determine if we have explicitly specified vision feature layers in our config
+feature_layers = get_non_negative_vision_feature_layers(v_hparams)
+
 if has_vision_encoder:
-    # vision_model hparams
+    # Siglip does not have a visual projector; set projection dim to 0
+    if args.clip_model_is_siglip:
+        visual_projection_dim = 0
+    else:
+        visual_projection_dim = v_hparams.get("projection_dim", config["projection_dim"])
+
+    # set vision_model hparams
     fout.add_uint32("clip.vision.image_size", v_hparams["image_size"])
     fout.add_uint32("clip.vision.patch_size", v_hparams["patch_size"])
     fout.add_uint32(k(KEY_EMBEDDING_LENGTH, VISION), v_hparams["hidden_size"])
     fout.add_uint32(k(KEY_FEED_FORWARD_LENGTH, VISION), v_hparams["intermediate_size"])
-    fout.add_uint32("clip.vision.projection_dim", v_hparams.get("projection_dim", config["projection_dim"]))
+    fout.add_uint32("clip.vision.projection_dim", visual_projection_dim)
     fout.add_uint32(k(KEY_ATTENTION_HEAD_COUNT, VISION), v_hparams["num_attention_heads"])
     fout.add_float32(k(KEY_ATTENTION_LAYERNORM_EPS, VISION), v_hparams["layer_norm_eps"])
-    block_count = v_hparams["num_hidden_layers"] - 1 if has_llava_projector else v_hparams["num_hidden_layers"]
+    if feature_layers:
+        block_count = max(feature_layers)
+    else:
+        block_count = v_hparams["num_hidden_layers"] - 1 if has_llava_projector else v_hparams["num_hidden_layers"]
     fout.add_uint32(k(KEY_BLOCK_COUNT, VISION), block_count)
                             #     /**
                             #      "image_grid_pinpoints": [
@@ -258,7 +330,8 @@ if has_vision_encoder:
         fout.add_string("clip.vision.mm_patch_merge_type", v_hparams["mm_patch_merge_type"])
     if "mm_projector_type" in v_hparams:
         fout.add_string("clip.vision.mm_projector_type", v_hparams["mm_projector_type"])
-
+    if feature_layers:
+        fout.add_array("clip.vision.feature_layer", feature_layers)
 
     if processor is not None:
         image_mean = processor.image_processor.image_mean if args.image_mean is None or args.image_mean == default_image_mean else args.image_mean  # pyright: ignore[reportAttributeAccessIssue]
@@ -274,7 +347,13 @@ fout.add_bool("clip.use_gelu", use_gelu)
 
 
 if has_llava_projector:
-    model.vision_model.encoder.layers.pop(-1)
+    # By default, we drop the last layer for llava projector
+    # models unless we have explicitly set vision feature layers
+    if feature_layers is None:
+        model.vision_model.encoder.layers.pop(-1)
+    else:
+        model.vision_model.encoder.layers = model.vision_model.encoder.layers[:max(feature_layers)]
+
     projector = torch.load(args.llava_projector)
     for name, data in projector.items():
         name = get_tensor_name(name)

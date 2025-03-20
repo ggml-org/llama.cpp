@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <fstream>
 #include <thread>
+#include <algorithm>
 
 void common_ngram_cache_update(common_ngram_cache & ngram_cache, int ngram_min, int ngram_max,
                               std::vector<llama_token> & inp, int nnew, bool print_progress) {

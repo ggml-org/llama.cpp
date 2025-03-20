@@ -110,9 +110,21 @@ enum common_conversation_mode {
     COMMON_CONVERSATION_MODE_AUTO     = 2,
 };
 
+enum common_grammar_trigger_type {
+    COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN,
+    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
+    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
+    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
+};
+
 struct common_grammar_trigger {
-    std::string word;
-    bool at_start;
+    common_grammar_trigger_type type;
+    std::string value;
+    llama_token token = LLAMA_TOKEN_NULL;
+
+    // T can only be nlohmann::ordered_json
+    template <class T> T to_json() const;
+    template <class T> static common_grammar_trigger from_json(const T & in);
 };
 
 // sampling parameters
@@ -140,6 +152,7 @@ struct common_params_sampling {
     int32_t dry_allowed_length = 2;     // tokens extending repetitions beyond this receive penalty
     int32_t dry_penalty_last_n = -1;    // how many tokens to scan for repetitions (0 = disable penalty, -1 = context size)
     int32_t mirostat           = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+    float   top_n_sigma        = -1.00f;// -1.0 = disabled
     float   mirostat_tau       = 5.00f; // target entropy
     float   mirostat_eta       = 0.10f; // learning rate
     bool    ignore_eos         = false;
@@ -162,8 +175,7 @@ struct common_params_sampling {
 
     std::string                         grammar; // optional BNF-like grammar to constrain sampling
     bool                                grammar_lazy = false;
-    std::vector<common_grammar_trigger> grammar_trigger_words;  // optional trigger words to trigger lazy grammar
-    std::vector<llama_token>            grammar_trigger_tokens; // optional trigger tokens to trigger lazy grammar and print trigger special tokens.
+    std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias; // logit biases to apply
@@ -177,10 +189,10 @@ struct common_params_speculative {
 
     int32_t n_ctx        =     0; // draft context size
     int32_t n_max        =    16; // maximum number of tokens to draft during speculative decoding
-    int32_t n_min        =     5; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min        =     0; // minimum number of draft tokens to use for speculative decoding
     int32_t n_gpu_layers =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
     float   p_split      =  0.1f; // speculative decoding split probability
-    float   p_min        =  0.9f; // minimum speculative decoding probability (greedy)
+    float   p_min        = 0.75f; // minimum speculative decoding probability (greedy)
 
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
@@ -199,7 +211,14 @@ struct common_params_vocoder {
     std::string model     = ""; // model path                                                // NOLINT
     std::string model_url = ""; // model url to download                                     // NOLINT
 
+    std::string speaker_file = ""; // speaker file path                                      // NOLINT
+
     bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy            // NOLINT
+};
+
+enum common_reasoning_format {
+    COMMON_REASONING_FORMAT_NONE,
+    COMMON_REASONING_FORMAT_DEEPSEEK, // Extract thinking tag contents and return as `message.reasoning_content`
 };
 
 struct common_params {
@@ -255,6 +274,7 @@ struct common_params {
     std::string hf_repo              = ""; // HF repo                                                       // NOLINT
     std::string hf_file              = ""; // HF file                                                       // NOLINT
     std::string prompt               = "";                                                                  // NOLINT
+    std::string system_prompt        = "";                                                                  // NOLINT
     std::string prompt_file          = ""; // store the external prompt file name                           // NOLINT
     std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state             // NOLINT
     std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
@@ -292,6 +312,7 @@ struct common_params {
     bool   kl_divergence    = false; // compute KL divergence
 
     bool usage             = false; // print usage
+    bool completion        = false; // print source-able completion script
     bool use_color         = false; // use color to distinguish generations and inputs
     bool special           = false; // enable special token output
     bool interactive       = false; // interactive mode
@@ -317,6 +338,8 @@ struct common_params {
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
+
+    bool single_turn       = false; // single turn chat conversation
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
@@ -346,6 +369,7 @@ struct common_params {
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
 
     std::vector<std::string> api_keys;
 
@@ -383,8 +407,6 @@ struct common_params {
     int32_t i_pos  = -1;  // position of the passkey in the junk text
 
     // imatrix params
-    std::string out_file = "imatrix.dat"; // save the resulting imatrix to this file
-
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
     int32_t i_chunk     =  0; // start processing from this chunk
@@ -396,16 +418,16 @@ struct common_params {
     int n_pca_batch = 100;
     int n_pca_iterations = 1000;
     dimre_method cvector_dimre_method = DIMRE_METHOD_PCA;
-    std::string cvector_outfile       = "control_vector.gguf";
     std::string cvector_positive_file = "examples/cvector-generator/positive.txt";
     std::string cvector_negative_file = "examples/cvector-generator/negative.txt";
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
-    std::string lora_outfile = "ggml-lora-merged-f16.gguf";
-
     // batched-bench params
     bool batched_bench_output_jsonl = false;
+
+    // common params
+    std::string out_file; // output filename for all example programs
 };
 
 // call once at the start of a program if it uses libcommon
@@ -424,13 +446,13 @@ bool set_process_priority(enum ggml_sched_priority prio);
 //
 
 #ifdef __GNUC__
-#ifdef __MINGW32__
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
+#    if defined(__MINGW32__) && !defined(__clang__)
+#        define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
+#    else
+#        define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
+#    endif
 #else
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
-#endif
-#else
-#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...)
+#    define LLAMA_COMMON_ATTRIBUTE_FORMAT(...)
 #endif
 
 LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)
@@ -444,6 +466,8 @@ std::vector<std::string> string_split(const std::string & str, const std::string
 std::string string_repeat(const std::string & str, size_t n);
 
 void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
+
+std::string regex_escape(const std::string & s);
 
 template<class T>
 static std::vector<T> string_split(const std::string & str, char delim) {
@@ -607,62 +631,6 @@ std::string common_detokenize(
               const struct llama_vocab * vocab,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
-
-//
-// Chat template utils
-//
-
-struct common_tool_call {
-    std::string name;
-    std::string arguments;
-    std::string id;
-};
-
-// same with llama_chat_message, but uses std::string
-struct common_chat_msg {
-    std::string role;
-    std::string content;
-    std::vector<common_tool_call> tool_calls;
-    std::string tool_plan = "";
-};
-
-// Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool common_chat_verify_template(const std::string & tmpl, bool use_jinja);
-
-namespace minja {
-    class chat_template;
-}
-
-typedef minja::chat_template common_chat_template;
-
-struct common_chat_templates {
-    bool has_explicit_template; // Model had builtin template or template overridde was specified.
-    std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
-    std::unique_ptr<common_chat_template> template_tool_use;
-};
-
-// CPP wrapper for llama_chat_apply_template
-// If the built-in template is not supported, we default to chatml
-// If the custom "tmpl" is not supported, we throw an error
-std::string common_chat_apply_template(
-        const common_chat_template & tmpl,
-        const std::vector<common_chat_msg> & chat,
-        bool add_ass,
-        bool use_jinja);
-
-// Format single message, while taking into account the position of that message in chat history
-std::string common_chat_format_single(
-        const common_chat_template & tmpl,
-        const std::vector<common_chat_msg> & past_msg,
-        const common_chat_msg & new_msg,
-        bool add_ass,
-        bool use_jinja);
-
-// Returns an example of formatted chat
-std::string common_chat_format_example(
-    const common_chat_template & tmpl, bool use_jinja);
-
-common_chat_templates common_chat_templates_from_model(const struct llama_model * model, const std::string & chat_template_override);
 
 //
 // KV cache utils

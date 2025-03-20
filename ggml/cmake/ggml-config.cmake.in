@@ -112,7 +112,7 @@ foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
 
     string(REGEX MATCH "^ggml-cpu" is_cpu_variant "${_ggml_backend}")
     if(is_cpu_variant)
-        list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES "ggml::ggml" "ggml::ggml-base")
+        list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
         set_target_properties(ggml::${_ggml_backend}
            PROPERTIES
                INTERFACE_LINK_LIBRARIES "${GGML_CPU_INTERFACE_LINK_LIBRARIES}")
@@ -124,7 +124,7 @@ foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
         endif()
 
     else()
-        list(APPEND ${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES "ggml::ggml" "ggml::ggml-base")
+        list(APPEND ${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
         set_target_properties(ggml::${_ggml_backend}
             PROPERTIES
                 INTERFACE_LINK_LIBRARIES "${${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES}")
@@ -138,6 +138,11 @@ foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
 
     list(APPEND _ggml_all_targets ggml::${_ggml_backend})
 endforeach()
+
+list(APPEND GGML_INTERFACE_LINK_LIBRARIES ggml::ggml-base "${_ggml_all_targets}")
+set_target_properties(ggml::ggml
+    PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${GGML_INTERFACE_LINK_LIBRARIES}")
 
 add_library(ggml::all INTERFACE IMPORTED)
 set_target_properties(ggml::all

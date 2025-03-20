@@ -99,3 +99,20 @@ catch (sycl::exception const &exc) {
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
 }
+
+
+void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {
+    for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
+        for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
+            if (extra->events[i][is] != nullptr) {
+                SYCL_CHECK(CHECK_TRY_ERROR(dpct::destroy_event(extra->events[i][is])));
+            }
+        }
+        if (extra->data_device[i] != nullptr && streams.size()>0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(
+                CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+        }
+    }
+    delete extra;
+}

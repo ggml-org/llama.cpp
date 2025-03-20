@@ -10,10 +10,7 @@
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
-#include "json-schema-to-grammar.h"
 #include "llama.h"
-#include "chat.hpp"
-#include "chat-template.hpp"
 
 #include <algorithm>
 #include <cinttypes>
@@ -485,6 +482,11 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     s = std::move(builder);
 }
 
+std::string regex_escape(const std::string & s) {
+    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+    return std::regex_replace(s, special_chars, "\\$0");
+}
+
 std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
     std::ostringstream result;
     for (size_t i = 0; i < values.size(); ++i) {
@@ -953,8 +955,8 @@ struct common_init_result common_init_from_params(common_params & params) {
         return iparams;
     }
 
-    if (params.ctx_shift && !llama_kv_cache_can_shift(lctx)) {
-        LOG_WRN("%s: KV cache shifting is not supported for this model, disabling KV cache shifting\n", __func__);
+    if (params.ctx_shift && !llama_kv_self_can_shift(lctx)) {
+        LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
         params.ctx_shift = false;
     }
 
@@ -1031,6 +1033,8 @@ struct common_init_result common_init_from_params(common_params & params) {
     if (params.warmup) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
+        llama_set_warmup(lctx, true);
+
         std::vector<llama_token> tmp;
         llama_token bos = llama_vocab_bos(vocab);
         llama_token eos = llama_vocab_eos(vocab);
@@ -1058,9 +1062,10 @@ struct common_init_result common_init_from_params(common_params & params) {
         if (llama_model_has_decoder(model)) {
             llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch)));
         }
-        llama_kv_cache_clear(lctx);
+        llama_kv_self_clear(lctx);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
+        llama_set_warmup(lctx, false);
     }
 
     iparams.model.reset(model);
@@ -1769,174 +1774,6 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
 }
 
 //
-// Chat template utils
-//
-
-bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
-    if (use_jinja) {
-        try {
-            auto chat_template = common_chat_template(tmpl, "<s>", "</s>");
-            common_chat_inputs inputs;
-            inputs.messages = json::array({{
-                {"role", "user"},
-                {"content", "test"},
-            }});
-            common_chat_params_init(chat_template, inputs);
-            return true;
-        } catch (const std::exception & e) {
-            LOG_ERR("%s: failed to apply template: %s\n", __func__, e.what());
-            return false;
-        }
-    }
-    llama_chat_message chat[] = {{"user", "test"}};
-    const int res = llama_chat_apply_template(tmpl.c_str(), chat, 1, true, nullptr, 0);
-    return res >= 0;
-}
-
-std::string common_chat_apply_template(
-        const common_chat_template & tmpl,
-        const std::vector<common_chat_msg> & msgs,
-        bool add_ass,
-        bool use_jinja) {
-    if (use_jinja) {
-        auto messages = json::array();
-        for (const auto & msg : msgs) {
-            messages.push_back({{"role", msg.role}, {"content", msg.content}});
-        }
-        common_chat_inputs inputs;
-        inputs.messages = messages;
-        inputs.add_generation_prompt = add_ass;
-        return common_chat_params_init(tmpl, inputs).prompt;
-    }
-
-    int alloc_size = 0;
-    std::vector<llama_chat_message> chat;
-    for (const auto & msg : msgs) {
-        chat.push_back({msg.role.c_str(), msg.content.c_str()});
-        alloc_size += (msg.role.size() + msg.content.size()) * 1.25;
-    }
-
-    std::vector<char> buf(alloc_size);
-
-    // run the first time to get the total output length
-    int32_t res = llama_chat_apply_template(tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-
-    // error: chat template is not supported
-    if (res < 0) {
-        // if the custom "tmpl" is not supported, we throw an error
-        // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()
-        throw std::runtime_error("this custom template is not supported");
-    }
-
-    // if it turns out that our buffer is too small, we resize it
-    if ((size_t) res > buf.size()) {
-        buf.resize(res);
-        res = llama_chat_apply_template(tmpl.source().c_str(), chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-    }
-
-    std::string formatted_chat(buf.data(), res);
-    return formatted_chat;
-}
-
-std::string common_chat_format_single(
-        const common_chat_template & tmpl,
-        const std::vector<common_chat_msg> & past_msg,
-        const common_chat_msg & new_msg,
-        bool add_ass,
-        bool use_jinja) {
-    std::ostringstream ss;
-    auto fmt_past_msg = past_msg.empty() ? "" : common_chat_apply_template(tmpl, past_msg, false, use_jinja);
-    std::vector<common_chat_msg> chat_new(past_msg);
-    // if the past_msg ends with a newline, we must preserve it in the formatted version
-    if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
-        ss << "\n";
-    };
-    // format chat with new_msg
-    chat_new.push_back(new_msg);
-    auto fmt_new_msg = common_chat_apply_template(tmpl, chat_new, add_ass, use_jinja);
-    // get the diff part
-    ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
-    return ss.str();
-}
-
-std::string common_chat_format_example(const common_chat_template & tmpl, bool use_jinja) {
-    std::vector<common_chat_msg> msgs = {
-        {"system",    "You are a helpful assistant", {}},
-        {"user",      "Hello", {}},
-        {"assistant", "Hi there", {}},
-        {"user",      "How are you?", {}},
-    };
-    return common_chat_apply_template(tmpl, msgs, true, use_jinja);
-}
-
-#define CHATML_TEMPLATE_SRC \
-    "{%- for message in messages -%}\n" \
-    "  {{- '<|im_start|>' + message.role + '\n' + message.content + '<|im_end|>\n' -}}\n" \
-    "{%- endfor -%}\n" \
-    "{%- if add_generation_prompt -%}\n" \
-    "  {{- '<|im_start|>assistant\n' -}}\n" \
-    "{%- endif -%}"
-
-common_chat_templates common_chat_templates_from_model(const struct llama_model * model, const std::string & chat_template_override)
-{
-    std::string default_template_src;
-    std::string template_tool_use_src;
-
-    bool has_explicit_template = !chat_template_override.empty();
-    if (chat_template_override.empty()) {
-        auto str = llama_model_chat_template(model, /* name */ nullptr);
-        if (str) {
-            default_template_src = str;
-            has_explicit_template = true;
-        }
-        str = llama_model_chat_template(model, /* name */ "tool_use");
-        if (str) {
-            template_tool_use_src = str;
-            has_explicit_template = true;
-        }
-    } else {
-        default_template_src = chat_template_override;
-    }
-    if (default_template_src.empty() || default_template_src == "chatml") {
-        if (!template_tool_use_src.empty()) {
-            default_template_src = template_tool_use_src;
-        } else {
-            default_template_src = CHATML_TEMPLATE_SRC;
-        }
-    }
-    auto vocab = llama_model_get_vocab(model);
-    const auto get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
-        if (token == LLAMA_TOKEN_NULL) {
-            if (default_template_src.find(jinja_variable_name) != std::string::npos
-                || template_tool_use_src.find(jinja_variable_name) != std::string::npos) {
-                LOG_WRN("%s: warning: vocab does not have a %s token, jinja template won't work as intended.\n", __func__, name);
-            }
-            return std::string();
-        } else {
-            return common_token_to_piece(vocab, token, true);
-        }
-    };
-    auto token_bos = get_token(llama_vocab_bos(vocab), "BOS", "bos_token");
-    auto token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
-    try {
-        return {
-            has_explicit_template,
-            std::make_unique<minja::chat_template>(default_template_src, token_bos, token_eos),
-            template_tool_use_src.empty()
-                ? nullptr
-                : std::make_unique<minja::chat_template>(template_tool_use_src, token_bos, token_eos),
-        };
-    } catch (const std::exception & e) {
-        LOG_ERR("%s: failed to parse chat template: %s\n", __func__, e.what());
-        return {
-            has_explicit_template,
-            std::make_unique<minja::chat_template>(CHATML_TEMPLATE_SRC, token_bos, token_eos),
-            nullptr,
-        };
-    }
-}
-
-//
 // KV cache utils
 //
 
@@ -2196,3 +2033,25 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
     return result;
 }
 
+template <>
+json common_grammar_trigger::to_json() const {
+    json out {
+        {"type", (int) type},
+        {"value", value},
+    };
+    if (type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out["token"] = (int) token;
+    }
+    return out;
+}
+
+template <>
+common_grammar_trigger common_grammar_trigger::from_json(const json & in) {
+    common_grammar_trigger out;
+    out.type = (common_grammar_trigger_type) in.at("type").get<int>();
+    out.value = in.at("value").get<std::string>();
+    if (out.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out.token = (llama_token) in.at("token").get<int>();
+    }
+    return out;
+}

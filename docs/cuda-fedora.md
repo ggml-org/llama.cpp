@@ -248,7 +248,7 @@ You have successfully set up CUDA on Fedora within a toolbox environment using t
 
 - **Building `llama.cpp`:**
 
-  - With CUDA installed, you can follow these [build instructions for `llama.cpp`](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md) to compile it with CUDA support.
+  - With CUDA installed, you can follow these [build instructions for `llama.cpp`](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md) to compile it with CUDA support.
   - Ensure that any CUDA-specific build flags or paths are correctly set in your build configuration.
 
 - **Using the Toolbox Environment:**

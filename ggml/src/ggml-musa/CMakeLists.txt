@@ -21,7 +21,7 @@ if (MUSAToolkit_FOUND)
     message(STATUS "MUSA Toolkit found")
 
     if (NOT DEFINED MUSA_ARCHITECTURES)
-        set(MUSA_ARCHITECTURES "21;22")
+        set(MUSA_ARCHITECTURES "21;22;31")
     endif()
     message(STATUS "Using MUSA architectures: ${MUSA_ARCHITECTURES}")
 
@@ -49,7 +49,7 @@ if (MUSAToolkit_FOUND)
 
     set_source_files_properties(${GGML_SOURCES_MUSA} PROPERTIES LANGUAGE CXX)
     foreach(SOURCE ${GGML_SOURCES_MUSA})
-        set(COMPILE_FLAGS "-x musa -mtgpu")
+        set(COMPILE_FLAGS "-fsigned-char -x musa -mtgpu")
         foreach(ARCH ${MUSA_ARCHITECTURES})
             set(COMPILE_FLAGS "${COMPILE_FLAGS} --cuda-gpu-arch=mp_${ARCH}")
         endforeach()
@@ -67,10 +67,6 @@ if (MUSAToolkit_FOUND)
     add_compile_definitions(GGML_USE_MUSA)
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
-    if (GGML_CUDA_GRAPHS)
-        add_compile_definitions(GGML_CUDA_USE_GRAPHS)
-    endif()
-
     if (GGML_CUDA_FORCE_MMQ)
         add_compile_definitions(GGML_CUDA_FORCE_MMQ)
     endif()
@@ -81,6 +77,10 @@ if (MUSAToolkit_FOUND)
 
     if (GGML_CUDA_NO_VMM)
         add_compile_definitions(GGML_CUDA_NO_VMM)
+    endif()
+
+    if (NOT GGML_CUDA_FA)
+        add_compile_definitions(GGML_CUDA_NO_FA)
     endif()
 
     if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)

@@ -352,10 +352,10 @@ function gg_run_open_llama_7b_v2 {
 
     (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -t 1 -ngl 99 -c 2048 -b 512 --chunks 4 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/llama-save-load-state--model ${model_q4_0} -ngl 10 -c 0     ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state--model ${model_q4_0} -ngl 10 -c 0 -fa ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state--model ${model_q4_0} -ngl 99 -c 0     ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/llama-save-load-state--model ${model_q4_0} -ngl 99 -c 0 -fa ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 0     ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 10 -c 0 -fa ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 0     ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/llama-save-load-state --model ${model_q4_0} -ngl 99 -c 0 -fa ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
         qnt="$1"

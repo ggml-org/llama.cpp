@@ -15,6 +15,7 @@ if (GGML_OPENCL_PROFILING)
 endif ()
 
 add_compile_definitions(GGML_OPENCL_SOA_Q)
+add_compile_definitions(GGML_OPENCL_TARGET_VERSION=${GGML_OPENCL_TARGET_VERSION})
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
     message(STATUS "OpenCL will use matmul kernels optimized for Adreno")

@@ -597,7 +597,6 @@ elif args.minicpmv_projector is not None:
     fname_middle = "mmproj-"
     has_text_encoder = False
     has_minicpmv_projector = True
-    minicpmv_version = 4
 elif args.vision_only:
     fname_middle = "vision-"
     has_text_encoder = False

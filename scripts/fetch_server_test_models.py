@@ -75,7 +75,7 @@ if __name__ == '__main__':
         logging.info(f'  - {m.hf_repo} / {m.hf_file}')
 
     cli_path = os.environ.get(
-        'LLAMA_SERVER_BIN_PATH',
+        'LLAMA_CLI_BIN_PATH',
         os.path.join(
             os.path.dirname(__file__),
             '../build/bin/Release/llama-cli.exe' if os.name == 'nt' else '../build/bin/llama-cli'))
