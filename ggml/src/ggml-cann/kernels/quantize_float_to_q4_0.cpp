@@ -1,6 +1,21 @@
 #include "kernel_operator.h"
 
 using namespace AscendC;
+#ifdef ASCEND_310P // 310P not support float->4bit quantization
+    extern "C" __global__ __aicore__ void ascendc_quantize_f32_to_q4_0(
+        GM_ADDR input_gm, GM_ADDR output_gm, GM_ADDR input_ne_gm,
+        GM_ADDR input_nb_gm, GM_ADDR output_ne_gm) {
+        // let following test cases can continue run, here just print error information. Of Cource the test case that call this operator is failed.
+        printf("Ascend310P not support f32->4bit quantization.\n");
+    }
+
+    extern "C" __global__ __aicore__ void ascendc_quantize_f16_to_q4_0(
+        GM_ADDR input_gm, GM_ADDR output_gm, GM_ADDR input_ne_gm,
+        GM_ADDR input_nb_gm, GM_ADDR output_ne_gm) {
+        // let following test cases can continue run, here just print error information. Of Cource the test case that call this operator is failed.
+        printf("Ascend310P not support f16->4bit quantization.\n");
+    }
+#else
 
 #define BUFFER_NUM 2
 #define Group_Size 32
@@ -276,3 +291,5 @@ extern "C" __global__ __aicore__ void ascendc_quantize_f32_to_q4_0(
     op.init(input_gm, output_gm, input_ne_ub, input_nb_ub, output_ne_ub);
     op.calculate();
 }
+
+#endif // #ifdef ASCEND_310P

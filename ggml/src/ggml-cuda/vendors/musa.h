@@ -3,6 +3,7 @@
 #include <musa_runtime.h>
 #include <musa.h>
 #include <mublas.h>
+#include <musa_bf16.h>
 #include <musa_fp16.h>
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
@@ -118,7 +119,7 @@
 #define cudaGraphExecDestroy musaGraphExecDestroy
 #define cudaGraphExec_t musaGraphExec_t
 #define cudaGraphExecUpdate musaGraphExecUpdate
-#define cudaGraphExecUpdateResultInfo musaGraphExecUpdateResult
+#define cudaGraphExecUpdateResult musaGraphExecUpdateResult
 #define cudaGraphGetNodes musaGraphGetNodes
 #define cudaGraphInstantiate musaGraphInstantiate
 #define cudaGraphKernelNodeGetParams musaGraphKernelNodeGetParams
@@ -131,4 +132,8 @@
 #define cudaGraph_t musaGraph_t
 #define cudaKernelNodeParams musaKernelNodeParams
 #define cudaStreamCaptureModeRelaxed musaStreamCaptureModeRelaxed
+#define cudaStreamBeginCapture musaStreamBeginCapture
 #define cudaStreamEndCapture musaStreamEndCapture
+#define cudaOccupancyMaxActiveBlocksPerMultiprocessor musaOccupancyMaxActiveBlocksPerMultiprocessor
+
+typedef mt_bfloat16 nv_bfloat16;

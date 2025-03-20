@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 struct ngram_data {
     bool active = false;
@@ -58,8 +59,10 @@ int main(int argc, char ** argv) {
     // load the target model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
@@ -93,7 +96,7 @@ int main(int argc, char ** argv) {
     llama_decode(ctx, llama_batch_get_one(&inp.back(),           1));
 
     for (int s = 1; s < W + G + 1; ++s) {
-        llama_kv_cache_seq_cp(ctx, 0, s, -1, -1);
+        llama_kv_self_seq_cp(ctx, 0, s, -1, -1);
     }
 
     const auto t_enc_end = ggml_time_us();
@@ -115,7 +118,7 @@ int main(int argc, char ** argv) {
     llama_batch batch = llama_batch_init(params.n_ctx, 0, W + G + 1);
 
     // target model sampling context
-    struct common_sampler * smpl = common_sampler_init(model, params.sparams);
+    struct common_sampler * smpl = common_sampler_init(model, params.sampling);
 
     // verification n-grams
     std::vector<ngram_data> ngrams_cur(G);
@@ -147,7 +150,7 @@ int main(int argc, char ** argv) {
     }
 
     // here we keep adding new n-grams as we go
-    ngram_container ngrams_observed(llama_n_vocab(model), N, G);
+    ngram_container ngrams_observed(llama_vocab_n_tokens(vocab), N, G);
 
     // debug
     struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, W + G + 1);
@@ -297,7 +300,7 @@ int main(int argc, char ** argv) {
                 }
                 fflush(stdout);
 
-                if (llama_token_is_eog(model, id)) {
+                if (llama_vocab_is_eog(vocab, id)) {
                     has_eos = true;
                 }
 
@@ -435,17 +438,17 @@ int main(int argc, char ** argv) {
 
         // KV cache management
         // if no verification token matched, we simply remove all cells from this batch -> no fragmentation
-        llama_kv_cache_seq_rm(ctx, -1, n_past, -1);
+        llama_kv_self_seq_rm(ctx, -1, n_past, -1);
 
         if (seq_id_best != 0) {
             // if a verification token matched, we keep the best sequence and remove the rest
             // this leads to some KV cache fragmentation
-            llama_kv_cache_seq_keep(ctx, seq_id_best);
-            llama_kv_cache_seq_cp  (ctx, seq_id_best, 0, -1, -1);
-            llama_kv_cache_seq_rm  (ctx, seq_id_best,    -1, -1);
+            llama_kv_self_seq_keep(ctx, seq_id_best);
+            llama_kv_self_seq_cp  (ctx, seq_id_best, 0, -1, -1);
+            llama_kv_self_seq_rm  (ctx, seq_id_best,    -1, -1);
 
             for (int s = 1; s < W + G + 1; ++s) {
-                llama_kv_cache_seq_cp(ctx, 0, s, -1, -1);
+                llama_kv_self_seq_cp(ctx, 0, s, -1, -1);
             }
         }
     }
@@ -473,9 +476,6 @@ int main(int argc, char ** argv) {
     llama_kv_cache_view_free(&kvc_view);
 
     llama_batch_free(batch);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

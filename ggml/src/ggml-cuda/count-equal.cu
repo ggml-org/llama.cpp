@@ -44,7 +44,7 @@ void ggml_cuda_count_equal(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne < (1 << 30) && "atomicAdd implementation only supports int");
-    const int64_t dne = GGML_PAD(ne / (4*nsm), CUDA_COUNT_EQUAL_CHUNK_SIZE);
+    const int64_t dne = GGML_PAD((ne + 4*nsm - 1) / (4*nsm), CUDA_COUNT_EQUAL_CHUNK_SIZE);
 
     CUDA_CHECK(cudaMemsetAsync(dst_d, 0, ggml_nbytes(dst), stream));
 

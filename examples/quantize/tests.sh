@@ -47,7 +47,7 @@ echo PASS
 echo
 
 # 3a. Test the requanted model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-requant-00001-of-00006.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-requant-00001-of-00006.gguf --n-predict 32
 echo PASS
 echo
 
@@ -57,7 +57,7 @@ echo PASS
 echo
 
 # 4b. Test the requanted model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-requant-merge.gguf --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-requant-merge.gguf --n-predict 32
 echo PASS
 echo
 

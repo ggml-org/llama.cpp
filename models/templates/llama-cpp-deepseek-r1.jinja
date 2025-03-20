@@ -1,0 +1,76 @@
+{%- if not add_generation_prompt is defined -%}
+    {%- set add_generation_prompt = false -%}
+{%- endif -%}
+{%- set ns = namespace(is_first=false, is_tool_outputs=false, is_output_first=true, system_prompt='') -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'system' -%}
+        {%- set ns.system_prompt = message['content'] -%}
+    {%- endif -%}
+{%- endfor -%}
+{{bos_token}}
+{%- if tools %}
+You can call any of the following function tools to satisfy the user's requests: {{tools | map(attribute='function') | tojson(indent=2)}}
+
+Example function tool call syntax:
+
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>example_function_name
+```json
+{
+  "arg1": "some_value"
+  ...
+}
+```
+<｜tool▁call▁end｜><｜tool▁calls▁end｜>
+
+{% endif -%}
+{{ns.system_prompt}}
+{%- macro flush_tool_outputs() -%}
+    {%- if ns.is_tool_outputs -%}
+        {{- '<｜tool▁outputs▁end｜><｜end▁of▁sentence｜>' -}}
+        {%- set ns.is_tool_outputs = false -%}
+    {%- endif -%}
+{%- endmacro -%}
+{{- flush_tool_outputs() -}}
+{%- for message in messages -%}
+    {%- if message['role'] != 'tool' -%}
+        {{- flush_tool_outputs() -}}
+    {%- endif -%}
+    {%- if message['role'] == 'user' -%}
+        {{- '<｜User｜>' + message['content'] + '<｜end▁of▁sentence｜>' -}}
+    {%- endif -%}
+    {%- if message['role'] == 'assistant' and message['content'] is none -%}
+        {{- '<｜Assistant｜><｜tool▁calls▁begin｜>' -}}
+        {%- set ns.is_first = true -%}
+        {%- for tc in message['tool_calls'] -%}
+            {%- if ns.is_first -%}
+                {%- set ns.is_first = false -%}
+            {%- else -%}
+                {{- '\n' -}}
+            {%- endif -%}
+            {%- set tool_name = tc['function']['name'] -%}
+            {%- set tool_args = tc['function']['arguments'] -%}
+            {{- '<｜tool▁call▁begin｜>' + tc['type'] + '<｜tool▁sep｜>' + tool_name + '\n' + '```json' + '\n' + tool_args + '\n' + '```' + '<｜tool▁call▁end｜>' -}}
+        {%- endfor -%}
+        {{- '<｜tool▁calls▁end｜><｜end▁of▁sentence｜>' -}}
+    {%- endif -%}
+    {%- if message['role'] == 'assistant' and message['content'] is  not none -%}
+        {{- flush_tool_outputs() -}}
+        {%- set content = message['content'] -%}
+        {%- if '</think>' in content -%}
+            {%- set content = content.split('</think>')[-1] -%}
+        {%- endif -%}
+        {{- '<｜Assistant｜>' + content + '<｜end▁of▁sentence｜>' -}}
+    {%- endif -%}
+    {%- if message['role'] == 'tool' -%}
+        {%- set ns.is_tool_outputs = true -%}
+        {%- if ns.is_output_first -%}
+            {{- '<｜tool▁outputs▁begin｜>' -}}
+            {%- set ns.is_output_first = false -%}
+        {%- endif -%}
+        {{- '\n<｜tool▁output▁begin｜>' + message['content'] + '<｜tool▁output▁end｜>' -}}
+    {%- endif -%}
+{%- endfor -%}
+{{- flush_tool_outputs() -}}
+{%- if add_generation_prompt and not ns.is_tool_outputs -%}
+    {{- '<｜Assistant｜><think>\n' -}}
+{%- endif -%}

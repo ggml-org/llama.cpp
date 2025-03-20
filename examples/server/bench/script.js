@@ -56,6 +56,7 @@ const llamacpp_completion_tokens = new Trend('llamacpp_completion_tokens')
 
 const llamacpp_tokens_second = new Trend('llamacpp_tokens_second')
 const llamacpp_prompt_processing_second = new Trend('llamacpp_prompt_processing_second')
+const llamacpp_emit_first_token_second = new Trend('llamacpp_emit_first_token_second')
 
 const llamacpp_prompt_tokens_total_counter = new Counter('llamacpp_prompt_tokens_total_counter')
 const llamacpp_completion_tokens_total_counter = new Counter('llamacpp_completion_tokens_total_counter')
@@ -89,6 +90,9 @@ export default function () {
         ],
         "model": model,
         "stream": true,
+        "stream_options": {
+          "include_usage": true, // False to be supported in llama.cpp server
+        },
         "seed": 42,
         "max_tokens": max_tokens,
         "stop": ["<|im_end|>"] // This is temporary for phi-2 base (i.e. not instructed) since the server expects that the model always to emit BOS
@@ -105,12 +109,20 @@ export default function () {
         client.on('event', function (event) {
             if (promptEvalEndTime == null) {
                 promptEvalEndTime = new Date()
+                llamacpp_emit_first_token_second.add((promptEvalEndTime - startTime) / 1.e3)
+            }
+
+            if (event.data === '[DONE]' || event.data === '') {
+                return
             }
 
             let chunk = JSON.parse(event.data)
-            let choice = chunk.choices[0]
-            if (choice.finish_reason) {
-                finish_reason = choice.finish_reason
+
+            if (chunk.choices && chunk.choices.length > 0) {
+                let choice = chunk.choices[0]
+                if (choice.finish_reason) {
+                    finish_reason = choice.finish_reason
+                }
             }
 
             if (chunk.usage) {

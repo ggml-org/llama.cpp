@@ -36,7 +36,7 @@ struct common_sampler;
 
 // llama_sampler API overloads
 
-struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_sampler_params & params);
+struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params);
 
 void common_sampler_free(struct common_sampler * gsmpl);
 
@@ -60,6 +60,27 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 //
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first = false);
 
+// generalized version of common_sampler_sample
+//
+// will cross-reference the sampled tokens with a batch of draft tokens and accept those that match
+// if the sampler disagrees at some point, we stop and return the accepted tokens up to now
+//
+//      common_sampler_sample_n(gsmpl, ctx, { idx }, {});
+//
+// is equivalent to
+//
+//      common_sampler_sample(gsmpl, ctx, idx);
+//      common_sampler_accept(gsmpl, token, true);
+//
+// requires: idxs.size() == draft.size() + 1
+//
+// returns at least 1 token, up to idxs.size()
+//
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first = false);
+
+// assume idxs == [ 0, 1, 2, ..., draft.size() ]
+std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const llama_tokens & draft, bool grammar_first = false);
+
 uint32_t common_sampler_get_seed(const struct common_sampler * gsmpl);
 
 // helpers
@@ -81,3 +102,6 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr);
 
 std::vector<enum common_sampler_type> common_sampler_types_from_names(const std::vector<std::string> & names, bool allow_alt_names);
 std::vector<enum common_sampler_type> common_sampler_types_from_chars(const std::string & chars);
+
+llama_sampler * llama_sampler_init_llg(const llama_vocab * vocab,
+                const char * grammar_kind, const char * grammar_data);

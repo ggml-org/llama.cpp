@@ -968,8 +968,8 @@ vec_dot_iq3_xxs_q8_1(const void *__restrict__ vbq,
             grid1[0] ^ signs[0], signs[0], std::minus<>());
         const int grid_h = dpct::vectorized_binary<sycl::uchar4>(
             grid2[0] ^ signs[1], signs[1], std::minus<>());
-        sumi = dpct::dp4a(grid_l, *((int *)q8 + 0), sumi);
-        sumi = dpct::dp4a(grid_h, *((int *)q8 + 1), sumi);
+        sumi = dpct::dp4a(grid_l, *((const int *)q8 + 0), sumi);
+        sumi = dpct::dp4a(grid_h, *((const int *)q8 + 1), sumi);
         q8 += 8;
         aux32 >>= 7;
     }
@@ -1009,8 +1009,8 @@ vec_dot_iq3_s_q8_1(const void *__restrict__ vbq,
             grid1[0] ^ signs0, signs0, std::minus<>());
         const int grid_h = dpct::vectorized_binary<sycl::uchar4>(
             grid2[0] ^ signs1, signs1, std::minus<>());
-        sumi = dpct::dp4a(grid_l, *((int *)q8 + 0), sumi);
-        sumi = dpct::dp4a(grid_h, *((int *)q8 + 1), sumi);
+        sumi = dpct::dp4a(grid_l, *((const int *)q8 + 0), sumi);
+        sumi = dpct::dp4a(grid_h, *((const int *)q8 + 1), sumi);
         q8 += 8;
     }
     const float d =

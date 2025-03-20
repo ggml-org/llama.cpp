@@ -1,5 +1,5 @@
 import { readFileSync } from "fs"
-import { SchemaConverter } from "../examples/server/public/json-schema-to-grammar.mjs"
+import { SchemaConverter } from "../examples/server/public_legacy/json-schema-to-grammar.mjs"
 
 const [, , file] = process.argv
 const url = `file://${file}`

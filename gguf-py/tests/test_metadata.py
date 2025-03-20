@@ -182,8 +182,43 @@ class TestMetadataMethod(unittest.TestCase):
         expect.base_models=[{'name': 'Mistral 7B Merge 14 v0', 'organization': 'EmbeddedLLM', 'version': '14-v0', 'repo_url': 'https://huggingface.co/EmbeddedLLM/Mistral-7B-Merge-14-v0'}, {'name': 'Trinity v1', 'organization': 'Janai Hq', 'version': 'v1', 'repo_url': 'https://huggingface.co/janai-hq/trinity-v1'}]
         expect.tags=['Llama-3', 'instruct', 'finetune', 'chatml', 'DPO', 'RLHF', 'gpt4', 'synthetic data', 'distillation', 'function calling', 'json mode', 'axolotl']
         expect.languages=['en']
-        expect.datasets=['teknium/OpenHermes-2.5']
+        expect.datasets=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}]
+        self.assertEqual(got, expect)
 
+        # Base Model spec is inferred from model id
+        model_card = {'base_models': 'teknium/OpenHermes-2.5'}
+        expect = gguf.Metadata(base_models=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
+        self.assertEqual(got, expect)
+
+        # Base Model spec is only url
+        model_card = {'base_models': ['https://huggingface.co/teknium/OpenHermes-2.5']}
+        expect = gguf.Metadata(base_models=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
+        self.assertEqual(got, expect)
+
+        # Base Model spec is given directly
+        model_card = {'base_models': [{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}]}
+        expect = gguf.Metadata(base_models=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
+        self.assertEqual(got, expect)
+
+        # Dataset spec is inferred from model id
+        model_card = {'datasets': 'teknium/OpenHermes-2.5'}
+        expect = gguf.Metadata(datasets=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
+        self.assertEqual(got, expect)
+
+        # Dataset spec is only url
+        model_card = {'datasets': ['https://huggingface.co/teknium/OpenHermes-2.5']}
+        expect = gguf.Metadata(datasets=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
+        self.assertEqual(got, expect)
+
+        # Dataset spec is given directly
+        model_card = {'datasets': [{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}]}
+        expect = gguf.Metadata(datasets=[{'name': 'OpenHermes 2.5', 'organization': 'Teknium', 'version': '2.5', 'repo_url': 'https://huggingface.co/teknium/OpenHermes-2.5'}])
+        got = gguf.Metadata.apply_metadata_heuristic(gguf.Metadata(), model_card, None, None)
         self.assertEqual(got, expect)
 
     def test_apply_metadata_heuristic_from_hf_parameters(self):

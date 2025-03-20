@@ -15,7 +15,7 @@ static void run(
     for (size_t il = 0; il < v_input.size(); ++il) {
         // prepare output vector
         struct ggml_tensor * ctrl_out = v_output[il];
-        ggml_format_name(ctrl_out, "direction.%ld", il+1);
+        ggml_format_name(ctrl_out, "direction.%zu", il+1);
 
         // calculate mean vector
         struct ggml_tensor * t_layer = v_input[il];

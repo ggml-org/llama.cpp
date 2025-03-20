@@ -10,11 +10,16 @@ declare -a params=(
 
 MODELS_REPO=lora-tests
 MODELS_REPO_URL=https://huggingface.co/ggml-org/$MODELS_REPO
+COMMIT=c26d5fb85b4070a9e9c4e65d132c783b98086890
 
 # Clone the Hugging Face repository if the directory does not exist
 if [ ! -d "$MODELS_REPO" ]; then
     echo "Cloning the Hugging Face repository..."
     git clone $MODELS_REPO_URL --depth 1
+    cd $MODELS_REPO
+    git fetch --depth=1 origin $COMMIT
+    git reset --hard $COMMIT
+    cd -
 else
     echo "Repository already exists. Skipping clone."
 fi
@@ -75,18 +80,18 @@ run_conversion_and_inference_lora() {
     # Run inference
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-cli without lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_BASE=$(./llama-cli -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    OUTPUT_BASE=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         -p "$EXPECTED_BASE_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-cli with hot lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_HOT=$(./llama-cli -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
+    OUTPUT_LORA_HOT=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32.gguf \
         --lora $MODELS_REPO/$model_name/hidden_size=$hidden_size/lora/Lora-F32-LoRA.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     echo -e "\n\n---------------------------\n\n"
     echo "Running llama-cli with merged lora for $model_name with hidden_size $hidden_size..."
-    OUTPUT_LORA_MERGED=$(./llama-cli -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
+    OUTPUT_LORA_MERGED=$(./llama-cli -no-cnv -m $MODELS_REPO/$model_name/hidden_size=$hidden_size/base/Base-F32-lora-merged.gguf \
         -p "$EXPECTED_LORA_FIRST_WORD" -n 50 --seed 42 --temp 0)
 
     # Remove any initial white space

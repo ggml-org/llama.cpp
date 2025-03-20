@@ -10,12 +10,10 @@
 name: Publish Docker image
 
 on:
-  #pull_request:
-  push:
-    branches:
-      - master
-    paths: ['.github/workflows/docker.yml', '.devops/*.Dockerfile', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal']
-  workflow_dispatch: # allows manual triggering, useful for debugging
+  workflow_dispatch: # allows manual triggering
+  schedule:
+    # Rebuild daily rather than on every push because it is expensive
+    - cron: '12 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -29,29 +27,22 @@ permissions:
 jobs:
   push_to_registry:
     name: Push Docker image to Docker Hub
-    #if: github.event.pull_request.draft == false
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     env:
       COMMIT_SHA: ${{ github.sha }}
     strategy:
+      fail-fast: false
       matrix:
         config:
-          - { tag: "light", dockerfile: ".devops/llama-cli.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          - { tag: "server", dockerfile: ".devops/llama-server.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          - { tag: "full", dockerfile: ".devops/full.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          - { tag: "light-cuda", dockerfile: ".devops/llama-cli-cuda.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "server-cuda", dockerfile: ".devops/llama-server-cuda.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "full-cuda", dockerfile: ".devops/full-cuda.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "light-musa", dockerfile: ".devops/llama-cli-musa.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "server-musa", dockerfile: ".devops/llama-server-musa.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "full-musa", dockerfile: ".devops/full-musa.Dockerfile", platforms: "linux/amd64" }
+          # Multi-stage build
+          - { tag: "cpu", dockerfile: ".devops/cpu.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, freediskspace: false}
+          - { tag: "cuda", dockerfile: ".devops/cuda.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, freediskspace: false}
+          - { tag: "musa", dockerfile: ".devops/musa.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, freediskspace: false}
+          - { tag: "intel", dockerfile: ".devops/intel.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, freediskspace: false}
+          - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, freediskspace: false}
           # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
-          #- { tag: "light-rocm", dockerfile: ".devops/llama-cli-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          #- { tag: "server-rocm", dockerfile: ".devops/llama-server-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          #- { tag: "full-rocm", dockerfile: ".devops/full-rocm.Dockerfile", platforms: "linux/amd64,linux/arm64" }
-          - { tag: "light-intel", dockerfile: ".devops/llama-cli-intel.Dockerfile", platforms: "linux/amd64" }
-          - { tag: "server-intel", dockerfile: ".devops/llama-server-intel.Dockerfile", platforms: "linux/amd64" }
+          #- {tag: "rocm", dockerfile: ".devops/rocm.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, freediskspace: true }
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
@@ -59,10 +50,12 @@ jobs:
           fetch-depth: 0 # preserve git history, so we can determine the build number
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:qemu-v7.0.0-28
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
@@ -82,26 +75,34 @@ jobs:
 
           # determine tag name postfix (build number, commit hash)
           if [[ "${{ env.GITHUB_BRANCH_NAME }}" == "master" ]]; then
-            TAG_POSTFIX="b${BUILD_NUMBER}"
+            TAG_POSTFIX="-b${BUILD_NUMBER}"
           else
             SAFE_NAME=$(echo "${{ env.GITHUB_BRANCH_NAME }}" | tr '/' '-')
-            TAG_POSTFIX="${SAFE_NAME}-${SHORT_HASH}"
+            TAG_POSTFIX="-${SAFE_NAME}-${SHORT_HASH}"
           fi
-
           # list all tags possible
-          TAGS=""
-          TAGS="${TAGS}ghcr.io/${REPO_OWNER}/${REPO_NAME}:${{ matrix.config.tag }},"
-          TAGS="${TAGS}ghcr.io/${REPO_OWNER}/${REPO_NAME}:${{ matrix.config.tag }}-${TAG_POSTFIX}"
-
-          echo "output_tags=$TAGS" >> $GITHUB_OUTPUT
-          echo "output_tags=$TAGS"  # print out for debugging
+          if [[ "${{ matrix.config.tag }}" == "cpu" ]]; then
+              TYPE=""
+          else
+              TYPE="-${{ matrix.config.tag }}"
+          fi
+          PREFIX="ghcr.io/${REPO_OWNER}/${REPO_NAME}:"
+          FULLTAGS="${PREFIX}full${TYPE},${PREFIX}full${TYPE}${TAG_POSTFIX}"
+          LIGHTTAGS="${PREFIX}light${TYPE},${PREFIX}light${TYPE}${TAG_POSTFIX}"
+          SERVERTAGS="${PREFIX}server${TYPE},${PREFIX}server${TYPE}${TAG_POSTFIX}"
+          echo "full_output_tags=$FULLTAGS" >> $GITHUB_OUTPUT
+          echo "light_output_tags=$LIGHTTAGS" >> $GITHUB_OUTPUT
+          echo "server_output_tags=$SERVERTAGS" >> $GITHUB_OUTPUT
+          echo "full_output_tags=$FULLTAGS"  # print out for debugging
+          echo "light_output_tags=$LIGHTTAGS"  # print out for debugging
+          echo "server_output_tags=$SERVERTAGS"  # print out for debugging
         env:
           GITHUB_BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
 
-      # https://github.com/jlumbroso/free-disk-space/tree/54081f138730dfa15788a46383842cd2f914a1be#example
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        if: ${{ matrix.config.free_disk_space == true }}
+        uses: ggml-org/free-disk-space@v1.3.1
         with:
           # this might remove tools that are actually needed,
           # if set to "true" but frees about 6 GB
@@ -116,13 +117,59 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Build and push Docker image (tagged + versioned)
-        if: github.event_name == 'push'
+      - name: Build and push Full Docker image (tagged + versioned)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.full == true }}
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: ${{ matrix.config.platforms }}
           # tag list is generated from step above
-          tags: ${{ steps.tag.outputs.output_tags }}
+          tags: ${{ steps.tag.outputs.full_output_tags }}
           file: ${{ matrix.config.dockerfile }}
+          target: full
+          provenance: false
+          # using github experimental cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # return to this if the experimental github cache is having issues
+          #cache-to: type=local,dest=/tmp/.buildx-cache
+          #cache-from: type=local,src=/tmp/.buildx-cache
+
+      - name: Build and push Light Docker image (tagged + versioned)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.light == true }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.config.platforms }}
+          # tag list is generated from step above
+          tags: ${{ steps.tag.outputs.light_output_tags }}
+          file: ${{ matrix.config.dockerfile }}
+          target: light
+          provenance: false
+          # using github experimental cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # return to this if the experimental github cache is having issues
+          #cache-to: type=local,dest=/tmp/.buildx-cache
+          #cache-from: type=local,src=/tmp/.buildx-cache
+
+      - name: Build and push Server Docker image (tagged + versioned)
+        if: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && matrix.config.server == true }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.config.platforms }}
+          # tag list is generated from step above
+          tags: ${{ steps.tag.outputs.server_output_tags }}
+          file: ${{ matrix.config.dockerfile }}
+          target: server
+          provenance: false
+          # using github experimental cache
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # return to this if the experimental github cache is having issues
+          #cache-to: type=local,dest=/tmp/.buildx-cache
+          #cache-from: type=local,src=/tmp/.buildx-cache

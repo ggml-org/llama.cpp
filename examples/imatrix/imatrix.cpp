@@ -3,11 +3,11 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <sstream>
 #include <thread>
 #include <mutex>
 #include <vector>
@@ -40,7 +40,7 @@ public:
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
-    bool load_imatrix(const char * file_name);
+    bool load_imatrix(const char * fname);
 private:
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
@@ -100,7 +100,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     const float * data = is_host ? (const float *) src1->data : m_src1_data.data();
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
-    // ref: https://github.com/ggerganov/llama.cpp/pull/6387
+    // ref: https://github.com/ggml-org/llama.cpp/pull/6387
     if (t->op == GGML_OP_MUL_MAT_ID) {
         //   ids  -> [n_experts_used, n_tokens]
         //   src1 -> [cols, n_expert_used, n_tokens]
@@ -206,9 +206,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
 
 void IMatrixCollector::save_imatrix(int ncall) const {
     auto fname = m_params.out_file;
-    if (fname.empty()) {
-        fname = "imatrix.dat";
-    }
 
     if (ncall > 0) {
         fname += ".at_";
@@ -429,9 +426,13 @@ static void process_logits(
 }
 
 static bool compute_imatrix(llama_context * ctx, const common_params & params) {
-    const bool add_bos = llama_add_bos_token(llama_get_model(ctx));
-    GGML_ASSERT(!llama_add_eos_token(llama_get_model(ctx)));
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const bool add_bos = llama_vocab_get_add_bos(vocab);
     const int n_ctx = llama_n_ctx(ctx);
+
+    GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
 
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -467,7 +468,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     const int n_chunk_max = tokens.size() / n_ctx;
 
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
-    const int n_vocab = llama_n_vocab(llama_get_model(ctx));
+    const int n_vocab = llama_vocab_n_tokens(vocab);
     const int n_batch = params.n_batch;
 
     int count = 0;
@@ -494,7 +495,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -507,7 +508,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
 
             // add BOS token for the first batch of each chunk
             if (add_bos && j == 0) {
-                tokens[batch_start] = llama_token_bos(llama_get_model(ctx));
+                tokens[batch_start] = llama_vocab_bos(vocab);
             }
 
             common_batch_clear(batch);
@@ -579,6 +580,8 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
 int main(int argc, char ** argv) {
     common_params params;
 
+    params.out_file = "imatrix.dat" ;
+
     params.n_ctx = 512;
     params.logits_all = true;
     params.escape = false;
@@ -618,14 +621,15 @@ int main(int argc, char ** argv) {
     // init
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
     if (model == nullptr || ctx == nullptr) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
     }
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     if (params.n_ctx > n_ctx_train) {
         LOG_WRN("%s: model was trained on only %d context tokens (%d specified)\n",
                 __func__, n_ctx_train, params.n_ctx);
@@ -637,17 +641,23 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    if (!compute_imatrix(ctx, params)) {
-        return 1;
+    if (params.prompt.empty()) {
+        if (params.in_files.empty()) {
+            LOG_ERR("Error: No prompt provided and no precomputed matrices (--in-file) to combine.\n");
+            return 1;
+        }
+        LOG_INF("No prompt provided; combining precomputed matrices only.\n");
+    } else {
+        if (!compute_imatrix(ctx, params)) {
+            return 1;
+        }
     }
+
 
     g_collector.save_imatrix();
 
     LOG("\n");
     llama_perf_context_print(ctx);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

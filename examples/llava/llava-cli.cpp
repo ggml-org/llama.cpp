@@ -47,8 +47,12 @@ static const char * sample(struct common_sampler * smpl,
                            int * n_past) {
     const llama_token id = common_sampler_sample(smpl, ctx_llama, -1);
     common_sampler_accept(smpl, id, true);
+
+    const llama_model * model = llama_get_model(ctx_llama);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     static std::string ret;
-    if (llama_token_is_eog(llama_get_model(ctx_llama), id)) {
+    if (llama_vocab_is_eog(vocab, id)) {
         ret = "</s>";
     } else {
         ret = common_token_to_piece(ctx_llama, id);
@@ -191,7 +195,7 @@ static void process_prompt(struct llava_context * ctx_llava, struct llava_image_
 
     LOG("\n");
 
-    struct common_sampler * smpl = common_sampler_init(ctx_llava->model, params->sparams);
+    struct common_sampler * smpl = common_sampler_init(ctx_llava->model, params->sampling);
     if (!smpl) {
         LOG_ERR("%s: failed to initialize sampling subsystem\n", __func__);
         exit(1);
@@ -221,7 +225,7 @@ static struct llama_model * llava_init(common_params * params) {
 
     llama_model_params model_params = common_model_params_to_llama(*params);
 
-    llama_model * model = llama_load_model_from_file(params->model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params->model.c_str(), model_params);
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return NULL;
@@ -239,11 +243,10 @@ static struct llava_context * llava_init_context(common_params * params, llama_m
 
     auto ctx_clip = clip_model_load(clip_path, /*verbosity=*/ 1);
 
-
     llama_context_params ctx_params = common_context_params_to_llama(*params);
     ctx_params.n_ctx           = params->n_ctx < 2048 ? 2048 : params->n_ctx; // we need a longer context size to process image embeddings
 
-    llama_context * ctx_llama = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx_llama = llama_init_from_model(model, ctx_params);
 
     if (ctx_llama == NULL) {
         LOG_ERR("%s: failed to create the llama_context\n" , __func__);
@@ -265,7 +268,7 @@ static void llava_free(struct llava_context * ctx_llava) {
     }
 
     llama_free(ctx_llava->ctx_llama);
-    llama_free_model(ctx_llava->model);
+    llama_model_free(ctx_llava->model);
     llama_backend_free();
 }
 
@@ -323,7 +326,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    llama_free_model(model);
+    llama_model_free(model);
 
     return 0;
 }

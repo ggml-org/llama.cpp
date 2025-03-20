@@ -3,88 +3,28 @@ set(LLAMA_BUILD_COMMIT @LLAMA_BUILD_COMMIT@)
 set(LLAMA_BUILD_NUMBER @LLAMA_BUILD_NUMBER@)
 set(LLAMA_SHARED_LIB   @BUILD_SHARED_LIBS@)
 
-set(GGML_BLAS       @GGML_BLAS@)
-set(GGML_CUDA       @GGML_CUDA@)
-set(GGML_METAL      @GGML_METAL@)
-set(GGML_HIPBLAS    @GGML_HIPBLAS@)
-set(GGML_ACCELERATE @GGML_ACCELERATE@)
-set(GGML_VULKAN @GGML_VULKAN@)
-set(GGML_VULKAN_CHECK_RESULTS @GGML_VULKAN_CHECK_RESULTS@)
-set(GGML_VULKAN_DEBUG @GGML_VULKAN_DEBUG@)
-set(GGML_VULKAN_MEMORY_DEBUG @GGML_VULKAN_MEMORY_DEBUG@)
-set(GGML_VULKAN_VALIDATE @GGML_VULKAN_VALIDATE@)
-set(GGML_SYCL @GGML_SYCL@)
-set(GGML_OPENMP @GGML_OPENMP@)
-
 @PACKAGE_INIT@
 
 set_and_check(LLAMA_INCLUDE_DIR "@PACKAGE_LLAMA_INCLUDE_INSTALL_DIR@")
 set_and_check(LLAMA_LIB_DIR     "@PACKAGE_LLAMA_LIB_INSTALL_DIR@")
 set_and_check(LLAMA_BIN_DIR     "@PACKAGE_LLAMA_BIN_INSTALL_DIR@")
 
-# Ensure transient dependencies satisfied
-
-find_package(Threads REQUIRED)
-
-if (APPLE AND GGML_ACCELERATE)
-    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
-endif()
-
-if (GGML_BLAS)
-    find_package(BLAS REQUIRED)
-endif()
-
-if (GGML_CUDA)
-    find_package(CUDAToolkit REQUIRED)
-endif()
-
-if (GGML_METAL)
-    find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
-    find_library(METAL_FRAMEWORK Metal REQUIRED)
-    find_library(METALKIT_FRAMEWORK MetalKit REQUIRED)
-endif()
-
-if (GGML_VULKAN)
-    find_package(Vulkan REQUIRED)
-endif()
-
-if (GGML_HIPBLAS)
-    find_package(hip REQUIRED)
-    find_package(hipblas REQUIRED)
-    find_package(rocblas REQUIRED)
-endif()
-
-if (GGML_SYCL)
-    find_package(IntelSYCL REQUIRED)
-    find_package(MKL REQUIRED)
-endif()
-
-if (GGML_OPENMP)
-    find_package(OpenMP REQUIRED)
-endif()
-
-
-find_library(ggml_LIBRARY ggml
-    REQUIRED
-    HINTS ${LLAMA_LIB_DIR})
+find_package(ggml REQUIRED HINTS ${LLAMA_LIB_DIR}/cmake)
 
 find_library(llama_LIBRARY llama
     REQUIRED
-    HINTS ${LLAMA_LIB_DIR})
-
-set(_llama_link_deps "${ggml_LIBRARY}" "@GGML_LINK_LIBRARIES@")
-set(_llama_transient_defines "@GGML_TRANSIENT_DEFINES@")
+    HINTS ${LLAMA_LIB_DIR}
+    NO_CMAKE_FIND_ROOT_PATH
+)
 
 add_library(llama UNKNOWN IMPORTED)
-
 set_target_properties(llama
     PROPERTIES
         INTERFACE_INCLUDE_DIRECTORIES "${LLAMA_INCLUDE_DIR}"
-        INTERFACE_LINK_LIBRARIES "${_llama_link_deps}"
-        INTERFACE_COMPILE_DEFINITIONS "${_llama_transient_defines}"
+        INTERFACE_LINK_LIBRARIES "ggml::ggml;ggml::ggml-base;"
         IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
         IMPORTED_LOCATION "${llama_LIBRARY}"
-        INTERFACE_COMPILE_FEATURES cxx_std_11
-        POSITION_INDEPENDENT_CODE ON )
+        INTERFACE_COMPILE_FEATURES c_std_90
+        POSITION_INDEPENDENT_CODE ON)
 
 check_required_components(Llama)

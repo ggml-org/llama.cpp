@@ -70,7 +70,7 @@ int main(void) {
 
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
 
 
     printf("test-arg-parser: test valid usage\n\n");
@@ -96,7 +96,7 @@ int main(void) {
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--draft", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
-    assert(params.n_draft == 123);
+    assert(params.speculative.n_max == 123);
 
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32

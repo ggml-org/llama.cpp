@@ -1,6 +1,6 @@
 # llama.cpp/examples/main
 
-This example program allows you to use various LLaMA language models easily and efficiently. It is specifically designed to work with the [llama.cpp](https://github.com/ggerganov/llama.cpp) project, which provides a plain C/C++ implementation with optional 4-bit quantization support for faster, lower memory inference, and is optimized for desktop CPUs. This program can be used to perform various inference tasks with LLaMA models, including generating text based on user-provided prompts and chat-like interactions with reverse prompts.
+This example program allows you to use various LLaMA language models easily and efficiently. It is specifically designed to work with the [llama.cpp](https://github.com/ggml-org/llama.cpp) project, which provides a plain C/C++ implementation with optional 4-bit quantization support for faster, lower memory inference, and is optimized for desktop CPUs. This program can be used to perform various inference tasks with LLaMA models, including generating text based on user-provided prompts and chat-like interactions with reverse prompts.
 
 ## Table of Contents
 
@@ -27,29 +27,53 @@ Once downloaded, place your model in the models folder in llama.cpp.
 ##### Input prompt (One-and-done)
 
 ```bash
-./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --prompt "Once upon a time"
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf -no-cnv --prompt "Once upon a time"
 ```
 ##### Conversation mode (Allow for continuous interaction with the model)
 
 ```bash
-./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf -cnv --chat-template gemma
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --chat-template gemma
+```
+
+##### Conversation mode using built-in jinja chat template
+
+```bash
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --jinja
+```
+
+##### One-and-done query using jinja with custom system prompt and a starting prompt
+
+```bash
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --jinja --single-turn -sys "You are a helpful assistant" -p "Hello"
 ```
 
 ##### Infinite text from a starting prompt (you can use `Ctrl-C` to stop it):
 ```bash
-./llama-cli -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 ```
 
 ### Windows:
 
 ##### Input prompt (One-and-done)
 ```powershell
-./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --prompt "Once upon a time"
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf -no-cnv --prompt "Once upon a time"
 ```
 ##### Conversation mode (Allow for continuous interaction with the model)
 
 ```powershell
-./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf -cnv --chat-template gemma
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --chat-template gemma
+```
+
+##### Conversation mode using built-in jinja chat template
+
+```powershell
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --jinja
+```
+
+##### One-and-done query using jinja with custom system prompt and a starting prompt
+
+```powershell
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --jinja --single-turn -sys "You are a helpful assistant" -p "Hello"
 ```
 
 #### Infinite text from a starting prompt (you can use `Ctrl-C` to stop it):
@@ -66,7 +90,7 @@ In this section, we cover the most commonly used options for running the `llama-
 -   `-mu MODEL_URL --model-url MODEL_URL`: Specify a remote http url to download the file (e.g [https://huggingface.co/ggml-org/gemma-1.1-7b-it-Q4_K_M-GGUF/resolve/main/gemma-1.1-7b-it.Q4_K_M.gguf?download=true](https://huggingface.co/ggml-org/gemma-1.1-7b-it-Q4_K_M-GGUF/resolve/main/gemma-1.1-7b-it.Q4_K_M.gguf?download=true)).
 -   `-i, --interactive`: Run the program in interactive mode, allowing you to provide input directly and receive real-time responses.
 -   `-n N, --n-predict N`: Set the number of tokens to predict when generating text. Adjusting this value can influence the length of the generated text.
--   `-c N, --ctx-size N`: Set the size of the prompt context. The default is 512, but LLaMA models were built with a context of 2048, which will provide better results for longer input/inference.
+-   `-c N, --ctx-size N`: Set the size of the prompt context. The default is 4096, but if a LLaMA model was built with a longer context, increasing this value will provide better results for longer input/inference.
 -   `-mli, --multiline-input`: Allows you to write or paste multiple lines without ending each in '\'
 -   `-t N, --threads N`: Set the number of threads to use during generation. For optimal performance, it is recommended to set this value to the number of physical CPU cores your system has.
 -   `-ngl N, --n-gpu-layers N`: When compiled with GPU support, this option allows offloading some layers to the GPU for computation. Generally results in increased performance.
@@ -77,6 +101,8 @@ The `llama-cli` program provides several ways to interact with the LLaMA models 
 
 -   `--prompt PROMPT`: Provide a prompt directly as a command-line option.
 -   `--file FNAME`: Provide a file containing a prompt or multiple prompts.
+-   `--system-prompt PROMPT`: Provide a system prompt (will otherwise use the default one in the chat template (if provided)).
+-   `--system-prompt-file FNAME`: Provide a file containing a system prompt.
 -   `--interactive-first`: Run the program in interactive mode and wait for input right away. (More on this below.)
 
 ## Interaction
@@ -89,7 +115,10 @@ In interactive mode, users can participate in text generation by injecting their
 
 -   `-i, --interactive`: Run the program in interactive mode, allowing users to engage in real-time conversations or provide specific instructions to the model.
 -   `--interactive-first`: Run the program in interactive mode and immediately wait for user input before starting the text generation.
--   `-cnv,  --conversation`:  Run the program in conversation mode (does not print special tokens and suffix/prefix, use default chat template) (default: false)
+-   `-cnv,  --conversation`:  Run the program in conversation mode (does not print special tokens and suffix/prefix, use default or provided chat template) (default: true if chat template found)
+-   `-no-cnv`:  Disable conversation mode (default: false)
+-   `-st, --single-turn`:  Only process a single conversation turn (user input) and then exit.
+-   `--jinja`:  Enable jinja chat template parser, will use the model's built-in template or a user-provided one (default: false)
 -   `--color`: Enable colorized output to differentiate visually distinguishing between prompts, user input, and generated text.
 
 By understanding and utilizing these interaction options, you can create engaging and dynamic experiences with the LLaMA models, tailoring the text generation process to your specific needs.
@@ -121,9 +150,11 @@ When --in-prefix or --in-suffix options are enabled the chat template ( --chat-t
 
 ### Chat templates
 
- `--chat-template JINJA_TEMPLATE`: This option sets a custom jinja chat template. It accepts a string, not a file name.  Default: template taken from model's metadata. Llama.cpp only supports [some pre-defined templates](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template). These include llama2, llama3, gemma, monarch, chatml, orion, vicuna, vicuna-orca, deepseek, command-r, zephyr. When --in-prefix or --in-suffix options are enabled the chat template ( --chat-template ) is disabled.
+ `--chat-template JINJA_TEMPLATE`: This option sets a custom jinja chat template. It accepts a string, not a file name.  Default: template taken from model's metadata. Llama.cpp only supports [some pre-defined templates](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template). These include llama2, llama3, gemma, monarch, chatml, orion, vicuna, vicuna-orca, deepseek, command-r, zephyr. When --in-prefix or --in-suffix options are enabled the chat template ( --chat-template ) is disabled.
 
  Example usage: `--chat-template gemma`
+
+`--chat-template-file FNAME`:  Load a custom jinja chat template from an external file, useful if the model contains outdated or incompatible template, some examples can be found in models/templates. Up-to-date chat templates can be downloaded from Hugging Face using scripts/get_chat_template.py
 
 ## Context Management
 
@@ -131,7 +162,7 @@ During text generation, LLaMA models have a limited context size, which means th
 
 ### Context Size
 
-- `-c N, --ctx-size N`: Set the size of the prompt context (default: 0, 0 = loaded from model). The LLaMA models were built with a context of 2048-8192, which will yield the best results on longer input/inference.
+- `-c N, --ctx-size N`: Set the size of the prompt context (default: 4096, 0 = loaded from model). If a LLaMA model was built with a longer context, increasing this value will yield the best results on longer input/inference.
 
 ### Extended Context Size
 
@@ -177,15 +208,34 @@ Example usage: `--temp 0`
 
 -   `--repeat-penalty N`: Control the repetition of token sequences in the generated text default: 1.0, 1.0 = disabled).
 -   `--repeat-last-n N`: Last n tokens to consider for penalizing repetition (default: 64, 0 = disabled, -1 = ctx-size).
--   `--no-penalize-nl`: Disable penalization for newline tokens when applying the repeat penalty.
 
 The `repeat-penalty` option helps prevent the model from generating repetitive or monotonous text. A higher value (e.g., 1.5) will penalize repetitions more strongly, while a lower value (e.g., 0.9) will be more lenient. The default value is 1.
 
 The `repeat-last-n` option controls the number of tokens in the history to consider for penalizing repetition. A larger value will look further back in the generated text to prevent repetitions, while a smaller value will only consider recent tokens. A value of 0 disables the penalty, and a value of -1 sets the number of tokens considered equal to the context size (`ctx-size`).
 
-Use the `--no-penalize-nl` option to disable newline penalization when applying the repeat penalty. This option is particularly useful for generating chat conversations, dialogues, code, poetry, or any text where newline tokens play a significant role in structure and formatting. Disabling newline penalization helps maintain the natural flow and intended formatting in these specific use cases.
+### DRY Repetition Penalty
 
-Example usage: `--repeat-penalty 1.15 --repeat-last-n 128 --no-penalize-nl`
+DRY (Don't Repeat Yourself) sampling is an effective technique for reducing repetition in generated text even across long contexts by penalizing tokens based on their recent usage patterns (original [PR link](https://github.com/oobabooga/text-generation-webui/pull/5677)).
+
+- `--dry-multiplier N`: Set the DRY sampling multiplier (default: 0.0, 0.0 = disabled).
+- `--dry-base N`: Set the DRY sampling base value (default: 1.75).
+- `--dry-allowed-length N`: Set the allowed length for DRY sampling (default: 2).
+- `--dry-penalty-last-n N`: Set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size).
+- `--dry-sequence-breaker STRING`: Add a sequence breaker for DRY sampling. Can be used more than once to add multiple sequence breakers. Using this clears out the default breakers, which consist of: `['\n', ':', '"', '*']`. If the string `"none"` is supplied, no sequence breakers are used.
+
+The `dry-multiplier` option controls the strength of the DRY sampling effect. A value of 0.0 disables DRY sampling, while higher values increase its influence. A typical recommended value is 0.8.
+
+The `dry-base` option sets the base value for the exponential penalty calculation in DRY sampling. Higher values lead to more aggressive penalization of repetitions.
+
+The `dry-allowed-length` option sets the maximum length of repeated sequences that will not be penalized. Repetitions shorter than or equal to this length are not penalized, allowing for natural repetitions of short phrases or common words.
+
+The `dry-penalty-last-n` option controls how many recent tokens to consider when applying the DRY penalty. A value of -1 considers the entire context. Use a positive value to limit the consideration to a specific number of recent tokens.
+
+The `dry-sequence-breaker` option adds a single sequence breaker and can be used more than once to specify multiple sequence breakers. Sequence breakers interrupt sequence matching and break the input into parts where matching can be applied.
+
+DRY sampling provides more nuanced control over text generation, particularly for reducing long-range repetitions and maintaining global coherence.
+
+Example usage: `--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n -1 --dry-sequence-breaker "—" --dry-sequence-breaker "##"`
 
 ### Top-K Sampling
 
@@ -210,14 +260,6 @@ Example usage: `--top-p 0.95`
 The Min-P sampling method was designed as an alternative to Top-P, and aims to ensure a balance of quality and variety. The parameter *p* represents the minimum probability for a token to be considered, relative to the probability of the most likely token. For example, with *p*=0.05 and the most likely token having a probability of 0.9, logits with a value less than 0.045 are filtered out.
 
 Example usage: `--min-p 0.05`
-
-### Tail-Free Sampling (TFS)
-
--   `--tfs N`: Enable tail free sampling with parameter z (default: 1.0, 1.0 = disabled).
-
-Tail-free sampling (TFS) is a text generation technique that aims to reduce the impact of less likely tokens, which may be less relevant, less coherent, or nonsensical, on the output. Similar to Top-P it tries to determine the bulk of the most likely tokens dynamically. But TFS filters out logits based on the second derivative of their probabilities. Adding tokens is stopped after the sum of the second derivatives reaches the parameter z. In short: TFS looks at how quickly the probabilities of the tokens decrease and cuts off the tail of unlikely tokens using the parameter z. Typical values for z are in the range of 0.9 to 0.95. A value of 1.0 would include all tokens and thus disables the effect of TFS.
-
-Example usage: `--tfs 0.95`
 
 ### Locally Typical Sampling
 
@@ -253,6 +295,14 @@ By removing top tokens XTC can improve the variety of answers, break writing cli
 Being experimental and unique, XTC is disabled by default. The recommended combination of samplers is Min-P followed by XTC on its default settings: `--sampling-seq mx --min-p 0.02 --xtc-probability 0.5`.
 
 Example usage: `--xtc-probability 0.5 --xtc-threshold 0.1`
+
+### Top-nσ Sampling
+
+-   `--top-nsigma N`: Limit the next token selection to a subset of tokens with pre-softmax logits that are within n * σ less than the max logit (default: -1, -1 = disabled).
+
+Top-nσ sampling is a text generation method that selects tokens based on a statistical threshold in pre-softmax logits. It works by only sampling from tokens with logits that are within n * σ of the maximum logit. This method helps maintain a stable sampling space regardless of temperature scaling, allowing it to perform well on reasoning tasks even in high temperatures. Without complex probability manipulation, it efficiently filters tokens directly on the pre-softmax logits. A higher value for top-nsigma (e.g., 5) will take more noisy tokens into consideration, while a lower value (e.g., 1) will focous on the more informative region of the sampling space.
+
+Example usage: `--top-nsigma 1`
 
 ### Logit Bias
 
@@ -299,9 +349,9 @@ These options help improve the performance and memory usage of the LLaMA models.
 
 ### Batch Size
 
--   `-b N, --batch-size N`: Set the batch size for prompt processing (default: `2048`). This large batch size benefits users who have BLAS installed and enabled it during the build. If you don't have BLAS enabled ("BLAS=0"), you can use a smaller number, such as 8, to see the prompt progress as it's evaluated in some situations.
+- `-ub N`, `--ubatch-size N`: Physical batch size. This is the maximum number of tokens that may be processed at a time. Increasing this value may improve performance during prompt processing, at the expense of higher memory usage. Default: `512`.
 
-- `-ub N`, `--ubatch-size N`: physical maximum batch size. This is for pipeline parallelization. Default: `512`.
+- `-b N`, `--batch-size N`: Logical batch size. Increasing this value above the value of the physical batch size may improve prompt processing performance when using multiple GPUs with pipeline parallelism. Default: `2048`.
 
 ### Prompt Caching
 
@@ -317,14 +367,22 @@ These options help improve the performance and memory usage of the LLaMA models.
 
 For information about 4-bit quantization, which can significantly improve performance and reduce memory usage, please refer to llama.cpp's primary [README](../../README.md#prepare-and-quantize).
 
+## LoRA (Low-Rank Adaptation) adapters
+
+-   `--lora FNAME`: Optional path to a LoRA adapter to use with scaling of 1.0. Can be mixed with `--lora-scaled` and can be repeated to use multiple adapters.
+-   `--lora-scaled FNAME`: Optional path to a LoRA adapter with user-defined scaling. Can be mixed with `--lora` and can repeated to use multiple adapters.
+
+You can add LoRA adapters using `--lora` or `--lora-scaled`. For example: `--lora my_adapter_1.gguf --lora my_adapter_2.gguf ...` or `--lora-scaled lora_task_A.gguf 0.5 --lora-scaled lora_task_B.gguf 0.5`.
+
+LoRA adapters should be in GGUF format. To convert from Hugging Face format use the `convert-lora-to-gguf.py` script. LoRA adapters are loaded separately and applied during inference - they are not merged with the main model. This means that mmap model loading is fully supported when using LoRA adapters. The old `--lora-base` flag has been removed now that merging is no longer performed.
+
 ## Additional Options
 
 These options provide extra functionality and customization when running the LLaMA models:
 
 -   `-h, --help`: Display a help message showing all available options and their default values. This is particularly useful for checking the latest options and default values, as they can change frequently, and the information in this document may become outdated.
 -   `--verbose-prompt`: Print the prompt before generating text.
+-   `--no-display-prompt`: Don't print prompt at generation.
 -   `-mg i, --main-gpu i`: When using multiple GPUs this option controls which GPU is used for small tensors for which the overhead of splitting the computation across all GPUs is not worthwhile. The GPU in question will use slightly more VRAM to store a scratch buffer for temporary results. By default GPU 0 is used.
 -   `-ts SPLIT, --tensor-split SPLIT`: When using multiple GPUs this option controls how large tensors should be split across all GPUs. `SPLIT` is a comma-separated list of non-negative values that assigns the proportion of data that each GPU should get in order. For example, "3,2" will assign 60% of the data to GPU 0 and 40% to GPU 1. By default the data is split in proportion to VRAM but this may not be optimal for performance.
--   `--lora FNAME`: Apply a LoRA (Low-Rank Adaptation) adapter to the model (implies --no-mmap). This allows you to adapt the pretrained model to specific tasks or domains.
--   `--lora-base FNAME`: Optional model to use as a base for the layers modified by the LoRA adapter. This flag is used in conjunction with the `--lora` flag, and specifies the base model for the adaptation.
 -   `-hfr URL --hf-repo URL`: The url to the Hugging Face model repository. Used in conjunction with `--hf-file` or `-hff`. The model is downloaded and stored in the file provided by `-m` or `--model`. If `-m` is not provided, the model is auto-stored in the path specified by the `LLAMA_CACHE` environment variable  or in an OS-specific local cache.

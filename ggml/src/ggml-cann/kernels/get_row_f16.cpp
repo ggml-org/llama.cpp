@@ -14,7 +14,7 @@ class GET_ROW_F16 {
                                 int64_t *output_ne_ub, size_t *output_nb_ub) {
         // TODO, use template for F16/f32
         int64_t op_block_num = GetBlockNum();
-        int64_t op_block_idx = GetBlockIdx();
+        op_block_idx = GetBlockIdx();
 
         for (int i = 0; i < 4; i++) {
             input_ne[i] = input_ne_ub[i];
@@ -59,32 +59,42 @@ class GET_ROW_F16 {
     }
 
     __aicore__ inline void copy_in(uint32_t offset, size_t len) {
+        size_t origin_len = len;
         LocalTensor<half> input_local = input_queue.AllocTensor<half>();
-        size_t tail = len % 32;
-        len = len & ~31;
-        DataCopy(input_local, input_gm[offset], len);
+        const size_t elem_per_block = 32 / sizeof(half);
+        size_t tail = len % elem_per_block;
+        len = len & ~(elem_per_block - 1);
         if(tail != 0) {
-            DataCopyExtParams dataCopyParams;
-            dataCopyParams.blockCount = 1;
-            dataCopyParams.blockLen = tail * sizeof(half);
-            DataCopyPadExtParams<half> padParams;
-            DataCopyPad(input_local[len], input_gm[offset + len],
-                        dataCopyParams, padParams);
+            len += elem_per_block;
         }
+        DataCopy(input_local, input_gm[offset], len);
         input_queue.EnQue(input_local);
     }
 
     __aicore__ inline void copy_out(uint32_t offset, size_t len) {
         LocalTensor<float> output_local = output_queue.DeQue<float>();
-        size_t tail = len % 32;
-        len = len & ~31;
-        DataCopy(output_gm[offset], output_local, len);
+        const size_t elem_per_block = 32 / sizeof(float);
+        size_t tail = len % elem_per_block;
+        len = len & ~(elem_per_block - 1);
+        if (len > 0) {
+            DataCopy(output_gm[offset], output_local, len);
+        }
+
         if(tail != 0) {
+#ifdef ASCEND_310P
+            for (size_t i = tail; i < elem_per_block; i++) {
+                output_local[len + i].SetValue(0, 0);
+            }
+            SetAtomicAdd<float>();
+            DataCopy(output_gm[offset + len], output_local[len], elem_per_block);
+            SetAtomicNone();
+#else
             DataCopyExtParams dataCopyParams;
             dataCopyParams.blockCount = 1;
             dataCopyParams.blockLen = tail * sizeof(float);
             DataCopyPad(output_gm[offset + len], output_local[len],
                         dataCopyParams);
+#endif
         }
         output_queue.FreeTensor(output_local);
     }
@@ -150,6 +160,7 @@ class GET_ROW_F16 {
     GlobalTensor<float> output_gm;
     TQue<QuePosition::VECIN, BUFFER_NUM> input_queue;
     TQue<QuePosition::VECOUT, BUFFER_NUM> output_queue;
+    int64_t op_block_idx;
 };
 
 template <typename T>

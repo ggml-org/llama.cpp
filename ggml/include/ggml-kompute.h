@@ -11,6 +11,8 @@
 extern "C" {
 #endif
 
+#define GGML_KOMPUTE_MAX_DEVICES 16
+
 struct ggml_vk_device {
     int index;
     int type; // same as VkPhysicalDeviceType
@@ -35,11 +37,13 @@ struct ggml_vk_device ggml_vk_current_device(void);
 // forward declaration
 typedef struct ggml_backend * ggml_backend_t;
 
-GGML_API ggml_backend_t ggml_backend_kompute_init(int device);
+GGML_BACKEND_API ggml_backend_t ggml_backend_kompute_init(int device);
 
-GGML_API bool ggml_backend_is_kompute(ggml_backend_t backend);
+GGML_BACKEND_API bool ggml_backend_is_kompute(ggml_backend_t backend);
 
-GGML_API ggml_backend_buffer_type_t ggml_backend_kompute_buffer_type(int device);
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_kompute_buffer_type(int device);
+
+GGML_BACKEND_API ggml_backend_reg_t ggml_backend_kompute_reg(void);
 
 #ifdef __cplusplus
 }

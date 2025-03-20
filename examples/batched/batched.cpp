@@ -41,17 +41,19 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_load_model_from_file(params.model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
 
     if (model == NULL) {
         LOG_ERR("%s: error: unable to load model\n" , __func__);
         return 1;
     }
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     // tokenize the prompt
 
     std::vector<llama_token> tokens_list;
-    tokens_list = common_tokenize(model, params.prompt, true);
+    tokens_list = common_tokenize(vocab, params.prompt, true);
 
     const int n_kv_req = tokens_list.size() + (n_predict - tokens_list.size())*n_parallel;
 
@@ -62,16 +64,17 @@ int main(int argc, char ** argv) {
     ctx_params.n_ctx   = n_kv_req;
     ctx_params.n_batch = std::max(n_predict, n_parallel);
 
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
 
     auto sparams = llama_sampler_chain_default_params();
+    sparams.no_perf = false;
 
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.sparams.top_k));
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.sparams.top_p, params.sparams.min_keep));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sparams.temp));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sparams.seed));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(params.sampling.top_k));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(params.sampling.top_p, params.sampling.min_keep));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp (params.sampling.temp));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist (params.sampling.seed));
 
     if (ctx == NULL) {
         LOG_ERR("%s: error: failed to create the llama_context\n" , __func__);
@@ -119,8 +122,8 @@ int main(int argc, char ** argv) {
         }
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-        if (decoder_start_token_id == -1) {
-            decoder_start_token_id = llama_token_bos(model);
+        if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
+            decoder_start_token_id = llama_vocab_bos(vocab);
         }
 
         common_batch_clear(batch);
@@ -173,7 +176,7 @@ int main(int argc, char ** argv) {
             const llama_token new_token_id = llama_sampler_sample(smpl, ctx, i_batch[i]);
 
             // is it an end of generation? -> mark the stream as finished
-            if (llama_token_is_eog(model, new_token_id) || n_cur == n_predict) {
+            if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_predict) {
                 i_batch[i] = -1;
                 LOG("\n");
                 if (n_parallel > 1) {
@@ -235,7 +238,7 @@ int main(int argc, char ** argv) {
 
     llama_sampler_free(smpl);
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
 
     llama_backend_free();
 

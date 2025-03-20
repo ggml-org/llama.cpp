@@ -840,6 +840,8 @@ class OutputFile:
                         self.gguf.add_base_model_version(key, base_model_entry["version"])
                     if "organization" in base_model_entry:
                         self.gguf.add_base_model_organization(key, base_model_entry["organization"])
+                    if "description" in base_model_entry:
+                        self.gguf.add_base_model_description(key, base_model_entry["description"])
                     if "url" in base_model_entry:
                         self.gguf.add_base_model_url(key, base_model_entry["url"])
                     if "doi" in base_model_entry:
@@ -849,12 +851,32 @@ class OutputFile:
                     if "repo_url" in base_model_entry:
                         self.gguf.add_base_model_repo_url(key, base_model_entry["repo_url"])
 
+            if metadata.datasets is not None:
+                self.gguf.add_dataset_count(len(metadata.datasets))
+                for key, dataset_entry in enumerate(metadata.datasets):
+                    if "name" in dataset_entry:
+                        self.gguf.add_dataset_name(key, dataset_entry["name"])
+                    if "author" in dataset_entry:
+                        self.gguf.add_dataset_author(key, dataset_entry["author"])
+                    if "version" in dataset_entry:
+                        self.gguf.add_dataset_version(key, dataset_entry["version"])
+                    if "organization" in dataset_entry:
+                        self.gguf.add_dataset_organization(key, dataset_entry["organization"])
+                    if "description" in dataset_entry:
+                        self.gguf.add_dataset_description(key, dataset_entry["description"])
+                    if "url" in dataset_entry:
+                        self.gguf.add_dataset_url(key, dataset_entry["url"])
+                    if "doi" in dataset_entry:
+                        self.gguf.add_dataset_doi(key, dataset_entry["doi"])
+                    if "uuid" in dataset_entry:
+                        self.gguf.add_dataset_uuid(key, dataset_entry["uuid"])
+                    if "repo_url" in dataset_entry:
+                        self.gguf.add_dataset_repo_url(key, dataset_entry["repo_url"])
+
             if metadata.tags is not None:
                 self.gguf.add_tags(metadata.tags)
             if metadata.languages is not None:
                 self.gguf.add_languages(metadata.languages)
-            if metadata.datasets is not None:
-                self.gguf.add_datasets(metadata.datasets)
 
     def add_meta_arch(self, params: Params) -> None:
         # Metadata About The Neural Architecture Itself

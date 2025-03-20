@@ -269,7 +269,8 @@ void ggml_sycl_op_rope(
         }
     }
 
-    (void) src1;
-    (void) dst;
-    (void) src1_dd;
+    GGML_UNUSED(src1);
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src1_dd);
+    GGML_UNUSED(ctx);
 }

@@ -225,11 +225,9 @@
       temperature: 0.7,
       repeat_last_n: 256, // 0 = disable penalty, -1 = context size
       repeat_penalty: 1.18, // 1.0 = disabled
-      penalize_nl: false,
       top_k: 40, // <= 0 to use vocab size
       top_p: 0.95, // 1.0 = disabled
       min_p: 0.05, // 0 = disabled
-      tfs_z: 1.0, // 1.0 = disabled
       typical_p: 1.0, // 1.0 = disabled
       presence_penalty: 0.0, // 0.0 = disabled
       frequency_penalty: 0.0, // 0.0 = disabled
@@ -783,7 +781,6 @@
             ${FloatField({ label: "Temperature", max: 2.0, min: 0.0, name: "temperature", step: 0.01, value: params.value.temperature })}
             ${FloatField({ label: "Penalize repeat sequence", max: 2.0, min: 0.0, name: "repeat_penalty", step: 0.01, value: params.value.repeat_penalty })}
             ${IntField({ label: "Consider N tokens for penalize", max: 2048, min: 0, name: "repeat_last_n", value: params.value.repeat_last_n })}
-            ${BoolField({ label: "Penalize repetition of newlines", name: "penalize_nl", value: params.value.penalize_nl })}
             ${IntField({ label: "Top-K sampling", max: 100, min: -1, name: "top_k", value: params.value.top_k })}
             ${FloatField({ label: "Top-P sampling", max: 1.0, min: 0.0, name: "top_p", step: 0.01, value: params.value.top_p })}
             ${FloatField({ label: "Min-P sampling", max: 1.0, min: 0.0, name: "min_p", step: 0.01, value: params.value.min_p })}
@@ -791,7 +788,6 @@
           <details>
             <summary>More options</summary>
             <fieldset class="two">
-              ${FloatField({ label: "TFS-Z", max: 1.0, min: 0.0, name: "tfs_z", step: 0.01, value: params.value.tfs_z })}
               ${FloatField({ label: "Typical P", max: 1.0, min: 0.0, name: "typical_p", step: 0.01, value: params.value.typical_p })}
               ${FloatField({ label: "Presence penalty", max: 1.0, min: 0.0, name: "presence_penalty", step: 0.01, value: params.value.presence_penalty })}
               ${FloatField({ label: "Frequency penalty", max: 1.0, min: 0.0, name: "frequency_penalty", step: 0.01, value: params.value.frequency_penalty })}

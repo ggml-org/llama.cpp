@@ -12,7 +12,7 @@ int main(int argc, char** argv) {
     }
 
     // Get only the program name from the full path
-    auto pos = filename.find_last_of('/');
+    auto pos = filename.find_last_of("/\\");
     if (pos != std::string::npos) {
         filename = filename.substr(pos+1);
     }

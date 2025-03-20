@@ -3,19 +3,18 @@ Kompute:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/include/ggml-kompute.h
-            - ggml/src/ggml-kompute.cpp
+            - ggml/src/ggml-kompute/**
             - README-kompute.md
 Apple Metal:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/include/ggml-metal.h
-            - ggml/src/ggml-metal.cpp
+            - ggml/src/ggml-metal/**
             - README-metal.md
 SYCL:
     - changed-files:
         - any-glob-to-any-file:
             - ggml/include/ggml-sycl.h
-            - ggml/src/ggml-sycl.cpp
             - ggml/src/ggml-sycl/**
             - docs/backend/SYCL.md
             - examples/sycl/**
@@ -27,8 +26,8 @@ Nvidia GPU:
 Vulkan:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml/ggml_vk_generate_shaders.py
-            - ggml/src/ggml-vulkan*
+            - ggml/include/ggml-vulkan.h
+            - ggml/src/ggml-vulkan/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:
@@ -75,11 +74,7 @@ server:
 ggml:
     - changed-files:
         - any-glob-to-any-file:
-            - ggml/include/ggml*.h
-            - ggml/src/ggml*.c
-            - ggml/src/ggml*.cpp
-            - ggml/src/ggml*.h
-            - ggml-cuda/**
+            - ggml/**
 nix:
     - changed-files:
         - any-glob-to-any-file:

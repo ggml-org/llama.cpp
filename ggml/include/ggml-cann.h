@@ -34,6 +34,8 @@ extern "C" {
  */
 #define GGML_CANN_MAX_DEVICES 16
 
+GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cann_reg(void);
+
 /**
  * @brief Initializes the CANN backend for a specified device.
  *
@@ -44,7 +46,7 @@ extern "C" {
  * @param device The index of the device to initialize.
  * @return A pointer to the initialized backend instance, or nullptr on failure.
  */
-GGML_API ggml_backend_t ggml_backend_cann_init(int32_t device);
+GGML_BACKEND_API ggml_backend_t ggml_backend_cann_init(int32_t device);
 
 /**
  * @brief Checks if a given backend is a CANN backend.
@@ -55,7 +57,7 @@ GGML_API ggml_backend_t ggml_backend_cann_init(int32_t device);
  * @param backend The backend instance to check.
  * @return True if the backend is a CANN backend, false otherwise.
  */
-GGML_API bool ggml_backend_is_cann(ggml_backend_t backend);
+GGML_BACKEND_API bool ggml_backend_is_cann(ggml_backend_t backend);
 
 /**
  * @brief Retrieves the CANN buffer type for a specified device.
@@ -67,7 +69,7 @@ GGML_API bool ggml_backend_is_cann(ggml_backend_t backend);
  * @return A pointer to the buffer type interface for the specified device, or
  * nullptr if the device index is out of range.
  */
-GGML_API ggml_backend_buffer_type_t
+GGML_BACKEND_API ggml_backend_buffer_type_t
 ggml_backend_cann_buffer_type(int32_t device);
 
 /**
@@ -78,14 +80,14 @@ ggml_backend_cann_buffer_type(int32_t device);
  *
  * @return The number of CANN devices available.
  */
-GGML_API int32_t ggml_backend_cann_get_device_count(void);
+GGML_BACKEND_API int32_t ggml_backend_cann_get_device_count(void);
 
 /**
  * @brief pinned host buffer for use with the CPU backend for faster copies between CPU and NPU.
  *
  * @return A pointer to the host buffer type interface.
  */
-GGML_API ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type(void);
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type(void);
 
 /**
  * @brief Retrieves the description of a specific CANN device.
@@ -97,7 +99,7 @@ GGML_API ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type(void);
  * @param description Pointer to a buffer where the description will be written.
  * @param description_size Size of the description buffer.
  */
-GGML_API void ggml_backend_cann_get_device_description(
+GGML_BACKEND_API void ggml_backend_cann_get_device_description(
     int32_t device, char* description, size_t description_size);
 
 /**
@@ -112,7 +114,7 @@ GGML_API void ggml_backend_cann_get_device_description(
  * @param total Pointer to a variable where the total memory size will be
  * stored.
  */
-GGML_API void ggml_backend_cann_get_device_memory(int32_t device,
+GGML_BACKEND_API void ggml_backend_cann_get_device_memory(int32_t device,
                                                   size_t* free,
                                                   size_t* total);
 

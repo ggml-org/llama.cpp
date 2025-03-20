@@ -211,17 +211,20 @@ struct ggml_cann_pool_alloc {
 struct ggml_backend_cann_context {
     int32_t device;                  /**< Device ID. */
     std::string name;                /**< Name of the device. */
+    std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
 
-    aclrtStream streams[GGML_CANN_MAX_STREAMS] = {
-        {nullptr}}; /**< Array of streams for the device. */
+    aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
     /**
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
      */
     explicit ggml_backend_cann_context(int device)
-        : device(device), name("CANN" + std::to_string(device)) {}
+        : device(device), name("CANN" + std::to_string(device)) {
+        ggml_cann_set_device(device);
+        description = aclrtGetSocName();
+    }
 
     /**
      * @brief Destructor for cleaning up resources.

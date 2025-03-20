@@ -23,6 +23,8 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ## News
 
+- 2024.11
+  - Support F16 and F32 data type model for Ascend 310P NPU.
 - 2024.8
   - Support `Q4_0` and `Q8_0` data type for Ascend NPU.
 - 2024.7
@@ -40,9 +42,11 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 ### Ascend NPU
 
 **Verified devices**
+
 | Ascend NPU                    | Status  |
 |:-----------------------------:|:-------:|
 | Atlas 300T A2                 | Support |
+| Atlas 300I Duo                | Support |
 
 *Notes:*
 

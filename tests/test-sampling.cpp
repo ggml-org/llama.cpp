@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+extern struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const std::vector<std::vector<llama_token>>& seq_breakers);
+
 static void dump(const llama_token_data_array * cur_p) {
     for (size_t i = 0; i < cur_p->size; i++) {
         printf("%d: %f (%f)\n", cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
@@ -103,16 +105,6 @@ static void test_top_p(const std::vector<float> & probs, const std::vector<float
     tester.check();
 }
 
-static void test_tfs(const std::vector<float> & probs, const std::vector<float> & probs_expected, float z) {
-    sampler_tester tester(probs, probs_expected);
-
-    DUMP(&tester.cur_p);
-    tester.apply(llama_sampler_init_tail_free(z, 1));
-    DUMP(&tester.cur_p);
-
-    tester.check();
-}
-
 static void test_min_p(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p) {
     sampler_tester tester(probs, probs_expected);
 
@@ -152,8 +144,7 @@ static void test_penalties(
 
     sampler_tester tester(probs, probs_expected);
 
-    const size_t n_vocab = probs.size();
-    auto * sampler = llama_sampler_init_penalties(n_vocab, LLAMA_TOKEN_NULL, LLAMA_TOKEN_NULL, last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence, false, false);
+    auto * sampler = llama_sampler_init_penalties(last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence);
 
     for (size_t i = 0; i < last_tokens.size(); i++) {
         llama_sampler_accept(sampler, last_tokens[i]);
@@ -162,6 +153,40 @@ static void test_penalties(
     DUMP(&tester.cur_p);
     tester.apply(sampler);
     tester.apply(llama_sampler_init_dist(0));
+    DUMP(&tester.cur_p);
+
+    tester.check();
+}
+
+static void test_dry(
+    const std::vector<float> & probs, const std::vector<llama_token> & last_tokens,
+    const std::vector<float> & expected_probs, float dry_multiplier, float dry_base,
+    int dry_allowed_length, int dry_penalty_last_n,
+    const std::vector<std::vector<llama_token>> & seq_breakers
+) {
+    GGML_ASSERT(probs.size() == expected_probs.size());
+
+    sampler_tester tester(probs, expected_probs);
+
+    auto * sampler = llama_sampler_init_dry_testing(1024, dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n, seq_breakers);
+
+    for (size_t i = 0; i < last_tokens.size(); i++) {
+        llama_sampler_accept(sampler, last_tokens[i]);
+    }
+
+    DUMP(&tester.cur_p);
+    tester.apply(sampler);
+    tester.apply(llama_sampler_init_dist(0));
+    DUMP(&tester.cur_p);
+    tester.check();
+}
+
+static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, int n) {
+    sampler_tester tester(probs, probs_expected);
+
+    DUMP(&tester.cur_p);
+    tester.apply(llama_sampler_init_top_n_sigma(n));
+    tester.apply(llama_sampler_init_dist (0));
     DUMP(&tester.cur_p);
 
     tester.check();
@@ -177,7 +202,6 @@ static void test_sampler_queue(const size_t n_vocab, const std::string & sampler
     for (auto s : samplers_sequence) {
         switch (s){
             case 'k': tester.apply(llama_sampler_init_top_k(top_k)); break;
-            case 'f': GGML_ABORT("tail_free test not implemented");
             case 'y': GGML_ABORT("typical test not implemented");
             case 'p': tester.apply(llama_sampler_init_top_p(top_p, 1)); break;
             case 'm': tester.apply(llama_sampler_init_min_p(min_p, 1)); break;
@@ -270,16 +294,15 @@ static void test_perf() {
 
     data.reserve(n_vocab);
     for (int i = 0; i < n_vocab; i++) {
-        const float logit = 2.0f*((float)(rand())/RAND_MAX - 0.5f);
+        const float logit = 2.0f*((double)(rand())/RAND_MAX - 0.5);
         data.emplace_back(llama_token_data{i, logit, 0.0f});
     }
 
-    BENCH(llama_sampler_init_top_k    (40),                     data, 32);
-    BENCH(llama_sampler_init_top_p    (0.8f, 1),                data, 32);
-    BENCH(llama_sampler_init_min_p    (0.2f, 1),                data, 32);
-    BENCH(llama_sampler_init_tail_free(0.5f, 1),                data, 32);
-    BENCH(llama_sampler_init_typical  (0.5f, 1),                data, 32);
-    BENCH(llama_sampler_init_xtc      (1.0f, 0.1f, 1, 1),       data, 32);
+    BENCH(llama_sampler_init_top_k  (40),                     data, 32);
+    BENCH(llama_sampler_init_top_p  (0.8f, 1),                data, 32);
+    BENCH(llama_sampler_init_min_p  (0.2f, 1),                data, 32);
+    BENCH(llama_sampler_init_typical(0.5f, 1),                data, 32);
+    BENCH(llama_sampler_init_xtc    (1.0f, 0.1f, 1, 1),       data, 32);
 }
 
 int main(void) {
@@ -318,10 +341,6 @@ int main(void) {
     printf("XTC should not:\n");
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.4f, 0.3f, 0.2f, 0.1f},              0.99f, 0.39f);
 
-    test_tfs({0.1f, 0.15f, 0.2f, 0.25f, 0.3f}, {0.3f}, 0.25f);
-    test_tfs({0.1f, 0.15f, 0.2f, 0.25f, 0.3f}, {0.3f, 0.25f}, 0.75f);
-    test_tfs({0.1f, 0.15f, 0.2f, 0.25f, 0.3f}, {0.3f, 0.25f}, 0.99f);
-
     test_typical({0.97f, 0.01f, 0.01f, 0.01f}, {0.97f}, 0.5f);
     test_typical({0.4f, 0.2f, 0.2f, 0.2f}, {0.2f, 0.2f, 0.2f}, 0.5f);
 
@@ -332,6 +351,17 @@ int main(void) {
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0},             {0.249997f, 0.249997f, 0.249997f, 0.249997f, 0.000011f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2},       {0.499966f, 0.499966f, 0.000023f, 0.000023f, 0.000023f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 0}, {0.499977f, 0.499977f, 0.000023f, 0.000023f, 0.000000f}, 1.0f, 5.0f, 5.0f);
+
+
+    test_dry({0.25f, 0.25f, 0.25f, 0.25f}, {0, 1}, {0.25f, 0.25f, 0.25f, 0.25f}, 1.0f, 1.1f, 2, 4, {});
+    test_dry({0.25f, 0.25f, 0.25f, 0.25f}, {0, 1, 2, 0, 1}, {0.296923f, 0.296923f, 0.296923f, 0.109232f}, 1.0f, 1.1f, 2, 5, {});
+    test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 2, 6, {{3}});
+    test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 1}, {0.241818f, 0.241818f, 0.241818f, 0.241818f, 0.032727f}, 2.0f, 1.1f, 2, 5, {});
+    test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 4, 7, {});
+
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.571429f, 0.428571f, 0.0f, 0.0f}, 1.00f);
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f, 0.0f, 0.0f, 0.0f}, 0.00f);
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 3.00f);
 
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);

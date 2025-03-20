@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-#define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  100
+#define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 struct seq_draft {
@@ -33,7 +33,7 @@ int main(int argc, char ** argv) {
     common_params params;
 
     // needed to get candidate probs even for temp <= 0.0
-    params.sparams.n_probs = 128;
+    params.sampling.n_probs = 128;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SPECULATIVE)) {
         return 1;
@@ -46,7 +46,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.model_draft.empty()) {
+    if (params.speculative.model.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -55,9 +55,9 @@ int main(int argc, char ** argv) {
     const int n_seq_dft = params.n_parallel;
 
     // probability threshold for splitting a draft branch (only for n_seq_dft > 1)
-    const float p_split  = params.p_split;
+    const float p_draft_split = params.speculative.p_split;
 
-    std::default_random_engine rng(params.sparams.seed == LLAMA_DEFAULT_SEED ? std::random_device()() : params.sparams.seed);
+    std::default_random_engine rng(params.sampling.seed == LLAMA_DEFAULT_SEED ? std::random_device()() : params.sampling.seed);
     std::uniform_real_distribution<> u_dist;
 
     // init llama.cpp
@@ -72,25 +72,31 @@ int main(int argc, char ** argv) {
 
     // load the target model
     common_init_result llama_init_tgt = common_init_from_params(params);
-    model_tgt = llama_init_tgt.model;
-    ctx_tgt = llama_init_tgt.context;
+
+    model_tgt = llama_init_tgt.model.get();
+    ctx_tgt   = llama_init_tgt.context.get();
 
     // load the draft model
-    params.model = params.model_draft;
-    params.n_gpu_layers = params.n_gpu_layers_draft;
-    if (params.draft_cpuparams.n_threads > 0) {
-        params.cpuparams.n_threads = params.draft_cpuparams.n_threads;
+    params.devices = params.speculative.devices;
+    params.model = params.speculative.model;
+    params.n_gpu_layers = params.speculative.n_gpu_layers;
+    if (params.speculative.cpuparams.n_threads > 0) {
+        params.cpuparams.n_threads = params.speculative.cpuparams.n_threads;
     }
 
-    params.cpuparams_batch.n_threads = params.draft_cpuparams_batch.n_threads;
+    params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
     common_init_result llama_init_dft = common_init_from_params(params);
-    model_dft = llama_init_dft.model;
-    ctx_dft = llama_init_dft.context;
 
-    const bool vocab_type_tgt = llama_vocab_type(model_tgt);
+    model_dft = llama_init_dft.model.get();
+    ctx_dft   = llama_init_dft.context.get();
+
+    const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+
+    const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
     LOG_DBG("vocab_type tgt: %d\n", vocab_type_tgt);
 
-    const bool vocab_type_dft = llama_vocab_type(model_dft);
+    const bool vocab_type_dft = llama_vocab_type(vocab_dft);
     LOG_DBG("vocab_type dft: %d\n", vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
@@ -100,18 +106,18 @@ int main(int argc, char ** argv) {
     }
 
     if (
-        llama_add_bos_token(model_tgt) != llama_add_bos_token(model_dft) ||
-        llama_add_eos_token(model_tgt) != llama_add_eos_token(model_dft) ||
-        llama_token_bos(model_tgt) != llama_token_bos(model_dft) ||
-        llama_token_eos(model_tgt) != llama_token_eos(model_dft)
+        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
+        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
     ) {
         LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
         return 1;
     }
 
     {
-        const int n_vocab_tgt = llama_n_vocab(model_tgt);
-        const int n_vocab_dft = llama_n_vocab(model_dft);
+        const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+        const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
         const int vocab_diff  = n_vocab_tgt > n_vocab_dft
             ? n_vocab_tgt - n_vocab_dft
             : n_vocab_dft - n_vocab_tgt;
@@ -119,13 +125,13 @@ int main(int argc, char ** argv) {
         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
             LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
-                    n_vocab_tgt, llama_n_vocab(model_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+                    n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return 1;
         }
 
         for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_token_get_text(model_tgt, i);
-            const char * token_text_dft = llama_token_get_text(model_dft, i);
+            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
                 LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
                 LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
@@ -167,10 +173,10 @@ int main(int argc, char ** argv) {
     const auto t_enc_end = ggml_time_us();
 
     // the 2 models should have the same vocab
-    //GGML_ASSERT(n_vocab == llama_n_vocab(model_dft));
+    //GGML_ASSERT(n_vocab == llama_vocab_n_tokens(model_dft));
 
     // how many tokens to draft each time
-    int n_draft = params.n_draft;
+    int n_draft = params.speculative.n_max;
 
     int n_predict = 0;
     int n_drafted = 0;
@@ -183,14 +189,14 @@ int main(int argc, char ** argv) {
     bool has_eos = false;
 
     // target model sampling context (reuse the llama_context's sampling instance)
-    struct common_sampler * smpl = common_sampler_init(model_tgt, params.sparams);
+    struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
     // draft sequence data
     std::vector<seq_draft> drafts(n_seq_dft);
 
     for (int s = 0; s < n_seq_dft; ++s) {
         // allocate llama_sampler for each draft sequence
-        drafts[s].smpl = common_sampler_init(model_dft, params.sparams);
+        drafts[s].smpl = common_sampler_init(model_dft, params.sampling);
     }
 
     llama_batch batch_dft = llama_batch_init(llama_n_batch(ctx_dft), 0, 1);
@@ -230,7 +236,7 @@ int main(int argc, char ** argv) {
             // for stochastic sampling, attempt to match the token with the drafted tokens
             {
                 bool accept = false;
-                if (params.sparams.temp > 0) {
+                if (params.sampling.temp > 0) {
                     // stochastic verification
                     common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
 
@@ -267,11 +273,12 @@ int main(int argc, char ** argv) {
                         for (size_t i = 0; i < dist_tgt.size; i++) {
                             if (dist_tgt.data[i].id == drafts[s].tokens[i_dft]) {
                                 p_tgt = dist_tgt.data[i].p;
+                                break;
                             }
+                        }
+                        for (size_t i = 0; i < dist_dft.size; i++) {
                             if (dist_dft.data[i].id == drafts[s].tokens[i_dft]) {
                                 p_dft = dist_dft.data[i].p;
-                            }
-                            if (p_tgt && p_dft) {
                                 break;
                             }
                         }
@@ -324,11 +331,11 @@ int main(int argc, char ** argv) {
                         }
 
                         active_seqs.erase(s);
-                        for(int i = 0; i < n_seq_dft; i++) {
+                        for (int i = 0; i < n_seq_dft; i++) {
                             if (i == s) {
                                 continue;
                             }
-                            if (drafts[i].tokens[i_dft] == drafts[s].tokens[i_dft]) {
+                            if (drafts[i].active && drafts[i].tokens[i_dft] == drafts[s].tokens[i_dft]) {
                                 // synchronize active status for sequences with the same drafted token
                                 drafts[i].active = drafts[i].active && accept;
                                 if (!drafts[i].active) {
@@ -382,7 +389,7 @@ int main(int argc, char ** argv) {
                     }
                 }
 
-                if (llama_token_is_eog(model_tgt, token_id)) {
+                if (llama_vocab_is_eog(vocab_tgt, token_id)) {
                     has_eos = true;
                 }
                 ++n_predict;
@@ -413,14 +420,14 @@ int main(int argc, char ** argv) {
             {
                 LOG_DBG("keeping sequence %d, n_past_tgt = %d, n_past_dft = %d\n", s_keep, n_past_tgt, n_past_dft);
 
-                llama_kv_cache_seq_keep(ctx_dft, s_keep);
-                llama_kv_cache_seq_cp  (ctx_dft, s_keep, 0, -1, -1);
-                llama_kv_cache_seq_keep(ctx_dft, 0);
+                llama_kv_self_seq_keep(ctx_dft, s_keep);
+                llama_kv_self_seq_cp  (ctx_dft, s_keep, 0, -1, -1);
+                llama_kv_self_seq_keep(ctx_dft, 0);
 
-                llama_kv_cache_seq_rm  (ctx_tgt, s_keep, n_past_tgt, -1);
-                llama_kv_cache_seq_keep(ctx_tgt, s_keep);
-                llama_kv_cache_seq_cp  (ctx_tgt, s_keep, 0, -1, -1);
-                llama_kv_cache_seq_keep(ctx_tgt, 0);
+                llama_kv_self_seq_rm  (ctx_tgt, s_keep, n_past_tgt, -1);
+                llama_kv_self_seq_keep(ctx_tgt, s_keep);
+                llama_kv_self_seq_cp  (ctx_tgt, s_keep, 0, -1, -1);
+                llama_kv_self_seq_keep(ctx_tgt, 0);
             }
 
             for (int s = 0; s < n_seq_dft; ++s) {
@@ -437,7 +444,7 @@ int main(int argc, char ** argv) {
             common_batch_clear(batch_dft);
             common_batch_add  (batch_dft, token_id, n_past_dft, { 0 }, true);
 
-            llama_kv_cache_seq_rm(ctx_dft, 0, n_past_dft, -1);
+            llama_kv_self_seq_rm(ctx_dft, 0, n_past_dft, -1);
             // LOG_DBG("dft batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_dft, batch_dft).c_str());
             llama_decode(ctx_dft, batch_dft);
 
@@ -493,11 +500,11 @@ int main(int argc, char ** argv) {
 
                 // attempt to split the branch if the probability is high enough
                 for (int f = 1; f < 8; ++f) {
-                    if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_split) {
+                    if (n_seq_cur < n_seq_dft && cur_p->data[f].p > p_draft_split) {
                         LOG_DBG("splitting seq %3d into %3d\n", s, n_seq_cur);
 
-                        llama_kv_cache_seq_rm(ctx_dft,    n_seq_cur, -1, -1);
-                        llama_kv_cache_seq_cp(ctx_dft, s, n_seq_cur, -1, -1);
+                        llama_kv_self_seq_rm(ctx_dft,    n_seq_cur, -1, -1);
+                        llama_kv_self_seq_cp(ctx_dft, s, n_seq_cur, -1, -1);
 
                         // all previous tokens from this branch are now also part of the new branch
                         for (int t = 0; t < batch_tgt.n_tokens; ++t) {
@@ -578,9 +585,9 @@ int main(int argc, char ** argv) {
 
         // evaluate the target model on the drafted tokens
         {
-            llama_kv_cache_seq_keep(ctx_tgt, 0);
+            llama_kv_self_seq_keep(ctx_tgt, 0);
             for (int s = 1; s < n_seq_dft; ++s) {
-                llama_kv_cache_seq_cp(ctx_tgt, 0, s, -1, -1);
+                llama_kv_self_seq_cp(ctx_tgt, 0, s, -1, -1);
             }
 
             // LOG_DBG("target batch: %s\n", LOG_BATCH_TOSTR_PRETTY(ctx_tgt, batch_tgt).c_str());
@@ -628,12 +635,6 @@ int main(int argc, char ** argv) {
     }
 
     llama_batch_free(batch_dft);
-
-    llama_free(ctx_tgt);
-    llama_free_model(model_tgt);
-
-    llama_free(ctx_dft);
-    llama_free_model(model_dft);
 
     llama_backend_free();
 

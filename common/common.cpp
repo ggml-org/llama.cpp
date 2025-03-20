@@ -2,12 +2,14 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 
+#include "ggml.h"
+#include "gguf.h"
+
 #include "common.h"
 #include "log.h"
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
-#include "json-schema-to-grammar.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -62,11 +65,29 @@
 #ifdef __linux__
 #include <linux/limits.h>
 #elif defined(_WIN32)
-#define PATH_MAX MAX_PATH
+#   if !defined(PATH_MAX)
+#   define PATH_MAX MAX_PATH
+#   endif
 #else
 #include <sys/syslimits.h>
 #endif
 #define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+//
+// CURL utils
+//
+
+using curl_ptr = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
+
+// cannot use unique_ptr for curl_slist, because we cannot update without destroying the old one
+struct curl_slist_ptr {
+    struct curl_slist * ptr = nullptr;
+    ~curl_slist_ptr() {
+        if (ptr) {
+            curl_slist_free_all(ptr);
+        }
+    }
+};
 #endif // LLAMA_USE_CURL
 
 using json = nlohmann::ordered_json;
@@ -416,19 +437,6 @@ std::string string_format(const char * fmt, ...) {
     return std::string(buf.data(), size);
 }
 
-std::vector<std::string> string_split(std::string input, char separator) {
-    std::vector<std::string> parts;
-    size_t separator_pos = input.find(separator);
-    while (separator_pos != std::string::npos) {
-        std::string part = input.substr(0, separator_pos);
-        parts.emplace_back(part);
-        input = input.substr(separator_pos + 1);
-        separator_pos = input.find(separator);
-    }
-    parts.emplace_back(input);
-    return parts;
-}
-
 std::string string_strip(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();
@@ -472,6 +480,53 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     }
     builder.append(s, last_pos, std::string::npos);
     s = std::move(builder);
+}
+
+std::string regex_escape(const std::string & s) {
+    static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
+    return std::regex_replace(s, special_chars, "\\$0");
+}
+
+std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
+    std::ostringstream result;
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i > 0) {
+            result << separator;
+        }
+        result << values[i];
+    }
+    return result.str();
+}
+
+std::vector<std::string> string_split(const std::string & str, const std::string & delimiter) {
+    std::vector<std::string> parts;
+    size_t start = 0;
+    size_t end = str.find(delimiter);
+
+    while (end != std::string::npos) {
+        parts.push_back(str.substr(start, end - start));
+        start = end + delimiter.length();
+        end = str.find(delimiter, start);
+    }
+
+    parts.push_back(str.substr(start));
+
+    return parts;
+}
+
+std::string string_repeat(const std::string & str, size_t n) {
+    if (n == 0) {
+        return "";
+    }
+
+    std::string result;
+    result.reserve(str.length() * n);
+
+    for (size_t i = 0; i < n; ++i) {
+        result += str;
+    }
+
+    return result;
 }
 
 std::string string_from(bool value) {
@@ -549,12 +604,12 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
                     [](const unsigned char c) { return !std::isprint(c); }),
                 detokenized.end());
 
-        buf << "\n" << std::to_string(i)
-            << ":token '" << detokenized << "'"
-            << ":pos " << std::to_string(batch.pos[i])
-            << ":n_seq_id  " << std::to_string(batch.n_seq_id[i])
-            << ":seq_id " << std::to_string(batch.seq_id[i][0])
-            << ":logits " << std::to_string(batch.logits[i]);
+        buf << "\n"          << std::to_string(i)
+            << ", token '"   << detokenized << "'"
+            << ", pos "      << std::to_string(batch.pos[i])
+            << ", n_seq_id " << std::to_string(batch.n_seq_id[i])
+            << ", seq_id "   << std::to_string(batch.seq_id[i][0])
+            << ", logits "   << std::to_string(batch.logits[i]);
     }
 
     buf << " ]";
@@ -665,7 +720,17 @@ bool fs_validate_filename(const std::string & filename) {
 
     std::u32string filename_utf32;
     try {
+#if defined(__clang__)
+        // disable C++17 deprecation warning for std::codecvt_utf8
+#    pragma clang diagnostic push
+#    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#endif
         std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
+
+#if defined(__clang__)
+#    pragma clang diagnostic pop
+#endif
+
         filename_utf32 = converter.from_bytes(filename);
 
         // If the reverse conversion mismatches, it means overlong UTF-8 sequences were used,
@@ -842,11 +907,11 @@ struct common_init_result common_init_from_params(common_params & params) {
     llama_model * model = nullptr;
 
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
-        model = common_load_model_from_hf(params.hf_repo.c_str(), params.hf_file.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
+        model = common_load_model_from_hf(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
     } else if (!params.model_url.empty()) {
-        model = common_load_model_from_url(params.model_url.c_str(), params.model.c_str(), params.hf_token.c_str(), mparams);
+        model = common_load_model_from_url(params.model_url, params.model, params.hf_token, mparams);
     } else {
-        model = llama_load_model_from_file(params.model.c_str(), mparams);
+        model = llama_model_load_from_file(params.model.c_str(), mparams);
     }
 
     if (model == NULL) {
@@ -854,26 +919,28 @@ struct common_init_result common_init_from_params(common_params & params) {
         return iparams;
     }
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     if (params.reranking) {
         bool ok = true;
 
-        if (llama_token_bos(model) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: model does not have a  BOS token, reranking will not work\n", __func__);
+        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
+            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
             ok = false;
         }
 
-        if (llama_token_eos(model) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: model does not have an EOS token, reranking will not work\n", __func__);
+        if (llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, reranking will not work\n", __func__);
             ok = false;
         }
 
-        if (llama_token_sep(model) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: model does not have a  SEP token, reranking will not work\n", __func__);
+        if (llama_vocab_sep(vocab) == LLAMA_TOKEN_NULL) {
+            LOG_WRN("%s: warning: vocab does not have a  SEP token, reranking will not work\n", __func__);
             ok = false;
         }
 
         if (!ok) {
-            llama_free_model(model);
+            llama_model_free(model);
 
             return iparams;
         }
@@ -881,34 +948,40 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     auto cparams = common_context_params_to_llama(params);
 
-    llama_context * lctx = llama_new_context_with_model(model, cparams);
+    llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.c_str());
-        llama_free_model(model);
+        llama_model_free(model);
         return iparams;
+    }
+
+    if (params.ctx_shift && !llama_kv_self_can_shift(lctx)) {
+        LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
+        params.ctx_shift = false;
     }
 
     if (!params.control_vectors.empty()) {
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
-        if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);
+        if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_model_n_layer(model);
 
         const auto cvec = common_control_vector_load(params.control_vectors);
         if (cvec.n_embd == -1) {
             llama_free(lctx);
-            llama_free_model(model);
+            llama_model_free(model);
 
             return iparams;
         }
 
-        int err = llama_control_vector_apply(lctx,
-                                             cvec.data.data(),
-                                             cvec.data.size(),
-                                             cvec.n_embd,
-                                             params.control_vector_layer_start,
-                                             params.control_vector_layer_end);
+        int err = llama_apply_adapter_cvec(
+                lctx,
+                cvec.data.data(),
+                cvec.data.size(),
+                cvec.n_embd,
+                params.control_vector_layer_start,
+                params.control_vector_layer_end);
         if (err) {
             llama_free(lctx);
-            llama_free_model(model);
+            llama_model_free(model);
 
             return iparams;
         }
@@ -916,33 +989,56 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     // load and optionally apply lora adapters
     for (auto & la : params.lora_adapters) {
-        common_lora_adapter_container loaded_la;
-        loaded_la.path = la.path;
-        loaded_la.scale = la.scale;
-        loaded_la.adapter = llama_lora_adapter_init(model, la.path.c_str());
-        if (loaded_la.adapter == nullptr) {
+        llama_adapter_lora_ptr lora;
+        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
+        if (lora == nullptr) {
             LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
             llama_free(lctx);
-            llama_free_model(model);
+            llama_model_free(model);
             return iparams;
         }
-        iparams.lora_adapters.push_back(loaded_la); // copy to list of loaded adapters
-    }
-    if (!params.lora_init_without_apply) {
-        common_lora_adapters_apply(lctx, iparams.lora_adapters);
+
+        la.ptr = lora.get();
+        iparams.lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
     }
 
-    if (params.sparams.ignore_eos && llama_token_eos(model) == LLAMA_TOKEN_NULL) {
-        LOG_WRN("%s: warning: model does not have an EOS token, ignoring --ignore-eos\n", __func__);
-        params.sparams.ignore_eos = false;
+    if (!params.lora_init_without_apply) {
+        common_set_adapter_lora(lctx, params.lora_adapters);
+    }
+
+    if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
+        LOG_WRN("%s: warning: vocab does not have an EOS token, ignoring --ignore-eos\n", __func__);
+        params.sampling.ignore_eos = false;
+    }
+
+    if (params.sampling.ignore_eos) {
+        for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
+            if (llama_vocab_is_eog(vocab, i)) {
+                LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
+                params.sampling.logit_bias.push_back({i, -INFINITY});
+            }
+        }
+    }
+
+    if (params.sampling.penalty_last_n == -1) {
+        LOG_INF("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+        params.sampling.penalty_last_n = llama_n_ctx(lctx);
+    }
+
+    if (params.sampling.dry_penalty_last_n == -1) {
+        LOG_INF("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
+        params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     }
 
     if (params.warmup) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
+        llama_set_warmup(lctx, true);
+
         std::vector<llama_token> tmp;
-        llama_token bos = llama_token_bos(model);
-        llama_token eos = llama_token_eos(model);
+        llama_token bos = llama_vocab_bos(vocab);
+        llama_token eos = llama_vocab_eos(vocab);
+
         // some models (e.g. T5) don't have a BOS token
         if (bos != LLAMA_TOKEN_NULL) {
             tmp.push_back(bos);
@@ -957,7 +1053,7 @@ struct common_init_result common_init_from_params(common_params & params) {
         if (llama_model_has_encoder(model)) {
             llama_encode(lctx, llama_batch_get_one(tmp.data(), tmp.size()));
             llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
-            if (decoder_start_token_id == -1) {
+            if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
                 decoder_start_token_id = bos;
             }
             tmp.clear();
@@ -966,33 +1062,36 @@ struct common_init_result common_init_from_params(common_params & params) {
         if (llama_model_has_decoder(model)) {
             llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch)));
         }
-        llama_kv_cache_clear(lctx);
+        llama_kv_self_clear(lctx);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
+        llama_set_warmup(lctx, false);
     }
 
-    iparams.model   = model;
-    iparams.context = lctx;
+    iparams.model.reset(model);
+    iparams.context.reset(lctx);
 
     return iparams;
 }
 
-void common_lora_adapters_apply(struct llama_context * ctx, std::vector<common_lora_adapter_container> & lora_adapters) {
-    llama_lora_adapter_clear(ctx);
-    for (auto & la : lora_adapters) {
+void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
+    llama_clear_adapter_lora(ctx);
+    for (auto & la : lora) {
         if (la.scale != 0.0f) {
-            llama_lora_adapter_set(ctx, la.adapter, la.scale);
+            llama_set_adapter_lora(ctx, la.ptr, la.scale);
         }
     }
 }
 
-struct llama_model_params common_model_params_to_llama(const common_params & params) {
+struct llama_model_params common_model_params_to_llama(common_params & params) {
     auto mparams = llama_model_default_params();
 
+    if (!params.devices.empty()) {
+        mparams.devices = params.devices.data();
+    }
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
     }
-    mparams.rpc_servers     = params.rpc_servers.c_str();
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
     mparams.tensor_split    = params.tensor_split;
@@ -1009,35 +1108,6 @@ struct llama_model_params common_model_params_to_llama(const common_params & par
     return mparams;
 }
 
-static ggml_type kv_cache_type_from_str(const std::string & s) {
-    if (s == "f32") {
-        return GGML_TYPE_F32;
-    }
-    if (s == "f16") {
-        return GGML_TYPE_F16;
-    }
-    if (s == "q8_0") {
-        return GGML_TYPE_Q8_0;
-    }
-    if (s == "q4_0") {
-        return GGML_TYPE_Q4_0;
-    }
-    if (s == "q4_1") {
-        return GGML_TYPE_Q4_1;
-    }
-    if (s == "iq4_nl") {
-        return GGML_TYPE_IQ4_NL;
-    }
-    if (s == "q5_0") {
-        return GGML_TYPE_Q5_0;
-    }
-    if (s == "q5_1") {
-        return GGML_TYPE_Q5_1;
-    }
-
-    throw std::runtime_error("Invalid cache type: " + s);
-}
-
 struct llama_context_params common_context_params_to_llama(const common_params & params) {
     auto cparams = llama_context_default_params();
 
@@ -1047,7 +1117,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
     cparams.n_threads_batch   = params.cpuparams_batch.n_threads == -1 ?
-                                    params.cpuparams.n_threads : params.cpuparams_batch.n_threads;
+                                params.cpuparams.n_threads : params.cpuparams_batch.n_threads;
     cparams.logits_all        = params.logits_all;
     cparams.embeddings        = params.embedding;
     cparams.rope_scaling_type = params.rope_scaling_type;
@@ -1072,8 +1142,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
         cparams.pooling_type  = LLAMA_POOLING_TYPE_RANK;
     }
 
-    cparams.type_k = kv_cache_type_from_str(params.cache_type_k);
-    cparams.type_v = kv_cache_type_from_str(params.cache_type_v);
+    cparams.type_k = params.cache_type_k;
+    cparams.type_v = params.cache_type_v;
 
     return cparams;
 }
@@ -1099,13 +1169,7 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 #define CURL_MAX_RETRY 3
 #define CURL_RETRY_DELAY_SECONDS 2
 
-
-static bool starts_with(const std::string & str, const std::string & prefix) {
-    // While we wait for C++20's std::string::starts_with...
-    return str.rfind(prefix, 0) == 0;
-}
-
-static bool curl_perform_with_retry(const std::string& url, CURL* curl, int max_attempts, int retry_delay_seconds) {
+static bool curl_perform_with_retry(const std::string & url, CURL * curl, int max_attempts, int retry_delay_seconds) {
     int remaining_attempts = max_attempts;
 
     while (remaining_attempts > 0) {
@@ -1129,9 +1193,9 @@ static bool curl_perform_with_retry(const std::string& url, CURL* curl, int max_
 }
 
 static bool common_download_file(const std::string & url, const std::string & path, const std::string & hf_token) {
-
     // Initialize libcurl
-    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
     if (!curl) {
         LOG_ERR("%s: error initializing libcurl\n", __func__);
         return false;
@@ -1145,11 +1209,9 @@ static bool common_download_file(const std::string & url, const std::string & pa
 
     // Check if hf-token or bearer-token was specified
     if (!hf_token.empty()) {
-      std::string auth_header = "Authorization: Bearer ";
-      auth_header += hf_token.c_str();
-      struct curl_slist *http_headers = NULL;
-      http_headers = curl_slist_append(http_headers, auth_header.c_str());
-      curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers);
+        std::string auth_header = "Authorization: Bearer " + hf_token;
+        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
     }
 
 #if defined(_WIN32)
@@ -1159,8 +1221,7 @@ static bool common_download_file(const std::string & url, const std::string & pa
 #endif
 
     // Check if the file already exists locally
-    struct stat model_file_info;
-    auto file_exists = (stat(path.c_str(), &model_file_info) == 0);
+    auto file_exists = std::filesystem::exists(path);
 
     // If the file exists, check its JSON metadata companion file.
     std::string metadata_path = path + ".json";
@@ -1202,11 +1263,13 @@ static bool common_download_file(const std::string & url, const std::string & pa
         std::string etag;
         std::string last_modified;
     };
+
     common_load_model_from_url_headers headers;
+
     {
         typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
         auto header_callback = [](char * buffer, size_t /*size*/, size_t n_items, void * userdata) -> size_t {
-            common_load_model_from_url_headers *headers = (common_load_model_from_url_headers *) userdata;
+            common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
 
             static std::regex header_regex("([^:]+): (.*)\r\n");
             static std::regex etag_regex("ETag", std::regex_constants::icase);
@@ -1343,17 +1406,17 @@ static bool common_download_file(const std::string & url, const std::string & pa
 }
 
 struct llama_model * common_load_model_from_url(
-        const char * model_url,
-        const char * path_model,
-        const char * hf_token,
+        const std::string & model_url,
+        const std::string & local_path,
+        const std::string & hf_token,
         const struct llama_model_params & params) {
     // Basic validation of the model_url
-    if (!model_url || strlen(model_url) == 0) {
+    if (model_url.empty()) {
         LOG_ERR("%s: invalid model_url\n", __func__);
         return NULL;
     }
 
-    if (!common_download_file(model_url, path_model, hf_token)) {
+    if (!common_download_file(model_url, local_path, hf_token)) {
         return NULL;
     }
 
@@ -1364,9 +1427,9 @@ struct llama_model * common_load_model_from_url(
             /*.no_alloc = */ true,
             /*.ctx      = */ NULL,
         };
-        auto * ctx_gguf = gguf_init_from_file(path_model, gguf_params);
+        auto * ctx_gguf = gguf_init_from_file(local_path.c_str(), gguf_params);
         if (!ctx_gguf) {
-            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, path_model);
+            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, local_path.c_str());
             return NULL;
         }
 
@@ -1385,13 +1448,13 @@ struct llama_model * common_load_model_from_url(
         // Verify the first split file format
         // and extract split URL and PATH prefixes
         {
-            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), path_model, 0, n_split)) {
-                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, path_model, n_split);
+            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), local_path.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, local_path.c_str(), n_split);
                 return NULL;
             }
 
-            if (!llama_split_prefix(split_url_prefix, sizeof(split_url_prefix), model_url, 0, n_split)) {
-                LOG_ERR("\n%s: unexpected model url: %s n_split=%d\n", __func__, model_url, n_split);
+            if (!llama_split_prefix(split_url_prefix, sizeof(split_url_prefix), model_url.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model url: %s n_split=%d\n", __func__, model_url.c_str(), n_split);
                 return NULL;
             }
         }
@@ -1418,14 +1481,14 @@ struct llama_model * common_load_model_from_url(
         }
     }
 
-    return llama_load_model_from_file(path_model, params);
+    return llama_model_load_from_file(local_path.c_str(), params);
 }
 
 struct llama_model * common_load_model_from_hf(
-        const char * repo,
-        const char * model,
-        const char * path_model,
-        const char * hf_token,
+        const std::string & repo,
+        const std::string & remote_path,
+        const std::string & local_path,
+        const std::string & hf_token,
         const struct llama_model_params & params) {
     // construct hugging face model url:
     //
@@ -1439,30 +1502,109 @@ struct llama_model * common_load_model_from_hf(
     std::string model_url = "https://huggingface.co/";
     model_url += repo;
     model_url += "/resolve/main/";
-    model_url += model;
+    model_url += remote_path;
 
-    return common_load_model_from_url(model_url.c_str(), path_model, hf_token, params);
+    return common_load_model_from_url(model_url, local_path, hf_token, params);
+}
+
+/**
+ * Allow getting the HF file from the HF repo with tag (like ollama), for example:
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q5_k_s
+ * Tag is optional, default to "latest" (meaning it checks for Q4_K_M first, then Q4, then if not found, return the first GGUF file in repo)
+ *
+ * Return pair of <repo, file> (with "repo" already having tag removed)
+ *
+ * Note: we use the Ollama-compatible HF API, but not using the blobId. Instead, we use the special "ggufFile" field which returns the value for "hf_file". This is done to be backward-compatible with existing cache files.
+ */
+std::pair<std::string, std::string> common_get_hf_file(const std::string & hf_repo_with_tag, const std::string & hf_token) {
+    auto parts = string_split<std::string>(hf_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "latest";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+
+    // fetch model info from Hugging Face Hub API
+    json model_info;
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::string res_str;
+    std::string url = "https://huggingface.co/v2/" + hf_repo + "/manifests/" + tag;
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_str);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    if (!hf_token.empty()) {
+        std::string auth_header = "Authorization: Bearer " + hf_token;
+        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+    }
+    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        throw std::runtime_error("error: cannot make GET request to HF API");
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+    if (res_code == 200) {
+        model_info = json::parse(res_str);
+    } else if (res_code == 401) {
+        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
+    } else {
+        throw std::runtime_error(string_format("error from HF API, response code: %ld, data: %s", res_code, res_str.c_str()));
+    }
+
+    // check response
+    if (!model_info.contains("ggufFile")) {
+        throw std::runtime_error("error: model does not have ggufFile");
+    }
+    json & gguf_file = model_info.at("ggufFile");
+    if (!gguf_file.contains("rfilename")) {
+        throw std::runtime_error("error: ggufFile does not have rfilename");
+    }
+
+    return std::make_pair(hf_repo, gguf_file.at("rfilename"));
 }
 
 #else
 
 struct llama_model * common_load_model_from_url(
-        const char * /*model_url*/,
-        const char * /*path_model*/,
-        const char * /*hf_token*/,
+        const std::string & /*model_url*/,
+        const std::string & /*local_path*/,
+        const std::string & /*hf_token*/,
         const struct llama_model_params & /*params*/) {
     LOG_WRN("%s: llama.cpp built without libcurl, downloading from an url not supported.\n", __func__);
     return nullptr;
 }
 
 struct llama_model * common_load_model_from_hf(
-        const char * /*repo*/,
-        const char * /*model*/,
-        const char * /*path_model*/,
-        const char * /*hf_token*/,
+        const std::string & /*repo*/,
+        const std::string & /*remote_path*/,
+        const std::string & /*local_path*/,
+        const std::string & /*hf_token*/,
         const struct llama_model_params & /*params*/) {
     LOG_WRN("%s: llama.cpp built without libcurl, downloading from Hugging Face not supported.\n", __func__);
     return nullptr;
+}
+
+std::pair<std::string, std::string> common_get_hf_file(const std::string &, const std::string &) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from Hugging Face not supported.\n", __func__);
+    return std::make_pair("", "");
 }
 
 #endif // LLAMA_USE_CURL
@@ -1495,6 +1637,66 @@ void common_batch_add(
 }
 
 //
+// Token utils
+//
+
+size_t common_lcp(const llama_tokens & a, const llama_tokens & b) {
+    size_t i;
+    for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
+
+    return i;
+}
+
+size_t common_lcs(const llama_tokens & a, const llama_tokens & b) {
+    // check for empty sequences
+    if (a.empty() || b.empty()) {
+        return 0;
+    }
+
+    // get the lengths of the input sequences
+    size_t a_len = a.size();
+    size_t b_len = b.size();
+
+    // initialize the maximum length of the longest common subsequence (LCS)
+    size_t max_length = 0;
+
+    // use two rows instead of a 2D matrix to optimize space
+    std::vector<size_t> prev_row(b_len + 1, 0);
+    std::vector<size_t> curr_row(b_len + 1, 0);
+
+    // iterate through the elements of a
+    for (size_t i = 1; i <= a_len; i++) {
+        // iterate through the elements of b
+        for (size_t j = 1; j <= b_len; j++) {
+            // if elements at the current positions match
+            if (a[i - 1] == b[j - 1]) {
+                // if it's the first element of either sequences, set LCS length to 1
+                if (i == 1 || j == 1) {
+                    curr_row[j] = 1;
+                } else {
+                    // increment LCS length by 1 compared to the previous element
+                    curr_row[j] = prev_row[j - 1] + 1;
+                }
+
+                // update max_length if necessary
+                if (curr_row[j] > max_length) {
+                    max_length = curr_row[j];
+                }
+            } else {
+                // reset LCS length if elements don't match
+                curr_row[j] = 0;
+            }
+        }
+
+        // update the previous row for the next iteration
+        prev_row = curr_row;
+    }
+
+    // return the maximum length of the LCS
+    return max_length;
+}
+
+//
 // Vocab utils
 //
 
@@ -1503,21 +1705,23 @@ std::vector<llama_token> common_tokenize(
            const std::string & text,
                         bool   add_special,
                         bool   parse_special) {
-    return common_tokenize(llama_get_model(ctx), text, add_special, parse_special);
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    return common_tokenize(vocab, text, add_special, parse_special);
 }
 
 std::vector<llama_token> common_tokenize(
-    const struct llama_model * model,
+    const struct llama_vocab * vocab,
            const std::string & text,
                         bool   add_special,
                         bool   parse_special) {
     // upper limit for the number of tokens
     int n_tokens = text.length() + 2 * add_special;
     std::vector<llama_token> result(n_tokens);
-    n_tokens = llama_tokenize(model, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+    n_tokens = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
     if (n_tokens < 0) {
         result.resize(-n_tokens);
-        int check = llama_tokenize(model, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
+        int check = llama_tokenize(vocab, text.data(), text.length(), result.data(), result.size(), add_special, parse_special);
         GGML_ASSERT(check == -n_tokens);
     } else {
         result.resize(n_tokens);
@@ -1526,12 +1730,18 @@ std::vector<llama_token> common_tokenize(
 }
 
 std::string common_token_to_piece(const struct llama_context * ctx, llama_token token, bool special) {
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    return common_token_to_piece(vocab, token, special);
+}
+
+std::string common_token_to_piece(const struct llama_vocab * vocab, llama_token token, bool special) {
     std::string piece;
     piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
-    const int n_chars = llama_token_to_piece(llama_get_model(ctx), token, &piece[0], piece.size(), 0, special);
+    const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
     if (n_chars < 0) {
         piece.resize(-n_chars);
-        int check = llama_token_to_piece(llama_get_model(ctx), token, &piece[0], piece.size(), 0, special);
+        int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
         GGML_ASSERT(check == -n_chars);
     }
     else {
@@ -1541,13 +1751,19 @@ std::string common_token_to_piece(const struct llama_context * ctx, llama_token 
     return piece;
 }
 
-std::string common_detokenize(llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+std::string common_detokenize(const struct llama_context * ctx, const std::vector<llama_token> & tokens, bool special) {
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    return common_detokenize(vocab, tokens, special);
+}
+
+std::string common_detokenize(const struct llama_vocab * vocab, const std::vector<llama_token> & tokens, bool special) {
     std::string text;
     text.resize(std::max(text.capacity(), tokens.size()));
-    int32_t n_chars = llama_detokenize(llama_get_model(ctx), tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
+    int32_t n_chars = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
     if (n_chars < 0) {
         text.resize(-n_chars);
-        n_chars = llama_detokenize(llama_get_model(ctx), tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
+        n_chars = llama_detokenize(vocab, tokens.data(), (int32_t)tokens.size(), &text[0], (int32_t)text.size(), false, special);
         GGML_ASSERT(n_chars <= (int32_t)text.size());  // whitespace trimming is performed after per-token detokenization
     }
 
@@ -1555,91 +1771,6 @@ std::string common_detokenize(llama_context * ctx, const std::vector<llama_token
 
     // NOTE: the original tokenizer decodes bytes after collecting the pieces.
     return text;
-}
-
-//
-// Chat template utils
-//
-
-bool common_chat_verify_template(const std::string & tmpl) {
-    llama_chat_message chat[] = {{"user", "test"}};
-    int res = llama_chat_apply_template(nullptr, tmpl.c_str(), chat, 1, true, nullptr, 0);
-    return res >= 0;
-}
-
-std::string common_chat_apply_template(const struct llama_model * model,
-        const std::string & tmpl,
-        const std::vector<common_chat_msg> & msgs,
-        bool add_ass) {
-    int alloc_size = 0;
-    bool fallback = false; // indicate if we must fallback to default chatml
-    std::vector<llama_chat_message> chat;
-    for (auto & msg : msgs) {
-        chat.push_back({msg.role.c_str(), msg.content.c_str()});
-        alloc_size += (msg.role.size() + msg.content.size()) * 1.25;
-    }
-
-    const char * ptr_tmpl = tmpl.empty() ? nullptr : tmpl.c_str();
-    std::vector<char> buf(alloc_size);
-
-    // run the first time to get the total output length
-    int32_t res = llama_chat_apply_template(model, ptr_tmpl, chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-
-    // error: chat template is not supported
-    if (res < 0) {
-        if (ptr_tmpl != nullptr) {
-            // if the custom "tmpl" is not supported, we throw an error
-            // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()
-            throw std::runtime_error("this custom template is not supported");
-        } else {
-            // If the built-in template is not supported, we default to chatml
-            res = llama_chat_apply_template(nullptr, "chatml", chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-            fallback = true;
-        }
-    }
-
-    // if it turns out that our buffer is too small, we resize it
-    if ((size_t) res > buf.size()) {
-        buf.resize(res);
-        res = llama_chat_apply_template(
-            fallback ? nullptr : model,
-            fallback ? "chatml" : ptr_tmpl,
-            chat.data(), chat.size(), add_ass, buf.data(), buf.size());
-    }
-
-    std::string formatted_chat(buf.data(), res);
-    return formatted_chat;
-}
-
-std::string common_chat_format_single(const struct llama_model * model,
-        const std::string & tmpl,
-        const std::vector<common_chat_msg> & past_msg,
-        const common_chat_msg & new_msg,
-        bool add_ass) {
-    std::ostringstream ss;
-    auto fmt_past_msg = past_msg.empty() ? "" : common_chat_apply_template(model, tmpl, past_msg, false);
-    std::vector<common_chat_msg> chat_new(past_msg);
-    // if the past_msg ends with a newline, we must preserve it in the formatted version
-    if (add_ass && !fmt_past_msg.empty() && fmt_past_msg.back() == '\n') {
-        ss << "\n";
-    };
-    // format chat with new_msg
-    chat_new.push_back(new_msg);
-    auto fmt_new_msg = common_chat_apply_template(model, tmpl, chat_new, add_ass);
-    // get the diff part
-    ss << fmt_new_msg.substr(fmt_past_msg.size(), fmt_new_msg.size() - fmt_past_msg.size());
-    return ss.str();
-}
-
-std::string common_chat_format_example(const struct llama_model * model,
-        const std::string & tmpl) {
-    std::vector<common_chat_msg> msgs = {
-        {"system",    "You are a helpful assistant"},
-        {"user",      "Hello"},
-        {"assistant", "Hi there"},
-        {"user",      "How are you?"},
-    };
-    return common_chat_apply_template(model, tmpl, msgs, true);
 }
 
 //
@@ -1730,7 +1861,9 @@ void common_embd_normalize(const float * inp, float * out, int n, int embd_norm)
             break;
         case 0: // max absolute
             for (int i = 0; i < n; i++) {
-                if (sum < std::abs(inp[i])) sum = std::abs(inp[i]);
+                if (sum < std::abs(inp[i])) {
+                    sum = std::abs(inp[i]);
+                }
             }
             sum /= 32760.0; // make an int16 range
             break;
@@ -1900,213 +2033,25 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
     return result;
 }
 
-//
-// YAML utils
-//
-
-void yaml_dump_vector_float(FILE * stream, const char * prop_name, const std::vector<float> & data) {
-    if (data.empty()) {
-        fprintf(stream, "%s:\n", prop_name);
-        return;
+template <>
+json common_grammar_trigger::to_json() const {
+    json out {
+        {"type", (int) type},
+        {"value", value},
+    };
+    if (type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out["token"] = (int) token;
     }
-
-    fprintf(stream, "%s: [", prop_name);
-    for (size_t i = 0; i < data.size() - 1; ++i) {
-        fprintf(stream, "%e, ", data[i]);
-    }
-    fprintf(stream, "%e]\n", data.back());
+    return out;
 }
 
-void yaml_dump_vector_int(FILE * stream, const char * prop_name, const std::vector<int> & data) {
-    if (data.empty()) {
-        fprintf(stream, "%s:\n", prop_name);
-        return;
+template <>
+common_grammar_trigger common_grammar_trigger::from_json(const json & in) {
+    common_grammar_trigger out;
+    out.type = (common_grammar_trigger_type) in.at("type").get<int>();
+    out.value = in.at("value").get<std::string>();
+    if (out.type == COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN) {
+        out.token = (llama_token) in.at("token").get<int>();
     }
-
-    fprintf(stream, "%s: [", prop_name);
-    for (size_t i = 0; i < data.size() - 1; ++i) {
-        fprintf(stream, "%d, ", data[i]);
-    }
-    fprintf(stream, "%d]\n", data.back());
-}
-
-void yaml_dump_string_multiline(FILE * stream, const char * prop_name, const char * data) {
-    std::string data_str(data == NULL ? "" : data);
-
-    if (data_str.empty()) {
-        fprintf(stream, "%s:\n", prop_name);
-        return;
-    }
-
-    size_t pos_start = 0;
-    size_t pos_found = 0;
-
-    if (std::isspace(data_str[0]) || std::isspace(data_str.back())) {
-        data_str = std::regex_replace(data_str, std::regex("\n"), "\\n");
-        data_str = std::regex_replace(data_str, std::regex("\""), "\\\"");
-        data_str = std::regex_replace(data_str, std::regex(R"(\\[^n"])"), R"(\$&)");
-        data_str = "\"" + data_str + "\"";
-        fprintf(stream, "%s: %s\n", prop_name, data_str.c_str());
-        return;
-    }
-
-    if (data_str.find('\n') == std::string::npos) {
-        fprintf(stream, "%s: %s\n", prop_name, data_str.c_str());
-        return;
-    }
-
-    fprintf(stream, "%s: |\n", prop_name);
-    while ((pos_found = data_str.find('\n', pos_start)) != std::string::npos) {
-        fprintf(stream, "  %s\n", data_str.substr(pos_start, pos_found-pos_start).c_str());
-        pos_start = pos_found + 1;
-    }
-}
-
-void yaml_dump_non_result_info(FILE * stream, const common_params & params, const llama_context * lctx,
-                               const std::string & timestamp, const std::vector<int> & prompt_tokens, const char * model_desc) {
-    const auto & sparams = params.sparams;
-
-    fprintf(stream, "build_commit: %s\n",        LLAMA_COMMIT);
-    fprintf(stream, "build_number: %d\n",        LLAMA_BUILD_NUMBER);
-    fprintf(stream, "cpu_has_arm_fma: %s\n",     ggml_cpu_has_arm_fma()     ? "true" : "false");
-    fprintf(stream, "cpu_has_avx: %s\n",         ggml_cpu_has_avx()         ? "true" : "false");
-    fprintf(stream, "cpu_has_avx_vnni: %s\n",    ggml_cpu_has_avx_vnni()    ? "true" : "false");
-    fprintf(stream, "cpu_has_avx2: %s\n",        ggml_cpu_has_avx2()        ? "true" : "false");
-    fprintf(stream, "cpu_has_avx512: %s\n",      ggml_cpu_has_avx512()      ? "true" : "false");
-    fprintf(stream, "cpu_has_avx512_vbmi: %s\n", ggml_cpu_has_avx512_vbmi() ? "true" : "false");
-    fprintf(stream, "cpu_has_avx512_vnni: %s\n", ggml_cpu_has_avx512_vnni() ? "true" : "false");
-    fprintf(stream, "cpu_has_cuda: %s\n",        ggml_cpu_has_cuda()        ? "true" : "false");
-    fprintf(stream, "cpu_has_vulkan: %s\n",      ggml_cpu_has_vulkan()      ? "true" : "false");
-    fprintf(stream, "cpu_has_kompute: %s\n",     ggml_cpu_has_kompute()     ? "true" : "false");
-    fprintf(stream, "cpu_has_fma: %s\n",         ggml_cpu_has_fma()         ? "true" : "false");
-    fprintf(stream, "cpu_has_gpublas: %s\n",     ggml_cpu_has_gpublas()     ? "true" : "false");
-    fprintf(stream, "cpu_has_neon: %s\n",        ggml_cpu_has_neon()        ? "true" : "false");
-    fprintf(stream, "cpu_has_sve: %s\n",         ggml_cpu_has_sve()         ? "true" : "false");
-    fprintf(stream, "cpu_has_f16c: %s\n",        ggml_cpu_has_f16c()        ? "true" : "false");
-    fprintf(stream, "cpu_has_fp16_va: %s\n",     ggml_cpu_has_fp16_va()     ? "true" : "false");
-    fprintf(stream, "cpu_has_riscv_v: %s\n",     ggml_cpu_has_riscv_v()     ? "true" : "false");
-    fprintf(stream, "cpu_has_wasm_simd: %s\n",   ggml_cpu_has_wasm_simd()   ? "true" : "false");
-    fprintf(stream, "cpu_has_blas: %s\n",        ggml_cpu_has_blas()        ? "true" : "false");
-    fprintf(stream, "cpu_has_sse3: %s\n",        ggml_cpu_has_sse3()        ? "true" : "false");
-    fprintf(stream, "cpu_has_vsx: %s\n",         ggml_cpu_has_vsx()         ? "true" : "false");
-    fprintf(stream, "cpu_has_matmul_int8: %s\n", ggml_cpu_has_matmul_int8() ? "true" : "false");
-
-#ifdef NDEBUG
-    fprintf(stream, "debug: false\n");
-#else
-    fprintf(stream, "debug: true\n");
-#endif // NDEBUG
-
-    fprintf(stream, "model_desc: %s\n", model_desc);
-    fprintf(stream, "n_vocab: %d  # output size of the final layer, 32001 for some models\n", llama_n_vocab(llama_get_model(lctx)));
-
-#ifdef __OPTIMIZE__
-    fprintf(stream, "optimize: true\n");
-#else
-    fprintf(stream, "optimize: false\n");
-#endif // __OPTIMIZE__
-
-    fprintf(stream, "time: %s\n", timestamp.c_str());
-
-    fprintf(stream, "\n");
-    fprintf(stream, "###############\n");
-    fprintf(stream, "# User Inputs #\n");
-    fprintf(stream, "###############\n");
-    fprintf(stream, "\n");
-
-    fprintf(stream, "alias: %s # default: unknown\n", params.model_alias.c_str());
-    fprintf(stream, "batch_size: %d # default: 512\n", params.n_batch);
-    fprintf(stream, "chunks: %d # default: -1 (unlimited)\n", params.n_chunks);
-    fprintf(stream, "color: %s # default: false\n", params.use_color ? "true" : "false");
-    fprintf(stream, "ctx_size: %d # default: 512\n", params.n_ctx);
-    fprintf(stream, "escape: %s # default: false\n", params.escape ? "true" : "false");
-    fprintf(stream, "file: # never logged, see prompt instead. Can still be specified for input.\n");
-    fprintf(stream, "frequency_penalty: %f # default: 0.0 \n", sparams.penalty_freq);
-    yaml_dump_string_multiline(stream, "grammar", sparams.grammar.c_str());
-    fprintf(stream, "grammar-file: # never logged, see grammar instead. Can still be specified for input.\n");
-    fprintf(stream, "hellaswag: %s # default: false\n", params.hellaswag ? "true" : "false");
-    fprintf(stream, "hellaswag_tasks: %zu # default: 400\n", params.hellaswag_tasks);
-    fprintf(stream, "ignore_eos: %s # default: false\n", sparams.ignore_eos ? "true" : "false");
-
-    yaml_dump_string_multiline(stream, "in_prefix", params.input_prefix.c_str());
-    fprintf(stream, "in_prefix_bos: %s # default: false\n", params.input_prefix_bos ? "true" : "false");
-    yaml_dump_string_multiline(stream, "in_suffix", params.input_prefix.c_str());
-    fprintf(stream, "interactive: %s # default: false\n", params.interactive ? "true" : "false");
-    fprintf(stream, "interactive_first: %s # default: false\n", params.interactive_first ? "true" : "false");
-    fprintf(stream, "keep: %d # default: 0\n", params.n_keep);
-    fprintf(stream, "logdir: %s # default: unset (no logging)\n", params.logdir.c_str());
-
-    fprintf(stream, "logit_bias:\n");
-    for (const auto & logit_bias : sparams.logit_bias) {
-        fprintf(stream, "  %d: %f", logit_bias.token, logit_bias.bias);
-    }
-
-    fprintf(stream, "lora:\n");
-    for (auto & la : params.lora_adapters) {
-        if (la.scale == 1.0f) {
-            fprintf(stream, "  - %s\n", la.path.c_str());
-        }
-    }
-    fprintf(stream, "lora_scaled:\n");
-    for (auto & la : params.lora_adapters) {
-        if (la.scale != 1.0f) {
-            fprintf(stream, "  - %s: %f\n", la.path.c_str(), la.scale);
-        }
-    }
-    fprintf(stream, "lora_init_without_apply: %s # default: false\n", params.lora_init_without_apply ? "true" : "false");
-    fprintf(stream, "main_gpu: %d # default: 0\n", params.main_gpu);
-    fprintf(stream, "min_keep: %d # default: 0 (disabled)\n", sparams.min_keep);
-    fprintf(stream, "mirostat: %d # default: 0 (disabled)\n", sparams.mirostat);
-    fprintf(stream, "mirostat_ent: %f # default: 5.0\n", sparams.mirostat_tau);
-    fprintf(stream, "mirostat_lr: %f # default: 0.1\n", sparams.mirostat_eta);
-    fprintf(stream, "mlock: %s # default: false\n", params.use_mlock ? "true" : "false");
-    fprintf(stream, "model: %s # default: %s\n", params.model.c_str(), DEFAULT_MODEL_PATH);
-    fprintf(stream, "model_draft: %s # default:\n", params.model_draft.c_str());
-    fprintf(stream, "multiline_input: %s # default: false\n", params.multiline_input ? "true" : "false");
-    fprintf(stream, "n_gpu_layers: %d # default: -1\n", params.n_gpu_layers);
-    fprintf(stream, "n_predict: %d # default: -1 (unlimited)\n", params.n_predict);
-    fprintf(stream, "n_probs: %d # only used by server binary, default: 0\n", sparams.n_probs);
-    fprintf(stream, "no_mmap: %s # default: false\n", !params.use_mmap ? "true" : "false");
-    fprintf(stream, "penalize_nl: %s # default: false\n", sparams.penalize_nl ? "true" : "false");
-    fprintf(stream, "ppl_output_type: %d # default: 0\n", params.ppl_output_type);
-    fprintf(stream, "ppl_stride: %d # default: 0\n", params.ppl_stride);
-    fprintf(stream, "presence_penalty: %f # default: 0.0\n", sparams.penalty_present);
-    yaml_dump_string_multiline(stream, "prompt", params.prompt.c_str());
-    fprintf(stream, "prompt_cache: %s\n", params.path_prompt_cache.c_str());
-    fprintf(stream, "prompt_cache_all: %s # default: false\n", params.prompt_cache_all ? "true" : "false");
-    fprintf(stream, "prompt_cache_ro: %s # default: false\n", params.prompt_cache_ro ? "true" : "false");
-    yaml_dump_vector_int(stream, "prompt_tokens", prompt_tokens);
-    fprintf(stream, "repeat_penalty: %f # default: 1.1\n", sparams.penalty_repeat);
-
-    fprintf(stream, "reverse_prompt:\n");
-    for (std::string ap : params.antiprompt) {
-        size_t pos = 0;
-        while ((pos = ap.find('\n', pos)) != std::string::npos) {
-            ap.replace(pos, 1, "\\n");
-            pos += 1;
-        }
-
-        fprintf(stream, "  - %s\n", ap.c_str());
-    }
-
-    fprintf(stream, "rope_freq_base: %f # default: 10000.0\n", params.rope_freq_base);
-    fprintf(stream, "rope_freq_scale: %f # default: 1.0\n", params.rope_freq_scale);
-    fprintf(stream, "simple_io: %s # default: false\n", params.simple_io ? "true" : "false");
-    fprintf(stream, "cont_batching: %s # default: false\n", params.cont_batching ? "true" : "false");
-    fprintf(stream, "flash_attn: %s # default: false\n", params.flash_attn ? "true" : "false");
-    fprintf(stream, "temp: %f # default: 0.8\n", sparams.temp);
-
-    const std::vector<float> tensor_split_vector(params.tensor_split, params.tensor_split + llama_max_devices());
-    yaml_dump_vector_float(stream, "tensor_split", tensor_split_vector);
-
-    fprintf(stream, "tfs: %f # default: 1.0\n", sparams.tfs_z);
-    fprintf(stream, "threads: %d # default: %u\n", params.cpuparams.n_threads, std::thread::hardware_concurrency());
-    fprintf(stream, "top_k: %d # default: 40\n", sparams.top_k);
-    fprintf(stream, "top_p: %f # default: 0.95\n", sparams.top_p);
-    fprintf(stream, "min_p: %f # default: 0.0\n", sparams.min_p);
-    fprintf(stream, "xtc_probability: %f # default: 0.0\n", sparams.xtc_probability);
-    fprintf(stream, "xtc_threshold: %f # default: 0.1\n", sparams.xtc_threshold);
-    fprintf(stream, "typ_p: %f # default: 1.0\n", sparams.typ_p);
-    fprintf(stream, "verbose_prompt: %s # default: false\n", params.verbose_prompt ? "true" : "false");
-    fprintf(stream, "display_prompt: %s # default: true\n", params.display_prompt ? "true" : "false");
+    return out;
 }

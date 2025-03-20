@@ -1,7 +1,7 @@
 import * as readline from 'node:readline'
 import { stdin, stdout } from 'node:process'
 import { readFileSync } from 'node:fs'
-import { SchemaConverter }  from './public/json-schema-to-grammar.mjs'
+import { SchemaConverter }  from './public_legacy/json-schema-to-grammar.mjs'
 
 const args = process.argv.slice(2);
 const grammarJsonSchemaFile = args.find(
