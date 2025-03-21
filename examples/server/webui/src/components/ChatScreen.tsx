@@ -99,13 +99,9 @@ export default function ChatScreen() {
     canvasData,
     replaceMessageAndGenerate,
   } = useAppContext();
-  const [inputMsg, setInputMsg] = useState(prefilledMsg.content());
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const textarea = useOptimizedTextarea(prefilledMsg.content());
 
-  const { extraContext, clearExtraContext } = useVSCodeContext(
-    inputRef,
-    setInputMsg
-  );
+  const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
   // TODO: improve this when we have "upload file" feature
   const currExtra: Message['extra'] = extraContext ? [extraContext] : undefined;
 
@@ -135,9 +131,10 @@ export default function ChatScreen() {
   };
 
   const sendNewMessage = async () => {
-    if (inputMsg.trim().length === 0 || isGenerating(currConvId ?? '')) return;
-    const lastInpMsg = inputMsg;
-    setInputMsg('');
+    const lastInpMsg = textarea.value();
+    if (lastInpMsg.trim().length === 0 || isGenerating(currConvId ?? ''))
+      return;
+    textarea.setValue('');
     scrollToBottom(false);
     setCurrNodeId(-1);
     // get the last message node
@@ -146,13 +143,13 @@ export default function ChatScreen() {
       !(await sendMessage(
         currConvId,
         lastMsgNodeId,
-        inputMsg,
+        lastInpMsg,
         currExtra,
         onChunk
       ))
     ) {
       // restore the input message if failed
-      setInputMsg(lastInpMsg);
+      textarea.setValue(lastInpMsg);
     }
     // OK
     clearExtraContext();
@@ -195,16 +192,13 @@ export default function ChatScreen() {
       // send the prefilled message if needed
       sendNewMessage();
     } else {
-      // otherwise, focus on the input and move the cursor to the end
-      if (inputRef.current) {
-        inputRef.current.focus();
-        inputRef.current.selectionStart = inputRef.current.value.length;
-      }
+      // otherwise, focus on the input
+      textarea.focus();
     }
     prefilledMsg.clear();
     // no need to keep track of sendNewMessage
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputRef]);
+  }, [textarea.ref]);
 
   // due to some timing issues of StorageUtils.appendMsg(), we need to make sure the pendingMsg is not duplicated upon rendering (i.e. appears once in the saved conversation and once in the pendingMsg)
   const pendingMsgDisplay: MessageDisplay[] =
@@ -258,9 +252,7 @@ export default function ChatScreen() {
           <textarea
             className="textarea textarea-bordered w-full"
             placeholder="Type a message (Shift+Enter to add a new line)"
-            ref={inputRef}
-            value={inputMsg}
-            onChange={(e) => setInputMsg(e.target.value)}
+            ref={textarea.ref}
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter' && e.shiftKey) return;
@@ -280,11 +272,7 @@ export default function ChatScreen() {
               Stop
             </button>
           ) : (
-            <button
-              className="btn btn-primary ml-2"
-              onClick={sendNewMessage}
-              disabled={inputMsg.trim().length === 0}
-            >
+            <button className="btn btn-primary ml-2" onClick={sendNewMessage}>
               Send
             </button>
           )}
@@ -297,4 +285,44 @@ export default function ChatScreen() {
       </div>
     </div>
   );
+}
+
+export interface OptimizedTextareaValue {
+  value: () => string;
+  setValue: (value: string) => void;
+  focus: () => void;
+  ref: React.RefObject<HTMLTextAreaElement>;
+}
+
+// This is a workaround to prevent the textarea from re-rendering when the inner content changes
+// See https://github.com/ggml-org/llama.cpp/pull/12299
+function useOptimizedTextarea(initValue: string): OptimizedTextareaValue {
+  const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (textareaRef.current && savedInitValue) {
+      textareaRef.current.value = savedInitValue;
+      setSavedInitValue('');
+    }
+  }, [textareaRef, savedInitValue, setSavedInitValue]);
+
+  return {
+    value: () => {
+      return textareaRef.current?.value ?? savedInitValue;
+    },
+    setValue: (value: string) => {
+      if (textareaRef.current) {
+        textareaRef.current.value = value;
+      }
+    },
+    focus: () => {
+      if (textareaRef.current) {
+        // focus and move the cursor to the end
+        textareaRef.current.focus();
+        textareaRef.current.selectionStart = textareaRef.current.value.length;
+      }
+    },
+    ref: textareaRef,
+  };
 }
