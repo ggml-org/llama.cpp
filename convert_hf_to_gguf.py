@@ -2327,6 +2327,39 @@ class WavTokenizerDecModel(Model):
         self.gguf_writer.add_causal_attention(False)
 
 
+@Model.register("MimiModel")
+class MimiDec(Model):
+    model_arch = gguf.MODEL_ARCH.MIMI_DEC
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        logger.debug(f"Processing tensor: {name}")
+
+        if name.startswith("decoder.") \
+            or name.startswith("decoder_transformer.") \
+            or name.startswith("downsample.") \
+            or name.startswith("encoder.") \
+            or name.startswith("encoder_transformer.") \
+            or name.startswith("upsample.") \
+            or re.match(r"quantizer\..*_residual_vector_quantizer\..*", name):
+            logger.info(f"{name} -> {data_torch.shape}")
+            return [(name, data_torch)]
+
+        logger.info(f"{self.map_tensor_name(name)} -> {data_torch.shape}")
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
+        self.gguf_writer.add_group_norm_eps(self.hparams["norm_eps"])
+
+
 @Model.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(Model):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
