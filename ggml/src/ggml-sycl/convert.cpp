@@ -138,7 +138,7 @@ static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
         sycl::range<3>(1, 1, WARP_SIZE),
         sycl::range<3>(1, 1, WARP_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) [[intel::reqd_sub_group_size(WARP_SIZE)]]{
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
             dequantize_block_q4_0_reorder(vx, y, k, item_ct1);
         });
 
