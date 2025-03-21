@@ -10217,13 +10217,53 @@ static void ggml_compute_forward_diag_mask_zero(
     }
 }
 
+
+__attribute__((noinline)) static void debug_hook(void) {
+}
+
 // ggml_compute_forward_soft_max
+static bool check_invalid_values(const struct ggml_tensor * src0) {
+    if (!src0) {
+        printf("Error: src0 is NULL!\n");
+        return false;
+    }
+
+    const int nc = src0->ne[0];  // 列数
+    const int nr = ggml_nrows(src0);  // 行数
+
+    int nan_count = 0, inf_count = 0;
+
+    // printf("Checking tensor for NaN/Inf values...\n");
+
+    for (int i1 = 0; i1 < nr; i1++) {
+        float * sp = (float *)((char *) src0->data + i1 * src0->nb[1]);
+
+        for (int i = 0; i < nc; ++i) {
+            if (isnan(sp[i])) {
+                nan_count++;
+                // printf("NaN detected at row %d, col %d (index %d)\n", i1, i, i1 * nc + i);
+            }
+            else if (isinf(sp[i])) {
+                inf_count++;
+                // printf("Inf detected at row %d, col %d (index %d)\n", i1, i, i1 * nc + i);
+            }
+        }
+    }
+
+
+    if (nan_count > 0 || inf_count > 0) {
+        debug_hook();
+        return true;
+    }
+}
 
 static void ggml_compute_forward_soft_max_f32(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
+    
+    // check_invalid_values(src0);
     const struct ggml_tensor * src1 = dst->src[1];
 
     assert(ggml_is_contiguous(dst));
@@ -10266,6 +10306,12 @@ static void ggml_compute_forward_soft_max_f32(
 
     const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
 
+    // 限制 scale 避免溢出
+    if (!isfinite(scale) || scale > 1e6) {
+        // printf("Warning: scale is invalid (%f), resetting to 1.0\n", scale);
+        scale = 1.0f;
+    }
+
     for (int i1 = ir0; i1 < ir1; i1++) {
         // ALiBi
         const uint32_t h = (i1/ne01)%ne02; // head
@@ -10277,6 +10323,27 @@ static void ggml_compute_forward_soft_max_f32(
         // broadcast the mask across rows
         ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
         float       * mp_f32 = src1 ? (float       *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
+
+        int nan_count = 0, inf_count = 0;
+        for (int i = 0; i < nc; ++i) 
+        {
+            if (isnan(sp[i])) nan_count++;
+            else if (isinf(sp[i])) {
+                // printf("Error: sp contains inf value!\n");
+                inf_count++;
+                sp[i] = FLT_MAX;
+            }
+        }
+
+        if(inf_count)
+        {
+            // printf("sp count: col: %d, row: %d, inf: [%d]\n", nc, nr, inf_count);
+        }
+
+        if (nan_count) {
+            // printf("Error: sp contains %d NaN values, aborting!\n", nan_count);
+            exit(1);
+        }
 
         ggml_vec_cpy_f32  (nc, wp, sp);
         ggml_vec_scale_f32(nc, wp, scale);
@@ -10301,6 +10368,10 @@ static void ggml_compute_forward_soft_max_f32(
 
         float max = -INFINITY;
         ggml_vec_max_f32(nc, &max, wp);
+
+        if (!isfinite(max)) {
+            max = FLT_MAX;
+        }
 
         ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
         assert(sum > 0.0);
@@ -15431,6 +15502,9 @@ struct ggml_cplan ggml_graph_plan(
     return cplan;
 }
 
+// ggml_graph_compute_with_ctx
+// ggml_graph_compute
+// check_invalid_values
 static thread_ret_t ggml_graph_compute_thread(void * data) {
     struct ggml_compute_state * state = (struct ggml_compute_state *) data;
     struct ggml_threadpool    * tp    = state->threadpool;
@@ -15450,6 +15524,27 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
+        struct ggml_tensor * tensor = node;
+
+        {
+            if (tensor->op == GGML_OP_NONE || ggml_is_empty(tensor)) 
+            {
+                
+            }
+            else if (ggml_cpu_extra_compute_forward(&params, tensor))
+            {
+
+            }
+            else if(tensor->op == GGML_OP_SOFT_MAX)
+            {
+                // ggml_compute_forward
+                // GGML_OP_SOFT_MAX
+                // ggml_compute_forward_soft_max
+                // ggml_compute_forward_soft_max_f32
+                // check_invalid_values
+                check_invalid_values(tensor);
+            }
+        }
 
         ggml_compute_forward(&params, node);
 
@@ -15726,6 +15821,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
                 atomic_store_explicit(&threadpool->n_threads_cur, n_threads, memory_order_relaxed);
             }
 
+            // printf("GGML_USE_OPENMP->ggml_graph_compute_thread: %d\n", omp_get_thread_num());
             ggml_graph_compute_thread(&threadpool->workers[omp_get_thread_num()]);
         }
     } else {
@@ -15757,6 +15853,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
     return ret;
 }
 
+// TODO cgraph
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads, NULL);
 
