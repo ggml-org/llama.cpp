@@ -381,6 +381,35 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
         return r;
     }
 
+#elif defined(__riscv) && defined(GGML_RV_ZFH)
+
+    static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
+        float f;
+        __asm__(
+            "fmv.h.x %[f], %[h]\n\t"
+            "fcvt.s.h %[f], %[f]"
+            : [f] "=&f" (f)
+            : [h] "r" (h)
+        );
+        return f;
+    }
+
+    static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
+        ggml_fp16_t res;
+        __asm__(
+            "fcvt.h.s %[f], %[f]\n\t"
+            "fmv.x.h %[h], %[f]"
+            : [h] "=&r" (res)
+            : [f] "f" (f)
+        );
+        return res;
+    }
+
+    #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
+    #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
+    #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
+    #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
+
 #else
 
     // FP16 <-> FP32
