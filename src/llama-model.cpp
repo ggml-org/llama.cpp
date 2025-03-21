@@ -11701,8 +11701,6 @@ struct llm_build_plm : public llm_graph_context {
                         ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
                 cb(k_pe, "k_pe", il);
 
-                // TODO: the CUDA backend used to not support non-cont. (RMS) norm, investigate removing ggml_cont
-                kv_compressed = ggml_cont(ctx0, kv_compressed);
                 kv_compressed = build_norm(kv_compressed,
                         model.layers[il].attn_kv_a_norm, NULL,
                         LLM_NORM_RMS, il);
@@ -11734,7 +11732,6 @@ struct llm_build_plm : public llm_graph_context {
                         0);
                 cb(v_states, "v_states", il);
 
-                q_pe = ggml_cont(ctx0, q_pe); // TODO: the CUDA backend used to not support non-cont. RoPE, investigate removing this
                 q_pe = ggml_rope_ext(
                         ctx0, q_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -11743,7 +11740,6 @@ struct llm_build_plm : public llm_graph_context {
                 cb(q_pe, "q_pe", il);
 
                 // shared RoPE key
-                k_pe = ggml_cont(ctx0, k_pe); // TODO: the CUDA backend used to not support non-cont. RoPE, investigate removing this
                 k_pe = ggml_rope_ext(
                         ctx0, k_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
