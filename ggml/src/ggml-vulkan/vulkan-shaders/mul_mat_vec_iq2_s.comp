@@ -19,8 +19,8 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
         const float db = d * (0.5 + scale) * 0.25;
 
         const uint qh = data_a[ibi].qh[ib32];
-        const u8vec2 qs16 = unpack8(data_a_packed16[ibi].qs[itid]);
-        const u8vec2 sign16 = unpack8(data_a_packed16[ibi].qs[QUANT_K / 16 + itid]);
+        const u8vec2 qs16 = unpack8(uint32_t(data_a_packed16[ibi].qs[itid])).xy; // vec4 used due to #12147
+        const u8vec2 sign16 = unpack8(uint32_t(data_a_packed16[ibi].qs[QUANT_K / 16 + itid])).xy;
         [[unroll]] for (uint l = 0; l < 2; ++l) {
             const uint8_t sign = sign16[l];
             const uint qs = qs16[l] | ((qh << (8 - nibble_shift - 2 * l)) & 0x300);
