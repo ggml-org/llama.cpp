@@ -5075,15 +5075,15 @@ void kernel_mul_mv_tq2_0_f32_impl(
     const int im = tgpig.z;
 
     const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
-    const int ib_row = first_row * nb;
 
     const uint i12 = im%args.ne12;
     const uint i13 = im/args.ne12;
 
-    const uint offset0 = (i12/args.r2)*(nb*args.ne01) + (i13/args.r3)*(nb*args.ne01*args.ne02);
+    const uint64_t offset0 = first_row*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const uint64_t offset1 =        r1*args.nb11 + (i12        )*args.nb12 + (i13        )*args.nb13;
 
-    device const block_tq2_0 * x = (device const block_tq2_0 *) src0 + ib_row + offset0;
-    device const float       * y = (device const float       *) src1 + r1*args.ne10 + im*args.ne00*args.ne1;
+    device const block_tq2_0 * x = (device const block_tq2_0 *) (src0 + offset0);
+    device const float       * y = (device const float       *) (src1 + offset1);
 
     float yl[32];
     float sumf[N_DST]={0.f}, all_sum;
@@ -5139,7 +5139,7 @@ void kernel_mul_mv_tq2_0_f32_impl(
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
 
-    for (int row = 0; row < N_DST; ++row) {
+    for (int row = 0; row < N_DST && first_row + row < args.ne0; ++row) {
         all_sum = simd_sum(sumf[row]);
         if (tiisg == 0) {
             dst_f32[first_row + row] = all_sum;
