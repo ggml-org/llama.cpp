@@ -349,6 +349,9 @@ extern "C" {
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
+    // Copy destination pointers for copy operations pointers to backend
+    GGML_API void ggml_backend_dest_ptrs_copy(char ** host_dest_ptrs, const int host_dest_ptrs_size);
+
 #ifdef  __cplusplus
 }
 #endif
