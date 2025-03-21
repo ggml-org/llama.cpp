@@ -29,6 +29,7 @@ struct rpc_server_params {
     std::string host        = "127.0.0.1";
     int         port        = 50052;
     size_t      backend_mem = 0;
+    std::string gguf_path   = "";
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
@@ -37,6 +38,7 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -h, --help            show this help message and exit\n");
     fprintf(stderr, "  -H HOST, --host HOST  host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p PORT, --port PORT  port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -f PATH, --gguf PATH  path to GGUF file\n");
     fprintf(stderr, "  -m MEM, --mem MEM     backend memory size (in MB)\n");
     fprintf(stderr, "\n");
 }
@@ -58,6 +60,11 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             if (params.port <= 0 || params.port > 65535) {
                 return false;
             }
+        } else if (arg == "-f" || arg == "--gguf") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.gguf_path = argv[i];
         } else if (arg == "-m" || arg == "--mem") {
             if (++i >= argc) {
                 return false;
@@ -164,8 +171,9 @@ int main(int argc, char * argv[]) {
     } else {
         get_backend_memory(&free_mem, &total_mem);
     }
+    const char * gguf_path = params.gguf_path.empty() ? nullptr : params.gguf_path.c_str();
     printf("Starting RPC server on %s, backend memory: %zu MB\n", endpoint.c_str(), free_mem / (1024 * 1024));
-    ggml_backend_rpc_start_server(backend, endpoint.c_str(), free_mem, total_mem);
+    ggml_backend_rpc_start_server(backend, endpoint.c_str(), gguf_path, free_mem, total_mem);
     ggml_backend_free(backend);
     return 0;
 }
