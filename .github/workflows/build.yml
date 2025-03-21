@@ -10,7 +10,7 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/build.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
   pull_request:
     types: [opened, synchronize, reopened]
     paths: ['.github/workflows/build.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
@@ -605,6 +605,9 @@ jobs:
             -DCMAKE_CXX_COMPILER=icpx \
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
+
+  build-linux-cross:
+    uses: ./.github/workflows/build-linux-cross.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest
