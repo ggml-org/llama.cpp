@@ -2179,35 +2179,58 @@ struct server_context {
 
         if (slot.has_new_line) {
             // require that each new line has a whitespace prefix (i.e. indentation) of at least slot.params.n_indent
-            if (slot.params.n_indent > 0) {
+            if (slot.params.n_indent >= 0) {
                 // check the current indentation
-                // TODO: improve by not doing it more than once for each new line
-                if (slot.last_nl_pos > 0) {
-                    size_t pos = slot.last_nl_pos;
+                int n_indent = 0;
 
-                    int n_indent = 0;
-                    while (pos < slot.generated_text.size() && (slot.generated_text[pos] == ' ' || slot.generated_text[pos] == '\t')) {
-                        n_indent++;
-                        pos++;
+                size_t pos = slot.last_nl_pos;
+
+                while (pos < slot.generated_text.size() && (slot.generated_text[pos] == ' ' || slot.generated_text[pos] == '\t' || slot.generated_text[pos] == '\n')) {
+                    n_indent++;
+
+                    if (slot.generated_text[pos] == '\n') {
+                        n_indent = 0;
+                        slot.last_nl_pos = pos + 1;
                     }
 
-                    if (pos < slot.generated_text.size() && n_indent < slot.params.n_indent) {
+                    pos++;
+                }
+
+                if (0 < pos && pos < slot.generated_text.size()) {
+                    if (n_indent < slot.params.n_indent) {
                         slot.stop           = STOP_TYPE_LIMIT;
                         slot.has_next_token = false;
 
                         // cut the last line
-                        slot.generated_text.erase(pos, std::string::npos);
+                        //slot.generated_text.erase(pos, std::string::npos);
 
                         SLT_DBG(slot, "stopped by indentation limit, n_decoded = %d, n_indent = %d\n", slot.n_decoded, n_indent);
                     }
                 }
 
+                //SLT_ERR(slot, "n_indent = %d (%d), generated_text.size() = %d, n_decoded = %d, last_nl_pos = %d\n", n_indent, slot.params.n_indent, slot.generated_text.size(), slot.n_decoded, slot.last_nl_pos);
+
                 // find the next new line
                 {
-                    const size_t pos = slot.generated_text.find('\n', slot.last_nl_pos);
+                    size_t pos = slot.generated_text.find('\n', slot.last_nl_pos);
 
-                    if (pos != std::string::npos) {
+                    while (pos != std::string::npos) {
                         slot.last_nl_pos = pos + 1;
+
+                        // detect end of paragraph at current indent level
+                        if (slot.generated_text[slot.last_nl_pos - 2] == '\n' && n_indent <= slot.params.n_indent) {
+                            slot.stop           = STOP_TYPE_LIMIT;
+                            slot.has_next_token = false;
+
+                            // cut the last line
+                            slot.generated_text.erase(pos, std::string::npos);
+
+                            SLT_DBG(slot, "stopped by reaching end of paragraph, n_decoded = %d, n_indent = %d\n", slot.n_decoded, n_indent);
+
+                            break;
+                        }
+
+                        pos = slot.generated_text.find('\n', slot.last_nl_pos);
                     }
                 }
             }
