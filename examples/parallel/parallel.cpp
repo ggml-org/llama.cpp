@@ -86,7 +86,7 @@ static void print_date_time() {
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", local_time);
 
     LOG_INF("\n");
-    LOG_INF("\033[35mrun parameters as of %s\033[0m\n", buffer);
+    LOG_INF(LOG_COL_MAGENTA "run parameters as of %s" LOG_COL_DEFAULT "\n", buffer);
     LOG_INF("\n");
 }
 
@@ -140,11 +140,11 @@ int main(int argc, char ** argv) {
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
-        LOG_INF("\033[32mNo new questions so proceed with build-in defaults.\033[0m\n");
+        LOG_INF(LOG_COL_GREEN "No new questions so proceed with build-in defaults." LOG_COL_DEFAULT "\n");
     } else {
         // Output each line of the input params.prompts vector and copy to k_prompts
         int index = 0;
-        LOG_INF("\033[32mNow printing the external prompt file %s\033[0m\n\n", params.prompt_file.c_str());
+        LOG_INF(LOG_COL_GREEN "Now printing the external prompt file %s" LOG_COL_DEFAULT "\n\n", params.prompt_file.c_str());
 
         std::vector<std::string> prompts = split_string(params.prompt, '\n');
         for (const auto& prompt : prompts) {
@@ -274,7 +274,7 @@ int main(int argc, char ** argv) {
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
-                    LOG_INF("\033[31mClient %3d, seq %4d, started decoding ...\033[0m\n", client.id, client.seq_id);
+                    LOG_INF(LOG_COL_RED "Client %3d, seq %4d, started decoding ..." LOG_COL_DEFAULT "\n", client.id, client.seq_id);
 
                     g_seq_id += 1;
 
@@ -377,7 +377,7 @@ int main(int argc, char ** argv) {
 
                     const auto t_main_end = ggml_time_us();
 
-                    LOG_INF("\033[31mClient %3d, seq %3d/%3d, prompt %4d t, response %4d t, time %5.2f s, speed %5.2f t/s, cache miss %d \033[0m \n\nInput:    %s\n\033[35mResponse: %s\033[0m\n\n",
+                    LOG_INF(LOG_COL_RED "Client %3d, seq %3d/%3d, prompt %4d t, response %4d t, time %5.2f s, speed %5.2f t/s, cache miss %d " LOG_COL_DEFAULT " \n\nInput:    %s\n" LOG_COL_MAGENTA "Response: %s" LOG_COL_DEFAULT "\n\n",
                             client.id, client.seq_id, n_seq, client.n_prompt, client.n_decoded,
                             (t_main_end - client.t_start_prompt) / 1e6,
                             (double) (client.n_prompt + client.n_decoded) / (t_main_end - client.t_start_prompt) * 1e6,
@@ -404,8 +404,8 @@ int main(int argc, char ** argv) {
     if (params.prompt_file.empty()) {
         params.prompt_file = "used built-in defaults";
     }
-    LOG_INF("External prompt file: \033[32m%s\033[0m\n", params.prompt_file.c_str());
-    LOG_INF("Model and path used:  \033[32m%s\033[0m\n\n", params.model.c_str());
+    LOG_INF("External prompt file: " LOG_COL_GREEN "%s" LOG_COL_DEFAULT "\n", params.prompt_file.c_str());
+    LOG_INF("Model and path used:  " LOG_COL_GREEN "%s" LOG_COL_DEFAULT "\n\n", params.model.c_str());
 
     LOG_INF("Total prompt tokens: %6d, speed: %5.2f t/s\n", n_total_prompt, (double) (n_total_prompt              ) / (t_main_end - t_main_start) * 1e6);
     LOG_INF("Total gen tokens:    %6d, speed: %5.2f t/s\n", n_total_gen,    (double) (n_total_gen                 ) / (t_main_end - t_main_start) * 1e6);
