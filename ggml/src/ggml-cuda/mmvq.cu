@@ -1,5 +1,6 @@
 #include "mmvq.cuh"
 #include "vecdotq.cuh"
+#include "__mp.cuh"
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
 
@@ -11,7 +12,8 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         type == GGML_TYPE_Q8_0 ? vec_dot_q8_0_q8_1 :
         type == GGML_TYPE_Q2_K ? vec_dot_q2_K_q8_1 :
         type == GGML_TYPE_Q3_K ? vec_dot_q3_K_q8_1 :
-        type == GGML_TYPE_Q4_K ? vec_dot_q4_K_q8_1 :
+        // type == GGML_TYPE_Q4_K ? vec_dot_q4_K_q8_1 :
+        type == GGML_TYPE_Q4_K ? __vec_dot_q4_K_q8_1 :
         type == GGML_TYPE_Q5_K ? vec_dot_q5_K_q8_1 :
         type == GGML_TYPE_Q6_K ? vec_dot_q6_K_q8_1 :
         type == GGML_TYPE_IQ2_XXS ? vec_dot_iq2_xxs_q8_1 :
@@ -127,12 +129,17 @@ static constexpr __host__ __device__ int calc_rows_per_block(int ncols_y, int ta
     return 1;
 }
 
+static __device__ uint64_t ticks_total = 0, ticks_vecdotq = 0, ticks_reduce_sum = 0;
 template <ggml_type type, int ncols_y>
 // tell the compiler to use as many registers as it wants, see nwarps definition below
 __launch_bounds__(calc_nwarps(ncols_y, get_device_table_id())*ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mul_mat_vec_q(
     const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
     const int ncols_x, const int nrows_x, const int nrows_y, const int nrows_dst) {
+
+    GGML_PERF_GPU_CLOCK(tick_start);
+    GGML_PERF_GPU_CLOCK(_clock);
+    GGML_PERF_GPU_CLOCK(_ticks_vecdotq);
 
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr int qi  = ggml_cuda_type_traits<type>::qi;
@@ -155,6 +162,7 @@ static __global__ void mul_mat_vec_q(
 
     const block_q8_1 * y = (const block_q8_1 *) vy;
 
+    GGML_PERF_GPU_CLOCK_NOW(_clock);
     for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
         const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
 
@@ -169,6 +177,7 @@ static __global__ void mul_mat_vec_q(
             }
         }
     }
+    GGML_PERF_GPU_CLOCK_COUNT_ADD(_ticks_vecdotq, _clock);
 
     __shared__ float tmp_shared[nwarps-1 > 0 ? nwarps-1 : 1][ncols_y][rows_per_cuda_block][warp_size];
     if (threadIdx.y > 0) {
@@ -185,6 +194,7 @@ static __global__ void mul_mat_vec_q(
         return;
     }
 
+    GGML_PERF_GPU_CLOCK_NOW(_clock);
     // sum up partial sums and write back result
 #pragma unroll
     for (int j = 0; j < ncols_y; ++j) {
@@ -201,6 +211,18 @@ static __global__ void mul_mat_vec_q(
             dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
         }
     }
+
+    // Stats: ticks_total  |  ticks_vecdotq  |  ticks_reduce_sum
+    //        267342976    |  211809728      |  45522960
+    //                     |  79.23%         |  17.03%
+    // -------------------------------------------------------------------------------------------
+    // GGML_PERF_GPU_CLOCK(tick_end);
+    // atomicAddUint64(&ticks_vecdotq,    _ticks_vecdotq);
+    // atomicAddUint64(&ticks_reduce_sum, tick_end - _clock);
+    // atomicAddUint64(&ticks_total,      tick_end - tick_start);
+    // printf(">> [mmvq] ticks_total = %12llu, ticks_vecdotq = %12llu, ticks_reduce_sum = %12llu\n",
+    //     ticks_total, ticks_vecdotq, ticks_reduce_sum
+    // );
 }
 
 static std::pair<dim3, dim3> calc_launch_params(const int ncols_y, const int nrows_x, const int warp_size, const mmvq_parameter_table_id table_id) {
@@ -221,6 +243,11 @@ static void mul_mat_vec_q_cuda(
     const int device = ggml_cuda_get_device();
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
     const mmvq_parameter_table_id table_id = get_device_table_id(ggml_cuda_info().devices[device].cc);
+
+    // printf(
+    //     ">> nblocks = %5d, nwarps = %5d, ncols_y = %5d, nrows_y = %5d, ncols_x = %5d, nrows_x = %5d, rows_per_cuda_block = %5d\n",
+    //     nblocks, nwarps, ncols_y, nrows_y, ncols_x, nrows_x, rows_per_cuda_block
+    // );
 
     switch (ncols_y) {
         case 1:

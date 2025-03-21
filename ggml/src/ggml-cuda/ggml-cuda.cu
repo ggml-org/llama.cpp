@@ -38,6 +38,7 @@
 #include "ggml-cuda/upscale.cuh"
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
+#include "ggml-cuda/__mp.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -1360,10 +1361,16 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
+static double ticks_total, ticks_quant, ticks_op;
+// stats:     |  ticks_total  |  ticks_quant  | ticks_mul_mat
+//            |  2.119177099  |  0.019638826  |  2.096463255
 static void ggml_cuda_op_mul_mat(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, ggml_cuda_op_mul_mat_t op,
     quantize_cuda_t quantize_src1) {
+
+    GGML_PERF_CLOCK(tick_start);
+    GGML_PERF_CLOCK(_tick);
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
@@ -1506,6 +1513,7 @@ static void ggml_cuda_op_mul_mat(
             dev[id].src1_ddf = dev[id].src1_ddf_alloc.alloc(ctx.pool(id), ggml_nelements(src1));
         }
 
+        GGML_PERF_CLOCK_NOW(_tick);
         if (quantize_src1) {
             size_t src_1_ddq_size = nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs;
             if (quantize_src1 == quantize_mmq_q8_1_cuda) {
@@ -1518,6 +1526,7 @@ static void ggml_cuda_op_mul_mat(
                 CUDA_CHECK(cudaGetLastError());
             }
         }
+        GGML_PERF_CLOCK_COUNT_ADD(ticks_quant, _tick);
 
         if (dst_on_device) {
             dev[id].dst_dd = (float *) dst->data;
@@ -1608,20 +1617,24 @@ static void ggml_cuda_op_mul_mat(
                     GGML_ABORT("fatal error");
                 }
 
+                GGML_PERF_CLOCK_NOW(_tick);
                 if (quantize_src1 && !src1_is_contiguous) {
                     quantize_src1(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, 1, src1_padded_col_size, src0->type, stream);
                     CUDA_CHECK(cudaGetLastError());
                 }
+                GGML_PERF_CLOCK_COUNT_ADD(ticks_quant, _tick);
 
                 if (src1_col_0 == 0 && !src0_is_contiguous && i03 % i03_divisor == 0 && i02 % i02_divisor == 0) {
                     CUDA_CHECK(ggml_cuda_cpy_tensor_2d(
                         src0_dd_i, src0, i03/i03_divisor, i02/i02_divisor, dev[id].row_low, dev[id].row_high, stream));
                 }
 
+                GGML_PERF_CLOCK_NOW(_tick);
                 // do the computation
                 op(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
                     dev[id].row_low, dev[id].row_high, src1_ncols, src1_padded_col_size, stream);
                 CUDA_CHECK(cudaGetLastError());
+                GGML_PERF_CLOCK_COUNT_ADD(ticks_op, _tick);
 
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
@@ -1668,6 +1681,14 @@ static void ggml_cuda_op_mul_mat(
             }
         }
     }
+
+    // GGML_PERF_CLOCK_COUNT_ADD(ticks_total, tick_start);
+    // FILE *stat_file = fopen("cuda_op_mul_mat_stats.log", "a");
+    // fprintf(stat_file,
+    //     ">> ticks_total = %2.9f, ticks_quant = %2.9f, ticks_op = %2.9f\n",
+    //    ticks_total, ticks_quant, ticks_op
+    // );
+    // fclose(stat_file);
 }
 
 static __global__ void k_compute_batched_ptrs(
@@ -1886,23 +1907,41 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     //printf("src0 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
     //printf("src1 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
 
+    // stats(Q4_K/Q8):    | mmv_cnt | mm_batched_cublas_cnt | op_mmv_cnt | op_mmvq_cnt | op_mmq_cnt | op_mm_cublas_cnt
+    //        FA=ON       |   0.0K  |         0.0K          |    0.0K    |    7.2K     |    0.0K    |       0.0K
+    //        FA=OFF      | 1.016K  |         0.0K          |    0.0K    |    8.256K   |    0.0K    |       0.016K
+    static int mmv_cnt = 0, mm_batched_cublas_cnt = 0, op_mmv_cnt = 0, op_mmvq_cnt = 0, op_mmq_cnt = 0, op_mm_cublas_cnt = 0;
+
     if (!split && use_mul_mat_vec && (src0->ne[1] < MMV_MAX_ROWS || any_gpus_without_fp16_mma)) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM
         // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec(ctx, src0, src1, dst);
+        mmv_cnt++;
     } else if (!split && src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16)
                && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
+        mm_batched_cublas_cnt++;
     } else if (use_mul_mat_vec) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec, nullptr);
+        op_mmv_cnt++;
     } else if (use_mul_mat_vec_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
+        op_mmvq_cnt++;
     } else if (use_mul_mat_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
+        op_mmq_cnt++;
     } else {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
+        op_mm_cublas_cnt++;
     }
+
+    // FILE *file = fopen("cuda_op_stats.log", "a");
+    // fprintf(file,
+    //     ">> mmv_cnt = %4.5fK, mm_batched_cublas_cnt = %4.5fK, op_mmv_cnt = %4.5fK, op_mmvq_cnt = %4.5fK, op_mmq_cnt = %4.5fK, op_mm_cublas_cnt = %4.5fK\n", 
+    //     mmv_cnt/1000.0, mm_batched_cublas_cnt/1000.0, op_mmv_cnt/1000.0, op_mmvq_cnt/1000.0, op_mmq_cnt/1000.0, op_mm_cublas_cnt/1000.0
+    // );
+    // fclose(file);
 }
 
 struct mmid_row_mapping {
@@ -3018,12 +3057,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16) {
                     return false;
                 }
-#ifdef GGML_USE_MUSA
-                if (b->type == GGML_TYPE_F16 && b->ne[2]*b->ne[3] > 1 &&
-                    !ggml_is_transposed(a) && !ggml_is_transposed(b)) {
-                    return false;
-                }
-#endif // GGML_USE_MUSA
                 switch (a->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:

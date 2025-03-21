@@ -5,6 +5,8 @@
 #include <mublas.h>
 #include <musa_bf16.h>
 #include <musa_fp16.h>
+#include "ggml-musa/ggml-musa.h"
+
 #define CUBLAS_COMPUTE_16F CUDA_R_16F
 #define CUBLAS_COMPUTE_32F CUDA_R_32F
 #define CUBLAS_COMPUTE_32F_FAST_16F MUBLAS_COMPUTE_32F_FAST_16F

@@ -1,4 +1,5 @@
 #pragma once
+#define GGML_USE_MUSA
 
 #include "ggml.h"
 #include "ggml-cuda.h"
@@ -223,7 +224,11 @@ static bool fast_fp16_available(const int cc) {
 
 // To be used for feature selection of external libraries, e.g. cuBLAS.
 static bool fast_fp16_hardware_available(const int cc) {
+#ifdef GGML_USE_MUSA
+    return true;
+#else
     return cc >= GGML_CUDA_CC_PASCAL && cc != 610;
+#endif // GGML_USE_MUSA
 }
 
 // Any FP16 tensor core instructions are available for ggml code.
@@ -254,6 +259,8 @@ static bool cp_async_available(const int cc) {
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     return __AMDGCN_WAVEFRONT_SIZE;
+#elif defined(GGML_USE_MUSA) && __MUSA_ARCH__ <= GGML_CUDA_CC_QY2
+    return 128;
 #else
     return 32;
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
@@ -284,22 +291,30 @@ static __device__ void no_device_code(
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(0xffffffff, x);
 #else
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+        x += musa_shfl_xor_sync<int, width>(x, offset);
+#else
         x += __shfl_xor_sync(0xffffffff, x, offset, width);
+#endif // GGML_USE_MUSA
     }
     return x;
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+        x += musa_shfl_xor_sync<float, width>(x, offset);
+#else
         x += __shfl_xor_sync(0xffffffff, x, offset, width);
+#endif // GGML_USE_MUSA
     }
     return x;
 }
@@ -308,8 +323,13 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+        a.x += musa_shfl_xor_sync<float, width>(a.x, offset);
+        a.y += musa_shfl_xor_sync<float, width>(a.y, offset);
+#else
         a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
         a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
+#endif // GGML_USE_MUSA
     }
     return a;
 }
@@ -319,7 +339,11 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #ifdef FP16_AVAILABLE
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+        a = __hadd2(a, musa_shfl_xor_sync<half2, width>(a, offset));
+#else
         a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
+#endif // GGML_USE_MUSA
     }
     return a;
 
@@ -333,7 +357,11 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+        x = fmaxf(x, musa_shfl_xor_sync<float, width>(x, offset));
+#else
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+#endif // GGML_USE_MUSA
     }
     return x;
 }
@@ -373,16 +401,46 @@ static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const hal
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000)
+#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000) || defined(GGML_USE_MUSA)
 #pragma unroll
    for (int offset = width/2; offset > 0; offset >>= 1) {
+#ifdef GGML_USE_MUSA
+       x = ggml_cuda_hmax2(x, musa_shfl_xor_sync<half2, width>(x, offset));
+#else
        x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+#endif // GGML_USE_MUSA
    }
    return x;
 #else
    GGML_UNUSED(x);
    NO_DEVICE_CODE;
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000)
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000) || defined(GGML_USE_MUSA)
+}
+
+template<int width = WARP_SIZE, int qk_size>
+static __device__ __forceinline__ float warp_reduce_sum(float x) {
+#ifdef GGML_USE_MUSA
+#pragma unroll
+    for (int offset = qk_size/2; offset > 0; offset >>= 1) {
+        x += musa_shfl_xor_sync<float, width>(x, offset);
+    }
+    return x;
+#else
+    return warp_reduce_sum<width>(x);
+#endif // GGML_USE_MUSA
+}
+
+template<int width = WARP_SIZE, int qk_size>
+static __device__ __forceinline__ float warp_reduce_max(float x) {
+#ifdef GGML_USE_MUSA
+#pragma unroll
+    for (int offset = qk_size/2; offset > 0; offset >>= 1) {
+        x = fmaxf(x, musa_shfl_xor_sync<float, width>(x, offset));
+    }
+    return x;
+#else
+    return warp_reduce_max<width>(x);
+#endif // GGML_USE_MUSA
 }
 
 #if CUDART_VERSION < CUDART_HMASK
