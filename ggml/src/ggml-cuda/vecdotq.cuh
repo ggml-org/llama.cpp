@@ -524,6 +524,32 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmq(
     return d6 * sumf_d;
 }
 
+#define VDR_TQ2_0_Q8_1_MMVQ 2
+#define VDR_TQ2_0_Q8_1_MMQ  8
+
+// Can use the same for both mmvq and mmq, because there are no sub-scales in a TQ2_0 block
+template <int vdr> static __device__ __forceinline__ float vec_dot_tq2_0_q8_1_impl(
+    const int * __restrict__ v, const int * __restrict__ u, const float & d2, const float * __restrict__ d8) {
+
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i0 = 0; i0 < QR2_0; ++i0) {
+        int sumi = 0;
+
+#pragma unroll
+        for (int i = 0; i < vdr; ++i) {
+            const int vi = (v[i] >> (2*i0)) & 0x03030303;
+
+            sumi = ggml_cuda_dp4a(__vsub4(vi, 0x01010101), u[vdr*i0 + i], sumi); // SIMD dot product
+        }
+
+        sumf += d8[i0] * sumi;
+    }
+
+    return d2 * sumf;
+}
+
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
 
@@ -784,6 +810,37 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
     }
 
     return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
+}
+
+static __device__ __forceinline__ float vec_dot_tq2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_tq2_0 * btq2_0 = (const block_tq2_0 *) vbq + kbx;
+
+    // iqs 0..7  all need bq8_offset 0, 1, 2, 3
+    // iqs 8..15 all need bq8_offset 4, 5, 6, 7
+    const int bq8_offset = QR2_0 * (iqs / 8);
+
+    int v[VDR_TQ2_0_Q8_1_MMVQ];
+    int u[QR2_0*VDR_TQ2_0_Q8_1_MMVQ];
+    float d8[QR2_0];
+
+#pragma unroll
+    for (int i = 0; i < VDR_TQ2_0_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_b2(btq2_0->qs, iqs + i);
+    }
+
+#pragma unroll
+    for (int i = 0; i < QR2_0; ++i) {
+        const block_q8_1 * bq8i = bq8_1 + bq8_offset + i;
+
+        for (int j = 0; j < VDR_TQ2_0_Q8_1_MMVQ; ++j) {
+            u[VDR_TQ2_0_Q8_1_MMVQ*i + j] = get_int_b4(bq8i->qs, (iqs % QI8_1) + j);
+        }
+        d8[i] = __low2float(bq8i->ds);
+    }
+
+    return vec_dot_tq2_0_q8_1_impl<VDR_TQ2_0_Q8_1_MMVQ>(v, u, btq2_0->d, d8);
 }
 
 #define VDR_IQ2_XXS_Q8_1_MMVQ 2
