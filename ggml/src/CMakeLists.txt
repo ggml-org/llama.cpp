@@ -76,7 +76,11 @@ if (GGML_CCACHE)
             set(GGML_CCACHE_VARIANT sccache)
         endif()
         # TODO: should not be set globally
-        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${GGML_CCACHE_VARIANT}")
+        if (GGML_SYCL AND GGML_CCACHE_FOUND AND WIN32)
+            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "ccache compiler_type=icl")
+        else ()
+            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${GGML_CCACHE_VARIANT}")
+        endif ()
         set(ENV{CCACHE_SLOPPINESS} time_macros)
         message(STATUS "${GGML_CCACHE_VARIANT} found, compilation results will be cached. Disable with GGML_CCACHE=OFF.")
     else()
@@ -323,6 +327,10 @@ endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Android")
     target_link_libraries(ggml-base PRIVATE dl)
+endif()
+
+if(CMAKE_SYSTEM_NAME MATCHES "visionOS")
+    target_compile_definitions(ggml-base PUBLIC _DARWIN_C_SOURCE)
 endif()
 
 if (BUILD_SHARED_LIBS)
