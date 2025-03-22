@@ -281,13 +281,13 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     if (!fp16_mma_available(cc)) {
         if (prec == GGML_PREC_DEFAULT) {
-            if (Q->ne[1] <= 8) {
+            if (Q->ne[1] <= 8 || Q->ne[0] == 256) {
                 ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
             } else {
                 ggml_cuda_flash_attn_ext_tile_f16(ctx, dst);
             }
         } else {
-            if (Q->ne[1] <= 8) {
+            if (Q->ne[1] <= 8 || Q->ne[0] == 256) {
                 ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
             } else {
                 ggml_cuda_flash_attn_ext_tile_f32(ctx, dst);
@@ -296,17 +296,17 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
         return;
     }
 
-    const int gqa_ratio = Q->ne[2] / K->ne[2];
-    const bool mma_fast_for_bs1 = fp16_mma_available(cc) && gqa_ratio % 2 == 0 &&
-        K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && mask;
-    if (Q->ne[1] == 1 && Q->ne[0] % (2*warp_size) == 0 && !mma_fast_for_bs1) {
+    const bool gqa_opt_applies = ((Q->ne[2] / K->ne[2]) % 2 == 0) && mask; // The mma-based kernels have GQA-specific optimizations
+    const bool mma_needs_data_conversion = K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16;
+    const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && cc < GGML_CUDA_CC_ADA_LOVELACE && !mma_needs_data_conversion;
+    const bool can_use_vector_kernel = (Q->ne[0] % (2*warp_size) == 0) && (prec == GGML_PREC_DEFAULT || Q->ne[0] <= 128);
+    if (Q->ne[1] == 1 && can_use_vector_kernel && !mma_faster_for_bs1) {
         if (prec == GGML_PREC_DEFAULT) {
             ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
-            return;
-        } else if(Q->ne[0] <= 128) {
+        } else {
             ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
-            return;
         }
+        return;
     }
 
     // The MMA implementation needs Turing or newer, use the old WMMA code for Volta:
