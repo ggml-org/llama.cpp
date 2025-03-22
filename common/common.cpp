@@ -11,6 +11,7 @@
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
 #include "llama.h"
+#include "chat.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -1772,6 +1773,67 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
     // NOTE: the original tokenizer decodes bytes after collecting the pieces.
     return text;
 }
+
+void common_chat_grammar_to_sampler(const common_chat_params * src,
+                                    const llama_vocab * vocab,
+                                    common_params_sampling * sparams)
+{
+    GGML_ASSERT(src && vocab && sparams);
+
+    auto & dst = *sparams;
+
+    dst.grammar      = src->grammar;
+    dst.grammar_lazy = src->grammar_lazy;
+
+    for (const auto & preserved : src->preserved_tokens) {
+        auto ids = common_tokenize(vocab, preserved, false, true);
+        if (ids.size() == 1) {
+            LOG_DBG("Preserved token: %d\n", ids[0]);
+            dst.preserved_tokens.insert(ids[0]);
+
+        } else {
+            // This may happen when using a tool call style meant for a model
+            // with special tokens to preserve on a model without said tokens.
+            LOG_WRN("Not preserved because more than 1 token (wrong chat template override?): %s\n",
+                    preserved.c_str());
+        }
+    }
+
+    for (const auto & trigger : src->grammar_triggers) {
+        if (trigger.type == COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
+            const auto & word = trigger.value;
+            auto ids = common_tokenize(vocab, word, /* add_special= */ false, /* parse_special= */ true);
+
+            if (ids.size() == 1) {
+                auto token = ids[0];
+                auto found = std::find(dst.preserved_tokens.begin(), dst.preserved_tokens.end(),
+                                       (llama_token) token);
+
+                if (found == dst.preserved_tokens.end()) {
+                    throw std::runtime_error("Grammar trigger word should be marked as preserved token: " + word);
+                }
+
+                LOG_DBG("Grammar trigger token: %d (`%s`)\n", token, word.c_str());
+                common_grammar_trigger trigger;
+                trigger.type = COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN;
+                trigger.value = word;
+                trigger.token = token;
+                dst.grammar_triggers.push_back(std::move(trigger));
+
+            } else {
+                LOG_DBG("Grammar trigger word: `%s`\n", word.c_str());
+                dst.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, word});
+            }
+
+        } else {
+            dst.grammar_triggers.push_back(trigger);
+        }
+    }
+    if (dst.grammar_lazy && dst.grammar_triggers.empty()) {
+        throw std::runtime_error("Error: no triggers set for lazy grammar!");
+    }
+}
+
 
 //
 // KV cache utils
