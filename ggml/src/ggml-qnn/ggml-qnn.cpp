@@ -6,24 +6,26 @@
  * https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
  *
  * this single-source-file or self-contained implementation of ggml-qnn backend has 10 sections:
- * section-1  forward/prototype declaration
- * section-2  global vars, macros, data structures
- * section-3  ggml-qnn internal troubleshooting function/class
- * section-4  helper function for WoA(Windows on ARM)
- * section-5  general helper function
- * section-6  QNN helper function
+ * section-1  forward/prototype declaration, global vars, macros, data structures
+ * section-2  ggml-qnn internal troubleshooting function/class
+ * section-3  helper function for WoA(Windows on ARM)
+ * section-4  general helper function
+ * section-5  QNN helper function
+ * section-6  Hexagon DSP helper function
  * section-7  ggml-qnn backend helper function / class
  * section-8  implementation of ggml-qnn backend according to ggml's backend subsystem
- * section-9  implementation of general approach or the first tech approach
- * section-10 implementation of the second tech approach:mapping the entire ggml cgraph to a single QNN graph
+ * section-9  implementation of general approach through QNN and Hexagon DSP
+ * section-10 implementation of special approach through QNN:mapping the entire ggml cgraph to a single QNN graph
  *
- * currently provide following ggml op' QNN backend implementation:
- * - GGML_OP_ADD/GGML_OP_SUB/GGML_OP_MUL/GGML_OP_DIV:
- *   this is a simple skeleton, can expand other ggml ops according to expertise
- * - GGML_OP_LOG/GGML_OP_SQRT:
+ * currently provide following ggml op' implementation through QNN:
+ * - GGML_OP_ADD/GGML_OP_SUB/GGML_OP_MUL/GGML_OP_DIV/GGML_OP_LOG/GGML_OP_SQRT:
  *   this is a simple skeleton, can expand other ggml ops according to expertise
  * - GGML_OP_MUL_MAT:
- *   this is a complicated skeleton, can expand other complex ggml ops accordingly
+ *   this is a complicated skeleton, can expand other ggml ops accordingly
+ *
+ *  currently provide following ggml op' implementation through Hexagon DSP:
+ * - GGML_OP_ADD:
+ *   this is a skeleton, can expand other ggml ops accordingly
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -51,15 +53,6 @@
 #include <inttypes.h>
 #include <math.h>
 #include <time.h>
-#if defined(__ANDROID__) || defined(__linux__)
-#include <unistd.h>
-#include <dlfcn.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/sysinfo.h>
-#include <unistd.h>
-#include <stdatomic.h>
-#endif
 
 #include <string>
 #include <vector>
@@ -83,14 +76,33 @@
 #include <unordered_set>
 #include <utility>
 #include <future>
-#if (defined __ANDROID__) || (defined ANDROID)
-#include "android/log.h"
+
+#if defined(__ANDROID__) || defined(__linux__)
+#include <unistd.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/sysinfo.h>
+#include <unistd.h>
+#include <stdatomic.h>
 #endif
 
 #if !defined(__ANDROID__) && !defined(__linux__)
 #include <wchar.h>
 #include <malloc.h>
 #include <Windows.h>
+#endif
+
+#if defined(__ANDROID__)
+#include "android/log.h"
+
+#include "rpcmem.h"
+#include "remote.h"
+#include "os_defines.h"
+#include "domain.h"
+#include "AEEStdErr.h"
+#include "HAP_power.h"
+#include "HAP_farf.h"
 #endif
 
 #include "QnnTypes.h"
@@ -110,16 +122,20 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "kernels/ggmlop.h"
+
 // =================================================================================================
-//  section-1: forward/prototype declaration, macro
+//  section-1: forward/prototype declaration, global vars, macros, data structures
 // =================================================================================================
 class  qnn_instance;
 struct qnn_parameter;
 struct ggml_backend_qnn_context;
 
 typedef void (* ggmlqnn_op_func_t)(ggml_backend_qnn_context * ctx, ggml_tensor * op);
+typedef int  (* notif_callback_fn)(void * context, int domain, int session, remote_rpc_status_flags_t status);
+typedef int  (* ggmlhexagon_op_func_t)(remote_handle64 handle, const dsptensor * src0, const dsptensor * src1, dsptensor * dst);
 
-//general function prototypes for ggml-qnn backend
+static void *           ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
 static void             ggmlqnn_dump_tensor(const ggml_tensor * tensor, const char * name);
 static enum ggml_status ggmlqnn_backend_graph_compute_special(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 static void             ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...);
@@ -132,7 +148,8 @@ static Qnn_Tensor_t *   ggmlqnn_create_general_tensor(qnn_instance * instance, Q
                                                      void * data, uint32_t data_size,
                                                      bool b_transpose = false);
 
-//function prototypes for all op functions in the first tech approach(general approach in other backends)
+
+//function prototypes for all op functions in the general approach
 //general op function for elment-wise operation on 1/2 input tensors and 1 output tensor
 static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
@@ -163,7 +180,7 @@ static void ggmlqnn_compute_upsample_nearest2d(ggml_backend_qnn_context * ctx, g
 static void ggmlqnn_compute_timestep_embedding(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void ggmlqnn_compute_diag_mask(ggml_backend_qnn_context * ctx, ggml_tensor * dst, float value);
 
-//function prototypes for all op functions in the second tech approach("mapping the entire cgraph to a single QNN graph")
+//function prototypes for all op functions in the special approach("mapping the entire cgraph to a single QNN graph")
 static void ggmlqnn_graph_addnode(ggml_backend_qnn_context * ctx, struct ggml_cgraph * cgraph,
                 Qnn_GraphHandle_t graph_handle, std::string & graph_name, ggml_tensor * op, bool is_reuse_graph = false);
 
@@ -192,6 +209,7 @@ static void ggmlqnn_graph_addnode(ggml_backend_qnn_context * ctx, struct ggml_cg
 #define QNN_VER_PTR(x)                                  (&((x).v1))
 #define RPCMEM_DEFAULT_FLAGS                            1
 #define RPCMEM_HEAP_ID_SYSTEM                           25
+#define STATUS_CONTEXT                                  0x12345678
 
 #define QNN_TENSOR_GET_ID(tensor)                       get_qnn_tensorid(tensor)
 #define QNN_TENSOR_GET_NAME(tensor)                     get_qnn_tensorname(tensor)
@@ -239,13 +257,15 @@ static void ggmlqnn_graph_addnode(ggml_backend_qnn_context * ctx, struct ggml_cg
 
 #define GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst)                              \
     do {                                                                        \
-        if (!ggmlqnn_is_valid_params((ctx), (src0), (src1), (dst))) {           \
-            return;                                                             \
+        if (g_qnn_params.inference_approach != DIRECT_USE_CDSP) {               \
+            if (!ggmlqnn_is_valid_params((ctx), (src0), (src1), (dst))) {       \
+                return;                                                         \
+            }                                                                   \
         }                                                                       \
-    } while (0)
+    } while (0)                                                                 \
 
 // =================================================================================================
-//  section-2: data type, data structure, global vars
+//  section-1: data type, data structure, global vars
 // =================================================================================================
 using pfn_rpc_mem_init                          = void (*)(void);
 using pfn_rpc_mem_deinit                        = void (*)(void);
@@ -268,10 +288,27 @@ using qnn_cgraph_node_t                         = std::tuple<std::string, qnn_te
 using qnn_cgraph_nodes_t                        = std::vector<qnn_cgraph_node_t>;
 using qnn_multinode_res_t                       = std::tuple<Qnn_GraphHandle_t, qnn_cgraph_nodes_t, qnn_ptensors_t, qnn_tensors_t, qnn_tensors_t>;
 
-enum class qnn_profile_level {
-    profile_off     = 0,
-    profile_basic   = 1,
-    profile_detail  = 2
+enum qnn_profile_level {
+    PROFILE_OFF     = 0,
+    PROFILE_BASIC   = 1,
+    PROFILE_DETAIL  = 2
+};
+
+//0: general approach through QNN
+//1: general approach through Hexagon cDSP
+//2: special approach through QNN:mapping entire ggml cgraph to QNN graph
+enum inference_approach {
+    QNN_GENERAL     = 0,
+    DIRECT_USE_CDSP = 1,
+    QNN_SINGLEGRAPH = 2,
+};
+
+enum hexagon_dsp_type {
+    HEXAGON_ADSP    = 0,
+    HEXAGON_MDSP    = 1,
+    HEXAGON_SDSP    = 2,
+    HEXAGON_CDSP    = 3,
+    HEXAGON_CDSP1   = 4,
 };
 
 enum qcom_htp_arch {
@@ -328,6 +365,10 @@ struct ggml_backend_qnn_context {
     size_t work_size;
     size_t desired_size;
     int n_threads;
+
+    size_t rpc_mempool_len;
+    void * rpc_mempool;
+    remote_handle64 ggmlop_handle;
 };
 
 struct qnn_op_caps {
@@ -347,21 +388,14 @@ struct qnn_parameter {
     int hvx_threads;
     int vtcm_size_in_mb;
     int enable_dlbc;
-    int inference_approach;     // 0: general approach,similar to ggml-sycl or ggml-cann 1: mapping entire ggml cgraph to QNN graph
-    int qnn_backend;            // 0: QNN-CPU backend, 1: QNN-GPU backend, 2: QNN-NPU backend
+    int inference_approach;     // 0: QNN_GENERAL     1: DIRECT_USE_CDSP 2: QNN_SINGELGRAPH
+    int qnn_backend;            // 0: QNN-CPU backend 1: QNN-GPU backend 2: QNN-NPU backend
     const char * qnn_cfgfilename;
     const char * qnn_runtimelib_path;
 };
 
-//TODO:I don't think threadsafe is required at the moment
-//     so we can uniform them to avoid compiler/toolchain's complains
-#if !defined(__ANDROID__) && !defined(__linux__)
-static std::atomic<int32_t> g_qnntensor_idx(0); //ensure every QNN tensor name is unique
-static std::atomic<int32_t> g_qnnopcfg_idx(0);  //ensure every QNN opconfig name is unique
-#else
 static int32_t g_qnntensor_idx = 0; //ensure every QNN tensor name is unique
 static int32_t g_qnnopcfg_idx  = 0; //ensure every QNN opconfig name is unique
-#endif
 
 static struct qnn_parameter g_qnn_params = {
         .print_qnn_internal_log = 0,
@@ -514,6 +548,14 @@ static struct ggml_backend_qnn_context g_qnn_mgr[GGML_QNN_MAX_DEVICES] = {
                 .socinfo              = {}},
 };
 
+static domain hexagon_supported_domains[] = {
+        {ADSP_DOMAIN_ID, ADSP_DOMAIN},
+        {MDSP_DOMAIN_ID, MDSP_DOMAIN},
+        {SDSP_DOMAIN_ID, SDSP_DOMAIN},
+        {CDSP_DOMAIN_ID, CDSP_DOMAIN},
+        {CDSP1_DOMAIN_ID, CDSP1_DOMAIN}
+};
+
 static constexpr const qnn_op_caps ggmlqnn_k_op_caps[] = {
         {true,  GGML_OP_NONE, nullptr, 0, nullptr},
         {false, GGML_OP_DUP},
@@ -624,7 +666,7 @@ static_assert(std::size(ggmlqnn_k_op_caps) == (GGML_OP_COUNT + GGML_UNARY_OP_COU
         "pls check ggmlqnn_k_op_caps and ensure is corresponding to latest ggml.h");
 
 // =================================================================================================
-//  section-3: ggml-qnn internal troubleshooting function/class
+//  section-2: ggml-qnn internal troubleshooting function/class
 // =================================================================================================
 static void ggmlqnn_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...) {
     static std::mutex ggmlqnn_log_internal_mutex;
@@ -762,7 +804,7 @@ private:
 };
 
 // =================================================================================================
-//  section-4: helper function for WoA(Window on ARM)
+//  section-3: helper function for WoA(Window on ARM)
 // =================================================================================================
 #if !defined(__ANDROID__) && !defined(__linux__)
 #define RTLD_GLOBAL 0x100
@@ -817,7 +859,7 @@ static const char * dlerror(void) {
 #endif
 
 // =================================================================================================
-//  section-5: general helper function
+//  section-4: general helper function
 // =================================================================================================
 //TODO: merge the following 6 helper functions which used to ensure every QNN tensor/opcfg name is unique
 static void ggmlqnn_reset_tensoridx() {
@@ -829,11 +871,7 @@ static void ggmlqnn_inc_tensoridx() {
 }
 
 static int32_t ggmlqnn_get_tensoridx() {
-#if !defined(__ANDROID__) && !defined(__linux__)
-    return g_qnntensor_idx.load();
-#else
     return g_qnntensor_idx;
-#endif
 }
 
 static void ggmlqnn_reset_opcfgidx() {
@@ -845,11 +883,7 @@ static void ggmlqnn_inc_opcfgidx() {
 }
 
 static int32_t ggmlqnn_get_opcfgidx() {
-#if !defined(__ANDROID__) && !defined(__linux__)
-    return g_qnnopcfg_idx.load();
-#else
     return g_qnnopcfg_idx;
-#endif
 }
 
 static void * ggmlqnn_mallocz_aligned(size_t size, size_t alignment) {
@@ -994,7 +1028,7 @@ static void ggmlqnn_get_timestring(char * p_currenttime) {
 }
 
 // =================================================================================================
-//  section-6: QNN helper function
+//  section-5: QNN helper function
 // =================================================================================================
 static inline uint32_t get_qnn_tensorid(const Qnn_Tensor_t & tensor) {
     if (tensor.version == QNN_TENSOR_VERSION_1) {
@@ -1343,6 +1377,810 @@ static Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * p
 }
 
 // =================================================================================================
+//  section-6: Hexagon DSP helper function
+// =================================================================================================
+static const char * ggmlhexagon_get_dsp_name(int domain_id) {
+    switch (domain_id) {
+        case HEXAGON_ADSP:
+            return "Hexagon-aDSP";
+        case HEXAGON_MDSP:
+            return "Hexagon-mDSP";
+        case HEXAGON_SDSP:
+            return "Hexagon-sDSP";
+        case HEXAGON_CDSP:
+            return "Hexagon-cDSP";
+        case HEXAGON_CDSP1:
+            return "Hexagon-cDSP1";
+        default:
+            return "Hexagon-unknown";
+    }
+}
+
+static int ggmlhexagon_pd_status_notifier_callback(void * context, int domain, int session, remote_rpc_status_flags_t status){
+    int error = AEE_SUCCESS;
+    switch (status){
+        case  FASTRPC_USER_PD_UP:
+            GGMLQNN_LOG_DEBUG("PD is up\n");
+            break;
+        case  FASTRPC_USER_PD_EXIT:
+            GGMLQNN_LOG_DEBUG("PD closed\n");
+            break;
+        case  FASTRPC_USER_PD_FORCE_KILL:
+            GGMLQNN_LOG_DEBUG("PD force kill\n");
+            break;
+        case  FASTRPC_USER_PD_EXCEPTION:
+            GGMLQNN_LOG_DEBUG("PD exception\n");
+            break;
+        case  FASTRPC_DSP_SSR:
+            GGMLQNN_LOG_DEBUG("DSP SSR\n");
+            break;
+        default :
+            error =  AEE_EBADITEM;
+            break;
+    }
+    return error;
+}
+
+static domain * ggmlhexagon_get_domain(int domain_id) {
+    int size = sizeof(hexagon_supported_domains) / sizeof(domain);
+
+    for (size_t i = 0; i < size; i++) {
+        if (hexagon_supported_domains[i].id == domain_id)
+            return &hexagon_supported_domains[i];
+    }
+
+    return nullptr;
+}
+
+static bool ggmlhexagon_is_cdsp(int domain_id) {
+    return (domain_id == HEXAGON_CDSP) || (domain_id == HEXAGON_CDSP1);
+}
+
+static bool ggmlhexagon_is_valid_domain_id(int domain_id, int compute_only) {
+    int size = sizeof(hexagon_supported_domains) / sizeof(domain);
+
+    if (compute_only) {
+        return ggmlhexagon_is_cdsp(domain_id);
+    }
+
+    for (size_t i = 0; i < size; i++) {
+        if (hexagon_supported_domains[i].id == domain_id)
+            return true;
+    }
+
+    return false;
+}
+
+static int ggmlhexagon_get_domains_info(const char * domain_type, int * num_domains, fastrpc_domain ** domains_info) {
+    int hexagon_err = AEE_SUCCESS;
+    int ss_info     = 0;
+    ss_info = strcmp(domain_type, "NSP")? HPASS: NSP;
+    system_req_payload req;
+    memset(&req, 0, sizeof(system_req_payload));
+    req.id = FASTRPC_GET_DOMAINS;
+    req.sys.domains = nullptr;
+    fastrpc_domain * domain = nullptr;
+
+    if (ss_info != 0) {
+        req.sys.flags = DOMAINS_LIST_FLAGS_SET_TYPE(req.sys.flags, ss_info);
+    } else {
+        req.sys.flags =0;
+    }
+
+#ifdef _WIN32
+    hexagon_err = AEE_EUNSUPPORTED;
+    goto bail;
+#endif
+
+    if (remote_system_request) {
+        hexagon_err = remote_system_request(&req);
+        if (hexagon_err != AEE_SUCCESS) {
+            GGMLQNN_LOG_DEBUG("failure in remote_system_request call: %d", hexagon_err);
+            goto bail;
+        }
+        //allocate memory for domain-info array
+        req.sys.max_domains = req.sys.num_domains;
+        void * buffer = calloc(req.sys.num_domains, sizeof(fastrpc_domain));
+        if (nullptr == buffer) {
+            hexagon_err = AEE_ENOMEMORY;
+            GGMLQNN_LOG_DEBUG("unable to allocate memory for req.sys.domains");
+            goto bail;
+        }
+        req.sys.domains = static_cast<fastrpc_domain *>(buffer);
+        hexagon_err = remote_system_request(&req);
+        if (hexagon_err != AEE_SUCCESS) {
+            GGMLQNN_LOG_DEBUG("failure in remote_system_request call: %d.\n", hexagon_err);
+            goto bail;
+        }
+
+        for (int i = 0; i < req.sys.num_domains; i++) {
+            //verify that only requested type domains were returned
+            domain = &req.sys.domains[i];
+            if (domain->type != ss_info) {
+                hexagon_err = -1;
+                GGMLQNN_LOG_DEBUG("incorrect data received from remote_system_request.\n");
+                goto bail;
+            }
+        }
+        *domains_info = req.sys.domains;
+        *num_domains = req.sys.num_domains;
+    } else {
+        hexagon_err = AEE_EUNSUPPORTED;
+        goto bail;
+    }
+
+bail:
+    if (hexagon_err && !req.sys.domains) {
+        free(req.sys.domains);
+    }
+    return hexagon_err;
+}
+
+static int ggmlhexagon_get_dsp_support(int * domain) {
+    int hexagon_error = AEE_SUCCESS;
+    *domain = HEXAGON_CDSP;
+
+    if (remote_handle_control) {
+        struct remote_dsp_capability dsp_capability_domain = {HEXAGON_CDSP, DOMAIN_SUPPORT, 0};
+        hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
+        if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+            GGMLQNN_LOG_DEBUG("FastRPC Capability API is not supported on this device");
+            goto bail;
+        }
+
+        if (0 == dsp_capability_domain.capability) {
+            dsp_capability_domain.domain = HEXAGON_ADSP;
+            dsp_capability_domain.attribute_ID = DOMAIN_SUPPORT;
+            dsp_capability_domain.capability = 0;
+            hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
+            if(dsp_capability_domain.capability) {
+                *domain = HEXAGON_ADSP;
+            }
+        }
+
+        if (hexagon_error != AEE_SUCCESS) {
+            GGMLQNN_LOG_DEBUG("get_dsp_support failed with error 0x%x", hexagon_error);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return hexagon_error;
+}
+
+static int ggmlhexagon_get_vtcm_info(int domain, uint32_t * capability, uint32_t attr) {
+    int hexagon_error = AEE_SUCCESS;
+    *capability = 0;
+
+    if (attr == VTCM_PAGE || attr == VTCM_COUNT) {
+    } else {
+        hexagon_error = AEE_EBADPARM;
+        GGMLQNN_LOG_DEBUG("unsupported attr, only VTCM_PAGE and VTCM_COUNT supported");
+        goto bail;
+    }
+
+    if (remote_handle_control) {
+        if (domain == HEXAGON_ADSP || domain == HEXAGON_CDSP) {
+            /*
+            * query the DSP for VTCM information
+            * since the ADSP does not have a dedicated VTCM, we expect the output to be 0
+            */
+            struct remote_dsp_capability dsp_capability_vtcm_dsp;
+            dsp_capability_vtcm_dsp.domain = (uint32_t)domain;
+            dsp_capability_vtcm_dsp.attribute_ID = attr;
+            dsp_capability_vtcm_dsp.capability = (uint32_t)0;
+            hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_vtcm_dsp, sizeof(struct remote_dsp_capability));
+            if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+                GGMLQNN_LOG_DEBUG("FastRPC Capability API is not supported on this device");
+                GGMLQNN_LOG_DEBUG("running the use case without checking the capability");
+                hexagon_error = AEE_SUCCESS;
+                goto bail;
+            } else if (hexagon_error == AEE_SUCCESS) {
+                *capability = dsp_capability_vtcm_dsp.capability;
+            } else {
+                GGMLQNN_LOG_DEBUG("get_vtcm_info failed with error 0x%x", hexagon_error);
+                goto bail;
+            }
+        } else {
+            hexagon_error = AEE_EUNSUPPORTED;
+            GGMLQNN_LOG_DEBUG("unsupported domain %d", domain);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return hexagon_error;
+}
+
+static bool ggmlhexagon_is_unsignedpd_supported(int domain_id) {
+    int hexagon_error = AEE_SUCCESS;
+    if (remote_handle_control) {
+        struct remote_dsp_capability dsp_capability_domain = {static_cast<uint32_t>(domain_id), UNSIGNED_PD_SUPPORT, 0};
+        hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_domain, sizeof(struct remote_dsp_capability));
+        if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+            GGMLQNN_LOG_WARN("FastRPC Capability API is not supported on this device. Falling back to signed pd");
+            return false;
+        }
+
+        if (hexagon_error) {
+            GGMLQNN_LOG_WARN("error 0x%x: FastRPC Capability API failed. falling back to signed pd", hexagon_error);
+            return false;
+        }
+
+        if (dsp_capability_domain.capability == 1) {
+            return true;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_WARN("remote_dsp_capability interface is not supported on this device.falling back to signed pd");
+        return false;
+    }
+
+    return false;
+}
+
+static bool ggmlhexagon_get_unsignedpd_support(void) {
+    return ggmlhexagon_is_unsignedpd_supported(HEXAGON_CDSP);
+}
+
+static bool ggmlhexagon_is_async_fastrpc_supported(int domain) {
+    int hexagon_error = AEE_SUCCESS;
+    if (remote_handle_control) {
+        if (domain == HEXAGON_CDSP) {
+            /*
+            * Query the DSP for ASYNC_FASTRPC_SUPPORT information
+            * Async fastrpc is supported only on CDSP
+            */
+            struct remote_dsp_capability dsp_capability_async_support;
+            dsp_capability_async_support.domain = (uint32_t)domain;
+            dsp_capability_async_support.attribute_ID = ASYNC_FASTRPC_SUPPORT;
+            dsp_capability_async_support.capability = (uint32_t)0;
+            hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_async_support, sizeof(struct remote_dsp_capability));
+            if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+                GGMLQNN_LOG_WARN("FastRPC Capability API is not supported on this device");
+                hexagon_error = AEE_SUCCESS;
+                goto bail;
+            } else if (dsp_capability_async_support.capability == 1) {
+                return true;
+            }
+
+            if (hexagon_error != AEE_SUCCESS){
+                GGMLQNN_LOG_WARN("failed with error 0x%x", hexagon_error);
+                goto bail;
+            }
+        } else {
+            hexagon_error = AEE_EUNSUPPORTED;
+            GGMLQNN_LOG_WARN("async FastRPC is not supported on domain %d", domain);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_WARN("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return false;
+}
+
+static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
+    int hexagon_error = AEE_SUCCESS;
+
+    if (remote_handle_control) {
+        struct remote_rpc_control_latency data;
+#if 1
+        data.enable = RPC_PM_QOS;
+        data.latency = 300;
+#else
+        data.enable = RPC_POLL_QOS;
+        data.latency = 1000;
+#endif
+        data.enable = qos;
+        data.latency = latency;
+        hexagon_error = remote_handle64_control(DSPRPC_GET_DSP_INFO, DSPRPC_CONTROL_LATENCY, (void*)&data, sizeof(data));
+        if (hexagon_error != AEE_SUCCESS){
+            GGMLQNN_LOG_WARN("failed with error 0x%x", hexagon_error);
+            goto bail;
+        } else {
+            GGMLQNN_LOG_INFO("set rpc qos %d, latency %d\n", qos, latency);
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_WARN("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return;
+}
+
+static bool ggmlhexagon_is_status_notification_supported(int domain) {
+    int hexagon_error = AEE_SUCCESS;
+
+    if (remote_handle_control) {
+        /*
+        * Query the DSP for STATUS_NOTIFICATION_SUPPORT information
+        * DSP User PD status notification Support
+        */
+        struct remote_dsp_capability dsp_capability_status_notification_support;
+        dsp_capability_status_notification_support.domain = (uint32_t)domain;
+        dsp_capability_status_notification_support.attribute_ID = STATUS_NOTIFICATION_SUPPORT;
+        dsp_capability_status_notification_support.capability = (uint32_t)0;
+        hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_status_notification_support, sizeof(struct remote_dsp_capability));
+        if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+            GGMLQNN_LOG_WARN("FastRPC Capability API is not supported on this device");
+            hexagon_error = AEE_SUCCESS;
+            goto bail;
+        } else if (1 == dsp_capability_status_notification_support.capability) {
+            return true;
+        }
+
+        if (hexagon_error != AEE_SUCCESS){
+            GGMLQNN_LOG_WARN("failed with error 0x%x", hexagon_error);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_WARN("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return false;
+}
+
+static int ggmlhexagon_get_hmx_support_info(int domain, uint32_t * capability, uint32_t attr) {
+    int hexagon_error = AEE_SUCCESS;
+    *capability = 0;
+
+    if (attr != HMX_SUPPORT_SPATIAL && attr != HMX_SUPPORT_DEPTH) {
+        hexagon_error = AEE_EBADPARM;
+        GGMLQNN_LOG_WARN("unsupported attr, only HMX_SUPPORT_SPATIAL and HMX_SUPPORT_DEPTH supported");
+        goto bail;
+    }
+
+    if (remote_handle_control) {
+        if (domain == HEXAGON_CDSP) {
+            /*
+            * Query the DSP for HMX SUPPORT information
+            * HMX is supported on CDSP only
+            */
+            struct remote_dsp_capability dsp_capability_hmx_dsp;
+            dsp_capability_hmx_dsp.domain = (uint32_t)domain;
+            dsp_capability_hmx_dsp.attribute_ID = attr;
+            dsp_capability_hmx_dsp.capability = (uint32_t)0;
+            hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hmx_dsp, sizeof(struct remote_dsp_capability));
+            if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+                GGMLQNN_LOG_DEBUG("FastRPC Capability API is not supported on this device");
+                hexagon_error = AEE_SUCCESS;
+                goto bail;
+            }
+            else if (hexagon_error == AEE_SUCCESS) {
+                *capability = dsp_capability_hmx_dsp.capability;
+            } else {
+                GGMLQNN_LOG_DEBUG("get_hmx_support_info failed with Error 0x%x", hexagon_error);
+                goto bail;
+            }
+        } else {
+            hexagon_error = AEE_EUNSUPPORTED;
+            GGMLQNN_LOG_DEBUG("HMX support is not there for domain %d", domain);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return hexagon_error;
+}
+
+static int ggmlhexagon_get_hex_arch_ver(int domain, uint32_t * capability) {
+    int hexagon_error = AEE_SUCCESS;
+    *capability = 0;
+    if(remote_handle_control) {
+        /*
+        * Query the Hexagon processor architecture version information
+        */
+        struct remote_dsp_capability dsp_capability_arch_ver;
+        dsp_capability_arch_ver.domain = (uint32_t)domain;
+        dsp_capability_arch_ver.attribute_ID = ARCH_VER;
+        dsp_capability_arch_ver.capability = (uint32_t)0;
+        hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_arch_ver, sizeof(struct remote_dsp_capability));
+        if ((hexagon_error & 0xFF) == (AEE_EUNSUPPORTEDAPI & 0xFF)) {
+            GGMLQNN_LOG_DEBUG("FastRPC Capability API is not supported on this device");
+            hexagon_error = AEE_SUCCESS;
+            goto bail;
+        } else if (hexagon_error == AEE_SUCCESS) {
+            *capability = dsp_capability_arch_ver.capability;
+        } else {
+            GGMLQNN_LOG_DEBUG("get_hex_arch_ver failed with error 0x%x", hexagon_error);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
+    }
+
+    bail:
+    return hexagon_error;
+}
+
+static int ggmlhexagon_get_hvx_support_info(int domain, uint32_t * capability, uint32_t attr)
+{
+    int hexagon_error = AEE_SUCCESS;
+    *capability = 0;
+    if (attr == HVX_SUPPORT_64B) {
+        hexagon_error = AEE_EBADPARM;
+        GGMLQNN_LOG_DEBUG("latest targets have 128 byte HVX register, use HVX_SUPPORT_128B instead of HVX_SUPPORT_64B");
+        goto bail;
+    }
+
+    if (attr != HVX_SUPPORT_128B) {
+        hexagon_error = AEE_EBADPARM;
+        GGMLQNN_LOG_DEBUG("unsupported attr. only HVX_SUPPORT_128B supported");
+        goto bail;
+    }
+
+    if (remote_handle_control) {
+        if (domain == HEXAGON_CDSP) {
+            /*
+            * Query the DSP for HVX SUPPORT information
+            * HVX is supported on CDSP only
+            */
+            struct remote_dsp_capability dsp_capability_hvx_dsp;
+            dsp_capability_hvx_dsp.domain = (uint32_t)domain;
+            dsp_capability_hvx_dsp.attribute_ID = attr;
+            dsp_capability_hvx_dsp.capability = (uint32_t)0;
+            hexagon_error = remote_handle_control(DSPRPC_GET_DSP_INFO, &dsp_capability_hvx_dsp, sizeof(struct remote_dsp_capability));
+            if ((hexagon_error & 0xFF)==(AEE_EUNSUPPORTEDAPI & 0xFF)) {
+                GGMLQNN_LOG_DEBUG("FastRPC Capability API is not supported on this device");
+                hexagon_error = AEE_SUCCESS;
+                goto bail;
+            } else if (hexagon_error == AEE_SUCCESS) {
+                *capability = dsp_capability_hvx_dsp.capability;
+            } else {
+                GGMLQNN_LOG_DEBUG("failed with error 0x%x", hexagon_error);
+                goto bail;
+            }
+        } else {
+            hexagon_error = AEE_EUNSUPPORTED;
+            GGMLQNN_LOG_DEBUG("HVX support is not available on domain %d", domain);
+            goto bail;
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+        GGMLQNN_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
+    }
+
+bail:
+    return hexagon_error;
+}
+
+static int ggmlhexagon_request_status_notifications(int domain_id, void * context, notif_callback_fn call_back_fn) {
+    int hexagon_error = AEE_SUCCESS;
+    struct remote_rpc_notif_register notif;
+    bool status_notification_support;
+
+    notif.context = context;
+    notif.domain = domain_id;
+    notif.notifier_fn = call_back_fn;
+
+    status_notification_support = ggmlhexagon_is_status_notification_supported(domain_id);
+    if (status_notification_support) {
+        hexagon_error = remote_session_control(FASTRPC_REGISTER_STATUS_NOTIFICATIONS, (void*)&notif, sizeof(notif));
+        if (hexagon_error != AEE_SUCCESS) {
+            GGMLQNN_LOG_DEBUG("error 0x%x: remote_session_control failed to enable status notifications", hexagon_error);
+        }
+    } else {
+        hexagon_error = AEE_EUNSUPPORTEDAPI;
+    }
+
+    return hexagon_error;
+}
+
+//TODO:not work on cDSP currently
+static AEEResult ggmlhexagon_set_clocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled) {
+#if 0
+    GGMLQNN_LOG_DEBUG("----------- entering power set clocks");
+
+    HAP_power_request_t request;
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_apptype;
+    request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
+
+    void * benchmark_ctx = (void*)(handle);
+    int retval = HAP_power_set(benchmark_ctx, &request);
+    if (retval)  {
+        GGMLQNN_LOG_WARN("failed first power vote");
+        return AEE_EFAILED;
+    }
+
+    //configure clocks & DCVS mode
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_DCVS_v2;
+    request.dcvs_v2.dcvs_enable = TRUE;
+    request.dcvs_v2.dcvs_params.target_corner = (HAP_dcvs_voltage_corner_t)power_level;
+    if (dcvs_enabled) {
+        request.dcvs_v2.dcvs_params.min_corner = HAP_DCVS_VCORNER_DISABLE;
+        request.dcvs_v2.dcvs_params.max_corner = HAP_DCVS_VCORNER_DISABLE;
+    } else {
+        request.dcvs_v2.dcvs_params.min_corner = request.dcvs_v2.dcvs_params.target_corner;
+        request.dcvs_v2.dcvs_params.max_corner = request.dcvs_v2.dcvs_params.target_corner;
+    }
+    request.dcvs_v2.dcvs_option     = HAP_DCVS_V2_PERFORMANCE_MODE;
+    request.dcvs_v2.set_dcvs_params = TRUE;
+    request.dcvs_v2.set_latency     = TRUE;
+    request.dcvs_v2.latency         = latency;
+    retval = HAP_power_set(benchmark_ctx, &request);
+    if (retval) {
+        GGMLQNN_LOG_WARN("failed to vote for performance mode");
+        return AEE_EFAILED;
+    }
+
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_HVX;
+    request.hvx.power_up = TRUE;
+    retval = HAP_power_set(benchmark_ctx, &request);
+    if (retval) {
+        GGMLQNN_LOG_WARN("failed to vote for HVX power");
+        return AEE_EFAILED;
+    }
+#endif
+    return AEE_SUCCESS;
+}
+
+static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
+    int hexagon_error               = AEE_SUCCESS;
+
+    int domain_id                   = HEXAGON_CDSP;
+    const char * domain_type        = "NSP";
+
+    int unsignedpd_flag             = 1;
+    bool is_unsignedpd_enabled      = false;
+    int use_logical_id              = 0;
+    int core_id                     = -1;
+    fastrpc_domain * domains_info   = NULL;
+    fastrpc_domain * domain_info    = NULL;
+    int num_domains                 = -1;
+
+    domain * my_domain              = NULL;
+    char * uri                      = NULL;
+
+    char * ggmlop_domain_uri        = NULL;
+    int    ggmlop_domain_uri_len    = 0;
+
+    if (nullptr == ctx)
+        return 1;
+    GGMLQNN_LOG_INFO("init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_qnn_get_devname(ctx->device));
+    //TODO: reasonable rpc memory pool size and use it practically
+    ctx->ggmlop_handle = -1;
+    ctx->rpc_mempool_len  = (1 << 20) * 512;
+    ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, ctx->rpc_mempool_len);
+    if (nullptr == ctx->rpc_mempool) {
+        hexagon_error = AEE_ENORPCMEMORY;
+        printf("rpc memory alloc failed", hexagon_error);
+        ctx->rpc_mempool_len = 0;
+        return 2;
+    }
+
+    if (domain_id == -1) {
+        if (domain_type != NULL) {
+            if ((strcmp(domain_type, "NSP") != 0 && strcmp(domain_type, "HPASS") != 0)) {
+                GGMLQNN_LOG_WARN("invalid domain_type %s. possible values are NSP or HPASS", domain_type);
+                goto bail;
+            } else {
+                hexagon_error = ggmlhexagon_get_domains_info(domain_type, &num_domains, &domains_info);
+                if (hexagon_error == AEE_EUNSUPPORTED) {
+                    GGMLQNN_LOG_DEBUG("API is not supported on this target so cannot get domains info from the device. falling back to legacy approach of using default domain id");
+                    hexagon_error = ggmlhexagon_get_dsp_support(&domain_id);
+                    if (hexagon_error != AEE_SUCCESS) {
+                        GGMLQNN_LOG_DEBUG("error: 0x%x, defaulting to CDSP domain", hexagon_error);
+                    }
+                } else if (hexagon_error != AEE_SUCCESS) {
+                    GGMLQNN_LOG_DEBUG("error in getting domains information");
+                    goto bail;
+                } else {
+                    if (core_id != -1) {
+                        if (core_id < 0 || core_id >= num_domains) {
+                            GGMLQNN_LOG_DEBUG("invalid core_id = %d for %s. core_id should be between 0 to %d", core_id, domain_type, num_domains - 1);
+                            hexagon_error = AEE_EBADPARM;
+                            goto bail;
+                        }
+                    } else {
+                        core_id = 0;
+                    }
+                    use_logical_id = 1;
+                    domain_id = domains_info[core_id].id;
+                }
+            }
+        } else {
+            GGMLQNN_LOG_DEBUG("DSP domain is not provided, retrieving DSP information using Remote APIs");
+            hexagon_error = ggmlhexagon_get_dsp_support(&domain_id);
+            if (hexagon_error != AEE_SUCCESS) {
+                GGMLQNN_LOG_DEBUG("error: 0x%x, defaulting to CDSP domain", hexagon_error);
+            }
+        }
+    }
+
+    if (0 == use_logical_id) {
+        if (!ggmlhexagon_is_valid_domain_id(domain_id, 0)) {
+            hexagon_error = AEE_EBADPARM;
+            GGMLQNN_LOG_DEBUG("error 0x%x: invalid domain %d", hexagon_error, domain_id);
+            goto bail;
+        }
+
+        my_domain = ggmlhexagon_get_domain(domain_id);
+        if (nullptr == my_domain) {
+            GGMLQNN_LOG_DEBUG("unable to get domain struct %d",  domain_id);
+            goto bail;
+        }
+        uri = my_domain->uri;
+    } else {
+        domain_info = &domains_info[domain_id];
+        uri = (char *)malloc(MAX_DOMAIN_NAMELEN);
+        if (nullptr == uri) {
+            hexagon_error = AEE_ENOMEMORY;
+            GGMLQNN_LOG_DEBUG("unable to allocated memory for uri of size: %d", MAX_DOMAIN_NAMELEN);
+            goto bail;
+        }
+        snprintf(uri, MAX_DOMAIN_NAMELEN, "%s%s", "&_dom=", domain_info->name);
+    }
+    GGMLQNN_LOG_INFO("\ndomain uri=%s\n", uri);
+
+    if (1 == unsignedpd_flag) {
+        is_unsignedpd_enabled = ggmlhexagon_is_unsignedpd_supported(domain_id);
+        if (!is_unsignedpd_enabled) {
+            GGMLQNN_LOG_DEBUG("overriding user request for unsigned PD, only signed offload is allowed on domain %d", domain_id);
+            unsignedpd_flag = 0;
+        }
+    }
+
+    GGMLQNN_LOG_INFO("using Hexagon domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
+    GGMLQNN_LOG_INFO("unsignedpd_enabled %d", is_unsignedpd_enabled);
+    if (is_unsignedpd_enabled) {
+        if (remote_session_control) {
+            struct remote_rpc_control_unsigned_module data;
+            data.enable = 1;
+            data.domain = domain_id;
+            hexagon_error = remote_session_control(DSPRPC_CONTROL_UNSIGNED_MODULE, (void *)&data, sizeof(data));
+            GGMLQNN_LOG_DEBUG("remote_session_control returned %d for configuring unsigned PD success", hexagon_error);
+            if (AEE_SUCCESS != hexagon_error) {
+                GGMLQNN_LOG_DEBUG("error 0x%x: remote_session_control failed", hexagon_error);
+            }
+        } else {
+            GGMLQNN_LOG_DEBUG("unsigned PD not supported on this device");
+            hexagon_error = AEE_EUNSUPPORTED;
+            GGMLQNN_LOG_DEBUG("error 0x%x: remote_session_control interface is not supported on this device", hexagon_error);
+        }
+    }
+
+    hexagon_error = ggmlhexagon_request_status_notifications(domain_id, (void *)STATUS_CONTEXT, ggmlhexagon_pd_status_notifier_callback);
+    if (AEE_SUCCESS != hexagon_error) {
+        if (AEE_EUNSUPPORTEDAPI != hexagon_error) {
+            GGMLQNN_LOG_WARN("error 0x%x: hexagon_request_status_notifications failed", hexagon_error);
+        }
+        GGMLQNN_LOG_WARN("error 0x%x: failed to compute on domain %d", hexagon_error, domain_id);
+        goto bail;
+    }
+
+    ggmlop_domain_uri_len   = strlen(ggmlop_URI) + MAX_DOMAIN_NAMELEN;
+    ggmlop_domain_uri       = (char *)malloc(ggmlop_domain_uri_len);
+    snprintf(ggmlop_domain_uri, ggmlop_domain_uri_len, "%s%s", ggmlop_URI, uri);
+    GGMLQNN_LOG_INFO("ggmlop domain uri:%s\n", ggmlop_domain_uri);
+    hexagon_error = ggmlop_open(ggmlop_domain_uri, &ctx->ggmlop_handle);
+    if (AEE_SUCCESS == hexagon_error) {
+        GGMLQNN_LOG_INFO("succeed to open domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
+        GGMLQNN_LOG_INFO("only support GGML_OP_ADD on cDSP currently\n");
+        ggmlhexagon_set_clocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
+        ggmlhexagon_set_rpc_latency(domain_id, RPC_POLL_QOS, 1000);
+    } else {
+        GGMLQNN_LOG_WARN("error 0x%x: failed to compute on domain %d(%s)", hexagon_error, domain_id,
+                         ggmlhexagon_get_dsp_name(domain_id));
+        goto bail;
+    }
+
+    return 0;
+bail:
+    if (ggmlop_domain_uri) {
+        free(ggmlop_domain_uri);
+    }
+
+    if (uri) {
+        free(uri);
+    }
+
+    if (ctx->rpc_mempool) {
+        rpcmem_free(ctx->rpc_mempool);
+        ctx->rpc_mempool = nullptr;
+        ctx->rpc_mempool_len = 0;
+        ctx->ggmlop_handle  = -1;
+    }
+
+    return -1;
+}
+
+static void ggmlhexagon_close_cdsp(ggml_backend_qnn_context * ctx) {
+    int hexagon_error  = AEE_SUCCESS;
+    GGMLQNN_LOG_DEBUG("enter %s", __func__);
+    if (-1 != ctx->ggmlop_handle) {
+        hexagon_error = ggmlop_close(ctx->ggmlop_handle);
+        if (AEE_SUCCESS != hexagon_error) {
+            GGMLQNN_LOG_WARN("error 0x%x: failed to close ggmlop handle", hexagon_error);
+        } else {
+            ctx->ggmlop_handle = -1;
+        }
+    }
+
+    if (ctx->rpc_mempool) {
+        rpcmem_free(ctx->rpc_mempool);
+        ctx->rpc_mempool = nullptr;
+        ctx->rpc_mempool_len = 0;
+    }
+    GGMLQNN_LOG_DEBUG("leave %s", __func__);
+}
+
+static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tensor * op) {
+    //skip sanity check because already checked in other place
+    struct dsptensor dsptensor_0;
+    struct dsptensor dsptensor_1;
+    struct dsptensor dsptensor_2;
+
+    int hexagon_error               = AEE_SUCCESS;
+    ggmlhexagon_op_func_t op_func   = nullptr;
+    void * wdata                    = nullptr;
+
+    ggml_tensor * src0              = op->src[0];
+    //TODO: src1 might-be nullptr
+    ggml_tensor * src1              = op->src[1];
+    ggml_tensor * dst               = op;
+    ggml_type src0_type = src0->type;
+
+    switch (op->op) {
+        case GGML_OP_ADD:
+            op_func = ggmlop_add;
+            break;
+        case GGML_OP_MUL_MAT: {
+            wdata = ggmlqnn_type_trait(ctx, op);
+            op_func = ggmlop_mulmat;
+            break;
+        }
+        default:
+            return;
+    }
+
+    if ((GGML_OP_MUL_MAT == op->op) && (src0_type != GGML_TYPE_F32)) {
+        dsptensor_0.data = static_cast<float *>(wdata);
+        dsptensor_0.dataLen = ctx->desired_size;
+    } else {
+        dsptensor_0.data = static_cast<float *>(src0->data);
+        dsptensor_0.dataLen = ggml_nbytes(src0);
+    }
+    dsptensor_1.data = static_cast<float *>(src1->data);
+    dsptensor_2.data = static_cast<float *>(dst->data);
+    dsptensor_0.type = GGML_TYPE_F32;
+    dsptensor_1.type = GGML_TYPE_F32;
+    dsptensor_2.type = GGML_TYPE_F32;
+    dsptensor_0.ne[0] = src0->ne[0];
+    dsptensor_0.ne[1] = src0->ne[1];
+    dsptensor_0.ne[2] = src0->ne[2];
+    dsptensor_0.ne[3] = src0->ne[3];
+    dsptensor_0.nb[0] = src0->nb[0];
+    dsptensor_0.nb[1] = src0->nb[1];
+    dsptensor_0.nb[2] = src0->nb[2];
+    dsptensor_0.nb[3] = src0->nb[3];
+    dsptensor_1.dataLen = ggml_nbytes(src1);
+    dsptensor_2.dataLen = ggml_nbytes(dst);
+    hexagon_error = op_func(ctx->ggmlop_handle, &dsptensor_0, &dsptensor_1, &dsptensor_2);
+    if (AEE_SUCCESS != hexagon_error) {
+        GGMLQNN_LOG_WARN("ggmlop computation fail on cdsp");
+    }
+}
+
+// =================================================================================================
 //  section-7:ggml-qnn backend helper function / class
 // =================================================================================================
 static const char * ggmlqnn_get_socmodel_desc(uint32_t soc_model) {
@@ -1380,6 +2218,19 @@ static const char * ggmlqnn_get_htparch_desc(size_t htp_arch) {
             return "QCOM_HTP_V79";
         default:
             return "unknown";
+    }
+}
+
+static const char * ggmlqnn_get_inference_approach_name(int inference_approach) {
+    switch (inference_approach) {
+        case 0:
+            return "QNN_GENERAL";
+        case 1:
+            return "DIRECT_USE_CDSP";
+        case 2:
+            return "QNN_SINGLEGRAPH";
+        default:
+            return "unknown approach";
     }
 }
 
@@ -2060,7 +2911,7 @@ private:
     bool _do_node_validations               = true;  // flag to indicate whether all add_node calls need to be validated
     QnnLog_Level_t _qnn_log_level           = QNN_LOG_LEVEL_DEBUG;
 
-    qnn_profile_level _profile_level   = qnn_profile_level::profile_off;
+    qnn_profile_level _profile_level        = PROFILE_OFF;
 
     void * _system_lib_handle               = nullptr;
     void * _loaded_lib_handle               = nullptr;
@@ -2710,9 +3561,9 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         GGMLQNN_LOG_INFO("create device successfully\n");
     }
 
-    if (qnn_profile_level::profile_off != _profile_level) {
+    if (PROFILE_OFF != _profile_level) {
         GGMLQNN_LOG_INFO("profiling turned on; level = %d", _profile_level);
-        if (qnn_profile_level::profile_basic == _profile_level) {
+        if (PROFILE_BASIC == _profile_level) {
             GGMLQNN_LOG_INFO("basic profiling requested. creating Qnn Profile object\n");
             if (QNN_PROFILE_NO_ERROR != _qnn_raw_interface.profileCreate(
                     _qnn_backend_handle, QNN_PROFILE_LEVEL_BASIC, &_qnn_profile_handle)) {
@@ -2721,7 +3572,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
             } else {
                 GGMLQNN_LOG_DEBUG("initialize qnn profile successfully\n");
             }
-        } else if (qnn_profile_level::profile_detail == _profile_level) {
+        } else if (PROFILE_DETAIL == _profile_level) {
             GGMLQNN_LOG_INFO("detailed profiling requested. Creating Qnn Profile object\n");
             if (QNN_PROFILE_NO_ERROR != _qnn_raw_interface.profileCreate(
                     _qnn_backend_handle, QNN_PROFILE_LEVEL_DETAILED, &_qnn_profile_handle)) {
@@ -3279,6 +4130,38 @@ void qnn_instance::htp_enter_performance_mode() {
     }
 }
 
+static void ggmlqnn_set_runtime_path(size_t device, const std::string & path) {
+    if ((QNN_BACKEND_NPU == device) || (DIRECT_USE_CDSP == g_qnn_params.inference_approach)) {
+        if (0 == setenv("LD_LIBRARY_PATH",
+                        (path +
+                         ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
+                        1)) {
+            GGMLQNN_LOG_INFO("QNN NPU backend setenv successfully");
+        } else {
+            GGMLQNN_LOG_ERROR("QNN NPU backend setenv failure");
+        }
+        if (0 == setenv("ADSP_LIBRARY_PATH",
+                        (path +
+                         ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/dsp;/vendor/dsp/images;/dsp").c_str(),
+                        1)) {
+            GGMLQNN_LOG_INFO("QNN NPU backend setenv successfully");
+        } else {
+            GGMLQNN_LOG_ERROR("QNN NPU backend setenv failure");
+        }
+    } else {
+        if (0 == setenv("LD_LIBRARY_PATH",
+                        (path +
+                         ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
+                        1)) {
+            GGMLQNN_LOG_INFO("%s backend setenv successfully\n",
+                             ggml_backend_qnn_get_devname(device));
+        } else {
+            GGMLQNN_LOG_ERROR("%s backend setenv failure\n",
+                              ggml_backend_qnn_get_devname(device));
+        }
+    }
+}
+
 static uint8_t * ggmlqnn_create_rpc_buffer(qnn_instance * instance, const ggml_tensor * ggml_tensor, Qnn_Tensor_t * qnn_tensor, bool b_copydata) {
     if (nullptr == instance || nullptr == ggml_tensor || nullptr == qnn_tensor) {
         GGMLQNN_LOG_WARN("invalid params\n");
@@ -3302,7 +4185,7 @@ static void ggmlqnn_load_cfg() {
     //this function can be called in various scenarios
     static bool initialized = false;
     if (initialized) {
-        GGMLQNN_LOG_DEBUG("qnn cfg file already loadded\n");
+        GGMLQNN_LOG_INFO("qnn cfg file already loadded\n");
         return;
     }
     char time_string[GGML_QNN_TMPBUF_LEN];
@@ -3330,7 +4213,8 @@ static void ggmlqnn_load_cfg() {
     qnncfg_instance.get_intvalue("npu", "enable_dlbc", g_qnn_params.enable_dlbc, 0);
     qnncfg_instance.get_stringvalue("npu", "precision_mode", precision_mode, "fp32");
     GGMLQNN_LOG_INFO("print_qnn_internal_log=%d", g_qnn_params.print_qnn_internal_log);
-    GGMLQNN_LOG_INFO("inference_approach=%d", g_qnn_params.inference_approach);
+    GGMLQNN_LOG_INFO("inference_approach=%d(%s)", g_qnn_params.inference_approach,
+                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
     GGMLQNN_LOG_INFO("qnn_backend=%d", g_qnn_params.qnn_backend);
     GGMLQNN_LOG_INFO("npu inference precision mode=%s", precision_mode.c_str());
     GGMLQNN_LOG_INFO("qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
@@ -3486,6 +4370,12 @@ static bool ggmlqnn_same_types(const ggml_backend_qnn_context * ctx, const ggml_
 static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
     if (op_tensor->op == GGML_OP_NONE) {
         return true;
+    }
+
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        //FIXME: mulmat on cDSP doesn't work as expected
+        if (op_tensor->op != GGML_OP_ADD)
+            return false;
     }
 
     if (!ggmlqnn_k_op_caps[ggmlqnn_get_op_index(op_tensor)].supported) {
@@ -3854,8 +4744,12 @@ static const char * ggml_backend_qnn_name(ggml_backend_t backend) {
 
 static void ggml_backend_qnn_free(ggml_backend_t backend) {
     GGMLQNN_LOG_DEBUG("enter %s", __func__ );
-    ggml_backend_qnn_context * ctx = (ggml_backend_qnn_context *) backend->context;
+    ggml_backend_qnn_context * ctx = (ggml_backend_qnn_context *)backend->context;
     GGMLQNN_LOG_DEBUG("device idx %d, name:%s", ctx->device, g_qnn_mgr[ctx->device].name);
+
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        ggmlhexagon_close_cdsp(ctx);
+    }
 
     qnn_instance * instance = (qnn_instance*)g_qnn_mgr[ctx->device].instance;
     if (instance != nullptr) {
@@ -3899,20 +4793,11 @@ static void ggml_backend_qnn_free(ggml_backend_t backend) {
     GGMLQNN_LOG_DEBUG("leave %s", __func__ );
 }
 
-//this is the first tech approach(or general approach in other ggml backends, such as ggml-sycl or ggml-cann)
 static enum ggml_status ggmlqnn_backend_graph_compute_general(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     enum ggml_status result         = GGML_STATUS_SUCCESS;
     ggml_backend_qnn_context * ctx  = (ggml_backend_qnn_context *)backend->context;
     GGML_UNUSED(ctx);
-#if 0
-    GGMLQNN_LOG_DEBUG("device %d", ctx->device);
-    GGMLQNN_LOG_DEBUG("cgraph->n_nodes %d", cgraph->n_nodes);
-    int num_nodes = std::min(5, cgraph->n_nodes);
-    for (int i = 0; i < num_nodes; i++) {
-        ggml_tensor * node = cgraph->nodes[i];
-        GGMLQNN_LOG_DEBUG("%s: op %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
-    }
-#endif
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
         if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE
@@ -3989,7 +4874,7 @@ static enum ggml_backend_dev_type ggml_backend_qnn_device_get_type(ggml_backend_
     if (QNN_BACKEND_CPU == ctx->device)
         return GGML_BACKEND_DEVICE_TYPE_ACCEL;
     else if (QNN_BACKEND_GPU == ctx->device)
-        return GGML_BACKEND_DEVICE_TYPE_GPU;
+        return GGML_BACKEND_DEVICE_TYPE_ACCEL;
     else if (QNN_BACKEND_NPU == ctx->device)
         return GGML_BACKEND_DEVICE_TYPE_ACCEL;
     else
@@ -4197,8 +5082,10 @@ ggml_backend_reg_t ggml_backend_qnn_reg() {
 
     //case-2: normal scenario, such as llama-cli or UI applicaton
     ggmlqnn_load_cfg();
+    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.inference_approach,
+                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
     GGMLQNN_LOG_INFO("user's specified qnn_backend=%d", g_qnn_params.qnn_backend);
-    GGMLQNN_LOG_INFO("user's sepcified qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
+    GGMLQNN_LOG_INFO("user's specified qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
     if (g_qnn_params.qnn_backend >= GGML_QNN_MAX_DEVICES) {
         GGMLQNN_LOG_INFO("assume default ggml backend\n");
         GGMLQNN_LOG_DEBUG("leave ggml_backend_qnn_reg");
@@ -4234,6 +5121,58 @@ ggml_backend_reg_t ggml_backend_qnn_reg() {
     return &reg;
 }
 
+const char * ggml_backend_qnn_get_devname(size_t dev_num) {
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        if (dev_num == QNN_BACKEND_GGML)
+            return "ggml";
+        else
+            return "ggml-hexagon";
+    }
+
+    switch (dev_num) {
+        case QNN_BACKEND_CPU:
+            return "QNN-CPU";
+        case QNN_BACKEND_GPU:
+            return "QNN-GPU";
+        case QNN_BACKEND_NPU:
+            return "QNN-NPU";
+        case QNN_BACKEND_GGML:
+            return "ggml"; //"fake" QNN backend, used for compare performance between QNN backend and original GGML
+        default:
+            return "unknown";
+    }
+}
+
+static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_lib_path) {
+    int result = 0;
+    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.inference_approach,
+                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
+
+    qnn_instance * instance = nullptr;
+    instance = new qnn_instance(qnn_lib_path, g_qnn_mgr[device].lib, "");
+    result = instance->qnn_init(nullptr);
+    if (0 != result) {
+        GGMLQNN_LOG_WARN("init qnn subsystem failed with qnn backend %s, pls check why\n",
+                         ggml_backend_qnn_get_devname(device));
+        delete instance;
+        return nullptr;
+    }
+    qnn_interface qnn_interface = instance->get_qnn_interface();
+    if (!qnn_interface.is_loaded()) {
+        GGMLQNN_LOG_WARN("qnn subsystem failure\n");
+        delete instance;
+        return nullptr;
+    }
+
+    std::string device_name = ggml_backend_qnn_get_devname(device);
+    GGMLQNN_LOG_INFO("qnn device name %s", device_name.c_str());
+    g_qnn_mgr[device].instance = instance;
+    g_qnn_mgr[device].raw_interface = instance->get_qnn_raw_interface();
+    g_qnn_mgr[device].raw_system_interface = instance->get_qnn_raw_system_interface();
+
+    return instance;
+}
+
 /**
  *
  * @param device            0: QNN_BACKEND_CPU 1: QNN_BACKEND_GPU 2: QNN_BACKEND_NPU
@@ -4257,69 +5196,27 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
         return nullptr;
     }
 
+#if defined(__ANDROID__)
+    std::string path = qnn_lib_path;
+    GGMLQNN_LOG_INFO("lib_path %s", path.c_str());
+    ggmlqnn_set_runtime_path(device, path);
+#endif
+
     if (nullptr != g_qnn_mgr[device].backend) {
-        GGMLQNN_LOG_INFO("qnn backend %d(%s) already loaded", device, ggml_backend_qnn_get_devname(device));
+        GGMLQNN_LOG_INFO("backend %d(%s) already loaded", device,
+                         ggml_backend_qnn_get_devname(device));
         GGMLQNN_LOG_INFO("leave %s\n", __func__);
         return g_qnn_mgr[device].backend;
     }
 
-#if defined(__ANDROID__)
-    std::string path = qnn_lib_path;
-    GGMLQNN_LOG_INFO("lib_path %s", path.c_str());
-    if (QNN_BACKEND_NPU == device) {
-        if (0 == setenv("LD_LIBRARY_PATH",
-                        (path +
-                         ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
-                        1)) {
-            GGMLQNN_LOG_INFO("QNN NPU backend setenv successfully");
-        } else {
-            GGMLQNN_LOG_ERROR("QNN NPU backend setenv failure");
-        }
-        if (0 == setenv("ADSP_LIBRARY_PATH",
-                        (path +
-                         ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/dsp;/vendor/dsp/images;/dsp").c_str(),
-                        1)) {
-            GGMLQNN_LOG_INFO("QNN NPU backend setenv successfully");
-        } else {
-            GGMLQNN_LOG_ERROR("QNN NPU backend setenv failure");
-        }
-    } else {
-        if (0 == setenv("LD_LIBRARY_PATH",
-                        (path +
-                         ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
-                        1)) {
-            GGMLQNN_LOG_INFO("%s backend setenv successfully\n", ggml_backend_qnn_get_devname(device));
-        } else {
-            GGMLQNN_LOG_ERROR("%s backend setenv failure\n", ggml_backend_qnn_get_devname(device));
-        }
-    }
-#endif
-
-    qnn_instance * instance = nullptr;
-    instance = new qnn_instance(qnn_lib_path, g_qnn_mgr[device].lib, "");
-    result = instance->qnn_init(nullptr);
-    if (0 != result) {
-        GGMLQNN_LOG_WARN("init qnn subsystem failed with qnn backend %s, pls check why\n", ggml_backend_qnn_get_devname(device));
-        delete instance;
+    qnn_instance * instance  = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
+    if (nullptr == instance)
         return nullptr;
-    }
-    qnn_interface qnn_interface                             = instance->get_qnn_interface();
-    if (!qnn_interface.is_loaded()) {
-        GGMLQNN_LOG_WARN("qnn subsystem failure\n");
-        delete instance;
-        return nullptr;
-    }
 
-    std::string device_name = ggml_backend_qnn_get_devname(device);
-    GGMLQNN_LOG_INFO("qnn device name %s", device_name.c_str());
-    g_qnn_mgr[device].instance                  = instance;
-    g_qnn_mgr[device].raw_interface             = instance->get_qnn_raw_interface();
-    g_qnn_mgr[device].raw_system_interface      = instance->get_qnn_raw_system_interface();
-
-    if (0 == g_qnn_params.inference_approach) {
-        ggml_backend_qnn_interface.graph_compute = ggmlqnn_backend_graph_compute_general;
-    } else {
+    if (QNN_SINGLEGRAPH == g_qnn_params.inference_approach) {
         ggml_backend_qnn_interface.graph_compute = ggmlqnn_backend_graph_compute_special;
+    } else {
+        ggml_backend_qnn_interface.graph_compute = ggmlqnn_backend_graph_compute_general;
     }
 
     ggml_backend_t qnn_backend = new ggml_backend{
@@ -4329,7 +5226,16 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
             /* .context   = */ &g_qnn_mgr[device]
     };
 
-    g_qnn_mgr[device].backend   = qnn_backend;
+    g_qnn_mgr[device].backend = qnn_backend;
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        int result = ggmlhexagon_init_dsp(&g_qnn_mgr[device]);
+        if (0 != result) {
+            GGMLQNN_LOG_INFO("init hexagon dsp failure");
+            ggml_backend_qnn_free(qnn_backend);
+            return nullptr;
+        }
+    }
+
     GGMLQNN_LOG_INFO("leave %s\n", __func__);
 
     return qnn_backend;
@@ -4338,7 +5244,7 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
 GGML_BACKEND_DL_IMPL(ggml_backend_qnn_reg)
 
 // =================================================================================================
-//  section-9: general approach: offload GGML op to QNN backend
+//  section-9: general approach: offload GGML op to QNN backend or offload GGML op to Hexagon DSP directly
 // =================================================================================================
 static inline uint32_t ggmlqnn_get_tensor_data_size(const ggml_tensor * tensor) {
     /*
@@ -4370,7 +5276,7 @@ static inline bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const
 }
 
 /*
- * provide a general skeleton to offload ggml op to QNN backend: peform element-wise operation on 1/2
+ * provide a general skeleton to offload ggml op to QNN backend or Hexagon cDSP: peform element-wise operation on 1/2
  * input tensors and 1 output tensors
 */
 static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
@@ -4393,20 +5299,25 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
     std::string ggml_op_name_string             = std::string("ggml_") + ggml_op_name(op->op);
     const char * ggml_op_name                   = ggml_op_name_string.c_str();
 
-    bool enable_npu_rpc = instance->enable_qnn_rpc() && ctx->device == QNN_BACKEND_NPU;
-
     std::string graph_name;
     ggmlqnn_get_graphkey_from_op(op, graph_name);
 
     qnn_perf op_perf                            = qnn_perf(graph_name);
     op_perf.start();
 
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        ggmlhexagon_compute(ctx, op);
+        op_perf.info();
+        return;
+    }
+
+    bool enable_npu_rpc = instance->enable_qnn_rpc() && ctx->device == QNN_BACKEND_NPU;
     if (ctx->qnn_singlenode_graph_map.find(graph_name) != ctx->qnn_singlenode_graph_map.end()) {
         //retrieve computational resource from cached QNN graph
-        qnn_singlenode_res_t & graph_item  = ctx->qnn_singlenode_graph_map[graph_name];
-        graph_handle              = std::get<0>(graph_item);
-        qnn_ptensors_t & ptensors = std::get<1>(graph_item);
-        p_tensor0                 = ptensors[0];
+        qnn_singlenode_res_t & graph_item = ctx->qnn_singlenode_graph_map[graph_name];
+        graph_handle                      = std::get<0>(graph_item);
+        qnn_ptensors_t & ptensors         = std::get<1>(graph_item);
+        p_tensor0  = ptensors[0];
         if (2 == input_param_count) {
             p_tensor1 = ptensors[1];
             p_tensor2 = ptensors[2];
@@ -4415,10 +5326,12 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
             p_tensor2 = ptensors[1];
         }
     } else {
-        GGMLQNN_LOG_INFO("graph name %s", graph_name.c_str());
         GGML_ASSERT(instance->get_device_id() == ctx->device);
+        GGMLQNN_LOG_INFO("graph name %s", graph_name.c_str());
         //create QNN graph
-        error = instance->init_qnn_graph(graph_name, static_cast<QNNBackend>(ctx->device), g_qnn_params.vtcm_size_in_mb, g_qnn_params.hvx_threads);
+        error = instance->init_qnn_graph(graph_name, static_cast<QNNBackend>(ctx->device),
+                                         g_qnn_params.vtcm_size_in_mb,
+                                         g_qnn_params.hvx_threads);
         if (QNN_SUCCESS != error) {
             GGMLQNN_LOG_WARN("can't create qnn graph handle with graph name %s, error = %d\n", graph_name.c_str(), error);
             return;
@@ -4431,7 +5344,7 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
         if (2 == input_param_count) {
             p_tensor1 = ggmlqnn_create_compute_tensor(instance, graph_handle, src1, QNN_TENSOR_TYPE_APP_WRITE);
         }
-        p_tensor2 = ggmlqnn_create_compute_tensor(instance, graph_handle, dst,  QNN_TENSOR_TYPE_APP_READ);
+        p_tensor2 = ggmlqnn_create_compute_tensor(instance, graph_handle, dst, QNN_TENSOR_TYPE_APP_READ);
 
         //compose QNN graph
         qnn_tensors_t input_tensors;
@@ -4443,25 +5356,12 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
         Qnn_Tensor_t output_tensors[] = {
                 *p_tensor2
         };
-#if 0 // keep them for understand code easily
-        Qnn_OpConfig_t op_config = {
-                QNN_OPCONFIG_VERSION_1, {
-                        ggml_op_name,
-                        QNN_OP_PACKAGE_NAME_QTI_AISW,
-                        qnn_op_name,
-                        0,
-                        nullptr,
-                        input_param_count,
-                        tensor_inputs,
-                        1,
-                        tensor_outputs
-                }
-        };
-#else
-        Qnn_OpConfig_t op_config        = ggmlqnn_create_op_config(ggml_op_name, QNN_OP_PACKAGE_NAME_QTI_AISW,
-                                                                   qnn_op_name, nullptr, 0,
-                                                                   input_tensors.data(), input_param_count, output_tensors, 1);
-#endif
+        Qnn_OpConfig_t op_config = ggmlqnn_create_op_config(ggml_op_name,
+                                                            QNN_OP_PACKAGE_NAME_QTI_AISW,
+                                                            qnn_op_name, nullptr, 0,
+                                                            input_tensors.data(),
+                                                            input_param_count, output_tensors,
+                                                            1);
         CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, op_config));
         //finalize QNN graph
         CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, nullptr, nullptr));
@@ -4475,20 +5375,21 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
             qnn_elementwise_tensors.push_back(p_tensor1);
         }
         qnn_elementwise_tensors.push_back(p_tensor2);
-        auto  graph_item = std::make_tuple(graph_handle, qnn_elementwise_tensors);
+        auto graph_item = std::make_tuple(graph_handle, qnn_elementwise_tensors);
         ctx->qnn_singlenode_graph_map[graph_name] = graph_item;
     }
 
     if (enable_npu_rpc) {
-        uint8_t * qnn_buffer_0 = static_cast<uint8_t *>(instance->get_rpcmem_from_memhandle(QNN_VER_PTR(*p_tensor0)->memHandle));
+        uint8_t * qnn_buffer_0 = static_cast<uint8_t *>(instance->get_rpcmem_from_memhandle(
+                                     QNN_VER_PTR(*p_tensor0)->memHandle));
         GGMLQNN_LOG_DEBUG("qnn_rpcbuffer_0 = %p\n", qnn_buffer_0);
         if (nullptr != qnn_buffer_0) {
             memcpy(qnn_buffer_0, src0->data, ggml_nbytes(src0));
         }
 
         if (2 == input_param_count) {
-            uint8_t *qnn_buffer_1 = static_cast<uint8_t *>(instance->get_rpcmem_from_memhandle(
-                    QNN_VER_PTR(*p_tensor1)->memHandle));
+            uint8_t * qnn_buffer_1 = static_cast<uint8_t *>(instance->get_rpcmem_from_memhandle(
+                                         QNN_VER_PTR(*p_tensor1)->memHandle));
             GGMLQNN_LOG_DEBUG("qnn_rpcbuffer_1 = %p\n", qnn_buffer_1);
             if (nullptr != qnn_buffer_1) {
                 memcpy(qnn_buffer_1, src1->data, ggml_nbytes(src1));
@@ -4784,7 +5685,6 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
     instance                                    = ctx->instance;
     QNN_INTERFACE_VER_TYPE qnn_raw_interface    = ctx->raw_interface;
 
-
     const enum ggml_type src0_type              = src0->type;
     const uint32_t src0_rank                    = ggml_n_dims(src0);
     const uint32_t src1_rank                    = ggml_n_dims(src1);
@@ -4802,39 +5702,51 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
     qnn_perf op_perf                            = qnn_perf(graph_name);
     op_perf.start();
 
+    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+        ggmlhexagon_compute(ctx, op);
+        op_perf.info();
+        return;
+    }
+
     void * wdata                                = ggmlqnn_type_trait(ctx, op);
     const size_t desired_size                   = ctx->desired_size;
 
     if (ctx->qnn_singlenode_graph_map.find(graph_name) != ctx->qnn_singlenode_graph_map.end()) {
         //retrieve computational resource from cached QNN graph
-        qnn_singlenode_res_t & graph_item  = ctx->qnn_singlenode_graph_map[graph_name];
-        graph_handle            = std::get<0>(graph_item);
-        qnn_ptensors_t & tensors = std::get<1>(graph_item);
-        p_tensor0               = tensors[0];
-        p_tensor1               = tensors[1];
-        p_tensor2               = tensors[2];
-        p_param_tensor          = tensors[3];
-        p_tensor2_transpose     = tensors[4];
+        qnn_singlenode_res_t & graph_item = ctx->qnn_singlenode_graph_map[graph_name];
+        graph_handle = std::get<0>(graph_item);
+        qnn_ptensors_t &tensors = std::get<1>(graph_item);
+        p_tensor0 = tensors[0];
+        p_tensor1 = tensors[1];
+        p_tensor2 = tensors[2];
+        p_param_tensor = tensors[3];
+        p_tensor2_transpose = tensors[4];
     } else {
         //create QNN graph
         GGMLQNN_LOG_INFO("graph name %s", graph_name.c_str());
-        error = instance->init_qnn_graph(graph_name, static_cast<QNNBackend>(ctx->device), g_qnn_params.vtcm_size_in_mb, g_qnn_params.hvx_threads);
+        error = instance->init_qnn_graph(graph_name, static_cast<QNNBackend>(ctx->device),
+                                         g_qnn_params.vtcm_size_in_mb,
+                                         g_qnn_params.hvx_threads);
         if (QNN_SUCCESS != error) {
-            GGMLQNN_LOG_WARN("can't create qnn graph handle with graph name %s, error = %d\n", graph_name.c_str(), error);
+            GGMLQNN_LOG_WARN("can't create qnn graph handle with graph name %s, error = %d\n",
+                             graph_name.c_str(), error);
             return;
         }
         graph_handle = instance->get_qnn_graph_handle();
 
         //create computational tensor
         p_tensor0 = ggmlqnn_create_general_tensor(instance, graph_handle, src0, nullptr,
-                        QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, src0_rank,
-                        nullptr, nullptr, 0);
+                                                  QNN_TENSOR_TYPE_APP_WRITE,
+                                                  QNN_DATATYPE_FLOAT_32, src0_rank,
+                                                  nullptr, nullptr, 0);
         p_tensor1 = ggmlqnn_create_general_tensor(instance, graph_handle, src1, nullptr,
-                        QNN_TENSOR_TYPE_APP_WRITE, QNN_DATATYPE_FLOAT_32, src0_rank,
-                        nullptr, nullptr, 0);
+                                                  QNN_TENSOR_TYPE_APP_WRITE,
+                                                  QNN_DATATYPE_FLOAT_32, src0_rank,
+                                                  nullptr, nullptr, 0);
         p_tensor2 = ggmlqnn_create_general_tensor(instance, graph_handle, dst, nullptr,
-                        QNN_TENSOR_TYPE_APP_READ, QNN_DATATYPE_FLOAT_32, src0_rank,
-                        nullptr, nullptr, 0);
+                                                  QNN_TENSOR_TYPE_APP_READ,
+                                                  QNN_DATATYPE_FLOAT_32, src0_rank,
+                                                  nullptr, nullptr, 0);
 
         //create param tensor for offload 2d/3d/4d matrix multiplication
         const uint32_t param_tensor_data[GGML_MAX_DIMS][GGML_MAX_DIMS] = {
@@ -4845,29 +5757,43 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
         };
         uint32_t param_tensor_dims[1] = {src0_rank};
         p_param_tensor = ggmlqnn_create_general_tensor(instance, graph_handle, nullptr, "param",
-                             QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1, param_tensor_dims,
-                             (void *)(param_tensor_data[src0_rank - 1]), src0_rank * sizeof(uint32_t));
+                                                       QNN_TENSOR_TYPE_STATIC,
+                                                       QNN_DATATYPE_UINT_32, 1,
+                                                       param_tensor_dims,
+                                                       (void *) (param_tensor_data[src0_rank - 1]),
+                                                       src0_rank * sizeof(uint32_t));
 
         //create transpose tensor
-        p_tensor2_transpose = ggmlqnn_create_general_tensor(instance, graph_handle, dst, "transpose",
-                                  QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, src0_rank,
-                                  nullptr, nullptr, 0, true);
+        p_tensor2_transpose = ggmlqnn_create_general_tensor(instance, graph_handle, dst,
+                                                            "transpose",
+                                                            QNN_TENSOR_TYPE_NATIVE,
+                                                            QNN_DATATYPE_FLOAT_32, src0_rank,
+                                                            nullptr, nullptr, 0, true);
 
         //compose QNN graph: add mulmat node
-        Qnn_Param_t out_0_params[]   = {{QNN_PARAMTYPE_SCALAR, QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1, .scalarParam = {QNN_DATATYPE_BOOL_8, .bool8Value = 1}}};
-        Qnn_Tensor_t out_0_inputs[]  = {*p_tensor0, *p_tensor1};
+        Qnn_Param_t out_0_params[] = {
+                {QNN_PARAMTYPE_SCALAR, QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1, .scalarParam = {
+                        QNN_DATATYPE_BOOL_8, .bool8Value = 1}}};
+        Qnn_Tensor_t out_0_inputs[] = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t out_0_outputs[] = {*p_tensor2_transpose};
-        Qnn_OpConfig_t out_0         = ggmlqnn_create_op_config("mulmat_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW,
-                                           QNN_OP_MAT_MUL, out_0_params, 1, out_0_inputs, 2, out_0_outputs, 1);
-        CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_0));
+        Qnn_OpConfig_t out_0 = ggmlqnn_create_op_config("mulmat_opconfig",
+                                                        QNN_OP_PACKAGE_NAME_QTI_AISW,
+                                                        QNN_OP_MAT_MUL, out_0_params, 1,
+                                                        out_0_inputs, 2, out_0_outputs, 1);
+        CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, out_0));
 
         //compose QNN graph: add transpose node
-        Qnn_Param_t out_trans1_0_params[]   = { {QNN_PARAMTYPE_TENSOR, "perm", .tensorParam = *p_param_tensor}};
-        Qnn_Tensor_t out_trans1_0_inputs[]  = {*p_tensor2_transpose};
+        Qnn_Param_t out_trans1_0_params[] = {
+                {QNN_PARAMTYPE_TENSOR, "perm", .tensorParam = *p_param_tensor}};
+        Qnn_Tensor_t out_trans1_0_inputs[] = {*p_tensor2_transpose};
         Qnn_Tensor_t out_trans1_0_outputs[] = {*p_tensor2};
-        Qnn_OpConfig_t out_trans1_0         = ggmlqnn_create_op_config("mulmat_transpose_opconfig", QNN_OP_PACKAGE_NAME_QTI_AISW,
-                                                  QNN_OP_TRANSPOSE, out_trans1_0_params, 1, out_trans1_0_inputs, 1, out_trans1_0_outputs, 1);
-        CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle,out_trans1_0));
+        Qnn_OpConfig_t out_trans1_0 = ggmlqnn_create_op_config("mulmat_transpose_opconfig",
+                                                               QNN_OP_PACKAGE_NAME_QTI_AISW,
+                                                               QNN_OP_TRANSPOSE,
+                                                               out_trans1_0_params, 1,
+                                                               out_trans1_0_inputs, 1,
+                                                               out_trans1_0_outputs, 1);
+        CHECK_QNN_API(error, qnn_raw_interface.graphAddNode(graph_handle, out_trans1_0));
 
         //finalize QNN graph
         CHECK_QNN_API(error, qnn_raw_interface.graphFinalize(graph_handle, nullptr, nullptr));
@@ -4880,7 +5806,7 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
         ggml_op_mulmat_tensors.push_back(p_tensor2);
         ggml_op_mulmat_tensors.push_back(p_param_tensor);
         ggml_op_mulmat_tensors.push_back(p_tensor2_transpose);
-        auto  graph_item = std::make_tuple(graph_handle, ggml_op_mulmat_tensors);
+        auto graph_item = std::make_tuple(graph_handle, ggml_op_mulmat_tensors);
         ctx->qnn_singlenode_graph_map[graph_name] = graph_item;
     }
 
@@ -5032,7 +5958,7 @@ static void ggmlqnn_compute_rope(ggml_backend_qnn_context * ctx, ggml_tensor * d
 }
 
 // =================================================================================================
-//  section-10: second approach: mapping ggml computational cgraph to QNN graph
+//  section-10: special approach: mapping ggml computational cgraph to QNN graph
 // =================================================================================================
 // TODO: remove duplicated codes between section-9 and section-10
 // TODO: the graph algorithm in this section is naive, should optimized by AI experts
