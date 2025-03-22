@@ -44,6 +44,7 @@ enum llm_type {
     LLM_TYPE_1_4B,
     LLM_TYPE_1_5B,
     LLM_TYPE_1_6B,
+    LLM_TYPE_1_8B,
     LLM_TYPE_2B,
     LLM_TYPE_2_8B,
     LLM_TYPE_2_9B,
