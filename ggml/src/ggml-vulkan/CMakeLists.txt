@@ -51,6 +51,20 @@ if (Vulkan_FOUND)
         add_compile_definitions(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
     endif()
 
+    # Compile a test shader to determine whether GL_EXT_integer_dot_product is supported.
+    # If it's not, there will be an error to stderr.
+    # If it's supported, set a define to indicate that we should compile those shaders
+    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
+                    OUTPUT_VARIABLE glslc_output
+                    ERROR_VARIABLE glslc_error)
+
+    if (${glslc_error} MATCHES ".*extension not supported: GL_EXT_integer_dot_product.*")
+        message(STATUS "GL_EXT_integer_dot_product not supported by glslc")
+    else()
+        message(STATUS "GL_EXT_integer_dot_product supported by glslc")
+        add_compile_definitions(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    endif()
+
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
