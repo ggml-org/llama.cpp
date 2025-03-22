@@ -191,6 +191,7 @@ set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
                                             "ggml: sycl device architecture")
+option(GGML_QNN                             "ggml: use QNN"                                   OFF)
 
 option(GGML_OPENCL                          "ggml: use OpenCL"                                OFF)
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
@@ -263,6 +264,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-rpc.h
     include/ggml-sycl.h
     include/ggml-vulkan.h
+    include/ggml-qnn.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
