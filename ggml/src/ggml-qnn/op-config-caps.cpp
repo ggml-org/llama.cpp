@@ -126,6 +126,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     },
     {}, // GGML_OP_RMS_NORM_BACK
     {}, // GGML_OP_GROUP_NORM
+    {}, // GGML_OP_L2_NORM
     {
      // GGML_OP_MUL_MAT
         QNN_OP_MAT_MUL,  // qnn_op_name
@@ -179,6 +180,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_ADD_REL_POS
     {}, // GGML_OP_RWKV_WKV6
     {}, // GGML_OP_GATED_LINEAR_ATTN
+    {}, // GGML_OP_RWKV_WKV7
 
     {}, // GGML_OP_UNARY
 
@@ -222,6 +224,8 @@ static_assert(kOpCaps[GGML_OP_ADD].qnn_op_name, "GGML_OP_ADD does not have qnn_o
 static_assert(kOpCaps[GGML_OP_MUL_MAT].qnn_op_name, "GGML_OP_MUL_MAT does not have qnn_op_name in the kOpCaps table");
 static_assert(kOpCaps[GGML_OP_MUL].qnn_op_name, "GGML_OP_MUL does not have qnn_op_name in the kOpCaps table");
 static_assert(kOpCaps[GGML_OP_LOG].qnn_op_name, "GGML_OP_LOG does not have qnn_op_name in the kOpCaps table");
+static_assert(kOpCaps[GGML_OP_COUNT + GGML_UNARY_OP_GELU].qnn_op_name,
+              "GGML_UNARY_OP_GELU does not have qnn_op_name in the kOpCaps table");
 static_assert(std::size(kOpCaps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
               "GGML_OP_COUNT does not match the size of the kOpCaps table");
 
@@ -297,6 +301,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     op_constructor_with_type_param<GGML_OP_RMS_NORM, float, qnn::ggml_qnn_rmsnorm_op_config>,  // GGML_OP_RMS_NORM
     nullptr,                                                                                   // GGML_OP_RMS_NORM_BACK
     nullptr,                                                                                   // GGML_OP_GROUP_NORM
+    nullptr,                                                                                   // GGML_OP_L2_NORM
 
     mat_mul_op_constructor,                                                                    // GGML_OP_MUL_MAT
     nullptr,                                                                                   // GGML_OP_MUL_MAT_ID
@@ -345,6 +350,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_ADD_REL_POS
     nullptr,  // GGML_OP_RWKV_WKV6
     nullptr,  // GGML_OP_GATED_LINEAR_ATTN
+    nullptr,  // GGML_OP_RWKV_WKV7
 
     nullptr,  // GGML_OP_UNARY
 

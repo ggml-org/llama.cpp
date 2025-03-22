@@ -85,6 +85,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_RMS_NORM
     false,  // GGML_OP_RMS_NORM_BACK
     false,  // GGML_OP_GROUP_NORM
+    false,  // GGML_OP_L2_NORM
 
     true,   // GGML_OP_MUL_MAT
     false,  // GGML_OP_MUL_MAT_ID
@@ -133,6 +134,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_ADD_REL_POS
     false,  // GGML_OP_RWKV_WKV6
     false,  // GGML_OP_GATED_LINEAR_ATTN
+    false,  // GGML_OP_RWKV_WKV7
 
     false,  // GGML_OP_UNARY
 
