@@ -786,8 +786,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
         hs_task_count = params.hellaswag_tasks;
     }
 
-    // The random seed should not impact the final result if the computation is done over enough tasks, so kept hardcoded for now
-    std::mt19937 rng(1);
+    std::mt19937 rng(std::random_device{}());
 
     // Dataholder for hellaswag tasks
     struct hs_data_t {
@@ -921,6 +920,11 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            if (params.ctx_overflow) {
+                LOG_ERR("%s : ignoring offending task: %s\n", __func__, hs_data[i0].context.c_str());
+                continue;
+            }
+
             return;
         }
 
@@ -1097,7 +1101,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
 
     if (params.winogrande_tasks > 0 && params.winogrande_tasks < data.size()) {
         LOG_INF("%s : selecting %zu random tasks\n", __func__, params.winogrande_tasks);
-        std::mt19937 rng(1);
+        std::mt19937 rng(std::random_device{}());
         std::vector<int> aux(data.size());
         for (int i = 0; i < int(data.size()); ++i) {
             aux[i] = i;
@@ -1200,6 +1204,11 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            if (params.ctx_overflow) {
+                LOG_ERR("%s : offending task: %s\n", __func__, data[i0].first.c_str());
+                continue;
+            }
+
             return;
         }
 
@@ -1423,7 +1432,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
     }
     else {
         LOG_INF("%s: selecting %zu random tasks from %u tasks available\n", __func__, params.multiple_choice_tasks, n_task);
-        std::mt19937 rng(1);
+        std::mt19937 rng(std::random_device{}());
         std::vector<int> aux(n_task);
         for (uint32_t i = 0; i < n_task; ++i) aux[i] = i;
         float scale = 1.f/(1.f + (float)std::mt19937::max());
@@ -1572,6 +1581,11 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 
         if (i0 == i1) {
             LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            if (params.ctx_overflow) {
+                LOG_ERR("%s : offending task: %s\n", __func__, tasks[i0].question.c_str());
+                continue;
+            }
+
             return;
         }
 
