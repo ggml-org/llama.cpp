@@ -277,6 +277,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
+            "encoder.layers.{bid}.mlp.router.layer",     # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -308,7 +309,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate_up_proj",                    # phi3
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
-            "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
+            "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert
             "model.layers.{bid}.mlp.c_fc",                            # starcoder2
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
@@ -322,6 +323,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.experts.mlp.v1",    # dbrx
             "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
+            "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -342,7 +344,6 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc2",              # jais
             "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
             "model.layers.{bid}.feed_forward.w1",         # internlm2
-            "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
             "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
@@ -388,6 +389,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
+            "encoder.layers.{bid}.mlp.fc12",                          # nomic-bert
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -397,6 +399,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.down_proj",          # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
             "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
+            "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (

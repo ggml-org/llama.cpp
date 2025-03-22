@@ -111,13 +111,6 @@ class Model:
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
-    @classmethod
-    def __init_subclass__(cls):
-        # can't use an abstract property, because overriding it without type errors
-        # would require using decorated functions instead of simply defining the property
-        if "model_arch" not in cls.__dict__:
-            raise TypeError(f"Missing property 'model_arch' for {cls.__name__!r}")
-
     def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
         key = next((k for k in keys if k in self.hparams), None)
         if key is not None:
@@ -705,6 +698,8 @@ class Model:
         if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
             # ref: https://huggingface.co/Xenova/gpt-4o
             res = "gpt-4o"
+        if chkhsh == "a81863d07e75497e2194eb1a1574d5e5cd4d5f85a87a0728b922bf2bed6fb327":
+            res = "bert"
 
         if res is None:
             logger.warning("\n")
@@ -3138,22 +3133,44 @@ class RobertaModel(BertModel):
 
 @Model.register("NomicBertModel")
 class NomicBertModel(BertModel):
-    model_arch = gguf.MODEL_ARCH.NOMIC_BERT
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, is_big_endian: bool = False,
+                 use_temp_file: bool = False, eager: bool = False,
+                 metadata_override: Path | None = None, model_name: str | None = None,
+                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None):
+
+        hparams = Model.load_hparams(dir_model)
+
+        if (hparams is None or hparams.get("moe_every_n_layers", 0) < 1):
+            self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT
+        else:
+            self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE
+
+        super().__init__(dir_model, ftype, fname_out, is_big_endian, use_temp_file,
+                         eager, metadata_override, model_name, split_max_tensors,
+                         split_max_size, dry_run, small_first_shard, hparams)
 
         # the HF config claims n_ctx=8192, but it uses RoPE scaling
         self.hparams["n_ctx"] = 2048
 
-        # SwigLU activation
-        assert self.hparams["activation_function"] == "swiglu"
+        if (self.hparams.get("moe_every_n_layers", 0) < 1):
+            assert self.hparams["activation_function"] == "swiglu"
+        else:
+            assert self.hparams["activation_function"] == "gelu"
+
         # this doesn't do anything in the HF version
         assert self.hparams["causal"] is False
-        # no bias tensors
-        assert self.hparams["qkv_proj_bias"] is False
-        assert self.hparams["mlp_fc1_bias"] is False
-        assert self.hparams["mlp_fc2_bias"] is False
+
+        if (self.hparams.get("moe_every_n_layers", 0) < 1):
+            assert self.hparams["qkv_proj_bias"] is False
+            assert self.hparams["mlp_fc1_bias"] is False
+            assert self.hparams["mlp_fc2_bias"] is False
+        else:
+            assert self.hparams["qkv_proj_bias"] is True
+            assert self.hparams["mlp_fc1_bias"] is True
+            assert self.hparams["mlp_fc2_bias"] is True
+
         # norm at end of layer
         assert self.hparams["prenorm"] is False
         # standard RoPE
@@ -3161,9 +3178,29 @@ class NomicBertModel(BertModel):
         assert self.hparams["rotary_emb_interleaved"] is False
         assert self.hparams["rotary_emb_scale_base"] is None
 
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
+        # If the tensor is an experts bias tensor, skip it by returning an empty list.
+        if "mlp.experts.bias" in name:
+            return []  # Explicitly return an empty list.
+
+        if "mlp.experts.mlp.w1" in name:
+            data_torch = data_torch.view(self.hparams["num_experts"], self.hparams["n_inner"], self.hparams["n_embd"])
+            return [(self.map_tensor_name(name) + ".weight", data_torch)]
+
+        if "mlp.experts.mlp.w2" in name:
+            data_torch = data_torch.view(self.hparams["num_experts"], self.hparams["n_inner"], self.hparams["n_embd"])
+            data_torch = data_torch.transpose(1, 2)
+            return [(self.map_tensor_name(name) + ".weight", data_torch)]
+
+        return [(self.map_tensor_name(name), data_torch)]
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self.gguf_writer.add_moe_every_n_layers(self.hparams["moe_every_n_layers"])
         self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
+        if (self.hparams.get("moe_every_n_layers", 0) > 0):
+            self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+            self.gguf_writer.add_expert_used_count(self.hparams["moe_top_k"])
 
 
 @Model.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
