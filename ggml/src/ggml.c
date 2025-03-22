@@ -967,6 +967,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "LEAKY_RELU",
+    "SNAKE",
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
@@ -998,7 +999,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
-static_assert(GGML_OP_COUNT == 85, "GGML_OP_COUNT != 85");
+static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1097,7 +1098,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 };
 
-static_assert(GGML_OP_COUNT == 85, "GGML_OP_COUNT != 85");
+static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -2469,6 +2470,35 @@ struct ggml_tensor * ggml_leaky_relu(
     ggml_set_op_params(result, &negative_slope, sizeof(negative_slope));
 
     result->op     = GGML_OP_LEAKY_RELU;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml snake
+
+struct ggml_tensor * ggml_snake(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * alpha) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    // store ptr to alpha tensor
+    ggml_set_op_params(result, &alpha, sizeof(alpha));
+    result->op = GGML_OP_SNAKE;
+    result->src[0] = a;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_snake_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * alpha) {
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    ggml_set_op_params(result, &alpha, sizeof(alpha));
+    result->op = GGML_OP_SNAKE;
     result->src[0] = a;
 
     return result;

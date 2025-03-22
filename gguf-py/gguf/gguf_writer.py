@@ -887,6 +887,18 @@ class GGUFWriter:
     def add_precompiled_charsmap(self, charsmap: Sequence[bytes]) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
+    def add_quantizer_count(self, count: int) -> None:
+        self.add_uint32(Keys.AudioCodec.QUANTIZER_COUNT.format(arch=self.arch), count)
+
+    def add_quantizer_strides(self, strides: Sequence[int]) -> None:
+        self.add_array(Keys.AudioCodec.QUANTIZER_STRIDES.format(arch=self.arch), strides)
+
+    def add_decoder_upsample_rates(self, rates: Sequence[int]) -> None:
+        self.add_array(Keys.AudioCodec.DECODER_UPSAMPLE_RATES.format(arch=self.arch), rates)
+
+    def add_decoder_channel_dims(self, dims: Sequence[int]) -> None:
+        self.add_array(Keys.AudioCodec.DECODER_CHANNEL_DIMS.format(arch=self.arch), dims)
+
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]]) -> None:
         if not isinstance(value, str):
             template_default = None
