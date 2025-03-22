@@ -70,7 +70,7 @@ class ggml_qnn_op_config {
      *
      * @return A reference to a vector of qnn_tensor_ptr_t objects representing the input tensors.
      */
-    virtual const qnn_tensor_array_t & get_input_tensors() = 0;
+    virtual qnn_tensor_array_t & get_input_tensors() = 0;
 
     /**
      * @brief Pure virtual function to retrieve the output tensors of a QNN.
@@ -81,7 +81,7 @@ class ggml_qnn_op_config {
      *
      * @return A reference to a vector of qnn_tensor_ptr_t objects representing the output tensors.
      */
-    virtual const qnn_tensor_array_t & get_output_tensors() = 0;
+    virtual qnn_tensor_array_t & get_output_tensors() = 0;
 
     /**
      * @brief Adds an operation to the given graph.

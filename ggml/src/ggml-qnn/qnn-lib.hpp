@@ -82,70 +82,48 @@ class qnn_interface {
 
     // QnnBackend
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_create, backendCreate);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_free, backendFree);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_register_op_package, backendRegisterOpPackage);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_validate_op_config, backendValidateOpConfig);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(backend_get_api_version, backendGetApiVersion);
+
     // QnnDevice
     DEFINE_SHIM_FUNCTION_INTERFACE(device_create, deviceCreate);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(device_free, deviceFree);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(device_get_infrastructure, deviceGetInfrastructure);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(device_get_platform_info, deviceGetPlatformInfo);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(device_free_platform_info, deviceFreePlatformInfo);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(device_get_info, deviceGetInfo);
 
     // QnnContext
     DEFINE_SHIM_FUNCTION_INTERFACE(context_create, contextCreate);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary_size, contextGetBinarySize);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(context_get_binary, contextGetBinary);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(context_create_from_binary, contextCreateFromBinary);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(context_free, contextFree);
 
     // QnnGraph
     DEFINE_SHIM_FUNCTION_INTERFACE(graph_create, graphCreate);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(graph_add_node, graphAddNode);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(graph_finalize, graphFinalize);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(graph_execute, graphExecute);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(graph_retrieve, graphRetrieve);
 
     // QnnLog
     DEFINE_SHIM_FUNCTION_INTERFACE(log_create, logCreate);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(log_free, logFree);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(log_set_log_level, logSetLogLevel);
 
     // QnnProfile
     DEFINE_SHIM_FUNCTION_INTERFACE(profile_create, profileCreate);
-
+    DEFINE_SHIM_FUNCTION_INTERFACE(profile_set_config, profileSetConfig);
     DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_events, profileGetEvents);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_sub_events, profileGetSubEvents);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(profile_get_event_data, profileGetEventData);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(profile_free, profileFree);
 
     // QnnMem
     DEFINE_SHIM_FUNCTION_INTERFACE(mem_register, memRegister);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(mem_de_register, memDeRegister);
 
     // QnnProperty
@@ -153,7 +131,6 @@ class qnn_interface {
 
     // QnnTensor
     DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_context_tensor, tensorCreateContextTensor);
-
     DEFINE_SHIM_FUNCTION_INTERFACE(tensor_create_graph_tensor, tensorCreateGraphTensor);
 
     uint32_t get_backend_id() const { return _qnn_interface.backendId; }
@@ -169,18 +146,20 @@ class qnn_interface {
 
 #pragma GCC diagnostic pop
 
+using qnn_interface_ptr = std::shared_ptr<qnn_interface>;
+
 class qnn_instance {
   public:
     using BackendIdType = decltype(QnnInterface_t{}.backendId);
 
-    explicit qnn_instance(const std::string & lib_path, const std::string & backend_lib_name);
+    explicit qnn_instance(const std::string & lib_path, QNNBackend device);
 
     ~qnn_instance() {}
 
     int qnn_init(const QnnSaver_Config_t ** saver_config);
     int qnn_finalize();
 
-    std::shared_ptr<qnn_interface> get_qnn_interface() {
+    qnn_interface_ptr get_qnn_interface() {
         if (!_qnn_interface) {
             QNN_LOG_WARN("pls check why _qnn_interface is not loaded\n");
         }
@@ -188,8 +167,6 @@ class qnn_instance {
     }
 
     Qnn_LogHandle_t get_qnn_log_handle() { return _qnn_log_handle; }
-
-    Qnn_ProfileHandle_t get_qnn_profile_handle() { return _qnn_profile_handle; }
 
     Qnn_DeviceHandle_t get_qnn_device_handle() { return _qnn_device_handle; }
 
@@ -256,7 +233,7 @@ class qnn_instance {
     }
 
     int set_high_performance_mode() {
-        if (nullptr == _qnn_htp_perfinfra) {
+        if (!_qnn_htp_perfinfra) {
             QNN_LOG_WARN("perf intra is null\n");
             return 1;
         }
@@ -425,29 +402,20 @@ class qnn_instance {
     std::string   _backend_lib_name;
     BackendIdType _backend_id;
 
-    QnnLog_Level_t _qnn_log_level = QNN_LOG_LEVEL_DEBUG;
-
 #ifdef NDEBUG
-    qnn::sdk_profile_level _profile_level = qnn::sdk_profile_level::profile_off;
+    QnnLog_Level_t _qnn_log_level = QNN_LOG_LEVEL_INFO;  // TODO: should we consider changing this dynamically?
 #else
-    qnn::sdk_profile_level _profile_level = qnn::sdk_profile_level::profile_detail;
+    QnnLog_Level_t _qnn_log_level = QNN_LOG_LEVEL_DEBUG;
 #endif
 
     std::shared_ptr<qnn::qnn_system_interface> _qnn_sys_interface;
     std::shared_ptr<qnn::qnn_interface>        _qnn_interface;
 
-    Qnn_GraphHandle_t _qnn_graph_handle = nullptr;
-
-    Qnn_LogHandle_t _qnn_log_handle = nullptr;
-
-    Qnn_ProfileHandle_t _qnn_profile_handle = nullptr;
-
-    Qnn_DeviceHandle_t _qnn_device_handle = nullptr;
-
-    Qnn_BackendHandle_t _qnn_backend_handle = nullptr;
-
-    Qnn_ContextHandle_t _qnn_context_handle = nullptr;
-
+    Qnn_GraphHandle_t                   _qnn_graph_handle   = nullptr;
+    Qnn_LogHandle_t                     _qnn_log_handle     = nullptr;
+    Qnn_DeviceHandle_t                  _qnn_device_handle  = nullptr;
+    Qnn_BackendHandle_t                 _qnn_backend_handle = nullptr;
+    Qnn_ContextHandle_t                 _qnn_context_handle = nullptr;
     QnnHtpDevice_PerfInfrastructure_t * _qnn_htp_perfinfra  = nullptr;
     uint32_t                            _qnn_power_configid = 1;
 
@@ -472,5 +440,23 @@ class qnn_instance {
 
     qnn::qcom_socinfo _soc_info = {};
 };
+
+using qnn_instance_ptr = std::shared_ptr<qnn_instance>;
+
+struct device_caps {
+    const char *               lib_name;
+    enum ggml_backend_dev_type type;
+
+    // TODO: should we get this from device?
+    uint64_t supported_types;
+
+    // TODO: should we merge this with supported_types?
+    uint64_t cpu_preprocess_types;
+
+    // TODO: should we get this from device?
+    size_t max_tensor_size_in_bytes;
+};
+
+const device_caps & get_device_caps(QNNBackend device);
 
 }  // namespace qnn

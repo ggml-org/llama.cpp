@@ -12,11 +12,50 @@ namespace {
 #ifdef _WIN32
 constexpr const char * kQnnSystemLibName = "QnnSystem.dll";
 constexpr const char * kQnnRpcLibName    = "libcdsprpc.dll";
+constexpr const char * kQnnCpuLibName    = "QnnCpu.dll";
+constexpr const char * kQnnGpuLibName    = "QnnGpu.dll";
+constexpr const char * kQnnNpuLibName    = "QnnHtp.dll";
 #else
 constexpr const char * kQnnSystemLibName = "libQnnSystem.so";
 constexpr const char * kQnnRpcLibName    = "libcdsprpc.so";
-
+constexpr const char * kQnnCpuLibName    = "libQnnCpu.so";
+constexpr const char * kQnnGpuLibName    = "libQnnGpu.so";
+constexpr const char * kQnnNpuLibName    = "libQnnHtp.so";
 #endif
+
+constexpr const qnn::device_caps kDeviceCaps[] = {
+    {
+     // https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-50/CpuOpDefSupplement.html#matmul
+        kQnnCpuLibName,                                                                   GGML_BACKEND_DEVICE_TYPE_ACCEL, (1L << GGML_TYPE_I8) | (1L << GGML_TYPE_F32),
+     0xFFFFFE,                                                                                                                                                                                                                                                                            // all quantized types can be offload to CPU, at current implementation, those types will be dequantized into float32 on cpu
+        0,                                                    // 0 for no limitation
+    },
+    {
+     // https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-50/GpuOpDefSupplement.html#matmul
+        kQnnGpuLibName,                                                                                    GGML_BACKEND_DEVICE_TYPE_GPU,                                                                                                   (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16),
+     // all quantized types can be offload to GPU, at current implementation, those types will be dequantized into float32 on cpu
+        0xFFFFFE,                                                           (128256L * 4096 *
+         sizeof(float)), // tested on 8 gen 2, failed to allocate tensor with size 128256x4096 and float32
+    },
+    {
+     // https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-50/HtpOpDefSupplement.html#matmul
+        kQnnNpuLibName, GGML_BACKEND_DEVICE_TYPE_ACCEL,
+     (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16) | (1L << GGML_TYPE_I16),
+     (1L << GGML_TYPE_Q2_K) | (1L << GGML_TYPE_Q3_K) | (1L << GGML_TYPE_Q4_K) | (1L << GGML_TYPE_Q8_K),
+     (8192L * 2048 + 8192 * 512 + 2048 * 512) * sizeof(float),  // TODO: should have a better way to get this value
+    },
+};
+
+static_assert(sizeof(kDeviceCaps) / sizeof(kDeviceCaps[0]) == GGML_QNN_MAX_DEVICES,
+              "The number of qnn devices should be equal to GGML_QNN_MAX_DEVICES");
+static_assert(kDeviceCaps[QNN_BACKEND_NPU].type == GGML_BACKEND_DEVICE_TYPE_ACCEL,
+              "The NPU device should be an accelerator device");
+static_assert(kDeviceCaps[QNN_BACKEND_GPU].type == GGML_BACKEND_DEVICE_TYPE_GPU,
+              "The GPU device should be an GPU device");
+static_assert(
+    kDeviceCaps[QNN_BACKEND_CPU].type == GGML_BACKEND_DEVICE_TYPE_ACCEL,
+    "The CPU device should be an accelerator device");  // we treat qnn-cpu as a supplementary accelerator device
+static_assert(GGML_TYPE_Q4_0 == 2 && GGML_TYPE_Q8_K == 15, "The quantized type order is not correct");
 
 void insert_path(std::string & path, std::string insert_path, const char separator = ':') {
     if (!insert_path.empty() && !path.empty()) {
@@ -108,9 +147,8 @@ qnn_system_interface::~qnn_system_interface() {
     }
 }
 
-qnn_instance::qnn_instance(const std::string & lib_path, const std::string & backend_lib_name) :
-    _additional_lib_load_path(lib_path),
-    _backend_lib_name(std::move(backend_lib_name)) {
+qnn_instance::qnn_instance(const std::string & lib_path, QNNBackend device) : _additional_lib_load_path(lib_path) {
+    _backend_lib_name = kDeviceCaps[device].lib_name;
     if (set_qnn_lib_search_path(lib_path)) {
         QNN_LOG_DEBUG("[%s] set_qnn_lib_search_path succeed\n", _backend_lib_name.c_str());
     } else {
@@ -181,21 +219,27 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         qnn_status                              = _qnn_interface->qnn_device_get_platform_info(nullptr, &p_info);
         if (qnn_status == QNN_SUCCESS) {
             QNN_LOG_INFO("device counts %d\n", p_info->v1.numHwDevices);
-            QnnDevice_HardwareDeviceInfo_t *         infos    = p_info->v1.hwDevices;
-            QnnHtpDevice_OnChipDeviceInfoExtension_t chipinfo = {};
+            QnnDevice_HardwareDeviceInfo_t * infos = p_info->v1.hwDevices;
             for (uint32_t i = 0; i < p_info->v1.numHwDevices; i++) {
                 QNN_LOG_INFO("deviceID:%d, deviceType:%d, numCores %d\n", (int) infos[i].v1.deviceId,
                              (int) infos[i].v1.deviceType, (int) infos[i].v1.numCores);
-                QnnDevice_DeviceInfoExtension_t devinfo = infos[i].v1.deviceInfoExtension;
-                chipinfo                                = devinfo->onChipDevice;
-                size_t htp_arch                         = (size_t) chipinfo.arch;
+                QnnDevice_DeviceInfoExtension_t          devinfo  = infos[i].v1.deviceInfoExtension;
+                QnnHtpDevice_OnChipDeviceInfoExtension_t chipinfo = devinfo->onChipDevice;
+                size_t                                   htp_arch = (size_t) chipinfo.arch;
                 QNN_LOG_INFO("htp_type:%d(%s)\n", devinfo->devType,
                              (devinfo->devType == QNN_HTP_DEVICE_TYPE_ON_CHIP) ? "ON_CHIP" : "");
-                QNN_LOG_INFO("qualcomm soc_model:%d(%s), htp_arch:%d(%s), vtcm_size:%d MB\n", (int) chipinfo.socModel,
-                             qnn::get_chipset_desc(chipinfo.socModel), (int) htp_arch, qnn::get_htparch_desc(htp_arch),
-                             (int) chipinfo.vtcmSize);
-                _soc_info = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize };
+                QNN_LOG_INFO("soc_model:%s(%s), htp_arch:%s(%d), vtcm_size:%d MB\n",
+                             get_chipset_desc(chipinfo.socModel), get_chipset_model(chipinfo.socModel),
+                             get_htparch_desc(htp_arch), (int) htp_arch, (int) chipinfo.vtcmSize);
             }
+
+            if (p_info->v1.numHwDevices) {
+                QnnDevice_DeviceInfoExtension_t devinfo = infos[p_info->v1.numHwDevices - 1].v1.deviceInfoExtension;
+                QnnHtpDevice_OnChipDeviceInfoExtension_t chipinfo = devinfo->onChipDevice;
+                size_t                                   htp_arch = (size_t) chipinfo.arch;
+                _soc_info                                         = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize };
+            }
+
             _qnn_interface->qnn_device_free_platform_info(nullptr, p_info);
         } else {
             // For emulator, we can't get platform info
@@ -227,20 +271,6 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
         QNN_LOG_WARN("failed to create QNN device\n");
     } else {
         QNN_LOG_INFO("create QNN device successfully\n");
-    }
-
-    if (_profile_level != sdk_profile_level::profile_off) {
-        QNN_LOG_INFO("profiling turned on; level = %d\n", _profile_level);
-        auto profile_level =
-            _profile_level == sdk_profile_level::profile_detail ? QNN_PROFILE_LEVEL_DETAILED : QNN_PROFILE_LEVEL_BASIC;
-
-        if (QNN_PROFILE_NO_ERROR !=
-            _qnn_interface->qnn_profile_create(_qnn_backend_handle, profile_level, &_qnn_profile_handle)) {
-            QNN_LOG_WARN("unable to create profile handle in the backend\n");
-            return 6;
-        } else {
-            QNN_LOG_DEBUG("initialize qnn profile successfully\n");
-        }
     }
 
     _rpc_lib_handle = load_lib_with_fallback(kQnnRpcLibName, _additional_lib_load_path);
@@ -339,21 +369,12 @@ int qnn_instance::qnn_finalize() {
     }
 
     if (_qnn_context_handle) {
-        error = _qnn_interface->qnn_context_free(_qnn_context_handle, _qnn_profile_handle);
+        error = _qnn_interface->qnn_context_free(_qnn_context_handle, nullptr);
         if (error != QNN_SUCCESS) {
             QNN_LOG_WARN("failed to free QNN context_handle: ID %u, error %d\n", _qnn_interface->get_backend_id(),
                          (int) QNN_GET_ERROR_CODE(error));
         }
         _qnn_context_handle = nullptr;
-    }
-
-    if (_qnn_profile_handle) {
-        error = _qnn_interface->qnn_profile_free(_qnn_profile_handle);
-        if (error != QNN_SUCCESS) {
-            QNN_LOG_WARN("failed to free QNN profile_handle: ID %u, error %d\n", _qnn_interface->get_backend_id(),
-                         (int) QNN_GET_ERROR_CODE(error));
-        }
-        _qnn_profile_handle = nullptr;
     }
 
     if (_qnn_device_handle) {
@@ -533,6 +554,10 @@ int qnn_instance::unload_backend() {
     _loaded_backend.clear();
 
     return 0;
+}
+
+const device_caps & get_device_caps(QNNBackend device) {
+    return kDeviceCaps[device];
 }
 
 }  // namespace qnn

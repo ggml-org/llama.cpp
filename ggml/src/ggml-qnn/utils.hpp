@@ -23,11 +23,14 @@ qnn_dimension_array_t get_view_internal_dimension(const ggml_tensor * tensor, si
 
 uint32_t     get_ggml_tensor_rank(const ggml_tensor * tensor);
 const char * get_ggml_type_name(ggml_type type);
-const char * get_backend_name(QNNBackend device_index);
-const char * get_chipset_desc(uint32_t chipset_id);
+const char * get_backend_name(QNNBackend device);
+const char * get_backend_desc(QNNBackend device);
+const char * get_chipset_desc(uint32_t soc_model);
+const char * get_chipset_model(uint32_t soc_model);
 const char * get_htparch_desc(size_t htp_arch);
 intptr_t     align_to(size_t alignment, intptr_t offset);
 uint32_t     get_ggml_tensor_data_size(const ggml_tensor * tensor);
+const char * get_qnn_tensor_type_name(Qnn_TensorType_t type);
 
 void * page_align_alloc(size_t size);
 void   align_free(void * ptr);
@@ -198,48 +201,6 @@ size_t         qnn_datatype_size(Qnn_DataType_t qnn_type);
 const char *   qnn_datatype_to_string(Qnn_DataType_t qnn_type);
 size_t         get_system_total_memory_in_bytes();
 size_t         get_system_free_memory_in_bytes();
-
-#if ENABLE_QNNBACKEND_PERF
-class qnn_perf {
-  public:
-    qnn_perf(const std::string & perf_name) : _perf_name(std::move(perf_name)) {};
-
-    ~qnn_perf() { info(); }
-
-    qnn_perf()                             = delete;
-    qnn_perf(const qnn_perf &)             = delete;
-    qnn_perf & operator=(const qnn_perf &) = delete;
-
-    void start() { _begin_time = ggml_time_us(); }
-
-    void info() {
-        _end_time = ggml_time_us();
-        _duration = (_end_time - _begin_time);
-        QNN_LOG_INFO("duration of %s : %lld microseconds\n", _perf_name.c_str(), _duration);
-    }
-
-  private:
-    int64_t     _begin_time = 0LL;
-    int64_t     _end_time   = 0LL;
-    int64_t     _duration   = 0LL;
-    std::string _perf_name;
-};
-#else
-class qnn_perf {
-  public:
-    qnn_perf(const std::string &) {}
-
-    ~qnn_perf() { info(); }
-
-    qnn_perf()                             = delete;
-    qnn_perf(const qnn_perf &)             = delete;
-    qnn_perf & operator=(const qnn_perf &) = delete;
-
-    void start() {}
-
-    void info() {}
-};
-#endif
 
 }  // namespace qnn
 

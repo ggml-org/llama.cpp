@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "convert.hpp"
 #include "ggml-backend.h"
 #include "ggml-qnn.h"
 #include "ggml.h"
@@ -25,26 +26,30 @@ struct ggml_backend_qnn_device_context {
     QNNBackend  device;
     size_t      threads;
     std::string name;
-    std::string lib_name;
+    std::string description;
 
     // initialize in qnn init
     qnn::qcom_socinfo                   socinfo = {};
-    uint64_t                            supported_types;
+    size_t                              max_tensor_size_in_bytes;
     std::shared_ptr<qnn::qnn_instance>  instance;
     std::shared_ptr<qnn::qnn_interface> qnn_interface;
 
-    qnn::qnn_graph_cache_t qnn_graph_cache;
+    qnn::qnn_graph_cache_t                      qnn_graph_cache;
+    std::shared_ptr<qnn::qnn_convert_context_t> convert_context = std::make_shared<qnn::qnn_convert_context_t>();
 
 #ifndef NDEBUG
     std::atomic_uint32_t supported_op_count   = 0;
     std::atomic_uint32_t unsupported_op_count = 0;
 #endif
 
+    bool     enable_cpu_dequantize = false;
+    uint64_t supported_types;
+    uint64_t cpu_preprocess_types;
+
     explicit ggml_backend_qnn_device_context(QNNBackend device, size_t threads, const char * name,
-                                             const char * lib_name, uint64_t supported_types) :
+                                             uint64_t supported_types) :
         device(device),
         threads(threads),
         name(name),
-        lib_name(lib_name),
         supported_types(supported_types) {}
 };

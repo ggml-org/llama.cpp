@@ -69,8 +69,8 @@ using qnn_buffer_ptr = std::shared_ptr<qnn_buffer_interface>;
  */
 class qnn_rpc_buffer : public qnn_buffer_interface {
   public:
-    qnn_rpc_buffer(std::shared_ptr<qnn_instance> qnn_instance, const size_t size, const uint32_t rank,
-                   uint32_t * dimensions, Qnn_DataType_t data_type) :
+    qnn_rpc_buffer(qnn_instance_ptr qnn_instance, const size_t size, const uint32_t rank, uint32_t * dimensions,
+                   Qnn_DataType_t data_type) :
         _size(size),
         _qnn_instance(qnn_instance) {
         _qnn_rpc_buffer     = static_cast<uint8_t *>(qnn_instance->alloc_rpcmem(size, alignof(uint8_t *)));
@@ -105,10 +105,10 @@ class qnn_rpc_buffer : public qnn_buffer_interface {
     Qnn_MemHandle_t get_mem_handle() const override { return _qnn_rpc_mem_handle; }
 
   private:
-    size_t                        _size               = 0;
-    uint8_t *                     _qnn_rpc_buffer     = nullptr;
-    Qnn_MemHandle_t               _qnn_rpc_mem_handle = nullptr;
-    std::shared_ptr<qnn_instance> _qnn_instance;
+    size_t           _size               = 0;
+    uint8_t *        _qnn_rpc_buffer     = nullptr;
+    Qnn_MemHandle_t  _qnn_rpc_mem_handle = nullptr;
+    qnn_instance_ptr _qnn_instance;
 
     DISABLE_COPY(qnn_rpc_buffer);
     DISABLE_MOVE(qnn_rpc_buffer);

@@ -1,14 +1,13 @@
 #pragma once
 
-#include "ggml.h"
-
 #include "ggml-backend.h"
+#include "ggml.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#define GGML_QNN_NAME "QNN"
+#define GGML_QNN_NAME        "qnn"
 #define GGML_QNN_MAX_DEVICES QNN_BACKEND_COUNT
 
 enum QNNBackend {

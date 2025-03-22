@@ -178,8 +178,8 @@ const char * get_ggml_type_name(ggml_type type) {
     return traits->type_name;
 }
 
-const char * get_backend_name(QNNBackend device_index) {
-    switch (device_index) {
+const char * get_backend_name(QNNBackend device) {
+    switch (device) {
         case QNN_BACKEND_CPU:
             return "qnn-cpu";
         case QNN_BACKEND_GPU:
@@ -192,18 +192,65 @@ const char * get_backend_name(QNNBackend device_index) {
     }
 }
 
-const char * get_chipset_desc(uint32_t chipset_id) {
-    switch (chipset_id) {
+const char * get_backend_desc(QNNBackend device) {
+    switch (device) {
+        case QNN_BACKEND_CPU:
+            return "CPU";
+        case QNN_BACKEND_GPU:
+            return "Adreno GPU";
+        case QNN_BACKEND_NPU:
+            return "Hexagon NPU";
+        case QNN_BACKEND_COUNT:
+        default:
+            return "unknown";
+    }
+}
+
+const char * get_chipset_desc(uint32_t soc_model) {
+    switch (soc_model) {
+        case SM8350:
+            return "Snapdragon 888/888+";
         case SM8450:
-            return "SD 8 Gen 1 (SM8450)";
+            return "Snapdragon 8 Gen 1";
         case SM8475:
-            return "SD 8+ Gen 1 (SM8475)";
+            return "Snapdragon 8 Gen 1+";
         case SM8550:
-            return "SD 8 Gen 2 (SM8550)";
+            return "Snapdragon 8 Gen 2";
+        case SM7675:
+            return "Snapdragon 7+ Gen 3";
+        case SM8635:
+            return "Snapdragon 8s Gen 3";
         case SM8650:
-            return "SD 8 Gen 3 (SM8650)";
+            return "Snapdragon 8 Gen 3";
         case SM8750:
-            return "SD 8 Gen 4 (SM8750)";
+            return "Snapdragon 8 Elite";
+        default:
+            return "unknown";
+    }
+}
+
+const char * get_chipset_model(uint32_t soc_model) {
+    switch (soc_model) {
+        case SM8350:
+            return "SM8350";
+        case SM8450:
+            return "SM8450";
+        case SA8295:
+            return "SA8295";
+        case SM8475:
+            return "SM8475";
+        case SM8550:
+            return "SM8550";
+        case SSG2115P:
+            return "SSG2115P";
+        case SM7675:
+            return "SM7675";
+        case SM8635:
+            return "SM8635";
+        case SM8650:
+            return "SM8650";
+        case SM8750:
+            return "SM8750";
         default:
             return "unknown";
     }
@@ -212,15 +259,15 @@ const char * get_chipset_desc(uint32_t chipset_id) {
 const char * get_htparch_desc(size_t htp_arch) {
     switch (htp_arch) {
         case V68:
-            return "QCOM_HTP_V68";
+            return "HTP_V68";
         case V69:
-            return "QCOM_HTP_V69";
+            return "HTP_V69";
         case V73:
-            return "QCOM_HTP_V73";
+            return "HTP_V73";
         case V75:
-            return "QCOM_HTP_V75";
+            return "HTP_V75";
         case V79:
-            return "QCOM_HTP_V79";
+            return "HTP_V79";
         default:
             return "unknown";
     }
@@ -232,6 +279,29 @@ intptr_t align_to(size_t alignment, intptr_t offset) {
 
 uint32_t get_ggml_tensor_data_size(const ggml_tensor * tensor) {
     return (uint32_t) ggml_nbytes(tensor);
+}
+
+const char * get_qnn_tensor_type_name(Qnn_TensorType_t type) {
+    switch (type) {
+        case QNN_TENSOR_TYPE_APP_WRITE:
+            return "QNN_TENSOR_TYPE_APP_WRITE";
+        case QNN_TENSOR_TYPE_APP_READ:
+            return "QNN_TENSOR_TYPE_APP_READ";
+        case QNN_TENSOR_TYPE_APP_READWRITE:
+            return "QNN_TENSOR_TYPE_APP_READWRITE";
+        case QNN_TENSOR_TYPE_STATIC:
+            return "QNN_TENSOR_TYPE_STATIC";
+        case QNN_TENSOR_TYPE_NATIVE:
+            return "QNN_TENSOR_TYPE_NATIVE";
+        case QNN_TENSOR_TYPE_UNDEFINED:
+            return "QNN_TENSOR_TYPE_UNDEFINED";
+        case QNN_TENSOR_TYPE_NULL:
+            return "QNN_TENSOR_TYPE_NULL";
+        default:
+            break;
+    }
+
+    return "unknown";
 }
 
 #ifdef _WIN32
@@ -265,14 +335,15 @@ void align_free(void * ptr) {
 void * page_align_alloc(size_t size) {
     const size_t alignment    = _get_page_size();
     size_t       size_aligned = align_to_generic<size_t>(alignment, size);
-    QNN_LOG_DEBUG("_align_alloc success, alignment: %ld, size: %ld, size_aligned: %ld\n", alignment, size, size_aligned);
-    void * data = _align_alloc(alignment, size_aligned);
+    void *       data         = _align_alloc(alignment, size_aligned);
     if (!data) {
         QNN_LOG_WARN("_align_alloc failed, alignment: %ld, size: %ld, size_aligned: %ld\n", alignment, size,
                      size_aligned);
         return nullptr;
     }
 
+    QNN_LOG_DEBUG("_align_alloc success, alignment: %ld, size: %ld, size_aligned: %ld\n", alignment, size,
+                  size_aligned);
     return data;
 }
 

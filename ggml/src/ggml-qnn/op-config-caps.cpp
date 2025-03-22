@@ -3,30 +3,77 @@
 
 namespace {
 
-using op_constructor_t    = std::shared_ptr<qnn::ggml_qnn_op_config> (*)(const ggml_tensor *, const std::string &,
+using op_constructor_t = std::shared_ptr<qnn::ggml_qnn_op_config> (*)(const ggml_tensor *, const std::string &,
                                                                       std::shared_ptr<qnn::qnn_instance>);
-using op_dims_calc_func_t = void (*)(const std::vector<qnn::ggml_dimension_array_t> & input_dims,
-                                     qnn::ggml_dimension_array_t &                    output_dims);
 
-void element_wise_op_dims(const std::vector<qnn::ggml_dimension_array_t> & input_dims,
-                          qnn::ggml_dimension_array_t &                    output_dims) {
-    for (size_t i = 1; i < std::size(output_dims); i++) {
-        output_dims[i] = input_dims.front()[i];
+using op_description_generator_t = void (*)(const ggml_tensor * op, bool append_dimensions,
+                                            ggml_type override_data_type, std::string & output);
+
+void append_tensor_shape_and_type_impl(const ggml_tensor * tensor, ggml_type override_data_type, std::string & output) {
+    char         buffer[256] = {};
+    const auto * type_name   = qnn::get_ggml_type_name(std::min(tensor->type, override_data_type));
+    int          len         = 0;
+    switch (ggml_n_dims(tensor)) {
+        case 1:
+            len = snprintf(buffer, sizeof(buffer), "%ld%s", (long) tensor->ne[0], type_name);
+            break;
+        case 2:
+            len = snprintf(buffer, sizeof(buffer), "%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1], type_name);
+            break;
+        case 3:
+            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
+                           (long) tensor->ne[2], type_name);
+            break;
+        case 4:
+        default:
+            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
+                           (long) tensor->ne[2], (long) tensor->ne[3], type_name);
+            break;
+    }
+    GGML_ASSERT(len > 0 && len < (int) sizeof(buffer));
+    output.append(buffer, len);
+}
+
+void get_graph_key_from_op(const ggml_tensor * op, ggml_type override_data_type, std::string & output) {
+    output += ggml_op_desc(op);
+    output += qnn::get_ggml_type_name(op->type);
+    for (size_t i = 0; i < GGML_MAX_SRC && op->src[i]; ++i) {
+        auto * src = op->src[i];
+        if (!src) {
+            break;
+        }
+
+        output += '_';
+        append_tensor_shape_and_type_impl(src, override_data_type, output);
     }
 }
 
-void mat_mul_op_dims(const std::vector<qnn::ggml_dimension_array_t> & input_dims,
-                     qnn::ggml_dimension_array_t &                    output_dims) {
-    GGML_ASSERT(input_dims.size() == 2);
-    output_dims[0] = input_dims.front()[1];
-    output_dims[1] = input_dims.back()[1];
+void get_op_key_with_src_op_desc(const ggml_tensor * op, std::string & output) {
+    output += ggml_op_desc(op);
+    output += '(';
+    if (op->src[0]) {
+        output += ggml_op_desc(op->src[0]);
+    }
+    for (size_t i = 1; i < GGML_MAX_SRC && op->src[i]; ++i) {
+        output += ',';
+        output += ggml_op_desc(op->src[i]);
+    }
+    output += ')';
+}
+
+void generic_get_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type override_data_type,
+                         std::string & output) {
+    if (append_dimensions) {
+        get_graph_key_from_op(op, override_data_type, output);
+    } else {
+        get_op_key_with_src_op_desc(op, output);
+    }
 }
 
 struct qnn_op_caps_t {
-    const char *        qnn_op_name       = nullptr;
-    const size_t        input_param_count = 0;
-    op_dims_calc_func_t calc_dims_func    = nullptr;
-    const char *        qnn_param_name    = nullptr;
+    const char *               qnn_op_name    = nullptr;
+    op_description_generator_t get_desc       = nullptr;
+    const char *               qnn_param_name = nullptr;
 };
 
 constexpr const qnn_op_caps_t kOpCaps[] = {
@@ -35,41 +82,29 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {
      // GGML_OP_ADD
         QNN_OP_ELEMENT_WISE_ADD,  // qnn_op_name
-        2,                        // input_param_count
-        element_wise_op_dims,     // calc_dims_func
     },
     {}, // GGML_OP_ADD1
     {}, // GGML_OP_ACC
     {
      // GGML_OP_SUB
         QNN_OP_ELEMENT_WISE_SUBTRACT,  // qnn_op_name
-        2,                             // input_param_count
-        element_wise_op_dims,          // calc_dims_func
     },
     {
      // GGML_OP_MUL
         QNN_OP_ELEMENT_WISE_MULTIPLY,  // qnn_op_name
-        2,                             // input_param_count
-        element_wise_op_dims,          // calc_dims_func
     },
     {
      // GGML_OP_DIV
         QNN_OP_ELEMENT_WISE_DIVIDE,  // qnn_op_name
-        2,                           // input_param_count
-        element_wise_op_dims,        // calc_dims_func
     },
     {}, // GGML_OP_SQR
     {
      // GGML_OP_SQRT
         QNN_OP_ELEMENT_WISE_SQUARE_ROOT,  // qnn_op_name
-        1,                                // input_param_count
-        element_wise_op_dims,             // calc_dims_func
     },
     {
      // GGML_OP_LOG
         QNN_OP_ELEMENT_WISE_LOG,  // qnn_op_name
-        1,                        // input_param_count
-        element_wise_op_dims,     // calc_dims_func
     },
     {}, // GGML_OP_SIN
     {}, // GGML_OP_COS
@@ -86,17 +121,14 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {
      // GGML_OP_RMS_NORM
         QNN_OP_RMS_NORM,                // qnn_op_name
-        1,                              // input_param_count
-        nullptr,                        // TODO: calc_dims_func
+        generic_get_op_desc,            // get_desc
         QNN_OP_RMS_NORM_PARAM_EPSILON,  // qnn_param_name
     },
     {}, // GGML_OP_RMS_NORM_BACK
     {}, // GGML_OP_GROUP_NORM
     {
      // GGML_OP_MUL_MAT
-        QNN_OP_MAT_MUL,   // qnn_op_name
-        2,                // input_param_count
-        mat_mul_op_dims,  // calc_dims_func
+        QNN_OP_MAT_MUL,  // qnn_op_name
     },
     {}, // GGML_OP_MUL_MAT_ID
     {}, // GGML_OP_OUT_PROD
@@ -107,8 +139,6 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {
      // GGML_OP_RESHAPE
         QNN_OP_RESHAPE,  // qnn_op_name
-        1,               // input_param_count
-        nullptr,         // TODO: calc_dims_func
     },
     {}, // GGML_OP_VIEW
     {}, // GGML_OP_PERMUTE
@@ -179,8 +209,6 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {
      // GGML_UNARY_OP_GELU
         QNN_OP_GELU,  // qnn_op_name
-        1,            // input_param_count
-        nullptr,      // TODO: calc_dims_func
     },
     {}, // GGML_UNARY_OP_GELU_QUICK
     {}, // GGML_UNARY_OP_SILU
@@ -189,15 +217,11 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_UNARY_OP_EXP
 };
 
-static_assert(kOpCaps[GGML_OP_NONE].calc_dims_func == nullptr, "GGML_OP_NONE should not have calc_dims_func function");
-static_assert(kOpCaps[GGML_OP_ADD].calc_dims_func == element_wise_op_dims,
-              "GGML_OP_ADD does not have element_wise_op_dims function");
-static_assert(kOpCaps[GGML_OP_MUL_MAT].calc_dims_func == mat_mul_op_dims,
-              "GGML_OP_ADD does not have element_wise_op_dims function");
-static_assert(kOpCaps[GGML_OP_LOG].calc_dims_func == element_wise_op_dims,
-              "GGML_OP_LOG does not have element_wise_op_dims function");
-static_assert(kOpCaps[GGML_OP_COUNT + GGML_UNARY_OP_GELU].input_param_count == 1,
-              "GGML_UNARY_OP_GELU does not have 1 input parameter");
+static_assert(kOpCaps[GGML_OP_NONE].get_desc == nullptr, "GGML_OP_NONE should not have get_desc function");
+static_assert(kOpCaps[GGML_OP_ADD].qnn_op_name, "GGML_OP_ADD does not have qnn_op_name in the kOpCaps table");
+static_assert(kOpCaps[GGML_OP_MUL_MAT].qnn_op_name, "GGML_OP_MUL_MAT does not have qnn_op_name in the kOpCaps table");
+static_assert(kOpCaps[GGML_OP_MUL].qnn_op_name, "GGML_OP_MUL does not have qnn_op_name in the kOpCaps table");
+static_assert(kOpCaps[GGML_OP_LOG].qnn_op_name, "GGML_OP_LOG does not have qnn_op_name in the kOpCaps table");
 static_assert(std::size(kOpCaps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
               "GGML_OP_COUNT does not match the size of the kOpCaps table");
 
@@ -368,6 +392,10 @@ static_assert(std::size(kOpConstructors) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT
 
 namespace qnn {
 
+void append_tensor_shape_and_type(const ggml_tensor * tensor, std::string & output) {
+    append_tensor_shape_and_type_impl(tensor, GGML_TYPE_COUNT, output);
+}
+
 size_t get_qnn_op_index(const ggml_tensor * tensor) {
     if (tensor->op == GGML_OP_UNARY) {
         return kGgmlUnaryOpStart + ggml_get_unary_op(tensor);
@@ -383,14 +411,20 @@ const char * get_qnn_op_name(const ggml_tensor * op) {
     return kOpCaps[op_index].qnn_op_name;
 }
 
-size_t get_qnn_op_input_param_count(const ggml_tensor * op) {
+void get_qnn_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type override_data_type,
+                     std::string & output) {
     auto op_index = get_qnn_op_index(op);
     GGML_ASSERT(op_index < std::size(kOpCaps));
-    return kOpCaps[op_index].input_param_count;
+    auto get_desc = kOpCaps[op_index].get_desc;
+    if (get_desc) {
+        get_desc(op, append_dimensions, override_data_type, output);
+    } else {
+        generic_get_op_desc(op, append_dimensions, override_data_type, output);
+    }
 }
 
 std::shared_ptr<ggml_qnn_op_config> create_op(const ggml_tensor * op, const std::string & name,
-                                              std::shared_ptr<qnn_instance> qnn_instance) {
+                                              qnn_instance_ptr qnn_instance) {
     auto op_index = get_qnn_op_index(op);
     GGML_ASSERT(op_index < std::size(kOpCaps));
     auto op_constructor = kOpConstructors[op_index];

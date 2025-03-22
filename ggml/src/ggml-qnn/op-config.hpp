@@ -14,11 +14,16 @@ namespace qnn {
 
 constexpr const size_t kGgmlUnaryOpStart = GGML_OP_COUNT;
 
-size_t                              get_qnn_op_index(const ggml_tensor * tensor);
-const char *                        get_qnn_op_name(const ggml_tensor * op);
-size_t                              get_qnn_op_input_param_count(const ggml_tensor * op);
+// TODO: move to a better place
+void append_tensor_shape_and_type(const ggml_tensor * tensor, std::string & output);
+
+size_t       get_qnn_op_index(const ggml_tensor * tensor);
+const char * get_qnn_op_name(const ggml_tensor * op);
+void         get_qnn_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type override_data_type,
+                             std::string & output);
+
 std::shared_ptr<ggml_qnn_op_config> create_op(const ggml_tensor * op, const std::string & name,
-                                              std::shared_ptr<qnn_instance> qnn_instance);
+                                              qnn_instance_ptr qnn_instance);
 
 inline bool add_op_to_graph(Qnn_GraphHandle_t graph_handle, std::vector<qnn_op_config_ptr_t> & operations) {
     for (auto & op : operations) {
