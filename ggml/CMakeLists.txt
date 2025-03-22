@@ -287,6 +287,15 @@ endif()
 
 # Generate version info based on git commit.
 
+# First try to get the build number from the file.
+if(NOT DEFINED GGML_BUILD_NUMBER)
+    if(EXISTS ${CMAKE_SOURCE_DIR}/.ggml_build_number)
+        file(STRINGS ${CMAKE_SOURCE_DIR}/.ggml_build_number GGML_BUILD_NUMBER)
+        # Assume the first line contains the desired version.
+        list(GET GGML_BUILD_NUMBER 0 GGML_BUILD_NUMBER)
+    endif()
+endif()
+
 if(NOT DEFINED GGML_BUILD_NUMBER)
     find_program(GIT_EXE NAMES git git.exe REQUIRED NO_CMAKE_FIND_ROOT_PATH)
     execute_process(COMMAND ${GIT_EXE} rev-list --count HEAD
