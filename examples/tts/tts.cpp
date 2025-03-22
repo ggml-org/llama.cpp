@@ -671,7 +671,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     {
         LOG_INF("%s: constructing prompt ..\n", __func__);
 
-        std::vector<llama_token> prompt_inp;
+        llama_tokens prompt_inp;
 
         prompt_init(prompt_inp, vocab);
 
