@@ -16,6 +16,7 @@ QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direc
 QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
+HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 
 qnnparams=" -mg 2 -ngl 99 "
 
@@ -99,7 +100,7 @@ function check_and_download_ndk()
 
 function build_arm64
 {
-    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DGGML_QNN_SDK_PATH=${QNN_SDK_PATH}
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DQNN_SDK_PATH=${QNN_SDK_PATH} -DHEXAGON_SDK_PATH=${HEXAGON_SDK_PATH}
     cd out/android
     make -j16
     show_pwd
@@ -178,6 +179,7 @@ function prepare_run_on_phone()
     fi
     adb push ./out/android/bin/${program} ${REMOTE_PATH}/
     adb shell chmod +x ${REMOTE_PATH}/${program}
+    adb push ggml/src/ggml-qnn/kernels/libggmlop_skel.so  ${REMOTE_PATH}/
 }
 
 function run_llamacli()
