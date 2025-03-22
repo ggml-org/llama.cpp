@@ -516,7 +516,6 @@ void string_process_escapes(std::string & input);
 std::string string_from(bool value);
 std::string string_from(const std::vector<int> & values);
 std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
-std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
 //
 // Filesystem utils
@@ -565,19 +564,6 @@ std::pair<std::string, std::string> common_get_hf_file(
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
-
-//
-// Batch utils
-//
-
-void common_batch_clear(struct llama_batch & batch);
-
-void common_batch_add(
-                 struct llama_batch & batch,
-                        llama_token   id,
-                          llama_pos   pos,
-    const std::vector<llama_seq_id> & seq_ids,
-                               bool   logits);
 
 //
 // Token utils
