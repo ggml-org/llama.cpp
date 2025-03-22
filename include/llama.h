@@ -945,6 +945,10 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Set whether the model is in warmup mode or not
+    // If true, all model tensors are activated during llama_decode() to load and cache their weights.
+    LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 

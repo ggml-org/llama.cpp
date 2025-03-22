@@ -23,6 +23,38 @@ ggml_add_backend_library(ggml-sycl
                          ../../include/ggml-sycl.h
                         )
 
+find_package(DNNL)
+set(GGML_SYCL_DNNL 0)
+if(DNNL_FOUND)
+    if (DEFINED ENV{ONEAPI_ROOT} AND NOT DEFINED DNNL_GPU_VENDOR)
+        # Assuming oneDNN packaged with oneapi release is used which
+        # supports only intel target
+        set(DNNL_GPU_VENDOR "INTEL")
+        if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
+            message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
+        endif()
+    endif()
+
+    # Verify oneDNN was compiled for the same target as llama
+    if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
+        target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
+        set(GGML_SYCL_DNNL 1)
+        get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
+        foreach(CONFIG ${CONFIGS})
+            get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
+            message(STATUS "Found oneDNN: ${DNNL_LIB}")
+        endforeach()
+    else()
+        message(WARNING
+            "oneDNN must be compiled for the same target as llama.cpp.
+             llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}.
+             Disabling oneDNN support.")
+    endif()
+else()
+    message(STATUS "oneDNN not found, disabling oneDNN support")
+endif()
+target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
+
 if (GGML_SYCL_F16)
     if (GGML_SYCL_TARGET STREQUAL "AMD")
         message(WARNING "AMD target does not entirely support FP16 in the SYCL backend.")
@@ -48,24 +80,15 @@ file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
-find_package(DNNL)
-message("-- DNNL found:" ${DNNL_FOUND})
-
-if (GGML_SYCL_TARGET STREQUAL "INTEL")
-    add_compile_definitions(GGML_SYCL_DNNL=${DNNL_FOUND})
-else()
-    add_compile_definitions(GGML_SYCL_DNNL=0)
-endif()
-
-if (${DNNL_FOUND} AND GGML_SYCL_TARGET STREQUAL "INTEL")
-    target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
-endif()
 
 if (WIN32)
     find_package(IntelSYCL REQUIRED)
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)
 else()
+    if (GGML_SYCL_GRAPH)
+        add_compile_definitions(GGML_SYCL_GRAPH)
+    endif()
     if (GGML_SYCL_TARGET STREQUAL "INTEL")
         target_link_libraries(ggml-sycl PRIVATE sycl OpenCL mkl_core pthread m dl mkl_sycl_blas mkl_intel_ilp64 mkl_tbb_thread)
     elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")

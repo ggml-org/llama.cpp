@@ -1689,11 +1689,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
                 case GGML_TYPE_Q8_0:
-                    // Current groupsize should not be greater than k-1 in
-                    // aclnnWeightQuantBatchMatmulV2GetWorkspaceSize
-                    if (op->src[0]->ne[0] <= QK8_0) {
-                        return false;
-                    }
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
                 case GGML_TYPE_Q4_0:

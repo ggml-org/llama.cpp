@@ -1,8 +1,4 @@
 find_package (Threads REQUIRED)
-find_program(GLSLC_EXECUTABLE glslc)
-if(NOT GLSLC_EXECUTABLE)
-    message(FATAL_ERROR "glslc not found.")
-endif()
 
 set(TARGET vulkan-shaders-gen)
 add_executable(${TARGET} vulkan-shaders-gen.cpp)

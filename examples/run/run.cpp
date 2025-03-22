@@ -79,6 +79,7 @@ class Opt {
         ctx_params           = llama_context_default_params();
         model_params         = llama_model_default_params();
         context_size_default = ctx_params.n_batch;
+        n_threads_default    = ctx_params.n_threads;
         ngl_default          = model_params.n_gpu_layers;
         common_params_sampling sampling;
         temperature_default = sampling.temp;
@@ -104,6 +105,7 @@ class Opt {
 
         ctx_params.n_batch        = context_size >= 0 ? context_size : context_size_default;
         ctx_params.n_ctx          = ctx_params.n_batch;
+        ctx_params.n_threads = ctx_params.n_threads_batch = n_threads >= 0 ? n_threads : n_threads_default;
         model_params.n_gpu_layers = ngl >= 0 ? ngl : ngl_default;
         temperature               = temperature >= 0 ? temperature : temperature_default;
 
@@ -116,12 +118,12 @@ class Opt {
     std::string chat_template_file;
     std::string          user;
     bool                 use_jinja   = false;
-    int                  context_size = -1, ngl = -1;
+    int                  context_size = -1, ngl = -1, n_threads = -1;
     float                temperature = -1;
     bool                 verbose     = false;
 
   private:
-    int   context_size_default = -1, ngl_default = -1;
+    int   context_size_default = -1, ngl_default = -1, n_threads_default = -1;
     float temperature_default = -1;
     bool  help                = false;
 
@@ -159,53 +161,94 @@ class Opt {
         return 0;
     }
 
+    int parse_options_with_value(int argc, const char ** argv, int & i, bool & options_parsing) {
+        if (options_parsing && (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--context-size") == 0)) {
+            if (handle_option_with_value(argc, argv, i, context_size) == 1) {
+                return 1;
+            }
+        } else if (options_parsing &&
+                   (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "-ngl") == 0 || strcmp(argv[i], "--ngl") == 0)) {
+            if (handle_option_with_value(argc, argv, i, ngl) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0)) {
+            if (handle_option_with_value(argc, argv, i, n_threads) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && strcmp(argv[i], "--temp") == 0) {
+            if (handle_option_with_value(argc, argv, i, temperature) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && strcmp(argv[i], "--chat-template-file") == 0) {
+            if (handle_option_with_value(argc, argv, i, chat_template_file) == 1) {
+                return 1;
+            }
+            use_jinja = true;
+        } else {
+            return 2;
+        }
+
+        return 0;
+    }
+
+    int parse_options(const char ** argv, int & i, bool & options_parsing) {
+        if (options_parsing && (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
+            verbose = true;
+        } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
+            use_jinja = true;
+        } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
+            help = true;
+            return 0;
+        } else if (options_parsing && strcmp(argv[i], "--") == 0) {
+            options_parsing = false;
+        } else {
+            return 2;
+        }
+
+        return 0;
+    }
+
+    int parse_positional_args(const char ** argv, int & i, int & positional_args_i) {
+        if (positional_args_i == 0) {
+            if (!argv[i][0] || argv[i][0] == '-') {
+                return 1;
+            }
+
+            ++positional_args_i;
+            model_ = argv[i];
+        } else if (positional_args_i == 1) {
+            ++positional_args_i;
+            user = argv[i];
+        } else {
+            user += " " + std::string(argv[i]);
+        }
+
+        return 0;
+    }
+
     int parse(int argc, const char ** argv) {
         bool options_parsing   = true;
         for (int i = 1, positional_args_i = 0; i < argc; ++i) {
-            if (options_parsing && (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--context-size") == 0)) {
-                if (handle_option_with_value(argc, argv, i, context_size) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing &&
-                       (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "-ngl") == 0 || strcmp(argv[i], "--ngl") == 0)) {
-                if (handle_option_with_value(argc, argv, i, ngl) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing && strcmp(argv[i], "--temp") == 0) {
-                if (handle_option_with_value(argc, argv, i, temperature) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing &&
-                       (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
-                verbose = true;
-            } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
-                use_jinja = true;
-            } else if (options_parsing && strcmp(argv[i], "--chat-template-file") == 0){
-                if (handle_option_with_value(argc, argv, i, chat_template_file) == 1) {
-                    return 1;
-                }
-                use_jinja = true;
-            } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
-                help = true;
-                return 0;
-            } else if (options_parsing && strcmp(argv[i], "--") == 0) {
-                options_parsing = false;
-            } else if (positional_args_i == 0) {
-                if (!argv[i][0] || argv[i][0] == '-') {
-                    return 1;
-                }
+            int ret = parse_options_with_value(argc, argv, i, options_parsing);
+            if (ret == 0) {
+                continue;
+            } else if (ret == 1) {
+                return ret;
+            }
 
-                ++positional_args_i;
-                model_ = argv[i];
-            } else if (positional_args_i == 1) {
-                ++positional_args_i;
-                user = argv[i];
-            } else {
-                user += " " + std::string(argv[i]);
+            ret = parse_options(argv, i, options_parsing);
+            if (ret == 0) {
+                continue;
+            } else if (ret == 1) {
+                return ret;
+            }
+
+            if (parse_positional_args(argv, i, positional_args_i)) {
+                return 1;
             }
         }
 
-        if (model_.empty()){
+        if (model_.empty()) {
             return 1;
         }
 
@@ -232,6 +275,8 @@ class Opt {
             "      Number of GPU layers (default: %d)\n"
             "  --temp <value>\n"
             "      Temperature (default: %.1f)\n"
+            "  -t, --threads <value>\n"
+            "      Number of threads to use during generation (default: %d)\n"
             "  -v, --verbose, --log-verbose\n"
             "      Set verbosity level to infinity (i.e. log all messages, useful for debugging)\n"
             "  -h, --help\n"
@@ -260,7 +305,7 @@ class Opt {
             "  llama-run file://some-file3.gguf\n"
             "  llama-run --ngl 999 some-file4.gguf\n"
             "  llama-run --ngl 999 some-file5.gguf Hello World\n",
-            context_size_default, ngl_default, temperature_default);
+            context_size_default, ngl_default, temperature_default, n_threads_default);
     }
 };
 

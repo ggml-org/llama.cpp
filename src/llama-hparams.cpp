@@ -70,7 +70,7 @@ uint32_t llama_hparams::n_embd_v_s() const {
     return ssm_d_state * ssm_d_inner;
 }
 
-bool llama_hparams::is_sliding(uint32_t il) const {
+bool llama_hparams::is_swa(uint32_t il) const {
     if (il < n_layer) {
         return n_swa > 0 && n_swa_pattern > 0 && il % n_swa_pattern < (n_swa_pattern - 1);
     }
