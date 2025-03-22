@@ -1911,6 +1911,21 @@ inline static void ggml_vec_leaky_relu_f16 (const int n, ggml_fp16_t * y, const 
         y[i] = GGML_FP32_TO_FP16(((v > 0.f) ? v : 0.f) + ns * ((v < 0.0f) ? v : 0.f));
     }
 }
+inline static void ggml_vec_snake_f32(const int n, float * y, const float * x, const float a) {
+    for (int i = 0; i < n; ++i) {
+        float x_val = x[i];
+        float sin_val = sinf(a * x_val);
+        y[i] = x_val + sin_val * sin_val;
+    }
+}
+inline static void ggml_vec_snake_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t a) {
+    for (int i = 0; i < n; ++i) {
+        float x_val = GGML_FP16_TO_FP32(x[i]); // TODO: double check this conversion
+        float a_val = GGML_FP16_TO_FP32(a);
+        float sin_val = sinf(a_val * x_val);
+        y[i] = GGML_FP32_TO_FP16(x_val + sin_val * sin_val);
+    }
+}
 inline static void ggml_vec_sigmoid_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = 1.f / (1.f + expf(-x[i])); }
 inline static void ggml_vec_sigmoid_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
@@ -7809,6 +7824,86 @@ static void ggml_compute_forward_leaky_relu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_leaky_relu_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
+// ggml_compute_forward_snake
+
+static void ggml_compute_forward_snake_f32(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    // Scaffold code, 1 thread for now
+    // TODO: add multithreading
+    if (params->ith != 0) {
+        return;
+    }
+
+    struct ggml_tensor * alpha = *(struct ggml_tensor **)(dst->op_params);
+    const float * x = (const float *)src0->data;
+    const float * a = (const float *)alpha->data;
+    float * y = (float *)dst->data;
+
+    const int n = ggml_nrows(src0);
+    const int nc = src0->ne[0];
+    const int channels = src0->ne[1];
+
+    for (int i = 0; i < n; i++) {
+        int c = i % channels;
+        ggml_vec_snake_f32(nc,
+                (float *) ((char *) y + i * dst->nb[1]),
+                (const float *) ((const char *) x + i * src0->nb[1]),
+                a[c]); // alpha tensor for this channel
+    }
+}
+
+static void ggml_compute_forward_snake_f16(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    if (params->ith != 0) {
+        return;
+    }
+
+    struct ggml_tensor * alpha = *(struct ggml_tensor **)(dst->op_params);
+    const ggml_fp16_t * x = (const ggml_fp16_t *)src0->data;
+    const ggml_fp16_t * a = (const ggml_fp16_t *)alpha->data;
+    ggml_fp16_t * y = (ggml_fp16_t *)dst->data;
+
+    const int n = ggml_nrows(src0);
+    const int nc = src0->ne[0];
+    const int channels = src0->ne[1];
+
+    for (int i = 0; i < n; i++) {
+        int c = i % channels;
+        ggml_vec_snake_f16(nc,
+                (ggml_fp16_t *) ((char *) y + i * dst->nb[1]),
+                (const ggml_fp16_t *) ((const char *) x + i * src0->nb[1]),
+                a[c]);
+    }
+}
+
+static void ggml_compute_forward_snake(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+
+    const struct ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_snake_f32(params, dst);
+            } break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_snake_f16(params, dst);
             } break;
         default:
             {
@@ -14554,6 +14649,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_LEAKY_RELU:
             {
                 ggml_compute_forward_leaky_relu(params, tensor);
+            } break;
+        case GGML_OP_SNAKE:
+            {
+                ggml_compute_forward_snake(params, tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {

@@ -2329,7 +2329,7 @@ class WavTokenizerDecModel(Model):
 
 @Model.register("SNACDec")
 class SNACDecModel(Model):
-    model_arch = gguf.MODEL_ARCH.SNAC_DEC  # Assumes this constant is defined in gguf
+    model_arch = gguf.MODEL_ARCH.SNAC_DEC
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, Tensor]]:
         del bid  # unused
@@ -2357,7 +2357,6 @@ class SNACDecModel(Model):
         self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])
         self.gguf_writer.add_decoder_upsample_rates(self.hparams["decoder_rates"])
         self.gguf_writer.add_decoder_channel_dims(self.hparams["decoder_channel_dims"])
-        self.gguf_writer.add_convnext_block_count(1)
 
 @Model.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(Model):
