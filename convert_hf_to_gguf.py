@@ -2289,6 +2289,11 @@ class Qwen2VLModel(Model):
             yield name, data
 
 
+@Model.register("Qwen2_5_VLForConditionalGeneration")
+class Qwen25VLModel(Qwen2VLModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2VL
+
+
 @Model.register("WavTokenizerDec")
 class WavTokenizerDecModel(Model):
     model_arch = gguf.MODEL_ARCH.WAVTOKENIZER_DEC
