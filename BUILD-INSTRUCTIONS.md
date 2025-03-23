@@ -60,7 +60,68 @@ ls -al
 unzip -l llama-server
 ```
 
+---
+### Package llama-server-one Executable
 
+Here are some raw notes that need to be organized.
+```
+LLAMA_CPP_DIR="llama.cpp"
+LLAMA_SERVER_ONE_DIR="llama-server-one"
 
+LLAMA_SERVER="llama-server"
+LLAMA_SERVER_ONE="llama-server-one"
+LLAMA_SERVER_ONE_ZIP="llama-server-one.zip"
+LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
+
+cd ~
+mkdir -p $LLAMA_SERVER_ONE_DIR
+rm -r ~/$LLAMA_SERVER_ONE_DIR/*
+cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
+
+cd ~/$LLAMA_SERVER_ONE_DIR
+
+# delete the /usr directory with all the timezone crap.
+zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
+
+# archive contents after delete /usr/*.
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+
+# add the completion tool to website
+mkdir -p website
+cp -r /mnt/hyperv/web-apps/completion-tool/* website
+rm website/*.txt
+rm website/images/*.psd
+
+ls -al --recursive website
+
+zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
+
+# archive contents after adding website
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+
+cat << EOF > $LLAMA_SERVER_ONE_ARGS
+-m
+model.gguf
+--host
+127.0.0.1
+--port
+8080
+--ctx-size
+8192
+--path
+/zip/website
+...
+EOF
+
+zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
+
+# archive contents after adding args
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+
+mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
+cp /mnt/hyperv/models/Google-Gemma-1B-Instruct-v3-q8_0.gguf ~/$LLAMA_SERVER_ONE_DIR/model.gguf
+
+$LLAMA_SERVER_ONE
+```
 
 
