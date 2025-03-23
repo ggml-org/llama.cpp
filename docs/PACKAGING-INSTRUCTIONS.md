@@ -70,7 +70,7 @@ A `llama-server-one-args` file in the archive can specify sane default parameter
 
 We don't yet support including the model inside the zip archive (yet). That has a size limitation on Windows anyway. So let's use an adjacent file called `model.gguf`.
 
-We will server on localhost, port 8080 by default for safety. We'll include the optional website we defined above. If you didn't include a custom UI, omit the `--path` and `/zip/website` lines.
+We will serve on localhost, port 8080 by default for safety. We'll include the optional website we defined above. If you didn't include a custom UI, omit the `--path` and `/zip/website` lines.
 
 ```
 cat << EOF > $LLAMA_SERVER_ONE_ARGS
@@ -95,19 +95,24 @@ Verify that the archive contains the `llama-server-one-args` file:
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 ```
 
+Let's download a small model to test with. We'll use Apple OpenELM 1.1B.
+```
+curl https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/Apple-OpenELM-1.1B-Instruct-q8_0.gguf?download=true -o model.gguf
+```
+
+Now we can test run `llama-server-one`, listening on localhost:8080.
+```
+./$LLAMA_SERVER_ONE
+```
+
+Hit `ctrl-C` to stop it.
+
+If you'd like it to listen on all available interfaces, so you can connect from a browser on another computer:
+```
+./$LLAMA_SERVER_ONE --host 0.0.0.0
+```
 
 
 Here are some more raw notes that need to be organized.
 ```
-
-# Link to download: https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/Apple-OpenELM-1.1B-Instruct-q8_0.gguf?download=true
-
-mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
-# maybe get the model from my HF repo?
-# Do I need to be logged in to HF?
-cp /mnt/hyperv/models/Google-Gemma-1B-Instruct-v3-q8_0.gguf \
-    ~/$LLAMA_SERVER_ONE_DIR/model.gguf
-
-# Test launch. It should load the model and listen.
-./$LLAMA_SERVER_ONE
-```
+---
