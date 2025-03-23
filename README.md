@@ -16,7 +16,7 @@ The goal of this project is to build a single `llama-server-one executable` file
 - ARM Linux
 - ARM MacOS
 
-I am inspired by the llamafile project. The main drawback of that project is that it doesn't keep up-to-date with llama.cpp and therefore, does not always support the latest models when llama.cpp supports them. Support for new models in llamafile takes work and time.
+I am inspired by the [llamafile project](https://github.com/Mozilla-Ocho/llamafile). The main drawback of that project is that it has not kept up-to-date with llama.cpp and therefore, does not always support the latest models when llama.cpp supports them. Support for new models in llamafile takes work and time.
 
 I want to use the MIT license as used by llama.cpp.
 
