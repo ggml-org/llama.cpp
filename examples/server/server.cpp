@@ -3421,18 +3421,33 @@ inline void signal_handler(int signal) {
 }
 
 int main(int argc, char ** argv) {
-    // This implements the args file feature.
+    // This implements an args file feature inspired by llamafile's.
     #ifdef COSMOCC
-    // args file if present
+    // Args files if present. 
     const std::string& argsFilename = "llama-server-one-args";
     const std::string& zipArgsFilename = "/zip/llama-server-one-args";
-    struct stat buffer;   
+    struct stat buffer;
+
+    // At this point, argc, argv represent:
+    //     command (User supplied args)
+    
     if (stat (argsFilename.c_str(), &buffer) == 0) {
         argc = cosmo_args(argsFilename.c_str(), &argv);
     }
-    else if (stat (zipArgsFilename.c_str(), &buffer) == 0) {
+    
+    // At this point, argc, argv represent:
+    //     command (argsFilename args) (User supplied args)
+
+    if (stat (zipArgsFilename.c_str(), &buffer) == 0) {
         argc = cosmo_args(zipArgsFilename.c_str(), &argv);
     }
+
+    // At this point, argc, argv represent:
+    //     command (zipArgsFilename args) (argsFilename args) (User supplied args)
+    
+    // Yep, this is counterintuitive, but how the cosmo_args command works.
+    // argsFilename args override zipArgsFilename file args.
+    // User supplied args override argsFilename and zipArgsFilename args.
     #endif
     
     // own arguments required by this example
