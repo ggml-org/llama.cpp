@@ -103,14 +103,9 @@ Verify that the archive contains the `llama-server-one-args` file:
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 ```
 
-Rename the `llama-server-one-args` file so it doesn't get read during our test:
-```
-mv $LLAMA_SERVER_ONE_ARGS
-```
-
 Remove the `.zip` from our working file:
 ```
-mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE-inactive
+mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
 ```
 
 Let's download a small model to test with. We'll use Apple OpenELM 1.1B.
