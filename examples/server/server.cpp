@@ -3346,13 +3346,48 @@ struct server_context {
     }
 
     json model_meta() const {
+        char general_architecture[64];
+        char general_type[64];
+        char general_name[64];
+        char general_version[64];
+        char general_finetune[64];
+        char general_basename[64];
+        char general_size_label[64];
+        char general_license[64];
+
+        general_architecture[0] = 0;
+        general_type[0] = 0;
+        general_name[0] = 0;
+        general_version[0] = 0;
+        general_finetune[0] = 0;
+        general_basename[0] = 0;
+        general_size_label[0] = 0;
+        general_license[0] = 0;
+
+        llama_model_meta_val_str(model, "general.architecture", general_architecture, 64);
+        llama_model_meta_val_str(model, "general.type", general_type, 64);
+        llama_model_meta_val_str(model, "general.name", general_name, 64);
+        llama_model_meta_val_str(model, "general.version",      general_version, 64);
+        llama_model_meta_val_str(model, "general.finetune",     general_finetune, 64);
+        llama_model_meta_val_str(model, "general.basename",     general_basename, 64);
+        llama_model_meta_val_str(model, "general.size_label",   general_size_label, 64);
+        llama_model_meta_val_str(model, "general.license",      general_license, 64);
+
         return json {
-            {"vocab_type",  llama_vocab_type       (vocab)},
-            {"n_vocab",     llama_vocab_n_tokens   (vocab)},
-            {"n_ctx_train", llama_model_n_ctx_train(model)},
-            {"n_embd",      llama_model_n_embd     (model)},
-            {"n_params",    llama_model_n_params   (model)},
-            {"size",        llama_model_size       (model)},
+            {"vocab_type",  llama_vocab_type            (vocab)},
+            {"n_vocab",     llama_vocab_n_tokens        (vocab)},
+            {"n_ctx_train", llama_n_ctx_train           (model)},
+            {"n_embd",      llama_n_embd                (model)},
+            {"n_params",    llama_model_n_params        (model)},
+            {"size",        llama_model_size            (model)},
+            {"general.architecture", general_architecture },
+            {"general.type", general_type },
+            {"general.name", general_name },
+            {"general.version", general_version },
+            {"general.finetune", general_finetune },
+            {"general.basename", general_basename },
+            {"general.size_label", general_size_label },
+            {"general.license", general_license },
         };
     }
 };
