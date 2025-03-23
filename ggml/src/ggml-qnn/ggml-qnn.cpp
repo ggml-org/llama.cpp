@@ -122,7 +122,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
-#include "kernels/ggmlop.h"
+#include "kernels/ggmlop_ap_skel.h"
 
 // =================================================================================================
 //  section-1: forward/prototype declaration, global vars, macros, data structures
@@ -132,7 +132,7 @@ struct qnn_parameter;
 struct ggml_backend_qnn_context;
 
 typedef void (* ggmlqnn_op_func_t)(ggml_backend_qnn_context * ctx, ggml_tensor * op);
-typedef int  (* notif_callback_fn)(void * context, int domain, int session, remote_rpc_status_flags_t status);
+typedef int  (* notify_callback_fn)(void * context, int domain, int session, remote_rpc_status_flags_t status);
 typedef int  (* ggmlhexagon_op_func_t)(remote_handle64 handle, const dsptensor * src0, const dsptensor * src1, dsptensor * dst);
 
 static void *           ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
@@ -288,10 +288,15 @@ using qnn_cgraph_node_t                         = std::tuple<std::string, qnn_te
 using qnn_cgraph_nodes_t                        = std::vector<qnn_cgraph_node_t>;
 using qnn_multinode_res_t                       = std::tuple<Qnn_GraphHandle_t, qnn_cgraph_nodes_t, qnn_ptensors_t, qnn_tensors_t, qnn_tensors_t>;
 
+enum qnn_index_type {
+    QNN_TENSOR_INDEX = 0,
+    QNN_OPCFG_INDEX  = 1,
+};
+
 enum qnn_profile_level {
     PROFILE_OFF     = 0,
     PROFILE_BASIC   = 1,
-    PROFILE_DETAIL  = 2
+    PROFILE_DETAIL  = 2,
 };
 
 //0: general approach through QNN
@@ -861,63 +866,34 @@ static const char * dlerror(void) {
 // =================================================================================================
 //  section-4: general helper function
 // =================================================================================================
-//TODO: merge the following 6 helper functions which used to ensure every QNN tensor/opcfg name is unique
-static void ggmlqnn_reset_tensoridx() {
+//ensure every QNN tensor/opcfg name is unique
+static void ggmlqnn_reset_idx() {
     g_qnntensor_idx = 0;
-}
-
-static void ggmlqnn_inc_tensoridx() {
-    g_qnntensor_idx++;
-}
-
-static int32_t ggmlqnn_get_tensoridx() {
-    return g_qnntensor_idx;
-}
-
-static void ggmlqnn_reset_opcfgidx() {
     g_qnnopcfg_idx = 0;
 }
 
-static void ggmlqnn_inc_opcfgidx() {
-    g_qnnopcfg_idx++;
+static void ggmlqnn_inc_idx(int idx_type) {
+    switch (idx_type) {
+        case QNN_TENSOR_INDEX:
+            g_qnntensor_idx++;
+            break;
+        case QNN_OPCFG_INDEX:
+            g_qnnopcfg_idx++;
+            break;
+        default:
+            break;
+    }
 }
 
-static int32_t ggmlqnn_get_opcfgidx() {
-    return g_qnnopcfg_idx;
-}
-
-static void * ggmlqnn_mallocz_aligned(size_t size, size_t alignment) {
-    uint8_t * buffer    = NULL;
-    size_t * sp         = NULL;
-    buffer = static_cast<uint8_t *>(calloc(1, size + GGMLQNN_MEM_ADD(alignment)));
-    if (!buffer)
-        return NULL;
-    sp = (size_t *)buffer;
-    *sp = size;
-    buffer = (uint8_t *)(((uintptr_t) buffer + GGMLQNN_MEM_ADD(alignment)) & ~GGMLQNN_MEM_MASK(alignment));
-    buffer[-1] = buffer - (uint8_t *)sp;
-    return buffer;
-}
-
-static void * ggmlqnn_malloc_aligned(size_t size, size_t alignment) {
-    uint8_t * buffer = NULL;
-    size_t * sp = NULL;
-    buffer = static_cast<uint8_t *>(malloc(size + GGMLQNN_MEM_ADD(alignment)));
-    if (!buffer)
-        return NULL;
-    sp = (size_t *)buffer;
-    *sp = size;
-    buffer = (uint8_t *)(((uintptr_t) buffer + GGMLQNN_MEM_ADD(alignment)) & ~GGMLQNN_MEM_MASK(alignment));
-    buffer[-1] = buffer - (uint8_t *)sp;
-    return buffer;
-}
-
-static void ggmqnn_free_aligned(void * ptr) {
-    uint8_t * old = (uint8_t *)ptr;
-    if (!old)
-        return;
-    old -= old[-1];
-    free(old);
+static int32_t ggmlqnn_get_idx(int idx_type) {
+    switch (idx_type) {
+        case QNN_TENSOR_INDEX:
+            return g_qnntensor_idx;
+        case QNN_OPCFG_INDEX:
+            return g_qnnopcfg_idx;
+        default:
+            break;
+    }
 }
 
 static intptr_t ggmlqnn_align_to(size_t alignment, intptr_t offset) {
@@ -994,25 +970,6 @@ static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
 #endif
 }
 
-static void * ggmlqnn_host_malloc(size_t buffer_size, size_t page_size) {
-    void * data = nullptr;
-#if defined(__ANDROID__) || defined(__linux__)
-    int result = posix_memalign((void **)&data, page_size, buffer_size);
-    if (result != 0) {
-        GGMLQNN_LOG_WARN("%s: error: posix_memalign failed\n", __func__);
-        return nullptr;
-    }
-#else
-    //GGMLQNN_LOG_DEBUG("buffer_size %d, page_size %d\n", buffer_size, page_size);
-    data = ggmlqnn_malloc_aligned(buffer_size, page_size);
-    if (nullptr == data) {
-        GGMLQNN_LOG_WARN("%s: error: host_malloc failed\n", __func__);
-    }
-#endif
-
-    return data;
-}
-
 static void ggmlqnn_get_timestring(char * p_currenttime) {
     time_t n_seconds    = 0;
     struct tm * p_tm    = nullptr;
@@ -1025,6 +982,37 @@ static void ggmlqnn_get_timestring(char * p_currenttime) {
     snprintf(p_currenttime, GGML_QNN_TMPBUF_LEN, "%04d-%02d-%02d-%02d-%02d-%02d",
              p_tm->tm_year + 1900, p_tm->tm_mon + 1, p_tm->tm_mday,
              p_tm->tm_hour, p_tm->tm_min, p_tm->tm_sec);
+}
+
+//fix some tricky memory issue
+typedef int (*pfn_mallopt)(int, int);
+typedef int (*pfn_android_mallopt)(int, void *, size_t);
+static void ggmlqnn_disable_android_tags(int disable) {
+    if (0 == disable)
+        return;
+
+    void * lib_handle = dlopen("libc.so", RTLD_LAZY);
+    if (nullptr != lib_handle) {
+        int api_level = android_get_device_api_level();
+        GGMLQNN_LOG_INFO("device_api_level=%d", api_level);
+        if (api_level >= 31) { //ANDROID 12
+            pfn_mallopt mallopt = reinterpret_cast<pfn_mallopt>(dlsym(lib_handle, "mallopt"));
+            if (mallopt) {
+                mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
+            }
+            return;
+        } else if (api_level >= 30) { //ANDROID 11
+            /* android_get_device_api_level() < 31 */
+            pfn_android_mallopt android_mallopt = reinterpret_cast<pfn_android_mallopt>(dlsym(
+                    lib_handle, "android_mallopt"));
+            if (android_mallopt) {
+                int android_malloc_tag_level = 0;
+                int tmp = 0;
+                android_mallopt(8, &tmp, sizeof(tmp));
+            }
+        }
+        dlclose(lib_handle);
+    }
 }
 
 // =================================================================================================
@@ -1359,12 +1347,12 @@ static Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * p
 
     //ensure the opcfg name is unique
     if (nullptr == name) {
-        snprintf(opcfg_name, GGML_MAX_NAME, "opcfg_%-8d", ggmlqnn_get_opcfgidx());
+        snprintf(opcfg_name, GGML_MAX_NAME, "opcfg_%-8d", ggmlqnn_get_idx(QNN_OPCFG_INDEX));
     } else {
-        snprintf(opcfg_name, GGML_MAX_NAME, "opcfg_%s_%-8d", name, ggmlqnn_get_opcfgidx());
+        snprintf(opcfg_name, GGML_MAX_NAME, "opcfg_%s_%-8d", name, ggmlqnn_get_idx(QNN_OPCFG_INDEX));
     }
     GGMLQNN_LOG_DEBUG("create qnn opconfig %s", opcfg_name);
-    ggmlqnn_inc_opcfgidx();
+    ggmlqnn_inc_idx(QNN_OPCFG_INDEX);
 
     Qnn_OpConfigV1_t v1 = {opcfg_name, package, type,
                            num_params, params,
@@ -1860,7 +1848,7 @@ bail:
     return hexagon_error;
 }
 
-static int ggmlhexagon_request_status_notifications(int domain_id, void * context, notif_callback_fn call_back_fn) {
+static int ggmlhexagon_request_status_notifications(int domain_id, void * context, notify_callback_fn call_back_fn) {
     int hexagon_error = AEE_SUCCESS;
     struct remote_rpc_notif_register notif;
     bool status_notification_support;
@@ -2019,17 +2007,8 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
             goto bail;
         }
         uri = my_domain->uri;
-    } else {
-        domain_info = &domains_info[domain_id];
-        uri = (char *)malloc(MAX_DOMAIN_NAMELEN);
-        if (nullptr == uri) {
-            hexagon_error = AEE_ENOMEMORY;
-            GGMLQNN_LOG_DEBUG("unable to allocated memory for uri of size: %d", MAX_DOMAIN_NAMELEN);
-            goto bail;
-        }
-        snprintf(uri, MAX_DOMAIN_NAMELEN, "%s%s", "&_dom=", domain_info->name);
     }
-    GGMLQNN_LOG_INFO("\ndomain uri=%s\n", uri);
+    GGMLQNN_LOG_INFO("domain uri=%s\n", uri);
 
     if (1 == unsignedpd_flag) {
         is_unsignedpd_enabled = ggmlhexagon_is_unsignedpd_supported(domain_id);
@@ -2078,7 +2057,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
         ggmlhexagon_set_clocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
         ggmlhexagon_set_rpc_latency(domain_id, RPC_POLL_QOS, 1000);
     } else {
-        GGMLQNN_LOG_WARN("error 0x%x: failed to compute on domain %d(%s)", hexagon_error, domain_id,
+        GGMLQNN_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
                          ggmlhexagon_get_dsp_name(domain_id));
         goto bail;
     }
@@ -2087,10 +2066,6 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
 bail:
     if (ggmlop_domain_uri) {
         free(ggmlop_domain_uri);
-    }
-
-    if (uri) {
-        free(uri);
     }
 
     if (ctx->rpc_mempool) {
@@ -2153,27 +2128,54 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
     }
 
     if ((GGML_OP_MUL_MAT == op->op) && (src0_type != GGML_TYPE_F32)) {
-        dsptensor_0.data = static_cast<float *>(wdata);
-        dsptensor_0.dataLen = ctx->desired_size;
+        dsptensor_0.data = wdata;
+        dsptensor_0.data_len = ctx->desired_size;
     } else {
-        dsptensor_0.data = static_cast<float *>(src0->data);
-        dsptensor_0.dataLen = ggml_nbytes(src0);
+        dsptensor_0.data = src0->data;
+        dsptensor_0.data_len= ggml_nbytes(src0);
     }
-    dsptensor_1.data = static_cast<float *>(src1->data);
-    dsptensor_2.data = static_cast<float *>(dst->data);
-    dsptensor_0.type = GGML_TYPE_F32;
-    dsptensor_1.type = GGML_TYPE_F32;
-    dsptensor_2.type = GGML_TYPE_F32;
+
+    dsptensor_1.data = src1->data;
+    dsptensor_2.data = dst->data;
+
     dsptensor_0.ne[0] = src0->ne[0];
     dsptensor_0.ne[1] = src0->ne[1];
     dsptensor_0.ne[2] = src0->ne[2];
     dsptensor_0.ne[3] = src0->ne[3];
+
     dsptensor_0.nb[0] = src0->nb[0];
     dsptensor_0.nb[1] = src0->nb[1];
     dsptensor_0.nb[2] = src0->nb[2];
     dsptensor_0.nb[3] = src0->nb[3];
-    dsptensor_1.dataLen = ggml_nbytes(src1);
-    dsptensor_2.dataLen = ggml_nbytes(dst);
+
+    dsptensor_1.ne[0] = src1->ne[0];
+    dsptensor_1.ne[1] = src1->ne[1];
+    dsptensor_1.ne[2] = src1->ne[2];
+    dsptensor_1.ne[3] = src1->ne[3];
+
+    dsptensor_1.nb[0] = src1->nb[0];
+    dsptensor_1.nb[1] = src1->nb[1];
+    dsptensor_1.nb[2] = src1->nb[2];
+    dsptensor_1.nb[3] = src1->nb[3];
+
+    dsptensor_2.ne[0] = dst->ne[0];
+    dsptensor_2.ne[1] = dst->ne[1];
+    dsptensor_2.ne[2] = dst->ne[2];
+    dsptensor_2.ne[3] = dst->ne[3];
+
+    dsptensor_2.nb[0] = dst->nb[0];
+    dsptensor_2.nb[1] = dst->nb[1];
+    dsptensor_2.nb[2] = dst->nb[2];
+    dsptensor_2.nb[3] = dst->nb[3];
+
+    dsptensor_0.data_len = ggml_nbytes(src0);
+    dsptensor_1.data_len = ggml_nbytes(src1);
+    dsptensor_2.data_len = ggml_nbytes(dst);
+
+    dsptensor_0.type = src0->type;
+    dsptensor_1.type = src1->type;
+    dsptensor_2.type = dst->type;
+
     hexagon_error = op_func(ctx->ggmlop_handle, &dsptensor_0, &dsptensor_1, &dsptensor_2);
     if (AEE_SUCCESS != hexagon_error) {
         GGMLQNN_LOG_WARN("ggmlop computation fail on cdsp");
@@ -3667,8 +3669,7 @@ int qnn_instance::qnn_finalize() {
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
 
     GGMLQNN_LOG_DEBUG("enter %s\n", __func__);
-    ggmlqnn_reset_tensoridx();
-    ggmlqnn_reset_opcfgidx();
+    ggmlqnn_reset_idx();
 
     free_rpcmem();
     unregister_rpcmem();
@@ -4192,6 +4193,8 @@ static void ggmlqnn_load_cfg() {
     memset(time_string, 0, GGML_QNN_TMPBUF_LEN);
     ggmlqnn_get_timestring(time_string);
     GGMLQNN_LOG_DEBUG("program running start time:%s", time_string);
+    ggmlqnn_disable_android_tags(1);
+
     std::string cfg_filename = std::string(g_qnn_params.qnn_runtimelib_path) + std::string(g_qnn_params.qnn_cfgfilename);
     GGMLQNN_LOG_INFO("load ggml-qnn config from %s", cfg_filename.c_str());
     qnn_cfg qnncfg_instance;
@@ -4238,12 +4241,12 @@ static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn
 
     //ensure the tensor name is unique
     if (nullptr == name) {
-        snprintf(tensor_name, GGML_MAX_NAME, "tensor_%-8d", ggmlqnn_get_tensoridx());
+        snprintf(tensor_name, GGML_MAX_NAME, "tensor_%-8d", ggmlqnn_get_idx(QNN_TENSOR_INDEX));
     } else {
-        snprintf(tensor_name, GGML_MAX_NAME, "tensor_%s%-8d", name, ggmlqnn_get_tensoridx());
+        snprintf(tensor_name, GGML_MAX_NAME, "tensor_%s%-8d", name, ggmlqnn_get_idx(QNN_TENSOR_INDEX));
     }
     GGMLQNN_LOG_DEBUG("init_tensor %s", tensor_name);
-    ggmlqnn_inc_tensoridx();
+    ggmlqnn_inc_idx(QNN_TENSOR_INDEX);
 
     uint32_t reverse_dims[GGML_MAX_DIMS]    = {};
     uint32_t transpose_dims[GGML_MAX_DIMS]  = {};
@@ -4362,9 +4365,37 @@ static bool ggmlqnn_same_types(const ggml_backend_qnn_context * ctx, const ggml_
             return false;
         }
     }
+
     if (src0->type != GGML_TYPE_F32)
         return false;
+
     return true;
+}
+
+static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
+    struct ggml_tensor * src0 = op_tensor->src[0];
+    struct ggml_tensor * src1 = op_tensor->src[1];
+
+    const int64_t ne00  = op_tensor->src[0]->ne[0];
+    uint32_t src0_rank  = ggml_n_dims(src0);
+    uint32_t src1_rank  = 0;
+    if (nullptr != src1) {
+        src1_rank = ggml_n_dims(src1);
+    }
+
+    //FIXME: mulmat on cDSP doesn't work as expected
+    if (op_tensor->op != GGML_OP_ADD)
+        return false;
+
+    //ggmlqnn_dump_op_info(op_tensor);
+    if (!ggml_are_same_shape(src0, src1)) {
+        return false;
+    }
+
+    if (ne00 < 32)
+        return false;
+
+    return ggmlqnn_same_types(ctx, op_tensor);
 }
 
 static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
@@ -4373,9 +4404,7 @@ static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const st
     }
 
     if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
-        //FIXME: mulmat on cDSP doesn't work as expected
-        if (op_tensor->op != GGML_OP_ADD)
-            return false;
+        return ggmlhexagon_can_handle_op(ctx, op_tensor);
     }
 
     if (!ggmlqnn_k_op_caps[ggmlqnn_get_op_index(op_tensor)].supported) {
@@ -4384,25 +4413,17 @@ static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const st
 
     struct ggml_tensor * src0 = op_tensor->src[0];
     struct ggml_tensor * src1 = op_tensor->src[1];
-
     const int64_t ne00  = op_tensor->src[0]->ne[0];
-    const int64_t ne01  = op_tensor->src[0]->ne[1];
-    const int64_t ne0   = op_tensor->ne[0];
-    const int64_t ne1   = op_tensor->ne[1];
-
     uint32_t src0_rank  = ggml_n_dims(src0);
     uint32_t src1_rank  = 0;
     if (nullptr != src1) {
         src1_rank = ggml_n_dims(src1);
     }
-    GGML_UNUSED(ne01);
-    GGML_UNUSED(ne0);
-    GGML_UNUSED(ne1);
+
     switch (op_tensor->op) {
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         {
-            //ggmlqnn_dump_op_info(op_tensor);
             if (!ggml_are_same_shape(src0, src1)) {
                 return false;
             }
@@ -4415,7 +4436,6 @@ static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const st
 
         case GGML_OP_DIV:
         case GGML_OP_MUL: {
-            //ggmlqnn_dump_op_info(op_tensor);
             if (ctx->device == QNN_BACKEND_NPU)
                 return false;
 
@@ -4597,7 +4617,7 @@ static bool ggmlqnn_compute_forward(ggml_backend_t backend, struct ggml_tensor *
 struct ggml_backend_qnn_buffer_context {
     ~ggml_backend_qnn_buffer_context() {
         if (buffer) {
-            free(buffer);
+            ggml_aligned_free(buffer, 0);
         }
 
         for (auto * sub_buffer : sub_buffers) {
@@ -4709,7 +4729,7 @@ static ggml_backend_buffer_t ggml_backend_qnn_buffer_type_alloc_buffer(
     if ((size_aligned % size_page) != 0) {
         size_aligned += (size_page - (size_aligned % size_page));
     }
-    ctx->buffer         = ggmlqnn_host_malloc(size_aligned, size_page);
+    ctx->buffer         = ggml_aligned_malloc(size_aligned);
     ctx->buffer_size    = size_aligned;
     if (nullptr == ctx->buffer) {
         GGMLQNN_LOG_WARN("%s: failed to allocate %d MiB\n", __func__, size / (1 << 20));
