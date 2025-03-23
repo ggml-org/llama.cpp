@@ -70,8 +70,22 @@ A `llama-server-one-args` file in the archive can specify sane default parameter
 
 We don't yet support including the model inside the zip archive (yet). That has a size limitation on Windows anyway. So let's use an adjacent file called `model.gguf`.
 
-We will serve on localhost, port 8080 by default for safety. We'll include the optional website we defined above. If you didn't include a custom UI, omit the `--path` and `/zip/website` lines.
+We will serve on localhost, port 8080 by default for safety. The `--ctx-size` parameter is the size of the context window. This is kinda screwy to have as a set size rather than a maximum because the `.gguf` files now have the training context size in metadata. We set it to 8192 to be sensible.
+```
+cat << EOF > $LLAMA_SERVER_ONE_ARGS
+-m
+model.gguf
+--host
+127.0.0.1
+--port
+8080
+--ctx-size
+8192
+...
+EOF
+```
 
+**Optional:** If you added a website to the archive, use this instead:
 ```
 cat << EOF > $LLAMA_SERVER_ONE_ARGS
 -m
@@ -86,13 +100,26 @@ model.gguf
 /zip/website
 ...
 EOF
+```
 
+Add the `llama-server-one-args` file to the archoive:
+```
 zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
 ```
 
 Verify that the archive contains the `llama-server-one-args` file:
 ```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
+```
+
+Rename the `llama-server-one-args` file so it doesn't get read during our test:
+```
+mv $LLAMA_SERVER_ONE_ARGS
+```
+
+Remove the `.zip` from our working file:
+```
+mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE-inactive
 ```
 
 Let's download a small model to test with. We'll use Apple OpenELM 1.1B.
@@ -111,8 +138,6 @@ If you'd like it to listen on all available interfaces, so you can connect from 
 ```
 ./$LLAMA_SERVER_ONE --host 0.0.0.0
 ```
-
-
-Here are some more raw notes that need to be organized.
-```
 ---
+Congratulations! You are ready to deploy your `llams-server-one` executable. There will be a document to help you with that soon!
+
