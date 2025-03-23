@@ -3,7 +3,7 @@
 Brad Hutchings<br/>
 brad@bradhutchings.com
 
-This file contains instructions for building llama.cpp with cosmocc to yield a `llama-server` executable that will run on multiple platforms.
+This file contains instructions for building `llama.cpp` with `cosmocc` to yield a `llama-server` executable that will run on multiple platforms.
 
 ---
 ### Build Dependencies
