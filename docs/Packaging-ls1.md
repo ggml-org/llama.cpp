@@ -108,7 +108,7 @@ Remove the `.zip` from our working file:
 mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
 ```
 
-Let's download a small model to test with. We'll use Apple OpenELM 1.1B.
+Let's download a small model to test with. We'll use Google Gemma 1B Instruct v3.
 ```
 MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
 wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_FILE?download=true \
