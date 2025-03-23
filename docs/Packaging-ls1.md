@@ -59,7 +59,7 @@ unzip -l $LLAMA_SERVER_ONE_ZIP
 
 A `llama-server-one-args` file in the archive can specify sane default parameters. The format of the file is parameter name on a line, parameter value on a line, rinse, repeat. End the file with a `...` line to include user specified parameters.
 
-We don't yet support including the model inside the zip archive (yet). That has a size limitation on Windows anyway. So let's use an adjacent file called `model.gguf`.
+We don't yet support including the model inside the zip archive (yet). That has a 4GB size limitation on Windows anyway, as `.exe` files cannot exceed 4GB. So let's use an adjacent file called `model.gguf`.
 
 We will serve on localhost, port 8080 by default for safety. The `--ctx-size` parameter is the size of the context window. This is kinda screwy to have as a set size rather than a maximum because the `.gguf` files now have the training context size in metadata. We set it to 8192 to be sensible.
 ```
