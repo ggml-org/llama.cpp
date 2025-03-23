@@ -48,16 +48,7 @@ unzip -l $LLAMA_SERVER_ONE_ZIP
 **Optional:** `llama.cpp` has a built in chat UI. If you'd like to provide a custom UI, you should add a `website` directory to the `llama-server-one` archive. `llama.cpp`'s chat UI is optimized for serving inside the project's source code. But we can copy the unoptimized source:
 ```
 mkdir -p website
-cp -r /mnt/hyperv/web-apps/completion-tool/* website
-zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
-```
-
-**Optional:** You don't have source for my Completion Tool UI, but if you did, and it were on a mounted share like on my build system, you would include it like this:
-```
-mkdir -p website
-cp -r /mnt/hyperv/web-apps/completion-tool/* website
-rm website/*.txt
-rm website/images/*.psd
+cp -r ~/$LLAMA_CPP_DIR/examples/server/public_legacy/* website
 zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 ```
 
