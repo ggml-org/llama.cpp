@@ -41,7 +41,7 @@ To get this from the llama.cpp source base, there are few files that need to be 
 
 2. [src/llama-context.cpp](src/llama-context.cpp) -- COSMOCC doesn't have std::fill in its Standard Templates Library.
 
-3. [examples/server/server.cpp](examples/server/server.cpp) -- support embedded or adjacent .args file, fix name conflict with "defer" task member.
+3. [examples/server/server.cpp](examples/server/server.cpp) -- support embedded or adjacent .args file, fix name conflict with "defer" task member, add additional meta data to `model_meta`.
 
 ---
 ### Building llama-server-one
