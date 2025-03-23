@@ -46,7 +46,12 @@ To get this from the llama.cpp source base, there are few files that need to be 
 ---
 ### Building llama-server-one
 
-My start-to-finish guide for building 'llama-server` with Cosmo and customizing a `llama-server-one` executable is in the [BUILD-INSTRUCTIONS.md](BUILD-INSTRUCTIONS.md) file.
+My start-to-finish guide for building `llama-server` with Cosmo and customizing a `llama-server-one` executable is in the [BUILD-INSTRUCTIONS.md](BUILD-INSTRUCTIONS.md) file.
+
+---
+### Deploying llama-server-one
+
+My guide for deploying a `llama-server-one` executable is in the [DEPLOY.md](DEPLOY.md) file.
 
 ---
 ### To Do List
