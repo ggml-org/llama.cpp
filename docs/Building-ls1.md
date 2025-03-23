@@ -63,7 +63,7 @@ make clean
 make
 ```
 
-At this point, you should see llama-server and other built binaries in the directort listing.
+At this point, you should see llama-server and other built binaries in the directory listing.
 ```
 ls -al
 ```
