@@ -31,6 +31,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef COSMOCC
+#include <cosmo.h>
+#endif
+
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
@@ -1556,7 +1560,7 @@ struct server_queue {
     }
 
     // Add a new task, but defer until one slot is available
-    void defer(server_task task) {
+    void defer_task(server_task task) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         QUE_DBG("defer task, id = %d\n", task.id);
         queue_tasks_deferred.push_back(std::move(task));
@@ -2598,13 +2602,13 @@ struct server_context {
                     if (slot == nullptr) {
                         // if no slot is available, we defer this task for processing later
                         SRV_DBG("no slot is available, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        queue_tasks.defer_task(task);
                         break;
                     }
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        queue_tasks.defer_task(task);
                         break;
                     }
 
@@ -2687,7 +2691,7 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        queue_tasks.defer_task(task);
                         break;
                     }
 
@@ -2723,7 +2727,7 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        queue_tasks.defer_task(task);
                         break;
                     }
 
@@ -2766,7 +2770,7 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        queue_tasks.defer_task(task);
                         break;
                     }
 
@@ -3382,6 +3386,20 @@ inline void signal_handler(int signal) {
 }
 
 int main(int argc, char ** argv) {
+    // This implements the args file feature.
+    #ifdef COSMOCC
+    // args file if present
+    const std::string& argsFilename = "llama-server-one-args";
+    const std::string& zipArgsFilename = "/zip/llama-server-one-args";
+    struct stat buffer;   
+    if (stat (argsFilename.c_str(), &buffer) == 0) {
+        argc = cosmo_args(argsFilename.c_str(), &argv);
+    }
+    else if (stat (zipArgsFilename.c_str(), &buffer) == 0) {
+        argc = cosmo_args(zipArgsFilename.c_str(), &argv);
+    }
+    #endif
+    
     // own arguments required by this example
     common_params params;
 
