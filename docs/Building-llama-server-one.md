@@ -74,7 +74,7 @@ unzip -l llama-server
 ```
 
 ---
-### Packaging
+### Packaging llama-server-one
 
-Now that you've built `llama-server`, you're ready to package it as `llama-server-one`. Follow instructions in [PACKAGING-INSTRUCTIONS.md](PACKAGING-INSTRUCTIONS.md).
+Now that you've built `llama-server`, you're ready to package it as `llama-server-one`. Follow instructions in [Packaging-llama-server-one.md](Packaging-llama-server-one.md).
 
