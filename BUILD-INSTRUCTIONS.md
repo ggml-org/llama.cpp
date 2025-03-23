@@ -3,7 +3,7 @@
 Brad Hutchings<br/>
 brad@bradhutchings.com
 
-This file contains instructions for building llama.cpp with cosmocc, then customizing the `llama-server` executable to create a ready-to-deploy `llama-server-one` executable.
+This file contains instructions for building llama.cpp with cosmocc to yield a `llama-server` executable that will run on multiple platforms.
 
 ---
 ### Build Dependencies
@@ -74,95 +74,7 @@ unzip -l llama-server
 ```
 
 ---
-### Package llama-server-one Executable
+### Packaging
 
-Let's define some environment variables:
-```
-LLAMA_CPP_DIR="llama.cpp"
-LLAMA_SERVER_ONE_DIR="llama-server-one"
-
-LLAMA_SERVER="llama-server"
-LLAMA_SERVER_ONE="llama-server-one"
-LLAMA_SERVER_ONE_ZIP="llama-server-one.zip"
-LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
-```
-
-Next, let's create a directory where we'll package up `llama-server-one`:
-```
-cd ~
-mkdir -p $LLAMA_SERVER_ONE_DIR
-rm -r ~/$LLAMA_SERVER_ONE_DIR/*
-cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER \
-    ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
-
-cd ~/$LLAMA_SERVER_ONE_DIR
-```
-
-Look at the contents of the `llama-server-one` zip archive:
-```
-unzip -l $LLAMA_SERVER_ONE_ZIP 
-```
-
-You should notice a bunch of extraneous timezone related files in `/usr/*`. Let's get rid of those:
-```
-zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
-```
-
-Verify that these files are no longer in the archive:
-```
-unzip -l $LLAMA_SERVER_ONE_ZIP 
-```
-
-**Optional:** `llama.cpp` has a built in chat UI. If you'd like to provide a custom UI, you should add a `website` directory to the `llama-server-one` archive. `llama.cpp`'s chat UI is optimized for serving inside the project's source code. But we can copy the unoptimized source:
-```
-mkdir -p website
-cp -r /mnt/hyperv/web-apps/completion-tool/* website
-zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
-```
-**Optional:** You don't have source for my Completion Tool UI, but if you did, and it were on a mounted share like on my build system, you would include it like this:
-```
-mkdir -p website
-cp -r /mnt/hyperv/web-apps/completion-tool/* website
-rm website/*.txt
-rm website/images/*.psd
-zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
-```
-
-**Optional:** Verify that the archive has your website:
-```
-unzip -l $LLAMA_SERVER_ONE_ZIP 
-```
-
-
-Here are some more raw notes that need to be organized.
-```
-cat << EOF > $LLAMA_SERVER_ONE_ARGS
--m
-model.gguf
---host
-127.0.0.1
---port
-8080
---ctx-size
-8192
---path
-/zip/website
-...
-EOF
-
-zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
-
-# archive contents after adding args
-unzip -l $LLAMA_SERVER_ONE_ZIP 
-
-mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
-# maybe get the model from my HF repo?
-# Do I need to be logged in to HF?
-cp /mnt/hyperv/models/Google-Gemma-1B-Instruct-v3-q8_0.gguf \
-    ~/$LLAMA_SERVER_ONE_DIR/model.gguf
-
-# Test launch. It should load the model and listen.
-./$LLAMA_SERVER_ONE
-```
-
+Now that you've built `llama-server`, you're ready to package it as `llama-server-one`. Follow instructions in [PACKAGING-INSTRUCTIONS.md](PACKAGING-INSTRUCTIONS.md).
 
