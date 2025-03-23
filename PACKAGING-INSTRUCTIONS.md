@@ -51,6 +51,7 @@ mkdir -p website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
 zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 ```
+
 **Optional:** You don't have source for my Completion Tool UI, but if you did, and it were on a mounted share like on my build system, you would include it like this:
 ```
 mkdir -p website
@@ -65,8 +66,12 @@ zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 ```
 
+A `llama-server-one-args` file in the archive can specify sane default parameters. The format of the file is parameter name on a line, parameter value on a line, rinse, repeat. End the file with a `...` line to include user specified parameters.
 
-Here are some more raw notes that need to be organized.
+We don't yet support including the model inside the zip archive (yet). That has a size limitation on Windows anyway. So let's use an adjacent file called `model.gguf`.
+
+We will server on localhost, port 8080 by default for safety. We'll include the optional website we defined above. If you didn't include a custom UI, omit the `--path` and `/zip/website` lines.
+
 ```
 cat << EOF > $LLAMA_SERVER_ONE_ARGS
 -m
@@ -83,9 +88,19 @@ model.gguf
 EOF
 
 zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
+```
 
-# archive contents after adding args
+Verify that the archive contains the `llama-server-one-args` file:
+```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
+```
+
+
+
+Here are some more raw notes that need to be organized.
+```
+
+# Link to download: https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/Apple-OpenELM-1.1B-Instruct-q8_0.gguf?download=true
 
 mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
 # maybe get the model from my HF repo?
