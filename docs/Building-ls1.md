@@ -37,6 +37,10 @@ export LLAMA_MAKEFILE=1
 make
 ```
 
+If the build is successful, it will end with this message:
+
+&nbsp;&nbsp;&nbsp;&nbsp;**NOTICE: The 'server' binary is deprecated. Please use 'llama-server' instead.**
+
 ### Install Cosmo
 ```
 mkdir -p cosmocc
@@ -64,6 +68,10 @@ export UNAME_M="cosmocc"
 make clean
 make
 ```
+
+If the build is successful, it will end with this message:
+
+&nbsp;&nbsp;&nbsp;&nbsp;**NOTICE: The 'server' binary is deprecated. Please use 'llama-server' instead.**
 
 At this point, you should see llama-server and other built binaries in the directory listing.
 ```
