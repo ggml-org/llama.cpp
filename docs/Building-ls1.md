@@ -21,11 +21,13 @@ cd ~
 git clone https://github.com/BradHutchings/llama-server-one.git llama.cpp
 ```
 
+<!--
 Use the `changes-1` branch while I test. **Delete this before merging!**
 ```
 cd ~/llama.cpp
 git checkout changes-1
 ```
+-->
 
 ### Make llama.cpp
 We use the old `Makefile` rather than CMake. We've updated the `Makefile` in this repo to build llama.cpp correctly.
