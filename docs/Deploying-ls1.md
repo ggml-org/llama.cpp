@@ -26,7 +26,7 @@ Create a folder and copy `llama-server-one` into the new folder.
 ```
 # This should use variables for paths and filenames. So should the packaging instructions.
 cd ~
-rm -r -f $DEPLOY_DIR
+rm -r -f $DEPLOY_DIR $DEPLOY_ZIP
 mkdir -p $DEPLOY_DIR
 cd $DEPLOY_DIR
 cp ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE .
@@ -65,10 +65,10 @@ Now we can test run `llama-server-one`, listening on all network interfaces, por
 
 Hit `ctrl-C` to stop it.
 
-Finally, let's zip up the files into a `.zip` file you can share and move it to your home directory.
+Finally, let's zip up the files into a `.zip` file you can share and move it to your home directory. The model won't compress much, so we're turning compression off with the `-0` parameter.
 
 ```
-zip $DEPLOY_ZIP *
+zip -0 $DEPLOY_ZIP *
 mv $DEPLOY_ZIP ~
 cd ~
 ```
