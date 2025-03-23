@@ -86,7 +86,7 @@ zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
 # archive contents after delete /usr/*.
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 
-# add the completion tool to website
+# add the completion tool to website -- need to decide on front end to add to this repo.
 mkdir -p website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
 rm website/*.txt
