@@ -112,7 +112,7 @@ Let's download a small model to test with. We'll use Apple OpenELM 1.1B.
 ```
 MODEL_FILE="Apple-OpenELM-1.1B-Instruct-q8_0.gguf"
 wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_FILE?download=true \
-    --show-progress -o model.gguf
+    --show-progress --quiet -O model.gguf
 ```
 
 Now we can test run `llama-server-one`, listening on localhost:8080.
