@@ -23,7 +23,7 @@ Next, let's create a directory where we'll package up `llama-server-one`:
 ```
 cd ~
 mkdir -p $LLAMA_SERVER_ONE_DIR
-rm -r ~/$LLAMA_SERVER_ONE_DIR/*
+rm -r -f ~/$LLAMA_SERVER_ONE_DIR/*
 cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER \
     ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
 
