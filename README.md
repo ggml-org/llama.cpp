@@ -9,7 +9,7 @@ brad@bradhutchings.com
 ---
 ### Project Goals
 
-The goal of this project is to build a single llama-server-one executable file that can run "anywhere":
+The goal of this project is to build a single `llama-server-one executable` file that can run "anywhere":
 - x86_64 Windows
 - x86_64 Linux
 - ARM Windows
