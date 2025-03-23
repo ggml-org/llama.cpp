@@ -76,7 +76,7 @@ unzip -l llama-server
 ---
 ### Package llama-server-one Executable
 
-Here are some raw notes that need to be organized.
+Let's define some environment variables:
 ```
 LLAMA_CPP_DIR="llama.cpp"
 LLAMA_SERVER_ONE_DIR="llama-server-one"
@@ -85,7 +85,10 @@ LLAMA_SERVER="llama-server"
 LLAMA_SERVER_ONE="llama-server-one"
 LLAMA_SERVER_ONE_ZIP="llama-server-one.zip"
 LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
+```
 
+Next, let's create a directory where we'll package up `llama-server-one`:
+```
 cd ~
 mkdir -p $LLAMA_SERVER_ONE_DIR
 rm -r ~/$LLAMA_SERVER_ONE_DIR/*
@@ -93,27 +96,46 @@ cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER \
     ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
 
 cd ~/$LLAMA_SERVER_ONE_DIR
+```
 
-# delete the /usr directory with all the timezone crap.
-zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
-
-# archive contents after delete /usr/*.
+Look at the contents of the `llama-server-one` zip archive:
+```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
+```
 
-# add the completion tool to website
-# need to decide on front end to add to this repo.
+You should notice a bunch of extraneous timezone related files in `/usr/*`. Let's get rid of those:
+```
+zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
+```
+
+Verify that these files are no longer in the archive:
+```
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+```
+
+**Optional:** `llama.cpp` has a built in chat UI. If you'd like to provide a custom UI, you should add a `website` directory to the `llama-server-one` archive. `llama.cpp`'s chat UI is optimized for serving inside the project's source code. But we can copy the unoptimized source:
+```
+mkdir -p website
+cp -r /mnt/hyperv/web-apps/completion-tool/* website
+zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
+```
+**Optional:** You don't have source for my Completion Tool UI, but if you did, and it were on a mounted share like on my build system, you would include it like this:
+```
 mkdir -p website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
 rm website/*.txt
 rm website/images/*.psd
-
-ls -al --recursive website
-
 zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
+```
 
-# archive contents after adding website
+**Optional:** Verify that the archive has your website:
+```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
+```
 
+
+Here are some more raw notes that need to be organized.
+```
 cat << EOF > $LLAMA_SERVER_ONE_ARGS
 -m
 model.gguf
