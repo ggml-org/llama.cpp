@@ -67,4 +67,5 @@ Here are some projects and pages you should be familiar with if you want to get 
 - Package gguf file into executable file. The zip item needs to be aligned for mmap. There is a zipalign.c tool source in llamafile that seems loosely inspired by the Android zipalign too. I feel like there should be a more generic solution for this problem.
 - GPU support without a complicated kludge, and that can support all supported platform / CPU / GPU triads. Perhaps a plugin system with shared library dispatch? Invoking dev tools on Apple Metal like llamafile does is "complicated".
 - Code signing instructions. Might have to sign executables within the zip package, plus the package itself.
-- Clean up remaining build warnings, either by fixing source or finding the magical compiler flags.
+- Clean up remaining build warnings, either by fixing source (i.e. Cosmo) or finding the magical compiler flags.
+- Copy the `cosmo_args` function into `server.cpp` so it could potentially be incorporated upstream in non-Cosmo builds.
