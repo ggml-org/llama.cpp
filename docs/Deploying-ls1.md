@@ -37,21 +37,30 @@ On Windows, this executable will need to be renamed to a `.exe` file. Since our 
 cp $LLAMA_SERVER_ONE $LLAMA_SERVER_ONE_EXE
 ```
 
-Let's download a small model. We'll use Google Gemma 1B Instruct v3, a surprisingly capable tiny model.
+Let's download a small model. We'll use Google Gemma 1B Instruct v3, a surprisingly capable tiny model. We'll keep it's filename and make that work with the `llama-server-args` file (below).
 ```
 MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
 wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_FILE?download=true \
-    --show-progress --quiet -O model.gguf
+    --show-progress --quiet
 ```
 
 Let's create a `llama-server-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line.
 ```
 cat << EOF > $LLAMA_SERVER_ARGS
+-m
+Google-Gemma-1B-Instruct-v3-q8_0.gguf
 --host
 0.0.0.0
 --port
-8080
+8888
 ...
 EOF
 ```
+
+Now we can test run `llama-server-one`, listening on all network interfaces, port 8888. You can connect to it from another web browser.
+```
+./$LLAMA_SERVER_ONE
+```
+
+Hit `ctrl-C` to stop it.
 
