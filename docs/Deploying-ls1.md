@@ -14,6 +14,7 @@ Let's define some environment variables:
 LLAMA_CPP_DIR="llama.cpp"
 LLAMA_SERVER_ONE_DIR="llama-server-one"
 DEPLOY_DIR="llama-server-one-deploy"
+DEPLOY_ZIP="llama-server-one-deploy.zip"
 
 LLAMA_SERVER="llama-server"
 LLAMA_SERVER_ONE="llama-server-one"
@@ -44,11 +45,11 @@ wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_
     --show-progress --quiet -O $MODEL_FILE
 ```
 
-Let's create a `llama-server-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line.
+Let's create a `llama-server-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line. Notice that we've overridden the `-m`, `--host`, and `--port` parameters.
 ```
 cat << EOF > $LLAMA_SERVER_ARGS
 -m
-Google-Gemma-1B-Instruct-v3-q8_0.gguf
+$MODEL_FILE
 --host
 0.0.0.0
 --port
@@ -63,4 +64,14 @@ Now we can test run `llama-server-one`, listening on all network interfaces, por
 ```
 
 Hit `ctrl-C` to stop it.
+
+Finally, let's zip up the files into a `.zip` file you can share and move it to your home directory.
+
+```
+zip $DEPLOY_ZIP *
+mv $DEPLOY_ZIP ~
+cd ~
+```
+
+
 
