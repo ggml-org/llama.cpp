@@ -61,7 +61,6 @@ Here are some projects and pages you should be familiar with if you want to get 
 ---
 ### To Do List
 
-- A good way to manage a forked repo where we update from upstream and patch files as needed. I don't quite understand how to manage this. We should update llama.cpp.once regularly (monthly? weekly?) and as popular new models are supported.
 - Package gguf file into executable file. The zip item needs to be aligned for mmap. There is a zipalign.c tool source in llamafile that seems loosely inspired by the Android zipalign too. I feel like there should be a more generic solution for this problem.
 - GPU support without a complicated kludge, and that can support all supported platform / CPU / GPU triads. Perhaps a plugin system with shared library dispatch? Invoking dev tools on Apple Metal like llamafile does is "complicated".
 - Code signing instructions. Might have to sign executables within the zip package, plus the package itself.
