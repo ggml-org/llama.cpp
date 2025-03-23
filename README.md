@@ -24,9 +24,9 @@ GPU support is not important to me and can be handled by platform specific build
 
 The ability to package support files, such as a custom web, UI into the executable file is important to me. This is implemented.
 
-The ability to package default arguments, in a .args file, into the executable file is important to me. This is implemented.
+The ability to package default arguments, in an "args" file, into the executable file is important to me. This is implemented.
 
-The ability to read llama-server-once-args from a file adjacent to the executable file is important to me. This is implemented.
+The ability to read arguments from a file adjacent to the executable file is important to me. This is implemented.
 
 The ability to package a gguf model into the executable file is important to me. This is not implemented yet.
 
@@ -37,11 +37,11 @@ I welcome any of my changes being implemented in the official llama.cpp.
 
 To get this from the llama.cpp source base, there are few files that need to be modified:
 
-1. [Makefile](Makefile) -- extensive modifications to bring up to date, as it is deprecated in favor of a CMake system, and to support COSMOCC.
+1. [Makefile](Makefile) -- Extensive modifications to bring up to date, as it is deprecated in favor of a CMake system, and to support COSMOCC.
 
 2. [src/llama-context.cpp](src/llama-context.cpp) -- COSMOCC doesn't have std::fill in its Standard Templates Library.
 
-3. [examples/server/server.cpp](examples/server/server.cpp) -- support embedded or adjacent .args file, fix name conflict with "defer" task member, add additional meta data to `model_meta`.
+3. [examples/server/server.cpp](examples/server/server.cpp) -- Support embedded or adjacent "args" file, fix Cosmo name conflict with "defer" task member, add additional meta data to `model_meta`.
 
 ---
 ### Building llama-server
