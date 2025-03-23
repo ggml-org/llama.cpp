@@ -6,6 +6,11 @@ brad@bradhutchings.com
 This file contains instructions for building llama.cpp with cosmocc, then customizing the `llama-server` executable to create a ready-to-deploy `llama-server-one` executable.
 
 ---
+### Build Dependencies
+I build with a Ubuntu 24.04 VM. Here are some packages that are helpful in creating a working build system.
+```
+sudo apt install -y build-essential zlib1g-dev libffi-dev libssl-dev libbz2-dev libreadline-dev libsqlite3-dev liblzma-dev tk-dev python3-tk cmake zip
+```
 
 ### Clone this Repo Locally
 Clone this repo into a `~\llama.cpp` directory.
