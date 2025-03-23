@@ -44,14 +44,14 @@ To get this from the llama.cpp source base, there are few files that need to be 
 3. [examples/server/server.cpp](examples/server/server.cpp) -- support embedded or adjacent .args file, fix name conflict with "defer" task member, add additional meta data to `model_meta`.
 
 ---
-### Building llama-server-one
+### Building llama-server
 
-My start-to-finish guide for building `llama-server` with Cosmo and customizing a `llama-server-one` executable is in the [BUILD-INSTRUCTIONS.md](BUILD-INSTRUCTIONS.md) file.
+My start-to-finish guide for building `llama-server` with Cosmo is in the [Building-ls1.md](docs/Building-ls1.md) file.
 
 ---
-### Deploying llama-server-one
+### Packaging llama-server-one
 
-My guide for deploying a `llama-server-one` executable is in the [DEPLOY.md](DEPLOY.md) file.
+My guide for packaging a `llama-server-one` executable is in the [Packaging-ls1.md](docs/Packaging-ls1.md) file.
 
 ---
 ### Reference
