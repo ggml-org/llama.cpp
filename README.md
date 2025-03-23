@@ -54,6 +54,13 @@ My start-to-finish guide for building `llama-server` with Cosmo and customizing 
 My guide for deploying a `llama-server-one` executable is in the [DEPLOY.md](DEPLOY.md) file.
 
 ---
+### Reference
+Here are some projects and pages you should be familiar with if you want to get the most out of `llama-server-one`:
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) - Georgi Gerganov and his team are the rock stars who are making the plumbing so LLMs can be available for developers of all kinds. The `llama.cpp` project is the industry standard for inference. I only fork it here because I want to make it a little better for my applications while preserving all its goodness.
+- [llamafile](https://github.com/Mozilla-Ocho/llamafile) - `Llamafile` lets you distribute and run LLMs with a single file. It is a Mozilla Foundation project that brough the Cosmopolitan C Library and llama.cpp together. It has some popular GPU support. It is based on an older version of llama.cpp and does not support all of the latest models supported by llama.cpp. Llamafile is an inspiration for this project.
+- [Cosmopolitan Libc](https://github.com/jart/cosmopolitan) - `Cosmopolitan` is a project for building cross-platform binaries that run on x86_64 and ARM architectures, supporting Linux, Windows, macOS, and other operating systems. Like `llamafile`, I use Cosmo compile cross-platform executables of `llama.cpp` targets, including `llama-server`.
+
+---
 ### To Do List
 
 - A good way to manage a forked repo where we update from upstream and patch files as needed. I don't quite understand how to manage this. We should update llama.cpp.once regularly (monthly? weekly?) and as popular new models are supported.
