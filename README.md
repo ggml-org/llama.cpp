@@ -1,8 +1,10 @@
-### llama-server-one
+## llama-server-one
 Based on [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 Brad Hutchings<br/>
 brad@bradhutchings.com
+
+**THIS REPO IS NOT QUITE READY FOR PUBIC USE. I WILL DELETE THIS NOTICE WHEN IT IS READY.**
 
 ---
 ### Project Goals
@@ -42,31 +44,11 @@ To get this from the llama.cpp source base, there are few files that need to be 
 3. examples/server/server.cpp -- support embedded or adjacent .args file, fix name conflict with "defer" task member.
 
 ---
-### Incorporaring Cosmopolitan
+### Building llama-server-one
 
-cosmocc needs to be installed in the llama.cpp directory:
-```
-    cd [path-to-llama.cpp]
-    mkdir -p cosmocc
-    cd cosmocc
-    wget https://cosmo.zip/pub/cosmocc/cosmocc.zip
-    unzip cosmocc.zip
-    rm cosmocc.zip
-    cd ..
-```
+My start-to-finish guide for building 'llama-server` with Cosmo and customizing a `llama-server-one` executable is in the [BUILD-INSTRUCTIONS.md](BUILD-INSTRUCTIONS.md) file.
 
-Some environment variables need to be set to build:
-```
-    export LLAMA_MAKEFILE=1
-    export PATH="/home/linux/llama.cpp/cosmocc/bin:$PATH"
-    export CC="cosmocc -I/home/linux/llama.cpp/cosmocc/include -L/home/linux/llama.cpp/cosmocc/lib"
-    export CXX="cosmocc -I/home/linux/llama.cpp/cosmocc/include -I/home/linux/llama.cpp/cosmocc/include/third_party/libcxx -L/home/linux/llama.cpp/cosmocc/lib"
-    export UNAME_S="cosmocc"
-    export UNAME_P="cosmocc"
-    export UNAME_M="cosmocc"
-```
 ---
-
 ### To Do List
 
 - A good way to manage a forked repo where we update from upstream and patch files as needed. I don't quite understand how to manage this. We should update llama.cpp.once regularly (monthly? weekly?) and as popular new models are supported.
