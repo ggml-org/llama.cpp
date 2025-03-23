@@ -7,9 +7,11 @@ This file contains instructions for building llama.cpp with cosmocc, then custom
 
 ---
 ### Build Dependencies
-I build with a Ubuntu 24.04 VM. Here are some packages that are helpful in creating a working build system.
+I build with a freshly installed Ubuntu 24.04 VM. Here are some packages that are helpful in creating a working build system. You may need to install more.
 ```
-sudo apt install -y build-essential zlib1g-dev libffi-dev libssl-dev libbz2-dev libreadline-dev libsqlite3-dev liblzma-dev tk-dev python3-tk cmake zip
+sudo apt install -y git python3-pip build-essential zlib1g-dev \
+    libffi-dev libssl-dev libbz2-dev libreadline-dev libsqlite3-dev \
+    liblzma-dev tk-dev python3-tk cmake zip
 ```
 
 ### Clone this Repo Locally
