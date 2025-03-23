@@ -3423,8 +3423,8 @@ inline void signal_handler(int signal) {
 int main(int argc, char ** argv) {
     // This implements an args file feature inspired by llamafile's.
     #ifdef COSMOCC
-    // Args files if present. 
-    const std::string& argsFilename = "llama-server-one-args";
+    // Args files if present. The names are different to remove confusion during packaging.
+    const std::string& argsFilename = "llama-server-args";
     const std::string& zipArgsFilename = "/zip/llama-server-one-args";
     struct stat buffer;
 
