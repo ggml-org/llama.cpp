@@ -37,11 +37,11 @@ I welcome any of my changes being implemented in the official llama.cpp.
 
 To get this from the llama.cpp source base, there are few files that need to be modified:
 
-1. Makefile -- extensive modifications to bring up to date, as it is deprecated in favor of a CMake system, and to support COSMOCC.
+1. [Makefile](Makefile) -- extensive modifications to bring up to date, as it is deprecated in favor of a CMake system, and to support COSMOCC.
 
-2. src/llama-context.cpp -- COSMOCC doesn't have std::fill in its Standard Templates Library.
+2. [src/llama-context.cpp](src/llama-context.cpp) -- COSMOCC doesn't have std::fill in its Standard Templates Library.
 
-3. examples/server/server.cpp -- support embedded or adjacent .args file, fix name conflict with "defer" task member.
+3. [examples/server/server.cpp](examples/server/server.cpp) -- support embedded or adjacent .args file, fix name conflict with "defer" task member.
 
 ---
 ### Building llama-server-one
@@ -57,4 +57,4 @@ My start-to-finish guide for building 'llama-server` with Cosmo and customizing 
 
 - GPU support without a complicated kludge, and that can support all supported platform / CPU / GPU triads. Perhaps a plugin system with shared library dispatch? Invoking dev tools on Apple Metal like llamafile does is "complicated".
 
-
+- Code signing instructions.
