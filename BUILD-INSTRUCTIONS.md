@@ -23,8 +23,8 @@ git clone https://github.com/BradHutchings/llama-server-one.git llama.cpp
 
 Use the `changes-1` branch while I test. **Delete this before merging!**
 ```
-cd ~\llama.cpp
-git checkout -b chnages-1
+cd ~/llama.cpp
+git checkout changes-1
 ```
 
 ### Make llama.cpp
@@ -47,11 +47,11 @@ cd ..
 
 ### Prepare to make llama.cpp with Cosmo
 ```
-export PATH="~/llama.cpp/cosmocc/bin:$PATH"
-export CC="cosmocc -I~/llama.cpp/cosmocc/include -L~/llama.cpp/cosmocc/lib"
-export CXX="cosmocc -I~/llama.cpp/cosmocc/include \
-    -I~/llama.cpp/cosmocc/include/third_party/libcxx \
-    -L~/llama.cpp/cosmocc/lib"
+export PATH="$(pwd)/cosmocc/bin:$PATH"
+export CC="cosmocc -I$(pwd)/cosmocc/include -L$(pwd)/cosmocc/lib"
+export CXX="cosmocc -I$(pwd)/cosmocc/include \
+    -I$(pwd)/cosmocc/include/third_party/libcxx \
+    -L$(pwd)/cosmocc/lib"
 export UNAME_S="cosmocc"
 export UNAME_P="cosmocc"
 export UNAME_M="cosmocc"
@@ -89,7 +89,8 @@ LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
 cd ~
 mkdir -p $LLAMA_SERVER_ONE_DIR
 rm -r ~/$LLAMA_SERVER_ONE_DIR/*
-cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
+cp ~/$LLAMA_CPP_DIR/$LLAMA_SERVER \
+    ~/$LLAMA_SERVER_ONE_DIR/$LLAMA_SERVER_ONE_ZIP
 
 cd ~/$LLAMA_SERVER_ONE_DIR
 
@@ -99,7 +100,8 @@ zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
 # archive contents after delete /usr/*.
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 
-# add the completion tool to website -- need to decide on front end to add to this repo.
+# add the completion tool to website
+# need to decide on front end to add to this repo.
 mkdir -p website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
 rm website/*.txt
@@ -132,9 +134,13 @@ zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 
 mv $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE
-cp /mnt/hyperv/models/Google-Gemma-1B-Instruct-v3-q8_0.gguf ~/$LLAMA_SERVER_ONE_DIR/model.gguf
+# maybe get the model from my HF repo?
+# Do I need to be logged in to HF?
+cp /mnt/hyperv/models/Google-Gemma-1B-Instruct-v3-q8_0.gguf \
+    ~/$LLAMA_SERVER_ONE_DIR/model.gguf
 
-$LLAMA_SERVER_ONE
+# Test launch. It should load the model and listen.
+./$LLAMA_SERVER_ONE
 ```
 
 
