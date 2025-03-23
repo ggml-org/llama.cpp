@@ -41,7 +41,7 @@ Let's download a small model. We'll use Google Gemma 1B Instruct v3, a surprisin
 ```
 MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
 wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_FILE?download=true \
-    --show-progress --quiet
+    --show-progress --quiet -O $MODEL_FILE
 ```
 
 Let's create a `llama-server-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line.
