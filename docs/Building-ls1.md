@@ -1,4 +1,4 @@
-## Build Instructions
+## Building llama-server
 
 Brad Hutchings<br/>
 brad@bradhutchings.com
@@ -76,5 +76,5 @@ unzip -l llama-server
 ---
 ### Packaging llama-server-one
 
-Now that you've built `llama-server`, you're ready to package it as `llama-server-one`. Follow instructions in [Packaging-llama-server-one.md](Packaging-llama-server-one.md).
+Now that you've built `llama-server`, you're ready to package it as `llama-server-one`. Follow instructions in [Packaging-ls1.md](Packaging-ls1.md).
 
