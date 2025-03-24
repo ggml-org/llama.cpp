@@ -19,7 +19,7 @@ DEPLOY_ZIP="llama-server-one-deploy.zip"
 LLAMA_SERVER="llama-server"
 LLAMA_SERVER_ONE="llama-server-one"
 LLAMA_SERVER_ONE_EXE="llama-server-one.exe"
-LLAMA_SERVER_ARGS="llama-server-args"
+LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
 ```
 
 Create a folder and copy `llama-server-one` into the new folder.
@@ -45,9 +45,9 @@ wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_
     --show-progress --quiet -O $MODEL_FILE
 ```
 
-Let's create a `llama-server-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line. Notice that we've overridden the `-m`, `--host`, and `--port` parameters.
+Let's create a `llama-server-one-args` file. These parameters can override or augment the parameters you previously embedded in you `llama-server-one` archive. This file could be edited by the end user to configure llama-file-one without having to construct and type a long command line. Notice that we've overridden the `-m`, `--host`, and `--port` parameters.
 ```
-cat << EOF > $LLAMA_SERVER_ARGS
+cat << EOF > $LLAMA_SERVER_ONE_ARGS
 -m
 $MODEL_FILE
 --host
@@ -58,7 +58,7 @@ $MODEL_FILE
 EOF
 ```
 
-Now we can test run `llama-server-one`, listening on all network interfaces, port 8888. You can connect to it from another web browser.
+Now we can test run `llama-server-one`, listening on all network interfaces, port 8888. Note that these are different from the default args you built into `llama-server-one`. You can connect to it from another web browser.
 ```
 ./$LLAMA_SERVER_ONE
 ```
