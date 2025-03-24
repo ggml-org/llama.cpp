@@ -33,6 +33,15 @@ function show_pwd()
 }
 
 
+function check_hexagon_sdk()
+{
+    if [ ! -d ${HEXAGON_SDK_PATH} ]; then
+        echo -e "HEXAGON_SDK_PATH ${HEXAGON_SDK_PATH} not exist, pls install it accordingly...\n"
+        exit 0
+    fi
+}
+
+
 function check_and_download_qnn_sdk()
 {
     is_qnn_sdk_exist=1
@@ -98,6 +107,16 @@ function check_and_download_ndk()
 }
 
 
+function build_dsp
+{
+    cd ggml/src/ggml-qnn/kernels/
+    show_pwd
+    make clean
+    make
+    cd -
+}
+
+
 function build_arm64
 {
     cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DQNN_SDK_PATH=${QNN_SDK_PATH} -DHEXAGON_SDK_PATH=${HEXAGON_SDK_PATH}
@@ -106,6 +125,8 @@ function build_arm64
     show_pwd
 
     cd -
+
+    build_dsp
 }
 
 
@@ -158,6 +179,7 @@ function build_ggml_qnn()
     show_pwd
     check_and_download_ndk
     check_and_download_qnn_sdk
+    check_hexagon_sdk
     dump_vars
     remove_temp_dir
     build_arm64
@@ -314,6 +336,7 @@ show_pwd
 
 check_and_download_ndk
 check_and_download_qnn_sdk
+check_hexagon_sdk
 
 if [ $# == 0 ]; then
     show_usage
