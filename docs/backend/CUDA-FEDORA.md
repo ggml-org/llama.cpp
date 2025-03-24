@@ -120,10 +120,10 @@ sudo dnf install nvidia-driver-libs nvidia-driver-cuda-libs
 
 If the installation fails due to conflicts, we'll manually download and install the required packages, excluding conflicting files.
 
-#### 1. Download `nvidia-driver-libs` and `nvidia-driver-cuda-libs` RPM's (with dependencies)
+#### 1. Download `nvidia-` parts that are supplied by the host RPM's (with dependencies)
 
 ```bash
-sudo dnf download --destdir=/tmp/nvidia-driver-libs --resolve --arch x86_64 nvidia-driver-libs nvidia-driver-cuda-libs
+sudo dnf download --destdir=/tmp/nvidia-driver-libs --resolve --arch x86_64 nvidia-driver-cuda nvidia-driver-libs nvidia-driver-cuda-libs nvidia-persistenced
 ```
 
 #### 2. Update the RPM database to assume the installation of these packages.
