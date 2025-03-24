@@ -349,9 +349,6 @@ static void ggml_compute_forward_add_f32(
         const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
 
-    const int ith = 0;
-    const int nth = 1;
-
     const int nr  = ggml_nrows(src0);
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -359,17 +356,16 @@ static void ggml_compute_forward_add_f32(
     GGML_ASSERT( nb0 == sizeof(float));
     GGML_ASSERT(nb00 == sizeof(float));
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int dr = nr;
 
     // row range for this thread
-    const int ir0 = dr*ith;
+    const int ir0 = 0;
     const int ir1 = MIN(ir0 + dr, nr);
 
     ggml_dump_tensor(src0);
     ggml_dump_tensor(src1);
 
-#if 1 //naive algorithm, can works with llama-cli
+#if 1 //naive algorithm for fp32, can works with llama-cli
     float * a = (float*)src0->data;
     float * b = (float*)src1->data;
     float * c = (float*)dst->data;
@@ -473,9 +469,6 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     const int64_t r2 = ne12 / ne02;
     const int64_t r3 = ne13 / ne03;
 
-    //printf("ir0_start = %6lld, ir0_end = %6lld, ir1_start = %6lld, ir1_end = %6lld\n", ir0_start, ir0_end, ir1_start, ir1_end);
-
-    // threads with no work simply yield (not sure if it helps)
     if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
        return;
     }
@@ -514,19 +507,11 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
                 const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
 
-                // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
-                //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
-                //       the original src1 data pointer, so we should index using the indices directly
-                // TODO: this is a bit of a hack, we should probably have a better way to handle this
                 const char * src1_col = (const char*)wdata +
                                         (src1_cont || src1->type != vec_dot_type
                                          ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
                                          : (i11 * nb11 + i12 * nb12 + i13 * nb13));
                 float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
-
-                //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
-                //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
-                //}
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
@@ -574,7 +559,7 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
         int M = src0->ne[1];
         int K = src0->ne[0];
         int N = src1->ne[1];
-         float sum = 0;
+        float sum = 0;
         for (int i = 0; i < M; i++) {
             for (int j = 0; j < N; j++) {
                 sum = 0;
