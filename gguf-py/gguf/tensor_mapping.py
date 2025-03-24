@@ -29,6 +29,8 @@ class TensorNameMap:
             "shared",                                    # t5
             "rwkv.embeddings",                           # rwkv6
             "model.embeddings",                          # rwkv7
+            "text_embeddings",                           # csm
+            "audio_embeddings",                          # csm
         ),
 
         # Token type embeddings
@@ -66,6 +68,7 @@ class TensorNameMap:
             "output_layer",              # chatglm
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
+            "audio_head",                # csm
         ),
 
         # Output norm
@@ -88,6 +91,7 @@ class TensorNameMap:
             "rwkv.ln_out",                             # rwkv6
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
+            "model.norm.scale",                        # csm
         ),
 
         # Rope frequencies
@@ -129,6 +133,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn_norm",                   # openelm
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
+            "model.layers.{bid}.sa_norm.scale"                     # csm
         ),
 
         # Attention norm 2
@@ -168,6 +173,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wq",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
+            "model.layers.{bid}.attn.q_proj"                             # csm
         ),
 
         # Attention key
@@ -182,6 +188,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wk",                         # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
+            "model.layers.{bid}.attn.k_proj"                           # csm
         ),
 
         # Attention value
@@ -195,6 +202,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wv",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
+            "model.layers.{bid}.attn.v_proj"                             # csm
         ),
 
         # Attention output
@@ -221,6 +229,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
+            "model.layers.{bid}.attn.output_proj"                           # csm
         ),
 
         # Attention output norm
@@ -258,6 +267,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
+            "model.layers.{bid}.mlp_norm.scale"                              # csm
         ),
 
         # Post feed-forward norm
@@ -314,6 +324,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
+            "model.layers.{bid}.mlp.w3",                              # csm
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -347,6 +358,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
+            "model.layers.{bid}.mlp.w1"                   # csm
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -388,6 +400,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
+            "model.layers.{bid}.mlp.w2",                              # csm
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (

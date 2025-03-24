@@ -1608,7 +1608,11 @@ class LlamaModel(Model):
                 self._set_vocab_llama_hf()
             except (FileNotFoundError, TypeError):
                 # Llama 3
-                self._set_vocab_gpt2()
+                try:
+                    self._set_vocab_gpt2()
+                except:
+                     logger.warning('Will not set tokenizer for that model. For some models it might be okay, check for this one.')
+                     self.gguf_writer.add_tokenizer_model("none")
 
         # Apply to CodeLlama only (and ignore for Llama 3 with a vocab size of 128256)
         if self.hparams.get("vocab_size", 32000) == 32016:
@@ -1636,12 +1640,21 @@ class LlamaModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        if "vocab_size" in hparams:
+            vocab_size = hparams["vocab_size"]
+        elif "text_vocab_size" in hparams:
+            vocab_size = hparams["text_vocab_size"]
+        else:
+            vocab_size = hparams["audio_vocab_size"]
+        self.gguf_writer.add_vocab_size(vocab_size)
 
         if "head_dim" in hparams:
             rope_dim = hparams["head_dim"]
+        elif "num_hidden_layers" in hparams:
+            rope_dim = hparams["num_hidden_layers"]
         else:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
@@ -1701,6 +1714,9 @@ class LlamaModel(Model):
                 return tensors
             else:
                 return []
+
+        if name.find("codebook0_head") or name.find("projection"):
+            return [(name, data_torch)]
 
         return [(self.map_tensor_name(name), data_torch)]
 
