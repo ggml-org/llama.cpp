@@ -5,12 +5,24 @@ Currently, this readme only supports minicpm-omni's image capabilities, and we w
 
 Download [MiniCPM-o-2_6](https://huggingface.co/openbmb/MiniCPM-o-2_6) PyTorch model from huggingface to "MiniCPM-o-2_6" folder.
 
+
+### Build llama.cpp
+Readme modification time: 20250206
+
+If there are differences in usage, please refer to the official build [documentation](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md)
+
 Clone llama.cpp:
 ```bash
-git clone git@github.com:OpenBMB/llama.cpp.git
+git clone https://github.com/ggerganov/llama.cpp
 cd llama.cpp
-git checkout minicpm-omni
 ```
+
+Build llama.cpp using `CMake`:
+```bash
+cmake -B build
+cmake --build build --config Release
+```
+
 
 ### Usage of MiniCPM-o 2.6
 
@@ -22,25 +34,15 @@ python ./examples/llava/minicpmv-convert-image-encoder-to-gguf.py -m ../MiniCPM-
 python ./convert_hf_to_gguf.py ../MiniCPM-o-2_6/model
 
 # quantize int4 version
-./llama-quantize ../MiniCPM-o-2_6/model/ggml-model-f16.gguf ../MiniCPM-o-2_6/model/ggml-model-Q4_K_M.gguf Q4_K_M
+./build/bin/llama-quantize ../MiniCPM-o-2_6/model/ggml-model-f16.gguf ../MiniCPM-o-2_6/model/ggml-model-Q4_K_M.gguf Q4_K_M
 ```
 
-Build llama.cpp using `CMake`:
-https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md
-
-```bash
-cmake -B build
-cmake --build build --config Release
-```
 
 Inference on Linux or Mac
-```
+```bash
 # run f16 version
-./llama-minicpmv-cli -m ../MiniCPM-o-2_6/model/ggml-model-f16.gguf --mmproj ../MiniCPM-o-2_6/mmproj-model-f16.gguf -c 4096 --temp 0.7 --top-p 0.8 --top-k 100 --repeat-penalty 1.05 --image xx.jpg -p "What is in the image?"
+./build/bin/llama-minicpmv-cli -m ../MiniCPM-o-2_6/model/ggml-model-f16.gguf --mmproj ../MiniCPM-o-2_6/mmproj-model-f16.gguf -c 4096 --temp 0.7 --top-p 0.8 --top-k 100 --repeat-penalty 1.05 --image xx.jpg -p "What is in the image?"
 
 # run quantized int4 version
-./llama-minicpmv-cli -m ../MiniCPM-o-2_6/model/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-o-2_6/mmproj-model-f16.gguf -c 4096 --temp 0.7 --top-p 0.8 --top-k 100 --repeat-penalty 1.05 --image xx.jpg  -p "What is in the image?"
-
-# or run in interactive mode
-./llama-minicpmv-cli -m ../MiniCPM-o-2_6/model/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-o-2_6/mmproj-model-f16.gguf -c 4096 --temp 0.7 --top-p 0.8 --top-k 100 --repeat-penalty 1.05 --image xx.jpg -i
+./build/bin/llama-minicpmv-cli -m ../MiniCPM-o-2_6/model/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-o-2_6/mmproj-model-f16.gguf -c 4096 --temp 0.7 --top-p 0.8 --top-k 100 --repeat-penalty 1.05 --image xx.jpg  -p "What is in the image?"
 ```

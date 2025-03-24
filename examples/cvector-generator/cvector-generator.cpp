@@ -342,7 +342,7 @@ static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
 }
 
 static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
-    llama_kv_cache_clear(ctx);
+    llama_kv_self_clear(ctx);
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
@@ -393,6 +393,8 @@ static int prepare_entries(common_params & params, train_context & ctx_train) {
 
 int main(int argc, char ** argv) {
     common_params params;
+
+    params.out_file = "control_vector.gguf";
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CVECTOR_GENERATOR, print_usage)) {
         return 1;
@@ -498,7 +500,7 @@ int main(int argc, char ** argv) {
     }
 
     // write output vectors to gguf
-    export_gguf(ctx_train.v_final, params.cvector_outfile, model_hint);
+    export_gguf(ctx_train.v_final, params.out_file, model_hint);
 
     llama_backend_free();
 

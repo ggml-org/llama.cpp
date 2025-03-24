@@ -173,7 +173,15 @@ jobs:
           name: llama-bin-macos-x64.zip
 
   ubuntu-cpu-cmake:
-    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          - build: 'arm64'
+            os: ubuntu-22.04-arm
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Clone
@@ -239,14 +247,14 @@ jobs:
         run: |
           cp LICENSE ./build/bin/
           cp examples/run/linenoise.cpp/LICENSE ./build/bin/LICENSE.linenoise.cpp
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.zip ./build/bin/*
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.zip
-          name: llama-bin-ubuntu-x64.zip
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip
+          name: llama-bin-ubuntu-${{ matrix.build }}.zip
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
@@ -459,6 +467,7 @@ jobs:
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
@@ -468,6 +477,7 @@ jobs:
           cmake -B build2 -S . \
             -DCMAKE_C_COMPILER=hipcc \
             -DCMAKE_CXX_COMPILER=hipcc \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
           cmake --build build2 --config Release -j $(nproc)
 
@@ -666,6 +676,35 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
+  macOS-latest-cmake-visionos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=visionOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
   macOS-latest-swift:
     runs-on: macos-latest
 
@@ -702,12 +741,11 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-          sudo cmake --install build --config Release
 
       - name: xcodebuild for swift package
         id: xcodebuild
         run: |
-          xcodebuild -scheme llama-Package -destination "${{ matrix.destination }}"
+          ./build-xcframework.sh
 
   windows-msys2:
     runs-on: windows-latest
@@ -765,7 +803,7 @@ jobs:
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.3.261.1
+      VULKAN_VERSION: 1.4.304.1
 
     strategy:
       matrix:
@@ -1195,6 +1233,11 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: Clone rocWMMA repository
+        id: clone_rocwmma
+        run: |
+          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+
       - name: Install
         id: depends
         run: |
@@ -1224,8 +1267,10 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_HIP=ON `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
 
@@ -1243,6 +1288,11 @@ jobs:
         uses: actions/checkout@v4
         with:
             fetch-depth: 0
+
+      - name: Clone rocWMMA repository
+        id: clone_rocwmma
+        run: |
+          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -1273,8 +1323,10 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
             -DCMAKE_BUILD_TYPE=Release `
             -DAMDGPU_TARGETS=${{ matrix.gpu_target }} `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DGGML_RPC=ON
           cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
@@ -1313,6 +1365,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build
         id: cmake_build
@@ -1328,15 +1382,40 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
-          sudo cmake --install build --config Release
 
       - name: xcodebuild for swift package
         id: xcodebuild
         run: |
-          xcodebuild -scheme llama-Package -destination 'generic/platform=iOS'
+          ./build-xcframework.sh
 
       - name: Build Xcode project
-        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' build
+        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+          name: llama-${{ steps.tag.outputs.name }}-xcframework
 
   android-build:
     runs-on: ubuntu-latest

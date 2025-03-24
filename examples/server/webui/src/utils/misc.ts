@@ -118,3 +118,11 @@ export const throttle = <T extends unknown[]>(
     }, delay);
   };
 };
+
+export const cleanCurrentUrl = (removeQueryParams: string[]) => {
+  const url = new URL(window.location.href);
+  removeQueryParams.forEach((param) => {
+    url.searchParams.delete(param);
+  });
+  window.history.replaceState({}, '', url.toString());
+};

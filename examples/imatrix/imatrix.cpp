@@ -206,9 +206,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
 
 void IMatrixCollector::save_imatrix(int ncall) const {
     auto fname = m_params.out_file;
-    if (fname.empty()) {
-        fname = "imatrix.dat";
-    }
 
     if (ncall > 0) {
         fname += ".at_";
@@ -498,7 +495,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -582,6 +579,8 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
 
 int main(int argc, char ** argv) {
     common_params params;
+
+    params.out_file = "imatrix.dat" ;
 
     params.n_ctx = 512;
     params.logits_all = true;

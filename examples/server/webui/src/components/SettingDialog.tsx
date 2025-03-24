@@ -148,13 +148,13 @@ const SETTING_SECTIONS: SettingSection[] = [
     fields: [
       {
         type: SettingInputType.CHECKBOX,
-        label: 'Expand though process by default for generating message',
+        label: 'Expand thought process by default when generating messages',
         key: 'showThoughtInProgress',
       },
       {
         type: SettingInputType.CHECKBOX,
         label:
-          'Exclude thought process when sending request to API (Recommended for DeepSeek-R1)',
+          'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1)',
         key: 'excludeThoughtOnReq',
       },
     ],
@@ -247,7 +247,7 @@ const SETTING_SECTIONS: SettingSection[] = [
               This feature uses{' '}
               <OpenInNewTab href="https://pyodide.org">pyodide</OpenInNewTab>,
               downloaded from CDN. To use this feature, ask the LLM to generate
-              python code inside a markdown code block. You will see a "Run"
+              Python code inside a Markdown code block. You will see a "Run"
               button on the code block, near the "Copy" button.
             </small>
           </>
@@ -274,7 +274,7 @@ export default function SettingDialog({
   );
 
   const resetConfig = () => {
-    if (window.confirm('Are you sure to reset all settings?')) {
+    if (window.confirm('Are you sure you want to reset all settings?')) {
       setLocalConfig(CONFIG_DEFAULT);
     }
   };
@@ -296,9 +296,9 @@ export default function SettingDialog({
           return;
         }
       } else if (mustBeNumeric) {
-        const trimedValue = value.toString().trim();
-        const numVal = Number(trimedValue);
-        if (isNaN(numVal) || !isNumeric(numVal) || trimedValue.length === 0) {
+        const trimmedValue = value.toString().trim();
+        const numVal = Number(trimmedValue);
+        if (isNaN(numVal) || !isNumeric(numVal) || trimmedValue.length === 0) {
           alert(`Value for ${key} must be numeric`);
           return;
         }

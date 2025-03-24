@@ -132,12 +132,14 @@ You may find the official downloads here: [NVIDIA developer site](https://develo
 
 
 #### Compile and run inside a Fedora Toolbox Container
-We also have a [guide](./cuda-fedora.md) for setting up CUDA toolkit in a Fedora [toolbox container](https://containertoolbx.org/).
+We also have a [guide](./backend/CUDA-FEDORA.md) for setting up CUDA toolkit in a Fedora [toolbox container](https://containertoolbx.org/).
 
 **Recommended for:**
-
-- ***Particularly*** *convenient* for users of [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/); such as: [Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/) and [Kinoite](https://fedoraproject.org/atomic-desktops/kinoite/).
-- Toolbox is installed by default: [Fedora Workstation](https://fedoraproject.org/workstation/) or [Fedora KDE Plasma Desktop](https://fedoraproject.org/spins/kde).
+- ***Necessary*** for users of [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/); such as: [Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/) and [Kinoite](https://fedoraproject.org/atomic-desktops/kinoite/).
+  - (there are no supported CUDA packages for these systems)
+- ***Necessary*** for users that have a host that is not a: [Supported Nvidia CUDA Release Platform](https://developer.nvidia.com/cuda-downloads).
+  - (for example, you may have [Fedora 42 Beta](https://fedoramagazine.org/announcing-fedora-linux-42-beta/) as your your host operating system)
+- ***Convenient*** For those running [Fedora Workstation](https://fedoraproject.org/workstation/) or [Fedora KDE Plasma Desktop](https://fedoraproject.org/spins/kde), and want to keep their host system clean.
 - *Optionally* toolbox packages are available: [Arch Linux](https://archlinux.org/), [Red Hat Enterprise Linux >= 8.5](https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux), or [Ubuntu](https://ubuntu.com/download)
 
 
@@ -197,20 +199,52 @@ The following compilation options are also available to tweak performance:
 
 ## MUSA
 
-This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GPU. Make sure to have the MUSA SDK installed. You can download it from here: [MUSA SDK](https://developer.mthreads.com/sdk/download/musa).
+This provides GPU acceleration using a Moore Threads GPU. Make sure to have the [MUSA SDK](https://developer.mthreads.com/musa/musa-sdk) installed.
 
-- Using `CMake`:
+#### Download directly from Moore Threads
 
-  ```bash
-  cmake -B build -DGGML_MUSA=ON
+You may find the official downloads here: [Moore Threads developer site](https://developer.mthreads.com/sdk/download/musa).
+
+### Compilation
+
+```bash
+cmake -B build -DGGML_MUSA=ON
+cmake --build build --config Release
+```
+
+#### Override Compute Capability Specifications
+
+By default, all supported compute capabilities are enabled. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
+
+```bash
+cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+```
+
+This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
+
+#### Compilation options
+
+Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
+
+- For static builds, add `-DBUILD_SHARED_LIBS=OFF` and `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`:
+  ```
+  cmake -B build -DGGML_MUSA=ON \
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   cmake --build build --config Release
   ```
 
-The environment variable [`MUSA_VISIBLE_DEVICES`](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) can be used to specify which GPU(s) will be used.
+### Runtime MUSA environmental variables
+
+You may set the [musa environmental variables](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) at runtime.
+
+```bash
+# Use `MUSA_VISIBLE_DEVICES` to hide the first compute device.
+MUSA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
+```
+
+### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted.
-
-Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
 
 ## HIP
 
@@ -226,6 +260,12 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```
   On Linux it is also possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting `-DGGML_HIP_UMA=ON`.
   However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
+
+  To enhance flash attention performance on RDNA3+ or CDNA architectures, you can utilize the rocWMMA library by enabling the `-DGGML_HIP_ROCWMMA_FATTN=ON` option. This requires rocWMMA headers to be installed on the build system.
+
+  The rocWMMA library is included by default when installing the ROCm SDK using the `rocm` meta package provided by AMD. Alternatively, if you are not using the meta package, you can install the library using the `rocwmma-dev` or `rocwmma-devel` package, depending on your system's package manager.
+
+  As an alternative, you can manually install the library by cloning it from the official [GitHub repository](https://github.com/ROCm/rocWMMA), checkout the corresponding version tag (e.g. `rocm-6.2.4`) and set `-DCMAKE_CXX_FLAGS="-I<path/to/rocwmma>/library/include/"` in CMake. This also works under Windows despite not officially supported by AMD.
 
   Note that if you get the following error:
   ```

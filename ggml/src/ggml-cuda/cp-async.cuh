@@ -24,7 +24,7 @@ static __device__ __forceinline__ void cp_async_cg_16(const unsigned int dst, co
     } else
 #endif // CUDART_VERSION >= 11040
     {
-        asm volatile("cp.async.cg.shared.global.L2 [%0], [%1], 16;"
+        asm volatile("cp.async.cg.shared.global [%0], [%1], 16;"
             : : "r"(dst), "l"(src));
     }
 #else

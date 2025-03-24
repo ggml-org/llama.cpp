@@ -9,7 +9,7 @@ These templates can be updated with the following commands:
 ./scripts/get_chat_template.py deepseek-ai/DeepSeek-R1-Distill-Qwen-32B      > models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja
 ./scripts/get_chat_template.py fireworks-ai/llama-3-firefunction-v2          > models/templates/fireworks-ai-llama-3-firefunction-v2.jinja
 ./scripts/get_chat_template.py google/gemma-2-2b-it                          > models/templates/google-gemma-2-2b-it.jinja
-./scripts/get_chat_template.py meetkai/functionary-medium-v3.                > models/templates/meetkai-functionary-medium-v3.jinja
+./scripts/get_chat_template.py meetkai/functionary-medium-v3.1               > models/templates/meetkai-functionary-medium-v3.1.jinja
 ./scripts/get_chat_template.py meetkai/functionary-medium-v3.2               > models/templates/meetkai-functionary-medium-v3.2.jinja
 ./scripts/get_chat_template.py meta-llama/Llama-3.1-8B-Instruct              > models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja
 ./scripts/get_chat_template.py meta-llama/Llama-3.2-3B-Instruct              > models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja

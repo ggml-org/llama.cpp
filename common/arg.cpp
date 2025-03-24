@@ -764,7 +764,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
-        string_format("number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict),
+        string_format(
+            ex == LLAMA_EXAMPLE_MAIN || ex == LLAMA_EXAMPLE_INFILL
+                ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
+                : "number of tokens to predict (default: %d, -1 = infinity)",
+            params.n_predict),
         [](common_params & params, int value) {
             params.n_predict = value;
         }
@@ -813,13 +817,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
-        ex == LLAMA_EXAMPLE_MAIN
-            ? "prompt to start generation with\nif -cnv is set, this will be used as system prompt"
-            : "prompt to start generation with",
+        "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
             params.prompt = value;
         }
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-sys", "--system-prompt"}, "PROMPT",
+        "system prompt to use with model (if applicable, depending on chat template)",
+        [](common_params & params, const std::string & value) {
+            params.system_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -844,6 +853,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-sysf", "--system-prompt-file"}, "FNAME",
+        "a file containing the system prompt (default: none)",
+        [](common_params & params, const std::string & value) {
+            std::ifstream file(value);
+            if (!file) {
+                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            }
+            std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), back_inserter(params.system_prompt));
+            if (!params.system_prompt.empty() && params.system_prompt.back() == '\n') {
+                params.system_prompt.pop_back();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
         "an input file (repeat to specify multiple files)",
@@ -942,6 +965,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "force disable conversation mode (default: false)",
         [](common_params & params) {
             params.conversation_mode = COMMON_CONVERSATION_MODE_DISABLED;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
+        {"-st", "--single-turn"},
+        "run conversation for a single turn only, then exit when done\n"
+        "will not be interactive if first turn is predefined with --prompt\n"
+        "(default: false)",
+        [](common_params & params) {
+            params.single_turn = true;
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
@@ -1853,18 +1885,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
     add_opt(common_arg(
         {"-o", "--output", "--output-file"}, "FNAME",
-        string_format("output file (default: '%s')",
-            ex == LLAMA_EXAMPLE_EXPORT_LORA
-                ? params.lora_outfile.c_str()
-                : ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR
-                    ? params.cvector_outfile.c_str()
-                    : params.out_file.c_str()),
+        string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
             params.out_file = value;
-            params.cvector_outfile = value;
-            params.lora_outfile = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -2447,6 +2472,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.vocoder.use_guide_tokens = true;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--tts-speaker-file"}, "FNAME",
+        "speaker file path for audio generation",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.speaker_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     // model-specific
     add_opt(common_arg(
@@ -2501,6 +2533,92 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.embedding = true;
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-1.5b-default"},
+        string_format("use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-3b-default"},
+        string_format("use default Qwen 2.5 Coder 3B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-7b-default"},
+        string_format("use default Qwen 2.5 Coder 7B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-7b-spec"},
+        string_format("use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.speculative.n_gpu_layers = 99;
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-14b-spec"},
+        string_format("use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
+            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.speculative.n_gpu_layers = 99;
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     return ctx_arg;
 }

@@ -796,11 +796,11 @@ static bool need_transform(ggml_type type) {
  * @param buffer The CANN buffer from which to initialize the tensor.
  * @param tensor Pointer to the tensor to be initialized.
  */
-static void ggml_backend_cann_buffer_init_tensor(
+static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     ggml_backend_buffer_t buffer, ggml_tensor* tensor) {
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
-        return;
+        return GGML_STATUS_SUCCESS;
     }
 
     // TODO: can backend doesn't support quantized yet. Just leave the code
@@ -817,6 +817,7 @@ static void ggml_backend_cann_buffer_init_tensor(
                                   memset_size, 0, memset_size));
         }
     }
+    return GGML_STATUS_SUCCESS;
 }
 
 // TODO: need handle tensor which has paddings.
@@ -1688,11 +1689,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
                 case GGML_TYPE_Q8_0:
-                    // Current groupsize should not be greater than k-1 in
-                    // aclnnWeightQuantBatchMatmulV2GetWorkspaceSize
-                    if (op->src[0]->ne[0] <= QK8_0) {
-                        return false;
-                    }
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
                 case GGML_TYPE_Q4_0:

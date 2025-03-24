@@ -3,7 +3,7 @@
 #  MIT license
 #  Copyright (C) 2024 Intel Corporation
 #  SPDX-License-Identifier: MIT
-
+export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 source /opt/intel/oneapi/setvars.sh
 
 #export GGML_SYCL_DEBUG=1
@@ -13,7 +13,7 @@ source /opt/intel/oneapi/setvars.sh
 INPUT_PROMPT="Building a website can be done in 10 simple steps:\nStep 1:"
 MODEL_FILE=models/llama-2-7b.Q4_0.gguf
 NGL=33
-CONEXT=8192
+CONEXT=4096
 
 if [ $# -gt 0 ]; then
     GGML_SYCL_DEVICE=$1

@@ -31,8 +31,6 @@
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
 
-static const char * DEFAULT_SYSTEM_MESSAGE = "You are a helpful assistant";
-
 static llama_context           ** g_ctx;
 static llama_model             ** g_model;
 static common_sampler          ** g_smpl;
@@ -47,8 +45,8 @@ static void print_usage(int argc, char ** argv) {
     (void) argc;
 
     LOG("\nexample usage:\n");
-    LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128\n", argv[0]);
-    LOG("\n  chat (conversation): %s -m your_model.gguf -p \"You are a helpful assistant\" -cnv\n", argv[0]);
+    LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
+    LOG("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
     LOG("\n");
 }
 
@@ -219,6 +217,10 @@ int main(int argc, char ** argv) {
     // print chat template example in conversation mode
     if (params.conversation_mode) {
         if (params.enable_chat_template) {
+            if (!params.prompt.empty() && params.system_prompt.empty()) {
+                LOG_WRN("*** User-specified prompt will pre-start conversation, did you mean to set --system-prompt (-sys) instead?\n");
+            }
+
             LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja).c_str());
         } else {
             LOG_INF("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
@@ -263,6 +265,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> embd_inp;
 
+    bool waiting_for_first_input = false;
     auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
         common_chat_msg new_msg;
         new_msg.role = role;
@@ -273,13 +276,34 @@ int main(int argc, char ** argv) {
         return formatted;
     };
 
+    std::string prompt;
     {
-        auto prompt = (params.conversation_mode && params.enable_chat_template)
-            // format the system prompt in conversation mode (fallback to default if empty)
-            ? chat_add_and_format("system", params.prompt.empty() ? DEFAULT_SYSTEM_MESSAGE : params.prompt)
+        if (params.conversation_mode && params.enable_chat_template) {
+            if (!params.system_prompt.empty()) {
+                // format the system prompt (will use template default if empty)
+                chat_add_and_format("system", params.system_prompt);
+            }
+
+            if (!params.prompt.empty()) {
+                // format and append the user prompt
+                chat_add_and_format("user", params.prompt);
+            } else {
+                waiting_for_first_input = true;
+            }
+
+            if (!params.system_prompt.empty() || !params.prompt.empty()) {
+                common_chat_templates_inputs inputs;
+                inputs.messages = chat_msgs;
+                inputs.add_generation_prompt = !params.prompt.empty();
+
+                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+            }
+        } else {
             // otherwise use the prompt as is
-            : params.prompt;
-        if (params.interactive_first || !params.prompt.empty() || session_tokens.empty()) {
+            prompt = params.prompt;
+        }
+
+        if (params.interactive_first || !prompt.empty() || session_tokens.empty()) {
             LOG_DBG("tokenize the prompt\n");
             embd_inp = common_tokenize(ctx, prompt, true, true);
         } else {
@@ -292,7 +316,7 @@ int main(int argc, char ** argv) {
     }
 
     // Should not run without any tokens
-    if (embd_inp.empty()) {
+    if (!waiting_for_first_input && embd_inp.empty()) {
         if (add_bos) {
             embd_inp.push_back(llama_vocab_bos(vocab));
             LOG_WRN("embd_inp was considered empty and bos was added: %s\n", string_from(ctx, embd_inp).c_str());
@@ -330,7 +354,7 @@ int main(int argc, char ** argv) {
         }
 
         // remove any "future" tokens that we might have inherited from the previous session
-        llama_kv_cache_seq_rm(ctx, -1, n_matching_session_tokens, -1);
+        llama_kv_self_seq_rm(ctx, -1, n_matching_session_tokens, -1);
     }
 
     LOG_DBG("recalculate the cached logits (check): embd_inp.size() %zu, n_matching_session_tokens %zu, embd_inp.size() %zu, session_tokens.size() %zu\n",
@@ -352,7 +376,12 @@ int main(int argc, char ** argv) {
     }
 
     if (params.conversation_mode) {
-        params.interactive_first = true;
+        if (params.single_turn && !params.prompt.empty()) {
+            params.interactive = false;
+            params.interactive_first = false;
+        } else {
+            params.interactive_first = true;
+        }
     }
 
     // enable interactive mode if interactive start is specified
@@ -476,8 +505,8 @@ int main(int argc, char ** argv) {
         LOG_INF(       " - Press Ctrl+C to interject at any time.\n");
 #endif
         LOG_INF(       "%s", control_message);
-        if (params.conversation_mode && params.enable_chat_template && params.prompt.empty()) {
-            LOG_INF(   " - Using default system message. To change it, set a different value via -p PROMPT or -f FILE argument.\n");
+        if (params.conversation_mode && params.enable_chat_template && params.system_prompt.empty()) {
+            LOG_INF(   " - Not using system message. To change it, set a different value via -sys PROMPT\n");
         }
         LOG_INF("\n");
 
@@ -573,8 +602,8 @@ int main(int argc, char ** argv) {
                     LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
                             n_past, n_left, n_ctx, params.n_keep, n_discard);
 
-                    llama_kv_cache_seq_rm (ctx, 0, params.n_keep            , params.n_keep + n_discard);
-                    llama_kv_cache_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
+                    llama_kv_self_seq_rm (ctx, 0, params.n_keep            , params.n_keep + n_discard);
+                    llama_kv_self_seq_add(ctx, 0, params.n_keep + n_discard, n_past, -n_discard);
 
                     n_past -= n_discard;
 
@@ -597,9 +626,9 @@ int main(int argc, char ** argv) {
                     LOG_DBG("div:   [%6d, %6d] / %6d -> [%6d, %6d]\n", ga_i + ib*bd, ga_i + ib*bd + ga_w, ga_n, (ga_i + ib*bd)/ga_n, (ga_i + ib*bd + ga_w)/ga_n);
                     LOG_DBG("shift: [%6d, %6d] + %6d -> [%6d, %6d]\n", ga_i + ib*bd + ga_w, n_past + ib*bd, dd, ga_i + ib*bd + ga_w + dd, n_past + ib*bd + dd);
 
-                    llama_kv_cache_seq_add(ctx, 0, ga_i,                n_past,              ib*bd);
-                    llama_kv_cache_seq_div(ctx, 0, ga_i + ib*bd,        ga_i + ib*bd + ga_w, ga_n);
-                    llama_kv_cache_seq_add(ctx, 0, ga_i + ib*bd + ga_w, n_past + ib*bd,      dd);
+                    llama_kv_self_seq_add(ctx, 0, ga_i,                n_past,              ib*bd);
+                    llama_kv_self_seq_div(ctx, 0, ga_i + ib*bd,        ga_i + ib*bd + ga_w, ga_n);
+                    llama_kv_self_seq_add(ctx, 0, ga_i + ib*bd + ga_w, n_past + ib*bd,      dd);
 
                     n_past -= bd;
 
@@ -773,7 +802,7 @@ int main(int argc, char ** argv) {
             }
 
             // deal with end of generation tokens in interactive mode
-            if (llama_vocab_is_eog(vocab, common_sampler_last(smpl))) {
+            if (!waiting_for_first_input && llama_vocab_is_eog(vocab, common_sampler_last(smpl))) {
                 LOG_DBG("found an EOG token\n");
 
                 if (params.interactive) {
@@ -793,12 +822,17 @@ int main(int argc, char ** argv) {
             }
 
             // if current token is not EOG, we add it to current assistant message
-            if (params.conversation_mode) {
+            if (params.conversation_mode && !waiting_for_first_input) {
                 const auto id = common_sampler_last(smpl);
                 assistant_ss << common_token_to_piece(ctx, id, false);
+
+                if (!prompt.empty()) {
+                    prompt.clear();
+                    is_interacting = false;
+                }
             }
 
-            if (n_past > 0 && is_interacting) {
+            if ((n_past > 0 || waiting_for_first_input) && is_interacting) {
                 LOG_DBG("waiting for user input\n");
 
                 if (params.conversation_mode) {
@@ -888,11 +922,17 @@ int main(int argc, char ** argv) {
                 input_echo = false; // do not echo this again
             }
 
-            if (n_past > 0) {
+            if (n_past > 0 || waiting_for_first_input) {
                 if (is_interacting) {
                     common_sampler_reset(smpl);
                 }
                 is_interacting = false;
+
+                if (waiting_for_first_input && params.single_turn) {
+                    params.interactive = false;
+                    params.interactive_first = false;
+                }
+                waiting_for_first_input = false;
             }
         }
 

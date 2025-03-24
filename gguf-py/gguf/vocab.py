@@ -154,7 +154,12 @@ class SpecialVocab:
             return True
         with open(tokenizer_config_file, encoding = 'utf-8') as f:
             tokenizer_config = json.load(f)
-        chat_template = tokenizer_config.get('chat_template')
+        chat_template_alt = None
+        chat_template_file = path / 'chat_template.json'
+        if chat_template_file.is_file():
+            with open(chat_template_file, encoding = 'utf-8') as f:
+                chat_template_alt = json.load(f).get('chat_template')
+        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:

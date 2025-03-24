@@ -413,20 +413,22 @@ static void print_usage(int, char ** argv) {
 int main(int argc, char ** argv) {
     common_params params;
 
+    params.out_file = "ggml-lora-merged-f16.gguf";
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_LORA, print_usage)) {
         return 1;
     }
 
     g_verbose = (params.verbosity > 1);
     try {
-        lora_merge_ctx ctx(params.model, params.lora_adapters, params.lora_outfile, params.cpuparams.n_threads);
+        lora_merge_ctx ctx(params.model, params.lora_adapters, params.out_file, params.cpuparams.n_threads);
         ctx.run_merge();
     } catch (const std::exception & err) {
         fprintf(stderr, "%s\n", err.what());
         exit(EXIT_FAILURE);
     }
 
-    printf("done, output file is %s\n", params.lora_outfile.c_str());
+    printf("done, output file is %s\n", params.out_file.c_str());
 
     return 0;
 }

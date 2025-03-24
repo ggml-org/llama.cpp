@@ -26,7 +26,10 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 12 if "LLAMA_SANITIZE" not in os.environ else 30
+DEFAULT_HTTP_TIMEOUT = 12
+
+if "LLAMA_SANITIZE" in os.environ or "GITHUB_ACTION" in os.environ:
+    DEFAULT_HTTP_TIMEOUT = 30
 
 
 class ServerResponse:
@@ -64,6 +67,9 @@ class ServerProcess:
     id_slot: int | None = None
     cache_prompt: bool | None = None
     n_slots: int | None = None
+    ctk: str | None = None
+    ctv: str | None = None
+    fa: bool | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
@@ -81,6 +87,7 @@ class ServerProcess:
     reasoning_format: Literal['deepseek', 'none'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
+    server_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -94,7 +101,9 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
 
     def start(self, timeout_seconds: int | None = DEFAULT_HTTP_TIMEOUT) -> None:
-        if "LLAMA_SERVER_BIN_PATH" in os.environ:
+        if self.server_path is not None:
+            server_path = self.server_path
+        elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
             server_path = "../../../build/bin/Release/llama-server.exe"
@@ -148,6 +157,12 @@ class ServerProcess:
             server_args.extend(["--ctx-size", self.n_ctx])
         if self.n_slots:
             server_args.extend(["--parallel", self.n_slots])
+        if self.ctk:
+            server_args.extend(["-ctk", self.ctk])
+        if self.ctv:
+            server_args.extend(["-ctv", self.ctv])
+        if self.fa is not None:
+            server_args.append("-fa")
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -181,7 +196,7 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
 
         args = [str(arg) for arg in [server_path, *server_args]]
-        print(f"bench: starting server with: {' '.join(args)}")
+        print(f"tests: starting server with: {' '.join(args)}")
 
         flags = 0
         if "nt" == os.name:
@@ -212,6 +227,10 @@ class ServerProcess:
                     return  # server is ready
             except Exception as e:
                 pass
+            # Check if process died
+            if self.process.poll() is not None:
+                raise RuntimeError(f"Server process died with return code {self.process.returncode}")
+
             print(f"Waiting for server to start...")
             time.sleep(0.5)
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
@@ -283,7 +302,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "tinyllamas/stories260K.gguf"
         server.model_alias = "tinyllama-2"
-        server.n_ctx = 256
+        server.n_ctx = 512
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 64

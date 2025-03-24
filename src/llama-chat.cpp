@@ -4,6 +4,7 @@
 
 #include <map>
 #include <sstream>
+#include <algorithm>
 
 #if __cplusplus >= 202000L
     #define LU8(x) (const char*)(u8##x)
