@@ -110,6 +110,7 @@ models = [
     {"name": "deepseek-v3",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V3"},
     {"name": "deepseek-r1-qwen", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"},
     {"name": "gpt-4o",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Xenova/gpt-4o", },
+    {"name": "nomic-embed-text-v2-moe",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/nomic-ai/nomic-embed-text-v2-moe", },
 ]
 
 
