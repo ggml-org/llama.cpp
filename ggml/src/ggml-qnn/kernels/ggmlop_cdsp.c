@@ -9,7 +9,7 @@
 
 #define ggml_tensor dsptensor
 
-int ggmlop_open(const char*uri, remote_handle64* handle) {
+int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
     void *tptr = NULL;
     FARF(HIGH, "uri %s", uri);
     tptr = (void *)malloc(1);
@@ -18,7 +18,7 @@ int ggmlop_open(const char*uri, remote_handle64* handle) {
     return 0;
 }
 
-int ggmlop_close(remote_handle64 handle) {
+int ggmlop_dsp_close(remote_handle64 handle) {
     if (handle)
         free((void*)handle);
     return 0;
@@ -279,9 +279,9 @@ static void ggml_compute_forward_add_f32(
     }
 }
 
-int ggmlop_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst)
+int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst)
 {
-    FARF(HIGH, "===============     DSP: ggmlop_add ");
+    FARF(HIGH, "===============     DSP: ggmlop_dsp_add ");
     switch (src0->type) {
         case GGML_TYPE_F32:
         {
@@ -349,8 +349,8 @@ int ggmlop_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * 
 }
 
 
-int ggmlop_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    FARF(HIGH, "===============     DSP: ggmlop_mulmat ");
+int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    FARF(HIGH, "===============     DSP: ggmlop_dsp_mulmat ");
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
