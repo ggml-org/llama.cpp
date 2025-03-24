@@ -3429,8 +3429,8 @@ int main(int argc, char ** argv) {
     // This implements an args file feature inspired by llamafile's.
     #ifdef COSMOCC
     // Args files if present. The names are different to remove confusion during packaging.
-    const std::string& argsFilename = "llama-server-args";
-    const std::string& zipArgsFilename = "/zip/llama-server-one-args";
+    const std::string& argsFilename = "llama-server-one-args";
+    const std::string& zipArgsFilename = "/zip/default-args";
     struct stat buffer;
 
     // At this point, argc, argv represent:
