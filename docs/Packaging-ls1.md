@@ -16,7 +16,7 @@ LLAMA_SERVER_ONE_DIR="llama-server-one"
 LLAMA_SERVER="llama-server"
 LLAMA_SERVER_ONE="llama-server-one"
 LLAMA_SERVER_ONE_ZIP="llama-server-one.zip"
-LLAMA_SERVER_ONE_ARGS="llama-server-one-args"
+DEFAULT_ARGS="default-args"
 ```
 
 Next, let's create a directory where we'll package up `llama-server-one`:
@@ -63,7 +63,7 @@ We don't yet support including the model inside the zip archive (yet). That has 
 
 We will serve on localhost, port 8080 by default for safety. The `--ctx-size` parameter is the size of the context window. This is kinda screwy to have as a set size rather than a maximum because the `.gguf` files now have the training context size in metadata. We set it to 8192 to be sensible.
 ```
-cat << EOF > $LLAMA_SERVER_ONE_ARGS
+cat << EOF > $DEFAULT_ARGS
 -m
 model.gguf
 --host
@@ -78,7 +78,7 @@ EOF
 
 **Optional:** If you added a website to the archive, use this instead:
 ```
-cat << EOF > $LLAMA_SERVER_ONE_ARGS
+cat << EOF > $DEFAULT_ARGS
 -m
 model.gguf
 --host
@@ -95,7 +95,7 @@ EOF
 
 Add the `llama-server-one-args` file to the archive:
 ```
-zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
+zip -0 -r $LLAMA_SERVER_ONE_ZIP $DEFAULT_ARGS
 ```
 
 Verify that the archive contains the `llama-server-one-args` file:
