@@ -53,6 +53,7 @@ To get this from the llama.cpp source base, there are few files that need to be 
 
 ---
 ### Reference
+
 Here are some projects and pages you should be familiar with if you want to get the most out of `llama-server-one`:
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) - Georgi Gerganov and his team are the rock stars who are making the plumbing so LLMs can be available for developers of all kinds. The `llama.cpp` project is the industry standard for inference. I only fork it here because I want to make it a little better for my applications while preserving all its goodness.
 - [llamafile](https://github.com/Mozilla-Ocho/llamafile) - `Llamafile` lets you distribute and run LLMs with a single file. It is a Mozilla Foundation project that brough the Cosmopolitan C Library and llama.cpp together. It has some popular GPU support. It is based on an older version of llama.cpp and does not support all of the latest models supported by llama.cpp. Llamafile is an inspiration for this project.
@@ -63,8 +64,10 @@ Here are some projects and pages you should be familiar with if you want to get 
 ---
 ### To Do List
 
+In no particular order of importance, these are the things that bother me:
 - Package gguf file into executable file. The zip item needs to be aligned for mmap. There is a zipalign.c tool source in llamafile that seems loosely inspired by the Android zipalign too. I feel like there should be a more generic solution for this problem.
 - GPU support without a complicated kludge, and that can support all supported platform / CPU / GPU triads. Perhaps a plugin system with shared library dispatch? Invoking dev tools on Apple Metal like llamafile does is "complicated".
 - Code signing instructions. Might have to sign executables within the zip package, plus the package itself.
 - Clean up remaining build warnings, either by fixing source (i.e. Cosmo) or finding the magical compiler flags.
-- Copy the `cosmo_args` function into `server.cpp` so it could potentially be incorporated upstream in non-Cosmo builds.
+- Copy the `cosmo_args` function into `server.cpp` so it could potentially be incorporated upstream in non-Cosmo builds. `common/arg2.cpp` might be a good landing spot. License in [Cosmo source code](https://github.com/jart/cosmopolitan/blob/master/tool/args/args2.c) appears to be MIT compatible with attribution. 
+- The `--ctx-size` parameter doesn't seem quite right given that new models have the training (or max) context size in their metadata. That size should be used subject to a maximum in a passed parameter. E.g. So a 128K model can run comfortably on a smaller device.
