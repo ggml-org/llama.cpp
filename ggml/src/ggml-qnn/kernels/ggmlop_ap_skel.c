@@ -288,10 +288,10 @@ __QAIC_SLIM_EXPORT const Interface __QAIC_SLIM(ggmlop_slim) = {4,&(methodArrays[
 #ifdef __cplusplus
 extern "C" {
 #endif
-__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_open)(const char* uri, remote_handle64* h) __QAIC_STUB_ATTRIBUTE {
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_open)(const char* uri, remote_handle64* h) __QAIC_STUB_ATTRIBUTE {
    return __QAIC_REMOTE(remote_handle64_open)(uri, h);
 }
-__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_close)(remote_handle64 h) __QAIC_STUB_ATTRIBUTE {
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_close)(remote_handle64 h) __QAIC_STUB_ATTRIBUTE {
    return __QAIC_REMOTE(remote_handle64_close)(h);
 }
 static __inline int _stub_unpack(_ATTRIBUTE_UNUSED remote_arg* _praROutPost, _ATTRIBUTE_UNUSED remote_arg* _ppraROutPost[1], _ATTRIBUTE_UNUSED void* _primROut, _ATTRIBUTE_UNUSED uint32_t _rout0[1], _ATTRIBUTE_UNUSED uint64_t _rout1[4], _ATTRIBUTE_UNUSED uint64_t _rout2[4], _ATTRIBUTE_UNUSED uint32_t _rout3[1], _ATTRIBUTE_UNUSED uint32_t _rout4[1], _ATTRIBUTE_UNUSED char* _rout5[1], _ATTRIBUTE_UNUSED uint32_t _rout5Len[1]) {
@@ -419,11 +419,11 @@ static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uint64_
    _allocator_deinit(_al);
    return _nErr;
 }
-__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_add)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_add)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
    uint32_t _mid = 2;
    return _stub_method(_handle, _mid, (uint64_t*)src0, (uint64_t*)src1, (uint64_t*)dst);
 }
-__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_mulmat)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_mulmat)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
    uint32_t _mid = 3;
    return _stub_method(_handle, _mid, (uint64_t*)src0, (uint64_t*)src1, (uint64_t*)dst);
 }
