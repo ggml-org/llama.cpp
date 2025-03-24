@@ -268,7 +268,7 @@ struct dsptensor {
     * @param h, resulting handle
     * @retval, 0 on success
     */
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_open)(const char* uri, remote_handle64* h) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_open)(const char* uri, remote_handle64* h) __QAIC_HEADER_ATTRIBUTE;
 /**
     * Closes a handle.  If this is the last handle to close, the session
     * is closed as well, releasing all the allocated resources.
@@ -276,9 +276,9 @@ __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_open)(const char* uri, remote_hand
     * @param h, the handle to close
     * @retval, 0 on success, should always succeed
     */
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_close)(remote_handle64 h) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_add)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_mulmat)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_close)(remote_handle64 h) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_add)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_mulmat)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
 #ifndef ggmlop_URI
 #define ggmlop_URI "file:///libggmlop_skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1"
 #endif /*ggmlop_URI*/

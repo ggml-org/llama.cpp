@@ -573,13 +573,13 @@ static __inline int _skel_method_2(int (*_pfn)(const char*, remote_handle64*), u
 __QAIC_SKEL_EXPORT int __QAIC_SKEL(ggmlop_skel_handle_invoke)(remote_handle64 _h, uint32_t _sc, remote_arg* _pra) __QAIC_SKEL_ATTRIBUTE {
    switch(REMOTE_SCALARS_METHOD(_sc)){
       case 0:
-      return _skel_method_2(__QAIC_IMPL(ggmlop_open), _sc, _pra);
+      return _skel_method_2(__QAIC_IMPL(ggmlop_dsp_open), _sc, _pra);
       case 1:
-      return _skel_method_1(__QAIC_IMPL(ggmlop_close), _sc, _pra);
+      return _skel_method_1(__QAIC_IMPL(ggmlop_dsp_close), _sc, _pra);
       case 2:
-      return _skel_method(__QAIC_IMPL(ggmlop_add), _h, _sc, _pra);
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_add), _h, _sc, _pra);
       case 3:
-      return _skel_method(__QAIC_IMPL(ggmlop_mulmat), _h, _sc, _pra);
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_mulmat), _h, _sc, _pra);
    }
    return AEE_EUNSUPPORTED;
 }
