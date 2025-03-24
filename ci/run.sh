@@ -826,8 +826,10 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
 fi
 
 ret=0
-
-test $ret -eq 0 && gg_run ctest_debug
+if [ -z ${GG_BUILD_SYCL} ]; then
+    # SYCL build breaks with debug build flags
+    test $ret -eq 0 && gg_run ctest_debug
+fi
 test $ret -eq 0 && gg_run ctest_release
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
@@ -835,7 +837,9 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
     test $ret -eq 0 && gg_run rerank_tiny
 
     if [ -z ${GG_BUILD_CLOUD} ] || [ ${GG_BUILD_EXTRA_TESTS_0} ]; then
-        test $ret -eq 0 && gg_run test_scripts_debug
+        if [ -z ${GG_BUILD_SYCL} ]; then
+            test $ret -eq 0 && gg_run test_scripts_debug
+        fi
         test $ret -eq 0 && gg_run test_scripts_release
     fi
 
@@ -846,7 +850,9 @@ if [ -z ${GG_BUILD_LOW_PERF} ]; then
             test $ret -eq 0 && gg_run pythia_2_8b
             #test $ret -eq 0 && gg_run open_llama_7b_v2
         fi
-        test $ret -eq 0 && gg_run ctest_with_model_debug
+        if [ -z ${GG_BUILD_SYCL} ]; then
+            test $ret -eq 0 && gg_run ctest_with_model_debug
+        fi
         test $ret -eq 0 && gg_run ctest_with_model_release
     fi
 fi
