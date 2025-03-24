@@ -52,7 +52,10 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
         echo "source /opt/intel/oneapi/setvars.sh"
         exit 1
     fi
-
+    # Use only main GPU
+    export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+    # Enable sysman for correct memory reporting
+    export ZES_ENABLE_SYSMAN=1
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 
