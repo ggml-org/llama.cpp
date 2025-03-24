@@ -38,7 +38,13 @@ On Windows, this executable will need to be renamed to a `.exe` file. Since our 
 cp $LLAMA_SERVER_ONE $LLAMA_SERVER_ONE_EXE
 ```
 
-Let's download a small model. We'll use Google Gemma 1B Instruct v3, a surprisingly capable tiny model. We'll keep it's filename and make that work with the `llama-server-args` file (below).
+We have already downloaded a model in the [Packaging steps](Packaging-ls1.md). Let's copy that into our deploy directory. We'll use the model's original filename and make that work with the `llama-server-args` file (below).
+```
+MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
+cp ~/$LLAMA_SERVER_ONE_DIR/model.gguf $MODEL_FILE
+```
+
+**Optional:** If you would rather download it again and save as the original name, here are the commands:
 ```
 MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
 wget https://huggingface.co/bradhutchings/Brads-LLMs/resolve/main/models/$MODEL_FILE?download=true \
@@ -65,13 +71,25 @@ Now we can test run `llama-server-one`, listening on all network interfaces, por
 
 Hit `ctrl-C` to stop it.
 
-Finally, let's zip up the files into a `.zip` file you can share and move it to your home directory. The model won't compress much, so we're turning compression off with the `-0` parameter.
+Let's zip up the files into a `.zip` file you can share and move it to your home directory. The model won't compress much, so we're turning compression off with the `-0` parameter.
 
 ```
 zip -0 $DEPLOY_ZIP *
 mv $DEPLOY_ZIP ~
 cd ~
 ```
+
+Finally, let's review what you created in building, packaging, and deploying `llama-server-one`:
+```
+ls -aldh llama*
+```
+
+You should see three directories and a `.zip` file. The `llama-server-one-deploy.zip` file is ready to upload and share.
+
+---
+Congratulations! You did it. You built a `llama-server-one` executable that runs on two different CPU architectures and several popular operating systems. If you had any trouble in this process, please post a question in the [Discussions section](https://github.com/BradHutchings/llama-server-one/discussions). I'm happy to help!
+
+-Brad
 
 
 
