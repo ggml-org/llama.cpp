@@ -4,7 +4,9 @@ Based on [llama.cpp](https://github.com/ggml-org/llama.cpp).
 Brad Hutchings<br/>
 brad@bradhutchings.com
 
-**THIS REPO IS NOT QUITE READY FOR PUBIC USE. I WILL DELETE THIS NOTICE WHEN IT IS READY.**
+<--
+**THIS REPO IS NOT QUITE READY FOR PUBIC USE. I WILL REMOVE THIS NOTICE WHEN IT IS READY.**
+-->
 
 ---
 ### Project Goals
