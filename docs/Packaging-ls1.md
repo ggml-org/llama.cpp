@@ -93,7 +93,7 @@ model.gguf
 EOF
 ```
 
-Add the `llama-server-one-args` file to the archoive:
+Add the `llama-server-one-args` file to the archive:
 ```
 zip -0 -r $LLAMA_SERVER_ONE_ZIP $LLAMA_SERVER_ONE_ARGS
 ```
