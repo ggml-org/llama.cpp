@@ -5358,7 +5358,7 @@ def main() -> None:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
 
-        model_instance = model_class(dir_model=dir_model, ftype=output_type, fname_out=fname_out,
+        model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,
