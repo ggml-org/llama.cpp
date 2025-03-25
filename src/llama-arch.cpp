@@ -1392,11 +1392,29 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
-        LLM_ARCH_UNKNOWN,
+        LLM_ARCH_SNAC_DEC,
         {
-            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.parametrizations.weight.original0" },
+            { LLM_TENSOR_WEIGHT_NORMALIZATION_KERNEL, "decoder.model.%d.parametrizations.weight.original1" },
+            { LLM_TENSOR_TRANSPOSED_CONV_WEIGHT,      "decoder.model.%d.parametrizations.weight.original1" },
+            { LLM_TENSOR_CONV1D_BIAS,                 "decoder.model.%d.bias" },
+            { LLM_TENSOR_TRANSPOSED_CONV_BIAS,        "decoder.model.%d.bias" },
+            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.alpha" },
+            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.block.%d.alpha" },
+            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.block.%d.block.%d.alpha" },
+            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.block.%d.parametrizations.weight.original0" },
+            { LLM_TENSOR_WEIGHT_NORMALIZATION_KERNEL, "decoder.model.%d.block.%d.parametrizations.weight.original1" },
+            { LLM_TENSOR_CONV1D_BIAS,                 "decoder.model.%d.block.%d.bias" },
+            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.block.%d.linear.parametrizations.weight.original0" },
+            { LLM_TENSOR_LINEAR_WEIGHT,               "decoder.model.%d.block.%d.linear.parametrizations.weight.original1" },
         },
     },
+        {
+            LLM_ARCH_UNKNOWN,
+            {
+                { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            },
+        },
 };
 
 static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {

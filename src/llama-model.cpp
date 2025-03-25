@@ -1317,6 +1317,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_GROUPNORM_GROUPS, hparams.n_norm_groups);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
             } break;
+        case LLM_ARCH_SNAC_DEC:
+            {
+                // ml.get_key(LLM_KV_VOCAB_SIZE,             hparams.n_vocab);
+                // ml.get_key(LLM_KV_QUANTIZER_COUNT,        hparams.n_quantizers);
+                // ml.get_key(LLM_KV_FEATURES_LENGTH,        hparams.n_codebook_dim);
+                // ml.get_key(LLM_KV_QUANTIZER_STRIDES,      hparams.vq_strides);
+                // ml.get_key(LLM_KV_DECODER_UPSAMPLE_RATES, hparams.rates);
+                // ml.get_key(LLM_KV_DECODER_CHANNEL_DIMS,   hparams.n_channels);
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
@@ -3694,6 +3703,86 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     output   = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {hparams.convnext.n_embd, n_embd}, 0);
                     output_b = create_tensor(tn(LLM_TENSOR_OUTPUT, "bias"),   {n_embd}, 0);
                 } break;
+        case LLM_ARCH_SNAC_DEC:
+            {
+                const int64_t n_layers = hparams.n_channels.size();
+                const int64_t n_blocks = hparams.upsample_rates.size();
+                GGML_ASSERT(n_layers == n_blocks + 2);
+
+                layers.resize(n_layers);
+
+                for (int i = 0; i < n_layers; ++i) {
+                    auto & layer = layers[i];
+                    const int64_t n_in  = (i == 0) ? hparams.n_channels[0] : hparams.n_channels[i-1];
+                    const int64_t n_out = hparams.n_channels[i];
+
+                    if (i == 0) {
+                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
+                                                     {7, 1, n_out}, 0); // [7, 1, 768] (original1)
+                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
+                                                         {n_out, 1, 1}, 0); // [768, 1, 1] (original0)
+                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
+                                                     {n_out}, 0);
+                    } else if (i == 1) {
+                        // Pointwise expansion
+                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
+                                                     {1, n_in, n_out}, 0); // [1, 768, 1024]
+                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
+                                                         {n_out, 1, 1}, 0); // [1024, 1, 1]
+                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
+                                                     {n_out}, 0);
+                    } else if (i == n_layers - 1) {
+                        // Final convolution
+                        layer.alpha = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha", i),
+                                                    {1, n_in, 1}, 0); // [1, 64, 1]
+                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
+                                                     {7, n_in, n_out}, 0); // [7, 64, 1]
+                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
+                                                         {n_out, 1, 1}, 0); // [1, 1, 1]
+                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
+                                                     {n_out}, 0);
+                    } else {
+                        // Decoder blocks
+                        const int64_t stride = hparams.upsample_rates[i-2];
+                        layer.decoder_blocks.resize(1);
+                        auto & block = layer.decoder_blocks[0];
+
+                        // Upsampling
+                        block.alpha = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha", i),
+                                                    {1, n_in, 1}, 0); // something like [1, 1024, 1]
+                        block.up_weight = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_WEIGHT, "weight", i),
+                                                        {stride * 2, n_out, n_in}, 0);
+                        block.up_scale = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_SCALE, "scale", i),
+                                                       {n_out, 1, 1}, 0);
+                        block.up_bias = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_BIAS, "bias", i),
+                                                      {n_out}, 0);
+
+                        // Residual units
+                        for (int j = 0; j < 3; ++j) {
+                            auto & ru = block.res_units[j];
+                            const int dilation = (j == 0) ? 1 : (j == 1) ? 3 : 9;
+
+                            ru.alpha1 = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha1", i, j),
+                                                      {1, n_out, 1}, 0);
+                            ru.conv1_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i, j),
+                                                       {7, 1, n_out}, 0);
+                            ru.conv1_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i, j),
+                                                           {n_out, 1, 1}, 0);
+                            ru.conv1_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i, j),
+                                                       {n_out}, 0);
+
+                            ru.alpha2 = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha2", i, j),
+                                                      {1, n_out, 1}, 0);
+                            ru.conv2_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight2", i, j),
+                                                       {1, n_out, n_out}, 0);
+                            ru.conv2_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale2", i, j),
+                                                           {n_out, 1, 1}, 0);
+                            ru.conv2_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias2", i, j),
+                                                       {n_out}, 0);
+                        }
+                    }
+                }
+            } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -11597,6 +11686,96 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
     }
 };
 
+struct llm_build_snac_dec : public llm_graph_context {
+    llm_build_snac_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+        ggml_tensor * cur;
+
+        cur = build_inp_embd(model.tok_embd);
+
+        for (uint32_t il = 0; il < model.layers.size(); ++il) {
+            const auto & layer = model.layers[il];
+
+            if (il == 0) {        // depthwise
+                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 3);
+            } else if (il == 1) { // pointwise
+                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 0);
+            } else if (il == model.layers.size() - 1) {
+                cur = ggml_snake(ctx0, cur, layer.alpha);
+                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 3);
+                cur = ggml_tanh(ctx0, cur);
+            } else {
+                // Layers 2-5: Decoder Blocks (1024 -> 512 -> 256 -> 128 -> 64)
+                const auto & block = layer.decoder_blocks[0];
+                const int stride = hparams.upsample_rates[il - 2];
+
+                cur = ggml_snake(ctx0, cur, block.alpha);
+                cur = apply_conv1d_transpose(cur, block.up_weight, block.up_scale, block.up_bias, stride, stride);
+
+                // Residual Units (3 per block)
+                for (int j = 0; j < 3; ++j) {
+                    const auto & ru = block.res_units[j];
+                    ggml_tensor * inpL = cur;
+
+                    cur = ggml_snake(ctx0, cur, ru.alpha1);
+                    int dilation = (j == 0) ? 1 : (j == 1) ? 3 : 9;
+                    int padding = 3 * dilation; // Kernel 7, dilated padding = (7-1)/2 * dilation
+                    cur = apply_conv1d(cur, ru.conv1_w, ru.conv1_scale, ru.conv1_b, 1, padding);
+
+                    // pw
+                    cur = ggml_snake(ctx0, cur, ru.alpha2);
+                    cur = apply_conv1d(cur, ru.conv2_w, ru.conv2_scale, ru.conv2_b, 1, 0);
+
+                    // residual
+                    cur = ggml_add(ctx0, cur, inpL);
+                }
+            }
+        }
+
+
+        int64_t target_samples = 24000; // TODO: magic number
+        if (cur->ne[0] > target_samples) {
+            cur = ggml_get_rows(ctx0, cur, ggml_new_i32(ctx0, target_samples));
+        }
+
+        cb(cur, "result_embd", -1);
+        res->t_embd = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+
+    // TODO: move these somewhere else
+private:
+    ggml_tensor * apply_conv1d(ggml_tensor * input, ggml_tensor * conv_w, ggml_tensor * conv_scale, ggml_tensor * conv_b,
+                              int stride, int padding) {
+        ggml_tensor * w_final = normalize_weight(conv_w, conv_scale);
+        ggml_tensor * cur = ggml_conv_1d_ph(ctx0, w_final, input, stride, padding);
+        if (conv_b) {
+            cur = ggml_add(ctx0, cur, conv_b);
+        }
+        return cur;
+    }
+
+    ggml_tensor * apply_conv1d_transpose(ggml_tensor * input, ggml_tensor * up_weight, ggml_tensor * up_scale,
+                                        ggml_tensor * up_bias, int stride, int padding) {
+        ggml_tensor * w_final = normalize_weight(up_weight, up_scale);
+        int kernel_size = up_weight->ne[0];
+        int output_padding = stride % 2; // 0 for even strides (8, 4, 2)
+        ggml_tensor * cur = ggml_conv_transpose_1d(ctx0, w_final, input, stride, padding / 2, output_padding);
+        if (up_bias) {
+            cur = ggml_add(ctx0, cur, up_bias);
+        }
+        return cur;
+    }
+
+    // w_final = scale * (w / || w ||)
+    ggml_tensor * normalize_weight(ggml_tensor * w, ggml_tensor * scale) {
+        ggml_tensor * norm = ggml_norm(ctx0, w, 1e-5f); // 1e-8f ?
+        ggml_tensor * w_normalized = ggml_div(ctx0, w, norm);
+        ggml_tensor * w_final = ggml_mul(ctx0, w_normalized, scale);
+        return w_final;
+    }
+};
+
 llama_memory_i * llama_model::create_memory() const {
     llama_memory_i * res;
 
@@ -11868,6 +12047,10 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_wavtokenizer_dec>(*this, params, gf);
             } break;
+        case LLM_ARCH_SNAC_DEC:
+            {
+                llm = std::make_unique<llm_build_snac_dec>(*this, params, gf);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -11976,6 +12159,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
         case LLM_ARCH_WAVTOKENIZER_DEC:
+        case LLM_ARCH_SNAC_DEC:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values

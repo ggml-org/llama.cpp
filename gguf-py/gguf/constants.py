@@ -174,9 +174,7 @@ class Keys:
         BLOCK_COUNT      = "{arch}.convnext.block_count"
 
     class AudioCodec:
-        QUANTIZER_COUNT = "{arch}.audio_codec.quantizer_count"
-        CODEBOOK_DIM = "{arch}.audio_codec.codebook_dim"
-        QUANTIZER_STRIDES = "{arch}.audio_codec.quantizer_strides"
+        #CODEBOOK_DIM = "{arch}.audio_codec.codebook_dim"
         DECODER_UPSAMPLE_RATES = "{arch}.audio_codec.decoder_upsample_rates"
         DECODER_CHANNEL_DIMS = "{arch}.audio_codec.decoder_channel_dims"
 

@@ -2334,11 +2334,7 @@ class SNACDecModel(Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, Tensor]]:
         del bid  # unused
 
-        logger.debug(f"Processing tensor: {name}")
-
-        if (name.startswith("decoder.") or
-            re.match(r"quantizer\.quantizers\.\d+\.codebook\.weight", name) or
-            re.match(r"quantizer\.quantizers\.\d+\.out_proj\..*", name)):
+        if (name.startswith("decoder.")):
             logger.info(f"{name} -> {data_torch.shape}")
             return [(name, data_torch)]
         else:
@@ -2350,13 +2346,15 @@ class SNACDecModel(Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
-        self.gguf_writer.add_quantizer_count(len(self.hparams["vq_strides"]))
-        self.gguf_writer.add_features_length(self.hparams["codebook_dim"])
-        self.gguf_writer.add_quantizer_strides(self.hparams["vq_strides"])
+        # TODO: Don't think codebook is needed if the LM is a drop in quantizer replacement
+        #self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
+        #self.gguf_writer.add_features_length(self.hparams["codebook_dim"])
         self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])
         self.gguf_writer.add_decoder_upsample_rates(self.hparams["decoder_rates"])
-        self.gguf_writer.add_decoder_channel_dims(self.hparams["decoder_channel_dims"])
+        self.gguf_writer.add_uint32("n_layers", len(self.hparams["decoder_rates"])) # Infer as 4 from decoder_rates
+        self.gguf_writer.add_array("decoder_channel_dims", [768, 1024, 512, 256, 128, 64, 1])
+        # TODO: Add sampling rate?
+        #self.gguf_writer.add_decoder_channel_dims(self.hparams["sampling_rate"])
 
 @Model.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(Model):

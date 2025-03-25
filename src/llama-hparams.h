@@ -70,6 +70,10 @@ struct llama_hparams {
     float f_attn_logit_softcapping  = 50.0f;
     float f_final_logit_softcapping = 30.0f;
 
+    // for SNAC vocoder
+    std::array<uint32_t, LLAMA_MAX_LAYERS> upsample_rates;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_channels;
+
     // for RWKV
     uint32_t rescale_every_n_layers = 0;
     uint32_t time_mix_extra_dim     = 0;
