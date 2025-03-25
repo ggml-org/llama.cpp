@@ -25,20 +25,35 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <assert.h>
+
 #include "HAP_farf.h"
+#include "HAP_compute_res.h"
+#include "hexagon_types.h"
+#include "AEEStdErr.h"
+
 #include "ggmlop_ap_skel.h"
 
+// =================================================================================================
+//  section-1: forward/prototype declaration,global vars,macros,data structures
+// =================================================================================================
 #define ggml_tensor         dsptensor
 
 #define GGML_MAX_DIMS       4
+
 #define GGML_UNUSED(x)      (void)(x)
+
 #define UNUSED              GGML_UNUSED
+
 #define GGML_PAD(x, n)      (((x) + (n) - 1) & ~((n) - 1))
+
 #define GGML_ABORT(...)     ggml_abort(__FILE__, __LINE__, __VA_ARGS__)
+
 #define GGML_ASSERT(x)      if (!(x)) GGML_ABORT("GGML_ASSERT(%s) failed", #x)
+
 #define MIN(a, b)           ((a) < (b) ? (a) : (b))
 #define MAX(a, b)           ((a) > (b) ? (a) : (b))
 #define SWAP(x, y, T)       do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
+
 #if UINTPTR_MAX == 0xFFFFFFFF
 #define GGML_MEM_ALIGN      4
 #else
@@ -49,9 +64,39 @@
 
 #define static_assert(a, b) do { } while (0)
 
-typedef uint16_t ggml_fp16_t;
+typedef double      ggml_float;
+typedef uint16_t    ggml_fp16_t;
 typedef struct { uint16_t bits; } ggml_bf16_t;
-typedef double ggml_float;
+
+static void ggmlhexagon_log_internal(int level, const char * file, const char * func, int line, const char * format, ...);
+
+enum ggmlhexagon_log_level {
+    GGMLHEXAGON_LOG_LEVEL_NONE  = 0,
+    GGMLHEXAGON_LOG_LEVEL_DEBUG = 1,
+    GGMLHEXAGON_LOG_LEVEL_INFO  = 2,
+    GGMLHEXAGON_LOG_LEVEL_WARN  = 3,
+    GGMLHEXAGON_LOG_LEVEL_ERROR = 4,
+    GGMLHEXAGON_LOG_LEVEL_CONT  = 5,
+};
+
+#if 0//def NDEBUG
+#define GGMLQNN_DEBUG                                       0
+#else
+#define GGMLQNN_DEBUG                                       1
+#endif
+
+#define GGMLHEXAGON_LOGBUF_LEN                              4096
+#define GGMLHEXAGON_TMPBUF_LEN                              256
+
+#define GGMLHEXAGON_LOG_ERROR(...)                          ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_ERROR, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGMLHEXAGON_LOG_WARN(...)                           ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_WARN , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGMLHEXAGON_LOG_INFO(...)                           ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_INFO , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#if GGMLQNN_DEBUG
+#define GGMLHEXAGON_LOG_DEBUG(...)                          ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_DEBUG, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#else
+#define GGMLHEXAGON_LOG_DEBUG(...)
+#endif
+#define GGMLQNN_DUMP_TENSOR(tensor)                         ggmlhexagon_dump_tensor(tensor, #tensor)
 
 
 #define GGML_TENSOR_LOCALS_1(type, prefix, pointer, array) \
@@ -133,6 +178,7 @@ enum ggml_type {
     GGML_TYPE_COUNT   = 39,
 };
 
+
 static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
 static void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
 static void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc);
@@ -179,19 +225,54 @@ static const struct ggml_type_traits type_traits[1] = {
 
 };
 
+// =================================================================================================
+//  section-2: ggml-hexagon kernel's internal troubleshooting function
+// =================================================================================================
+static void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...) {
+    return;
+    static char s_ggmlhexagon_log_internal_buf[GGMLHEXAGON_LOGBUF_LEN];
+    va_list args;
+    va_start(args, format);
+    int len_prefix = snprintf(s_ggmlhexagon_log_internal_buf, GGMLHEXAGON_LOGBUF_LEN, "[%s, %d]: ",
+                              func, line);
+    int len = vsnprintf(s_ggmlhexagon_log_internal_buf + len_prefix,
+                        GGMLHEXAGON_LOGBUF_LEN - len_prefix, format, args);
+    if (len < (GGMLHEXAGON_LOGBUF_LEN - len_prefix)) {
+
+        FARF(ALWAYS, "%s\n", s_ggmlhexagon_log_internal_buf);
+    }
+    va_end(args);
+}
+
+static void ggmlhexagon_dump_tensor(const ggml_tensor * tensor) {
+    GGMLHEXAGON_LOG_DEBUG("ne = %5d x %5d x %5d x %5d , nb = (%5zi, %5zi, %5zi, %5zi)\n",
+         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
+         tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);
+}
+
+static void ggml_abort(const char * file, int line, const char * fmt, ...) {
+    GGMLHEXAGON_LOG_DEBUG("enter ggml_abort");
+    //abort();
+    return;
+}
+
+// =================================================================================================
+//  section-3: ggml-hexagon kernel's helper function(tiny ggml-dsp, ported from original ggml)
+// =================================================================================================
 static const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
     return &type_traits_cpu[type];
 }
 
-static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc) {
+static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x,
+                             size_t bx, const float *GGML_RESTRICT y, size_t by, int nrc) {
     assert(nrc == 1);
-            UNUSED(nrc);
-            UNUSED(bx);
-            UNUSED(by);
-            UNUSED(bs);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
     ggml_float sumf = 0.0;
     for (int i = 0; i < n; ++i) {
-        sumf += (ggml_float)(x[i]*y[i]);
+        sumf += (ggml_float) (x[i] * y[i]);
     }
     *s = sumf;
 }
@@ -269,7 +350,6 @@ static bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_ten
 
 static bool ggml_are_same_shape(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
     static_assert(GGML_MAX_DIMS == 4, "GGML_MAX_DIMS is not 4 - update this function");
-
     return
             (t0->ne[0] == t1->ne[0]) &&
             (t0->ne[1] == t1->ne[1]) &&
@@ -317,17 +397,8 @@ static bool ggml_is_contiguous(const struct ggml_tensor * tensor) {
     return ggml_is_contiguous_0(tensor);
 }
 
-inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
-
-static void ggml_dump_tensor(const ggml_tensor * tensor) {
-    FARF(HIGH, "ne = %5" PRIi64 " x %5" PRIi64 " x %5" PRIi64 " x %5" PRIi64 ", nb = (%5zi, %5zi, %5zi, %5zi)\n",
-         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
-         tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);
-}
-
-static void ggml_abort(const char * file, int line, const char * fmt, ...) {
-    //abort();
-    return;
+inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, const float * y) {
+    for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i];
 }
 
 int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
@@ -345,40 +416,31 @@ int ggmlop_dsp_close(remote_handle64 handle) {
     return 0;
 }
 
+// =================================================================================================
+//  section-4: ggml-hexagon kernel function
+// =================================================================================================
 static void ggml_compute_forward_add_f32(
-        const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+        struct ggml_tensor * src0,
+        struct ggml_tensor * src1,
+        struct ggml_tensor * dst) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    memcpy(dst->ne, src1->ne, 16);
+    memcpy(dst->nb, src1->nb, 16);
+
     GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
 
-    const int nr  = ggml_nrows(src0);
+    const int ith = 0;
+    const int nth = 1;
 
+    const int nr  = ggml_nrows(src0);
     GGML_TENSOR_BINARY_OP_LOCALS
 
     GGML_ASSERT( nb0 == sizeof(float));
     GGML_ASSERT(nb00 == sizeof(float));
 
-    const int dr = nr;
-
-    // row range for this thread
-    const int ir0 = 0;
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
-
-    ggml_dump_tensor(src0);
-    ggml_dump_tensor(src1);
-
-#if 1 //naive algorithm for fp32, can works with llama-cli
-    float * a = (float*)src0->data;
-    float * b = (float*)src1->data;
-    float * c = (float*)dst->data;
-    //TODO: Hexagon SIMD
-    for (size_t idx = 0; idx < src0->data_len; idx++) {
-        *c = *a + *b;
-        a++;
-        b++;
-        c++;
-    }
-    return;
-#endif
-
     if (nb10 == sizeof(float)) {
         for (int ir = ir0; ir < ir1; ++ir) {
             // src1 is broadcastable across src0 and dst in i1, i2, i3
@@ -394,9 +456,12 @@ static void ggml_compute_forward_add_f32(
             float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
             float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
-
             for (int64_t r = 0; r < nr0; ++r) {
+#ifdef GGML_USE_ACCELERATE
+                vDSP_vadd(src0_ptr + r*ne10, 1, src1_ptr, 1, dst_ptr + r*ne10, 1, ne10);
+#else
                 ggml_vec_add_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+#endif
             }
         }
     } else {
@@ -422,11 +487,12 @@ static void ggml_compute_forward_add_f32(
             }
         }
     }
+    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
 }
 
 int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst)
 {
-    FARF(HIGH, "===============     DSP: ggmlop_dsp_add ");
+    GGMLHEXAGON_LOG_DEBUG("enter ggmlop_dsp_add\n");
     switch (src0->type) {
         case GGML_TYPE_F32:
         {
@@ -442,21 +508,34 @@ int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tenso
             GGML_ABORT("fatal error");
         }
     }
-
+    GGMLHEXAGON_LOG_DEBUG("leave ggmlop_dsp_add\n");
     return 0;
 }
-
 
 static void ggml_compute_forward_mul_mat_one_chunk(
         const struct ggml_tensor * src0,
         const struct ggml_tensor * src1,
         struct ggml_tensor * dst,
         const enum ggml_type type,
-        const int64_t num_rows_per_vec_dot,
-        const int64_t ir0_start,
-        const int64_t ir0_end,
-        const int64_t ir1_start,
-        const int64_t ir1_end) {
+        const int32_t num_rows_per_vec_dot,
+        const int32_t ir0_start,
+        const int32_t ir0_end,
+        const int32_t ir1_start,
+        const int32_t ir1_end) {
+    ggmlhexagon_dump_tensor(src0);
+    ggmlhexagon_dump_tensor(src1);
+    ggmlhexagon_dump_tensor(dst);
+
+    dst->ne[0] = src0->ne[1];
+    dst->ne[1] = src1->ne[1];
+    dst->ne[2] = src1->ne[2];
+    dst->ne[3] = src1->ne[3];
+
+    dst->nb[0] = ggml_type_size(src1->type);
+    dst->nb[1] = dst->nb[0] * (dst->ne[0] / ggml_blck_size(src1->type));
+    dst->nb[2] = dst->nb[1] * dst->ne[1];
+    dst->nb[3] = dst->nb[2] * dst->ne[2];
+    ggmlhexagon_dump_tensor(dst);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -466,8 +545,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     enum ggml_type const vec_dot_type = type_traits_cpu[type].vec_dot_type;
 
     // broadcast factors
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
+    const int32_t r2 = ne12 / ne02;
+    const int32_t r3 = ne13 / ne03;
 
     if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
        return;
@@ -481,8 +560,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     assert(ne13 % ne03 == 0);
 
     // block-tiling attempt
-    const int64_t blck_0 = 16;
-    const int64_t blck_1 = 16;
+    const int32_t blck_0 = 16;
+    const int32_t blck_1 = 16;
 
     const size_t src1_col_stride = src1_cont || src1->type != vec_dot_type ? row_size : nb11;
 
@@ -490,30 +569,38 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     // 16 * 2, accounting for mmla kernels
     float tmp[32];
 
-    for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
-        for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
-            for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
-                const int64_t i13 = (ir1 / (ne12 * ne1));
-                const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
-                const int64_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
+    for (int32_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
+        for (int32_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
+            for (int32_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
+                const int32_t i13 = (ir1 / (ne12 * ne1));
+                const int32_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
+                const int32_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
 
                 // broadcast src0 into src1
-                const int64_t i03 = i13 / r3;
-                const int64_t i02 = i12 / r2;
+                const int32_t i03 = i13 / r3;
+                const int32_t i02 = i12 / r2;
 
-                const int64_t i1 = i11;
-                const int64_t i2 = i12;
-                const int64_t i3 = i13;
+                const int32_t i1 = i11;
+                const int32_t i2 = i12;
+                const int32_t i3 = i13;
 
                 const char * src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
 
+                // desc: when src1 is not a contiguous memory block we have to calculate the offset using the strides
+                //       if it is, then we have either copied the data to params->wdata and made it contiguous or we are using
+                //       the original src1 data pointer, so we should index using the indices directly
+                // TODO: this is a bit of a hack, we should probably have a better way to handle this
                 const char * src1_col = (const char*)wdata +
                                         (src1_cont || src1->type != vec_dot_type
                                          ? (i11 + i12 * ne11 + i13 * ne12 * ne11) * row_size
                                          : (i11 * nb11 + i12 * nb12 + i13 * nb13));
                 float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
-                for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
+                //for (int32_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
+                //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
+                //}
+
+                for (int32_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
 
@@ -525,13 +612,27 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
-int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+     ggmlhexagon_dump_tensor(src0);
+     ggmlhexagon_dump_tensor(src1);
+     ggmlhexagon_dump_tensor(dst);
+
+     dst->ne[0] = src0->ne[1];
+     dst->ne[1] = src1->ne[1];
+     dst->ne[2] = src1->ne[2];
+     dst->ne[3] = src1->ne[3];
+
+     dst->nb[0] = ggml_type_size(src1->type);
+     dst->nb[1] = dst->nb[0] * (dst->ne[0] / ggml_blck_size(src1->type));
+     dst->nb[2] = dst->nb[1] * dst->ne[1];
+     dst->nb[3] = dst->nb[2] * dst->ne[2];
+     ggmlhexagon_dump_tensor(dst);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     enum ggml_type           const vec_dot_type         = type_traits_cpu[src0->type].vec_dot_type;
     ggml_from_float_t        const from_float           = type_traits_cpu[vec_dot_type].from_float;
-    int64_t                  const vec_dot_num_rows     = type_traits_cpu[src0->type].nrows;
+    int32_t                  const vec_dot_num_rows     = type_traits_cpu[src0->type].nrows;
 
     GGML_ASSERT(ne0 == ne01);
     GGML_ASSERT(ne1 == ne11);
@@ -548,10 +649,10 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-#if 1 //naive algorithm for fp32, can pass various case in UT
-     {
-        ggml_dump_tensor(src0);
-        ggml_dump_tensor(src1);
+#if 0 //naive algorithm for fp32, can pass various case in UT
+    {
+        //ggml_dump_tensor(src0);
+        //ggml_dump_tensor(src1);
 
         float * a = (float*)src0->data;
         float * b = (float*)src1->data;
@@ -574,10 +675,10 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
 #endif
 
     // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
-    const int64_t nr0 = ne0;
+    const int32_t nr0 = ne0;
 
     // This is the size of the rest of the dimensions of the result
-    const int64_t nr1 = ne1 * ne2 * ne3;
+    const int32_t nr1 = ne1 * ne2 * ne3;
 
     // Now select a reasonable chunk size.
     int chunk_size = 16;
@@ -590,8 +691,8 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
     // distribute the work across the inner or outer loop based on which one is larger
     // The number of chunks in the 0/1 dim.
     // CEIL(nr0/chunk_size)
-    int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
-    int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
+    int32_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
+    int32_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
 
     // If the chunking is poor for the number of threads on this setup, scrap the whole plan.  Re-chunk it by thread.
     //   Also, chunking by thread was measured to have perform better on NUMA systems.  See https://github.com/ggml-org/llama.cpp/pull/6915
@@ -603,24 +704,24 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
     }
 
     // The number of elements in each chunk
-    const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
-    const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
+    const int32_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+    const int32_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
 
     // The first chunk comes from our thread_id, the rest will get auto-assigned.
     int current_chunk = 0;
 
     while (current_chunk < nchunk0 * nchunk1) {
-        const int64_t ith0 = current_chunk % nchunk0;
-        const int64_t ith1 = current_chunk / nchunk0;
+        const int32_t ith0 = current_chunk % nchunk0;
+        const int32_t ith1 = current_chunk / nchunk0;
 
-        const int64_t ir0_start = dr0 * ith0;
-        const int64_t ir0_end = MIN(ir0_start + dr0, nr0);
+        const int32_t ir0_start = dr0 * ith0;
+        const int32_t ir0_end = MIN(ir0_start + dr0, nr0);
 
-        const int64_t ir1_start = dr1 * ith1;
-        const int64_t ir1_end = MIN(ir1_start + dr1, nr1);
+        const int32_t ir1_start = dr1 * ith1;
+        const int32_t ir1_end = MIN(ir1_start + dr1, nr1);
 
         // dot kernels can handle 1 row and col at a time, but mmla kernels can process 2 rows and cols
-        int64_t num_rows_per_vec_dot = vec_dot_num_rows;
+        int32_t num_rows_per_vec_dot = vec_dot_num_rows;
 
         // these checks are needed to avoid crossing dim1 boundaries
         // can be optimized, but the logic would become more complicated, so keeping it like this for simplicity
@@ -635,5 +736,5 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
         current_chunk++;
     }
 
-   return 0;
+    return 0;
 }
