@@ -216,8 +216,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 if (i_layer < 9) new_type = GGML_TYPE_IQ2_XXS; // 2.06 bpw
             }
             else {
-                if  (i_layer < 6) new_type = GGML_TYPE_Q3_K;
-                else new_type = GGML_TYPE_Q2_K;
+                if  (i_layer < 6) new_type = GGML_TYPE_Q4_K;
+                else new_type = GGML_TYPE_Q3_K;
             }
             ++qs.i_ffn_down;
         }
@@ -338,7 +338,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
             // Layers 0, 1, 2 are Dense so Q4_K
             // 3, 4, 5 left as Q3_K
-            new_type = GGML_TYPE_Q3_K;
+            if   (i_layer < 6) new_type = GGML_TYPE_Q4_K;
+            else new_type = GGML_TYPE_Q3_K;
         }
         else if (ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S) {
             if (i_layer < n_layer/8) new_type = GGML_TYPE_Q4_K;
