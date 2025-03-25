@@ -213,7 +213,10 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // 3, 4, 5 left as Q2_K
             if (is_one_bit) {
                 // 3, 4, 5, 6, 7, 8 left as 2.06 bpw
-                if (i_layer < 9) new_type = GGML_TYPE_IQ2_XXS; // 2.06 bpw
+                if (i_layer < 6) new_type = GGML_TYPE_Q4_K; // 4.5 bpw
+                else if (i_layer < 12) new_type = GGML_TYPE_Q3_K; // 3.5 bpw
+                else if (i_layer < 18) new_type = GGML_TYPE_IQ2_XXS; // 2.06 bpw
+                else if (i_layer > 58) new_type = GGML_TYPE_IQ2_XXS; // 3.5 bpw
             }
             else {
                 if  (i_layer < 6) new_type = GGML_TYPE_Q4_K;
