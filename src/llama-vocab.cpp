@@ -332,6 +332,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_SMOLLM:
             case LLAMA_VOCAB_PRE_TYPE_CODESHELL:
             case LLAMA_VOCAB_PRE_TYPE_EXAONE:
+            case LLAMA_VOCAB_PRE_TYPE_TRILLION:
             case LLAMA_VOCAB_PRE_TYPE_MINERVA:
                 regex_exprs = {
                     "\\p{N}",
@@ -1617,6 +1618,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "trillion") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_TRILLION;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
