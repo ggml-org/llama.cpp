@@ -236,6 +236,38 @@ function run_test-ops()
 
 }
 
+function run_test-op()
+{
+    prepare_run_on_phone test-backend-ops
+
+    qnnbackendname=qnn-cpu
+    case $qnnbackend in
+        0)
+        qnnbackendname=qnn-cpu
+        ;;
+        1)
+        qnnbackendname=qnn-gpu
+        ;;
+        2)
+        qnnbackendname=qnn-npu
+        ;;
+        *)
+        qnnbackendname=qnn-cpu
+        ;;
+    esac
+
+    #debug
+    echo "adb shell cd ${REMOTE_PATH} \
+               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
+
+    echo "\n"
+    adb shell "cd ${REMOTE_PATH} \
+               && export LD_LIBRARY_PATH=${REMOTE_PATH} \
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
+
+}
+
 
 function print_oplist()
 {
@@ -325,6 +357,7 @@ function show_usage()
     echo "  $0 build"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
+    echo "  $0 run_testop          [ADD/MUL_MAT]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
     echo "  $0 run_llamacli"
     echo "  $0 run_llamabench"
 
@@ -370,6 +403,19 @@ elif [ $# == 1 ]; then
         show_usage
         exit 1
     fi
+elif [ $# == 3 ]; then
+    opname=$2
+#TODO: check opname in oplist
+#opname can be found via print_oplist:
+
+    qnnbackend=$3
+    if [ ${qnnbackend} -gt 3 ]; then
+        show_usage
+        exit 1
+    fi
+
+    run_test-op
+    exit 0
 else
     show_usage
     exit 1
