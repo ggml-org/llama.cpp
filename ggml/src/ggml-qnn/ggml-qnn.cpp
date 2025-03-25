@@ -179,8 +179,6 @@ static void   ggmlqnn_compute_diag_mask(ggml_backend_qnn_context * ctx, ggml_ten
 #endif
 #define GGMLQNN_DUMP_TENSOR(tensor)                     ggmlqnn_dump_tensor(tensor, #tensor)
 
-#define GGMLQNN_MEM_ADD(alignment)                      (sizeof (size_t) + alignment)
-#define GGMLQNN_MEM_MASK(alignment)                     ((uintptr_t)alignment - 1)
 #define QNN_VER_PTR(x)                                  (&((x).v1))
 #define RPCMEM_DEFAULT_FLAGS                            1
 #define RPCMEM_HEAP_ID_SYSTEM                           25
@@ -4230,18 +4228,13 @@ static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, cons
     uint32_t src1_rank  = 0;
     if (nullptr != src0) {
         src0_rank = ggml_n_dims(src0);
-    } else {
-        //GGMLQNN_LOG_DEBUG("op name %s\n", ggml_op_name(op_tensor->op));
     }
     if (nullptr != src1) {
         src1_rank = ggml_n_dims(src1);
-    } else {
-        //GGMLQNN_LOG_DEBUG("op name %s\n", ggml_op_name(op_tensor->op));
     }
 
-    //TODO: remove this filter in the future, mulmat on cDSP doesn't work as expected
-    //bool support =  ((op_tensor->op == GGML_OP_ADD) || (op_tensor->op == GGML_OP_MUL_MAT));
-    bool support =  (op_tensor->op == GGML_OP_ADD);
+    //TODO: only support offload GGML_OP_ADD and GGML_OP_MUL_MAT to cDSP directly
+    bool support =  ((op_tensor->op == GGML_OP_ADD) || (op_tensor->op == GGML_OP_MUL_MAT));
     if (!support)
         return false;
 
@@ -4251,21 +4244,17 @@ static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, cons
             if (!ggml_are_same_shape(src0, src1)) {
                 return false;
             }
-            return ggmlqnn_same_types(ctx, op_tensor);
+            return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
 
         case GGML_OP_MUL_MAT:
         {
             ggmlqnn_dump_op_info(op_tensor);
-            if (src0_rank != src1_rank)
+
+            if (src1_rank != 2)
                 return false;
 
-            //TODO: remove this filter in the future
-            if (src0_rank != 2)
-                return false;
-
-            return (src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type))
-                       && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+            return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
 
         }
         default:
@@ -5110,6 +5099,8 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
             ggml_backend_qnn_free(qnn_backend);
             return nullptr;
         }
+        //ensure test-backend-ops get the correct backend name when inference approach is 1(DIRECT_USE_CDSP)
+        memcpy(g_qnn_mgr[device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
     }
 
     GGMLQNN_LOG_INFO("leave %s\n", __func__);
@@ -5564,11 +5555,6 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
     const enum ggml_type src0_type              = src0->type;
     const uint32_t src0_rank                    = ggml_n_dims(src0);
     const uint32_t src1_rank                    = ggml_n_dims(src1);
-    GGML_ASSERT(src0_rank == src1_rank);
-    GGML_ASSERT(src0_rank >= 2); //QNN SDK's limitation, make QNN SDK happy
-    if (4 == src0_rank) {
-        return ggmlqnn_compute_mul_mat_4d(ctx, op);
-    }
 
     ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
 
@@ -5582,6 +5568,12 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
         ggmlhexagon_compute(ctx, op);
         op_perf.info();
         return;
+    }
+
+    GGML_ASSERT(src0_rank == src1_rank);
+    GGML_ASSERT(src0_rank >= 2); //QNN SDK's limitation, make QNN SDK happy
+    if (4 == src0_rank) {
+        return ggmlqnn_compute_mul_mat_4d(ctx, op);
     }
 
     void * wdata                                = ggmlqnn_type_trait(ctx, op);
