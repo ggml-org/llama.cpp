@@ -6,7 +6,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-
 #ifndef __QAIC_HEADER
 #define __QAIC_HEADER(ff) ff
 #endif //__QAIC_HEADER
@@ -240,8 +239,8 @@ typedef struct _cstring1_s {
 typedef struct dsptensor dsptensor;
 struct dsptensor {
    int32_t type;
-   int64_t ne[4];
-   int64_t nb[4];
+   int32_t ne[4];
+   int32_t nb[4];
    int32_t op;
    int32_t flags;
    void * data;
@@ -277,8 +276,8 @@ __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_open)(const char* uri, remote_
     * @retval, 0 on success, should always succeed
     */
 __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_close)(remote_handle64 h) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_add)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_mulmat)(remote_handle64 _h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_add)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_mulmat)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
 #ifndef ggmlop_URI
 #define ggmlop_URI "file:///libggmlop_skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1"
 #endif /*ggmlop_URI*/
