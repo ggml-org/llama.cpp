@@ -108,7 +108,8 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28,
         LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
         LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
-    };
+        LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
+};
 
     enum llama_rope_type {
         LLAMA_ROPE_TYPE_NONE   = -1,

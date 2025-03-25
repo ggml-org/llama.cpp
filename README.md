@@ -112,6 +112,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [RWKV-6](https://github.com/BlinkDL/RWKV-LM)
 - [x] [QRWKV-6](https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1)
 - [x] [GigaChat-20B-A3B](https://huggingface.co/ai-sage/GigaChat-20B-A3B-instruct)
+- [X] [Trillion-7B-preview](https://huggingface.co/trillionlabs/Trillion-7B-preview)
 
 #### Multimodal
 
