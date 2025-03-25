@@ -5108,12 +5108,15 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #elif defined __riscv_v_intrinsic
 
+    const int vector_length = __riscv_vlenb() * 8;
     float sumf = 0;
 
-    if (__riscv_vlenb() >= 32) {
-        uint8_t temp_01[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                                1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    uint8_t temp_01[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+    uint8_t atmp[16];
 
+    switch (vector_length) {
+    case 256:
         for (int i = 0; i < nb; ++i) {
             const uint8_t * q2 = x[i].qs;
             const int8_t *  q8 = y[i].qs;
@@ -5188,8 +5191,8 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             sumf += dall * isum;
         }
-    } else if (__riscv_vlenb() == 16) {
-        uint8_t atmp[16];
+        break;
+    case 128:
         for (int i = 0; i < nb; ++i) {
             const uint8_t * q2 = x[i].qs;
             const  int8_t * q8 = y[i].qs;
@@ -5277,6 +5280,10 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             sumf += dall * isum;
         }
+        break;
+    default:
+        assert(false && "Unsupported vector length");
+        break;
     }
 
     *s = sumf;
@@ -6141,8 +6148,11 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     uint32_t aux[3];
     uint32_t utmp[4];
 
+    const int vector_length = __riscv_vlenb() * 8;
     float sumf = 0;
-    if (__riscv_vlenb() >= 32) {
+
+    switch (vector_length) {
+    case 256:
         for (int i = 0; i < nb; ++i) {
 
             const uint8_t * GGML_RESTRICT q3 = x[i].qs;
@@ -6234,7 +6244,8 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             sumf += d*sum_t;
 
         }
-    } else if (__riscv_vlenb() == 16) {
+        break;
+    case 128:
         for (int i = 0; i < nb; ++i) {
             const uint8_t * restrict q3 = x[i].qs;
             const uint8_t * restrict qh = x[i].hmask;
@@ -6348,6 +6359,10 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
             sumf += d * isum;
         }
+        break;
+    default:
+        assert(false && "Unsupported vector length");
+        break;
     }
 
     *s = sumf;
@@ -7065,9 +7080,11 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
 
+    const int vector_length = __riscv_vlenb() * 8;
     float sumf = 0;
 
-    if (__riscv_vlenb() >= 32) {
+    switch (vector_length) {
+    case 256:
         for (int i = 0; i < nb; ++i) {
 
             size_t vl = 8;
@@ -7130,7 +7147,8 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             sumf += d*(sum_1 + sum_2);
 
         }
-    } else if (__riscv_vlenb() == 16) {
+        break;
+    case 128:
         for (int i = 0; i < nb; ++i) {
             const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
             const float dmin = y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
@@ -7233,6 +7251,10 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             sumf += d * sumi;
         }
+        break;
+    default:
+        assert(false && "Unsupported vector length");
+        break;
     }
 
     *s = sumf;
@@ -8912,9 +8934,11 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 #elif defined __riscv_v_intrinsic
 
+    const int vector_length = __riscv_vlenb() * 8;
     float sumf = 0;
 
-    if (__riscv_vlenb() >= 32) {
+    switch (vector_length) {
+    case 256:
         for (int i = 0; i < nb; ++i) {
 
             const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
@@ -8994,7 +9018,8 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             sumf += d * sum_t;
 
         }
-    } else if (__riscv_vlenb() == 16) {
+        break;
+    case 128:
         for (int i = 0; i < nb; ++i) {
 
             const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
@@ -9067,6 +9092,10 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             sumf += d * sum_t;
 
         }
+        break;
+    default:
+        assert(false && "Unsupported vector length");
+        break;
     }
 
     *s = sumf;
