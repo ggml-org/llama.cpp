@@ -1752,7 +1752,7 @@ class Mistral3Model(LlamaModel):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
@@ -3385,7 +3385,7 @@ class Gemma3Model(Model):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
