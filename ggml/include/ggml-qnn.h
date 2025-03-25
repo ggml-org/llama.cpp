@@ -1,5 +1,5 @@
  /*
- * Copyright (c) 2023-2024 The ggml authors
+ * Copyright (c) 2023-2025 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -29,7 +29,7 @@ extern "C" {
 #endif
 
 #define GGML_QNN_MAX_DEVICES    3
-#define GGML_QNN_BACKEND_NAME   "qnn"
+#define GGML_QNN_BACKEND_NAME   "hexagon"
 
 enum QNNBackend {
     QNN_BACKEND_CPU,
