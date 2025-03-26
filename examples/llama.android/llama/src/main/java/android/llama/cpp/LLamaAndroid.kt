@@ -45,7 +45,7 @@ class LLamaAndroid {
     private external fun backend_free()
     private external fun new_batch(nTokens: Int, embd: Int, nSeqMax: Int): Long
     private external fun free_batch(batch: Long)
-    private external fun new_sampler(): Long
+    private external fun new_sampler(model: Long): Long
     private external fun free_sampler(sampler: Long)
     private external fun bench_model(
         context: Long,
@@ -103,7 +103,7 @@ class LLamaAndroid {
                     val batch = new_batch(DEFAULT_BATCH_SIZE, 0, 1)
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
-                    val sampler = new_sampler()
+                    val sampler = new_sampler(model)
                     if (sampler == 0L) throw IllegalStateException("new_sampler() failed")
 
                     Log.i(tag, "Loaded model $pathToModel")
@@ -133,7 +133,7 @@ class LLamaAndroid {
                     emit(str)
                 }
 
-                kv_cache_clear(state.context)
+                // kv_cache_clear(state.context)
             }
             else -> {}
         }
