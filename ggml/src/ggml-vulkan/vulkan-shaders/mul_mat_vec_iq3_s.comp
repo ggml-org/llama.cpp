@@ -21,7 +21,7 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint ib32, 
             sum[j] = 0.0;
         }
         [[unroll]] for (uint l = 0; l < 4; ++l) {
-            const u8vec2 qs = unpack8(data_a_packed16[ibi].qs[4 * ib32 + l]);
+            const u8vec2 qs = unpack8(uint32_t(data_a_packed16[ibi].qs[4 * ib32 + l])).xy; // vec4 used due to #12147
             const uint sign = data_a[ibi].signs[4 * ib32 + l];
             const vec4 grid0 = vec4(unpack8(iq3s_grid[qs.x | ((qh << (8 - 2*l)) & 0x100)]));
             const vec4 grid1 = vec4(unpack8(iq3s_grid[qs.y | ((qh << (7 - 2*l)) & 0x100)]));

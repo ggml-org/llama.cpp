@@ -571,6 +571,10 @@ int main(int argc, char ** argv) {
     model_ttc = llama_init_ttc.model.get();
     ctx_ttc   = llama_init_ttc.context.get();
 
+    if (model_ttc == nullptr || ctx_ttc == nullptr) {
+        return ENOENT;
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model_ttc);
 
     // TODO: refactor in a common struct
@@ -585,6 +589,10 @@ int main(int argc, char ** argv) {
 
     model_cts = llama_init_cts.model.get();
     ctx_cts   = llama_init_cts.context.get();
+
+    if (model_cts == nullptr || ctx_cts == nullptr) {
+        return ENOENT;
+    }
 
     std::vector<common_sampler *> smpl(n_parallel);
     for (int i = 0; i < n_parallel; ++i) {

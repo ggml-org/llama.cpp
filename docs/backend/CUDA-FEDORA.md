@@ -14,9 +14,7 @@ In this guide we setup [Nvidia CUDA](https://docs.nvidia.com/cuda/) in a toolbox
 - [Creating a Fedora Toolbox Environment](#creating-a-fedora-toolbox-environment)
 - [Installing Essential Development Tools](#installing-essential-development-tools)
 - [Adding the CUDA Repository](#adding-the-cuda-repository)
-- [Installing `nvidia-driver-libs`](#installing-nvidia-driver-libs)
-- [Manually Resolving Package Conflicts](#manually-resolving-package-conflicts)
-- [Finalizing the Installation of `nvidia-driver-libs`](#finalizing-the-installation-of-nvidia-driver-libs)
+- [Installing Nvidia Driver Libraries](#installing-nvidia-driver-libraries)
 - [Installing the CUDA Meta-Package](#installing-the-cuda-meta-package)
 - [Configuring the Environment](#configuring-the-environment)
 - [Verifying the Installation](#verifying-the-installation)
@@ -67,7 +65,7 @@ This guide focuses on Fedora hosts, but with small adjustments, it can work for 
    sudo dnf distro-sync
    ```
 
-2. **Install the Default Text Editor (Optional):**
+2. **Install **Vim** the default text editor (Optional):**
 
    ```bash
    sudo dnf install vim-default-editor --allowerasing
@@ -97,36 +95,48 @@ After adding the repository, synchronize the package manager again:
 sudo dnf distro-sync
 ```
 
-## Installing `nvidia-driver-libs` and `nvidia-driver-cuda-libs`
+## Installing Nvidia Driver Libraries
 
-We need to detect if the host is supplying the [NVIDIA driver libraries into the toolbox](https://github.com/containers/toolbox/blob/main/src/pkg/nvidia/nvidia.go).
+First, we need to detect if the host is supplying the [NVIDIA driver libraries into the toolbox](https://github.com/containers/toolbox/blob/main/src/pkg/nvidia/nvidia.go):
 
 ```bash
 ls -la /usr/lib64/libcuda.so.1
 ```
 
+### If *`libcuda.so.1`* is missing:
+
+```
+ls: cannot access '/usr/lib64/libcuda.so.1': No such file or directory
+```
+
 **Explanation:**
+The host dose not supply the CUDA drivers, **install them now:**
 
-- `nvidia-driver-libs` and `nvidia-driver-cuda-libs` contains necessary NVIDIA driver libraries required by CUDA,
-  on hosts with NVIDIA drivers installed the Fedora Container will supply the host libraries.
-
-### Install Nvidia Driver Libraries on Guest (if `libcuda.so.1` was NOT found).
+#### Install the Nvidia Driver Libraries on Guest:
 
 ```bash
-sudo dnf install nvidia-driver-libs nvidia-driver-cuda-libs
+sudo dnf install nvidia-driver-cuda nvidia-driver-libs nvidia-driver-cuda-libs nvidia-persistenced
 ```
 
-### Manually Updating the RPM database for host-supplied NVIDIA drivers (if `libcuda.so.1` was found).
+### If *`libcuda.so.1`* exists:
+```
+lrwxrwxrwx. 1 root root 21 Mar 24 11:26 /usr/lib64/libcuda.so.1 -> libcuda.so.570.133.07
+```
 
-If the installation fails due to conflicts, we'll manually download and install the required packages, excluding conflicting files.
+**Explanation:**
+The host is supply the CUDA drivers, **we need to update the guest RPM Database accordingly:**
 
-#### 1. Download `nvidia-driver-libs` and `nvidia-driver-cuda-libs` RPM's (with dependencies)
+#### Update the Toolbox RPM Database to include the Host-Supplied Libraries:
+
+Note: we do not actually install the libraries, we just update the DB so that the guest system knows they are supplied by the host.
+
+##### 1. Download `nvidia-` parts that are supplied by the host RPM's (with dependencies)
 
 ```bash
-sudo dnf download --destdir=/tmp/nvidia-driver-libs --resolve --arch x86_64 nvidia-driver-libs nvidia-driver-cuda-libs
+sudo dnf download --destdir=/tmp/nvidia-driver-libs --resolve --arch x86_64 nvidia-driver-cuda nvidia-driver-libs nvidia-driver-cuda-libs nvidia-persistenced
 ```
 
-#### 2. Update the RPM database to assume the installation of these packages.
+##### 2. Update the RPM database to assume the installation of these packages.
 
 ```bash
 sudo rpm --install --verbose --hash --justdb /tmp/nvidia-driver-libs/*
@@ -134,23 +144,26 @@ sudo rpm --install --verbose --hash --justdb /tmp/nvidia-driver-libs/*
 
 **Note:**
 
-- The `--justdb` option only updates the RPM database, without touching the filesystem.
+- The `--justdb` option only updates the RPM database, without touching the filesystem elsewhere.
 
-#### Finalizing the Installation of `nvidia-driver-libs` and `nvidia-driver-cuda-libs`
+##### Check that the RPM Database has been correctly updated:
 
-After manually installing the dependencies, run:
+**Note:** This is the same command as in the *"Install the Nvidia Driver Libraries on Guest"* for if *`libcuda.so.1`* was missing.
+
 
 ```bash
-sudo dnf install nvidia-driver-libs nvidia-driver-cuda-libs
+sudo dnf install nvidia-driver-cuda nvidia-driver-libs nvidia-driver-cuda-libs nvidia-persistenced
 ```
 
-You should receive a message indicating the package is already installed:
+*(this time it will not install anything, as the database things that these packages are already installed)*
 
 ```
 Updating and loading repositories:
 Repositories loaded.
-Package "nvidia-driver-libs-3:570.86.10-1.fc41.x86_64" is already installed.
-Package "nvidia-driver-cuda-libs-3:570.86.10-1.fc41.x86_64" is already installed.
+Package "nvidia-driver-cuda-3:570.124.06-1.fc41.x86_64" is already installed.
+Package "nvidia-driver-libs-3:570.124.06-1.fc41.x86_64" is already installed.
+Package "nvidia-driver-cuda-libs-3:570.124.06-1.fc41.x86_64" is already installed.
+Package "nvidia-persistenced-3:570.124.06-1.fc41.x86_64" is already installed.
 
 Nothing to do.
 ```
@@ -207,9 +220,9 @@ You should see output similar to:
 ```
 nvcc: NVIDIA (R) Cuda compiler driver
 Copyright (c) 2005-2025 NVIDIA Corporation
-Built on Wed_Jan_15_19:20:09_PST_2025
-Cuda compilation tools, release 12.8, V12.8.61
-Build cuda_12.8.r12.8/compiler.35404655_0
+Built on Fri_Feb_21_20:23:50_PST_2025
+Cuda compilation tools, release 12.8, V12.8.93
+Build cuda_12.8.r12.8/compiler.35583870_0
 ```
 
 This output confirms that the CUDA compiler is accessible and indicates the installed version.

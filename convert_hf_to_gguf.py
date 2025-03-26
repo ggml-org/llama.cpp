@@ -708,6 +708,9 @@ class Model:
         if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
             # ref: https://huggingface.co/Xenova/gpt-4o
             res = "gpt-4o"
+        if chkhsh == "7dec86086fcc38b66b7bc1575a160ae21cf705be7718b9d5598190d7c12db76f":
+            # ref: https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k
+            res = "superbpe"
 
         if res is None:
             logger.warning("\n")
@@ -1752,7 +1755,7 @@ class Mistral3Model(LlamaModel):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
@@ -3385,7 +3388,7 @@ class Gemma3Model(Model):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
@@ -5358,7 +5361,7 @@ def main() -> None:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
 
-        model_instance = model_class(dir_model=dir_model, ftype=output_type, fname_out=fname_out,
+        model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,

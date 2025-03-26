@@ -107,7 +107,8 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_MINERVA        = 27,
         LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28,
         LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
-        LLAMA_VOCAB_PRE_TYPE_VELVET         = 30,
+        LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
+        LLAMA_VOCAB_PRE_TYPE_VELVET         = 31,
     };
 
     enum llama_rope_type {
