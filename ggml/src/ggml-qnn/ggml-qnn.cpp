@@ -23,7 +23,7 @@
  *   this is a complicated skeleton, can expand other ggml ops accordingly
  *
  *  currently provide following ggml op' implementation through Hexagon DSP:
- * - GGML_OP_ADD:
+ * - GGML_OP_ADD & GGML_OP_MUL_MAT:
  *   this is a skeleton, can expand other ggml ops accordingly
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -343,6 +343,7 @@ struct ggml_backend_qnn_context {
     size_t rpc_mempool_len;
     void * rpc_mempool;
     remote_handle64 ggmlop_handle;
+    int domain_id;
 };
 
 struct qnn_op_caps {
@@ -363,6 +364,8 @@ struct qnn_parameter {
     int enable_dlbc;
     int inference_approach;     // 0: QNN_GENERAL     1: DIRECT_USE_CDSP 2: QNN_SINGELGRAPH
     int qnn_backend;            // 0: QNN-CPU backend 1: QNN-GPU backend 2: QNN-NPU backend
+    int enable_mulmat_cdsp;     // enable/disable offload mulmat to cDSP
+    int enable_q_mulmat;        // enable/disable offload fp32 & all quantized type mulmat to cDSP
     const char * qnn_cfgfilename;
     const char * qnn_runtimelib_path;
 };
@@ -381,6 +384,8 @@ static struct qnn_parameter g_qnn_params = {
         .enable_dlbc            = 1,
         .inference_approach     = 0,
         .qnn_backend            = 2, //default is QNN-NPU backend
+        .enable_mulmat_cdsp     = 0,
+        .enable_q_mulmat        = 0,
         .qnn_cfgfilename        = "ggml-qnn.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -1451,7 +1456,7 @@ bail:
     return hexagon_error;
 }
 
-static int ggmlhexagon_get_vtcm_info(int domain, uint32_t * capability, uint32_t attr) {
+static int ggmlhexagon_get_vtcm_info(int domain, uint32_t attr, uint32_t * capability) {
     int hexagon_error = AEE_SUCCESS;
     *capability = 0;
 
@@ -1633,7 +1638,7 @@ bail:
     return false;
 }
 
-static int ggmlhexagon_get_hmx_support_info(int domain, uint32_t * capability, uint32_t attr) {
+static int ggmlhexagon_get_hmx_support_info(int domain, uint32_t attr, uint32_t * capability) {
     int hexagon_error = AEE_SUCCESS;
     *capability = 0;
 
@@ -1679,7 +1684,7 @@ bail:
     return hexagon_error;
 }
 
-static int ggmlhexagon_get_hex_arch_ver(int domain, uint32_t * capability) {
+static int ggmlhexagon_get_hvx_arch_ver(int domain, uint32_t * capability) {
     int hexagon_error = AEE_SUCCESS;
     *capability = 0;
     if(remote_handle_control) {
@@ -1696,7 +1701,7 @@ static int ggmlhexagon_get_hex_arch_ver(int domain, uint32_t * capability) {
             hexagon_error = AEE_SUCCESS;
             goto bail;
         } else if (hexagon_error == AEE_SUCCESS) {
-            *capability = dsp_capability_arch_ver.capability;
+            *capability = dsp_capability_arch_ver.capability & 0xFF;
         } else {
             GGMLQNN_LOG_DEBUG("get_hex_arch_ver failed with error 0x%x", hexagon_error);
             goto bail;
@@ -1710,7 +1715,7 @@ bail:
     return hexagon_error;
 }
 
-static int ggmlhexagon_get_hvx_support_info(int domain, uint32_t * capability, uint32_t attr)
+static int ggmlhexagon_get_hvx_support_info(int domain, uint32_t attr, uint32_t * capability)
 {
     int hexagon_error = AEE_SUCCESS;
     *capability = 0;
@@ -1834,6 +1839,58 @@ static AEEResult ggmlhexagon_set_clocks(remote_handle64 handle, int32 power_leve
     return AEE_SUCCESS;
 }
 
+static void ggmlhexagon_probe_dspinfo(ggml_backend_qnn_context * ctx, size_t * rpcmem_capacity) {
+    size_t candidate_size   = 0;
+    uint8_t * rpc_buffer    = nullptr;
+    const int SIZE_IN_MB    = (1 << 20);
+    size_t probe_slots[]    = {1024, 1536, 2048 - 48, 2048};
+    size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
+    for (size_t idx = 0; idx < probe_counts; idx++) {
+        rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
+        if (nullptr == rpc_buffer) {
+            GGMLQNN_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx], strerror(errno));
+            break;
+        } else {
+            candidate_size = probe_slots[idx];
+            rpcmem_free(rpc_buffer);
+            rpc_buffer = nullptr;
+        }
+    }
+
+    *rpcmem_capacity = candidate_size;
+    GGMLQNN_LOG_INFO("capacity of rpc ion memory %d MB\n", *rpcmem_capacity);
+
+    uint32_t dsp_version = 0;
+    ggmlhexagon_get_hvx_arch_ver(ctx->domain_id, &dsp_version);
+
+    if (dsp_version == 0x68 || dsp_version == 0x69 || dsp_version == 0x73 || dsp_version == 0x75 || dsp_version == 0x79) {
+        GGMLQNN_LOG_DEBUG("dsp arch version 0x%x", dsp_version);
+    } else {
+        GGMLQNN_LOG_WARN("error: dsp arch version 0x%x is not supported", dsp_version);
+    }
+
+    uint32_t vtcm_count = 0;
+    uint32_t vtcm_page  = 0;
+    ggmlhexagon_get_vtcm_info(ctx->domain_id, VTCM_COUNT, &vtcm_count);
+    ggmlhexagon_get_vtcm_info(ctx->domain_id, VTCM_PAGE, &vtcm_page);
+    GGMLQNN_LOG_DEBUG("vtcm_count %d", vtcm_count);
+    GGMLQNN_LOG_DEBUG("vtcm_page %d", vtcm_page);
+
+    uint32_t hmx_depth = 0;
+    uint32_t hmx_spatial = 0;
+    ggmlhexagon_get_hmx_support_info(ctx->domain_id, HMX_SUPPORT_DEPTH, &hmx_depth);
+    ggmlhexagon_get_hmx_support_info(ctx->domain_id, HMX_SUPPORT_SPATIAL, &hmx_spatial);
+    GGMLQNN_LOG_DEBUG("hmx_depth %d", hmx_depth);
+    GGMLQNN_LOG_DEBUG("hmx_spatial %d", hmx_spatial);
+
+    uint32_t hvx_support_128b = 0;
+    ggmlhexagon_get_hvx_support_info(ctx->domain_id, HVX_SUPPORT_128B, &hvx_support_128b);
+    GGMLQNN_LOG_DEBUG("hvx_support_128b %d", hvx_support_128b);
+
+    GGMLQNN_LOG_DEBUG("unsigned pd supported %d", ggmlhexagon_get_unsignedpd_support());
+    GGMLQNN_LOG_DEBUG("async fastrpc supported %d", ggmlhexagon_is_async_fastrpc_supported(ctx->domain_id));
+}
+
 static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
     int hexagon_error               = AEE_SUCCESS;
 
@@ -1931,6 +1988,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
         }
     }
 
+    ctx->domain_id = domain_id;
     GGMLQNN_LOG_INFO("using Hexagon domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
     GGMLQNN_LOG_INFO("unsignedpd_enabled %d", is_unsignedpd_enabled);
     if (is_unsignedpd_enabled) {
@@ -1966,7 +2024,9 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
     hexagon_error = ggmlop_dsp_open(ggmlop_domain_uri, &ctx->ggmlop_handle);
     if (AEE_SUCCESS == hexagon_error) {
         GGMLQNN_LOG_INFO("succeed to open domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
-        GGMLQNN_LOG_INFO("only support GGML_OP_ADD on cDSP currently\n");
+        GGMLQNN_LOG_INFO("only support GGML_OP_ADD and GGML_OP_MUL_MAT on cDSP currently\n");
+        size_t rpcmem_size = 0;
+        ggmlhexagon_probe_dspinfo(ctx, &rpcmem_size);
         ggmlhexagon_set_clocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
         ggmlhexagon_set_rpc_latency(domain_id, RPC_POLL_QOS, 1000);
     } else {
@@ -1983,9 +2043,10 @@ bail:
 
     if (ctx->rpc_mempool) {
         rpcmem_free(ctx->rpc_mempool);
-        ctx->rpc_mempool = nullptr;
-        ctx->rpc_mempool_len = 0;
-        ctx->ggmlop_handle  = -1;
+        ctx->rpc_mempool        = nullptr;
+        ctx->rpc_mempool_len    = 0;
+        ctx->ggmlop_handle      = -1;
+        ctx->domain_id          = -1;
     }
 
     return -1;
@@ -2005,8 +2066,9 @@ static void ggmlhexagon_close_cdsp(ggml_backend_qnn_context * ctx) {
 
     if (ctx->rpc_mempool) {
         rpcmem_free(ctx->rpc_mempool);
-        ctx->rpc_mempool = nullptr;
-        ctx->rpc_mempool_len = 0;
+        ctx->rpc_mempool        = nullptr;
+        ctx->rpc_mempool_len    = 0;
+        ctx->domain_id          = -1;
     }
     GGMLQNN_LOG_DEBUG("leave %s", __func__);
 }
@@ -2019,20 +2081,15 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
 
     int hexagon_error               = AEE_SUCCESS;
     ggmlhexagon_op_func_t op_func   = nullptr;
-    void * wdata                    = nullptr;
-
     ggml_tensor * src0              = op->src[0];
-    //src1 might-be nullptr for some ggml op
     ggml_tensor * src1              = op->src[1];
     ggml_tensor * dst               = op;
-    ggml_type src0_type = src0->type;
 
     switch (op->op) {
         case GGML_OP_ADD:
             op_func = ggmlop_dsp_add;
             break;
         case GGML_OP_MUL_MAT: {
-            wdata = ggmlqnn_type_trait(ctx, op);
             op_func = ggmlop_dsp_mulmat;
             break;
         }
@@ -2040,18 +2097,12 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
             return;
     }
 
-    if ((GGML_OP_MUL_MAT == op->op) && (src0_type != GGML_TYPE_F32)) {
-        dsptensor_0.data        = wdata;
-        dsptensor_0.data_len    = ctx->desired_size;
-    } else {
-        dsptensor_0.data        = src0->data;
-        dsptensor_0.data_len    = ggml_nbytes(src0);
-    }
+    dsptensor_0.data     = src0->data;
+    dsptensor_0.data_len = ggml_nbytes(src0);
 
-    dsptensor_1.data = src1->data;
-    dsptensor_2.data = dst->data;
+    dsptensor_1.data     = src1->data;
+    dsptensor_2.data     = dst->data;
 
-    //make compiler happy
     dsptensor_0.ne[0] = src0->ne[0];
     dsptensor_0.ne[1] = src0->ne[1];
     dsptensor_0.ne[2] = src0->ne[2];
@@ -2085,10 +2136,6 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
     dsptensor_0.data_len = ggml_nbytes(src0);
     dsptensor_1.data_len = ggml_nbytes(src1);
     dsptensor_2.data_len = ggml_nbytes(dst);
-
-    if ((GGML_OP_MUL_MAT == op->op) && (src0_type != GGML_TYPE_F32)) {
-        dsptensor_0.data_len    = ctx->desired_size;
-    }
 
     dsptensor_0.type = src0->type;
     dsptensor_1.type = src1->type;
@@ -4179,10 +4226,12 @@ static void ggmlqnn_load_cfg() {
     qnncfg_instance.get_intvalue("general", "dump_op_info", g_qnn_params.dump_op_info, 0);
     qnncfg_instance.get_intvalue("general", "inference_approach", g_qnn_params.inference_approach, 0);
     qnncfg_instance.get_intvalue("general", "qnn_backend", g_qnn_params.qnn_backend, 2);
-    qnncfg_instance.get_intvalue("npu", "hvx_threads", g_qnn_params.hvx_threads, 4);
-    qnncfg_instance.get_intvalue("npu", "vtcm_size_in_mb", g_qnn_params.vtcm_size_in_mb, 8);
-    qnncfg_instance.get_intvalue("npu", "enable_dlbc", g_qnn_params.enable_dlbc, 0);
-    qnncfg_instance.get_stringvalue("npu", "precision_mode", precision_mode, "fp32");
+    qnncfg_instance.get_intvalue("qnn", "hvx_threads", g_qnn_params.hvx_threads, 4);
+    qnncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_qnn_params.vtcm_size_in_mb, 8);
+    qnncfg_instance.get_intvalue("qnn", "enable_dlbc", g_qnn_params.enable_dlbc, 0);
+    qnncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
+    qnncfg_instance.get_intvalue("cdsp", "enable_mulmat_cdsp", g_qnn_params.enable_mulmat_cdsp, 0);
+    qnncfg_instance.get_intvalue("cdsp", "enable_q_mulmat", g_qnn_params.enable_q_mulmat, 0);
     GGMLQNN_LOG_INFO("print_qnn_internal_log=%d", g_qnn_params.print_qnn_internal_log);
     GGMLQNN_LOG_INFO("inference_approach=%d(%s)", g_qnn_params.inference_approach,
                      ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
@@ -4226,6 +4275,8 @@ static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, cons
     const int64_t ne00  = op_tensor->src[0]->ne[0];
     uint32_t src0_rank  = 0;
     uint32_t src1_rank  = 0;
+    bool support        = false;
+
     if (nullptr != src0) {
         src0_rank = ggml_n_dims(src0);
     }
@@ -4233,32 +4284,39 @@ static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, cons
         src1_rank = ggml_n_dims(src1);
     }
 
-    //TODO: only support offload GGML_OP_ADD and GGML_OP_MUL_MAT to cDSP directly
-    bool support =  ((op_tensor->op == GGML_OP_ADD) || (op_tensor->op == GGML_OP_MUL_MAT));
+    if (g_qnn_params.enable_mulmat_cdsp)
+        support = ((op_tensor->op == GGML_OP_ADD) || (op_tensor->op == GGML_OP_MUL_MAT));
+    else
+        support = (op_tensor->op == GGML_OP_ADD);
     if (!support)
         return false;
 
+    ggmlqnn_dump_op_info(op_tensor);
     switch (op_tensor->op) {
         case GGML_OP_ADD:
         {
             if (!ggml_are_same_shape(src0, src1)) {
                 return false;
             }
+
             return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
-
         case GGML_OP_MUL_MAT:
         {
             ggmlqnn_dump_op_info(op_tensor);
 
-            if (src1_rank != 2)
+            //TODO:3d&4d matrix mulmat on cDSP
+            if (src0_rank != 2)
                 return false;
 
-            return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
-
+            if (g_qnn_params.enable_q_mulmat)
+                return (src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type))
+                       && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+            else
+                return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
         default:
-            return false;
+            return ggmlqnn_same_types(ctx, op_tensor);
     }
 }
 
@@ -4597,8 +4655,6 @@ static ggml_backend_buffer_t ggml_backend_qnn_buffer_type_alloc_buffer(
     if (nullptr == ctx->buffer) {
         GGMLQNN_LOG_WARN("%s: failed to allocate %d MiB\n", __func__, size / (1 << 20));
         return nullptr;
-    } else {
-        GGMLQNN_LOG_DEBUG("%s: allocate %d MiB\n", __func__, size_aligned / (1 << 20));
     }
 
     return ggml_backend_buffer_init(buft, ggml_backend_qnn_buffer_interface, ctx, size);
@@ -4729,10 +4785,16 @@ static void ggml_backend_qnn_device_get_memory(ggml_backend_dev_t dev, size_t * 
         *total = ggmlqnn_get_system_total_memory_in_bytes();
         *free = ggmlqnn_get_system_free_memory_in_bytes();
     } else if (QNN_BACKEND_NPU == ctx->device) {
-        size_t rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
-        size_t rpc_ion_usage = ctx->instance->get_rpcmem_usage();
-        GGMLQNN_LOG_DEBUG("rpc memsize %d", rpc_ion_memsize);
-        GGMLQNN_LOG_DEBUG("rpc usage %d", rpc_ion_usage);
+        size_t rpc_ion_memsize = 0;
+        size_t rpc_ion_usage   = 0;
+        if (DIRECT_USE_CDSP != g_qnn_params.inference_approach) {
+            rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
+            rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
+        } else {
+            ggmlhexagon_probe_dspinfo(ctx, &rpc_ion_memsize);
+        }
+        GGMLQNN_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize);
+        GGMLQNN_LOG_DEBUG("rpc usage %d M", rpc_ion_usage);
         *total = rpc_ion_memsize * (1 << 20);
         *free = (rpc_ion_memsize - rpc_ion_usage) * (1 << 20);
     }
@@ -5078,9 +5140,12 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
         return g_qnn_mgr[device].backend;
     }
 
-    qnn_instance * instance  = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
-    if (nullptr == instance)
-        return nullptr;
+    //don't initialize QNN when inference approach is offload ggml op to Hexagon cDSP directly
+    if (DIRECT_USE_CDSP != g_qnn_params.inference_approach) {
+        qnn_instance * instance = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
+        if (nullptr == instance)
+            return nullptr;
+    }
 
     ggml_backend_qnn_interface.graph_compute = ggmlqnn_backend_graph_compute_general;
 
