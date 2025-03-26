@@ -1758,15 +1758,10 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 
     const int compute_capability = ggml_cuda_info().devices[ctx.device].cc;
-    if (GGML_CUDA_CC_IS_CDNA(compute_capability)) {
+    if (GGML_CUDA_CC_IS_CDNA(compute_capability) || GGML_CUDA_CC_IS_RDNA4(compute_capability)) {
         cu_compute_type = CUBLAS_COMPUTE_32F;
         alpha = &alpha_f32;
         beta  = &beta_f32;
-
-        if (GGML_CUDA_CC_IS_RDNA4(compute_capability)) {
-            dst_t = (char *) dst_ddf;
-            cu_data_type = CUDA_R_32F;
-        }
     }
 
     GGML_ASSERT(ne12 % ne02 == 0);
