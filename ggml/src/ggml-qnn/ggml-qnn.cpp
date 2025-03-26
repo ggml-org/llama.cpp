@@ -14,17 +14,17 @@
  * section-6  Hexagon DSP helper function
  * section-7  backend helper function / class
  * section-8  implementation of ggml-hexagon backend according to specification in ggml backend subsystem
- * section-9  implementation of general approach through QNN and Hexagon DSP
+ * section-9  implementation of hwaccel approach through QNN and Hexagon DSP
  *
  * currently provide following ggml op' implementation through QNN:
  * - GGML_OP_ADD/GGML_OP_SUB/GGML_OP_MUL/GGML_OP_DIV/GGML_OP_LOG/GGML_OP_SQRT:
- *   this is a simple skeleton, can expand other ggml ops according to expertise
+ *   this is a simple hwaccel skeleton, can expand other ggml ops according to expertise
  * - GGML_OP_MUL_MAT:
- *   this is a complicated skeleton, can expand other ggml ops accordingly
+ *   this is a complicated hwaccel skeleton, can expand other ggml ops accordingly
  *
  *  currently provide following ggml op' implementation through Hexagon DSP:
  * - GGML_OP_ADD & GGML_OP_MUL_MAT:
- *   this is a skeleton, can expand other ggml ops accordingly
+ *   this is a hwaccel skeleton, can expand other ggml ops accordingly
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -230,7 +230,7 @@ static void   ggmlqnn_compute_diag_mask(ggml_backend_qnn_context * ctx, ggml_ten
 
 #define GGMLQNN_CHECK_PARAMS(ctx, src0, src1, dst)                              \
     do {                                                                        \
-        if (g_qnn_params.inference_approach != DIRECT_USE_CDSP) {               \
+        if (g_qnn_params.hwaccel_approach != HWACCEL_CDSP) {                    \
             if (!ggmlqnn_is_valid_params((ctx), (src0), (src1), (dst))) {       \
                 return;                                                         \
             }                                                                   \
@@ -270,12 +270,12 @@ enum qnn_profile_level {
 };
 
 //0: general approach through QNN:offload ggmlop to QNN
-//1: general approach through Hexagon cDSP:offload ggmlop to Hexagon cDSP directly
-//2: special approach through QNN:mapping entire ggml cgraph to a single QNN graph
-enum inference_approach {
-    QNN_GENERAL     = 0,
-    DIRECT_USE_CDSP = 1,
-    QNN_SINGLEGRAPH = 2,
+//1: special approach through QNN-SINGLEGRAPH:mapping entire ggml cgraph to a single QNN graph
+//2: general approach through Hexagon cDSP:offload ggmlop to Hexagon cDSP directly
+enum hwaccel_approach_type {
+    HWACCEL_QNN                     = 0,
+    HWACCEL_QNN_SINGLEGRAPH         = 1,
+    HWACCEL_CDSP                    = 2,
 };
 
 enum hexagon_dsp_type {
@@ -362,7 +362,7 @@ struct qnn_parameter {
     int hvx_threads;
     int vtcm_size_in_mb;
     int enable_dlbc;
-    int inference_approach;     // 0: QNN_GENERAL     1: DIRECT_USE_CDSP 2: QNN_SINGELGRAPH
+    int hwaccel_approach;       // 0: HWACCEL_QNN 1: HWACCEL_QNN_SINGLEGRAPH 2: HWACCEL_CDSP
     int qnn_backend;            // 0: QNN-CPU backend 1: QNN-GPU backend 2: QNN-NPU backend
     int enable_mulmat_cdsp;     // enable/disable offload mulmat to cDSP
     int enable_q_mulmat;        // enable/disable offload fp32 & all quantized type mulmat to cDSP
@@ -382,8 +382,8 @@ static struct qnn_parameter g_qnn_params = {
         .hvx_threads            = 4,
         .vtcm_size_in_mb        = 8,
         .enable_dlbc            = 1,
-        .inference_approach     = 0,
-        .qnn_backend            = 2, //default is QNN-NPU backend
+        .hwaccel_approach       = HWACCEL_CDSP,
+        .qnn_backend            = QNN_BACKEND_NPU,
         .enable_mulmat_cdsp     = 0,
         .enable_q_mulmat        = 0,
         .qnn_cfgfilename        = "ggml-qnn.cfg",
@@ -1578,13 +1578,12 @@ static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
 
     if (remote_handle_control) {
         struct remote_rpc_control_latency data;
-#if 1
-        data.enable  = RPC_PM_QOS;
-        data.latency = 300;
-#else
-        data.enable = RPC_POLL_QOS;
-        data.latency = 1000;
-#endif
+/*
+        qos          |  latency
+        -----------------------
+        RPC_PM_QOS   |  300
+        RPC_POLL_QOS |  1000
+*/
         data.enable   = qos;
         data.latency  = latency;
         hexagon_error = remote_handle64_control(DSPRPC_GET_DSP_INFO, DSPRPC_CONTROL_LATENCY, (void*)&data, sizeof(data));
@@ -1926,7 +1925,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
     }
 
     if (-1 == domain_id) {
-        if (NULL != domain_type) {
+        if (nullptr != domain_type) {
             if ((strcmp(domain_type, "NSP") != 0 && strcmp(domain_type, "HPASS") != 0)) {
                 GGMLQNN_LOG_WARN("invalid domain_type %s. possible values are NSP or HPASS", domain_type);
                 goto bail;
@@ -2188,16 +2187,16 @@ static const char * ggmlqnn_get_htparch_desc(size_t htp_arch) {
     }
 }
 
-static const char * ggmlqnn_get_inference_approach_name(int inference_approach) {
-    switch (inference_approach) {
-        case QNN_GENERAL:
-            return "QNN_GENERAL";
-        case DIRECT_USE_CDSP:
-            return "DIRECT_USE_CDSP";
-        case QNN_SINGLEGRAPH:
-            return "QNN_SINGLEGRAPH";
+static const char * ggmlqnn_get_hwaccel_approach_name(int hwaccle_approach) {
+    switch (hwaccle_approach) {
+        case HWACCEL_QNN:
+            return "HWACCEL_QNN";
+        case HWACCEL_QNN_SINGLEGRAPH:
+            return "HWACCEL_QNN_SINGLEGRAPH";
+        case HWACCEL_CDSP:
+            return "HWACCEL_CDSP";
         default:
-            return "unknown approach";
+            return "unknown hwaccel approach";
     }
 }
 
@@ -3996,7 +3995,7 @@ void qnn_instance::htp_enter_performance_mode() {
 }
 
 static void ggmlqnn_set_runtime_path(size_t device, const std::string & path) {
-    if ((QNN_BACKEND_NPU == device) || (DIRECT_USE_CDSP == g_qnn_params.inference_approach)) {
+    if ((QNN_BACKEND_NPU == device) || (HWACCEL_CDSP == g_qnn_params.hwaccel_approach)) {
         if (0 == setenv("LD_LIBRARY_PATH",
                         (path +
                          ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
@@ -4224,7 +4223,7 @@ static void ggmlqnn_load_cfg() {
     qnncfg_instance.get_intvalue("general", "enable_perf", g_qnn_params.enable_perf, 0);
     qnncfg_instance.get_intvalue("general", "print_tensors_info", g_qnn_params.print_tensors_info, 0);
     qnncfg_instance.get_intvalue("general", "dump_op_info", g_qnn_params.dump_op_info, 0);
-    qnncfg_instance.get_intvalue("general", "inference_approach", g_qnn_params.inference_approach, 0);
+    qnncfg_instance.get_intvalue("general", "hwaccel_approach", g_qnn_params.hwaccel_approach, 0);
     qnncfg_instance.get_intvalue("general", "qnn_backend", g_qnn_params.qnn_backend, 2);
     qnncfg_instance.get_intvalue("qnn", "hvx_threads", g_qnn_params.hvx_threads, 4);
     qnncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_qnn_params.vtcm_size_in_mb, 8);
@@ -4233,8 +4232,8 @@ static void ggmlqnn_load_cfg() {
     qnncfg_instance.get_intvalue("cdsp", "enable_mulmat_cdsp", g_qnn_params.enable_mulmat_cdsp, 0);
     qnncfg_instance.get_intvalue("cdsp", "enable_q_mulmat", g_qnn_params.enable_q_mulmat, 0);
     GGMLQNN_LOG_INFO("print_qnn_internal_log=%d", g_qnn_params.print_qnn_internal_log);
-    GGMLQNN_LOG_INFO("inference_approach=%d(%s)", g_qnn_params.inference_approach,
-                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
+    GGMLQNN_LOG_INFO("hwaccel_approach=%d(%s)", g_qnn_params.hwaccel_approach,
+                     ggmlqnn_get_hwaccel_approach_name(g_qnn_params.hwaccel_approach));
     GGMLQNN_LOG_INFO("qnn_backend=%d", g_qnn_params.qnn_backend);
     GGMLQNN_LOG_INFO("npu inference precision mode=%s", precision_mode.c_str());
     GGMLQNN_LOG_INFO("qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
@@ -4325,7 +4324,7 @@ static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const st
         return true;
     }
 
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         return ggmlhexagon_can_handle_op(ctx, op_tensor);
     }
 
@@ -4686,7 +4685,7 @@ static void ggml_backend_qnn_free(ggml_backend_t backend) {
     ggml_backend_qnn_context * ctx = (ggml_backend_qnn_context *)backend->context;
     GGMLQNN_LOG_DEBUG("device idx %d, name:%s", ctx->device, g_qnn_mgr[ctx->device].name);
 
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         ggmlhexagon_close_cdsp(ctx);
     }
 
@@ -4787,7 +4786,7 @@ static void ggml_backend_qnn_device_get_memory(ggml_backend_dev_t dev, size_t * 
     } else if (QNN_BACKEND_NPU == ctx->device) {
         size_t rpc_ion_memsize = 0;
         size_t rpc_ion_usage   = 0;
-        if (DIRECT_USE_CDSP != g_qnn_params.inference_approach) {
+        if (HWACCEL_CDSP != g_qnn_params.hwaccel_approach) {
             rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
             rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
         } else {
@@ -5013,8 +5012,8 @@ ggml_backend_reg_t ggml_backend_qnn_reg() {
 
     //case-2: normal scenario, such as llama-cli or UI applicaton
     ggmlqnn_load_cfg();
-    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.inference_approach,
-                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
+    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.hwaccel_approach,
+                     ggmlqnn_get_hwaccel_approach_name(g_qnn_params.hwaccel_approach));
     GGMLQNN_LOG_INFO("user's specified qnn_backend=%d", g_qnn_params.qnn_backend);
     GGMLQNN_LOG_INFO("user's specified qnn runtime lib path=%s", g_qnn_params.qnn_runtimelib_path);
     if (g_qnn_params.qnn_backend >= GGML_QNN_MAX_DEVICES) {
@@ -5053,7 +5052,7 @@ ggml_backend_reg_t ggml_backend_qnn_reg() {
 }
 
 const char * ggml_backend_qnn_get_devname(size_t dev_num) {
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         if (dev_num == QNN_BACKEND_GGML)
             return "ggml";
         else
@@ -5076,8 +5075,8 @@ const char * ggml_backend_qnn_get_devname(size_t dev_num) {
 
 static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_lib_path) {
     int result = 0;
-    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.inference_approach,
-                     ggmlqnn_get_inference_approach_name(g_qnn_params.inference_approach));
+    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.hwaccel_approach,
+                     ggmlqnn_get_hwaccel_approach_name(g_qnn_params.hwaccel_approach));
 
     qnn_instance * instance = nullptr;
     instance = new qnn_instance(qnn_lib_path, g_qnn_mgr[device].lib, "");
@@ -5141,7 +5140,7 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
     }
 
     //don't initialize QNN when inference approach is offload ggml op to Hexagon cDSP directly
-    if (DIRECT_USE_CDSP != g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP != g_qnn_params.hwaccel_approach) {
         qnn_instance * instance = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
         if (nullptr == instance)
             return nullptr;
@@ -5157,14 +5156,14 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
     };
 
     g_qnn_mgr[device].backend = qnn_backend;
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         int result = ggmlhexagon_init_dsp(&g_qnn_mgr[device]);
         if (0 != result) {
             GGMLQNN_LOG_INFO("init hexagon dsp failure");
             ggml_backend_qnn_free(qnn_backend);
             return nullptr;
         }
-        //ensure test-backend-ops get the correct backend name when inference approach is 1(DIRECT_USE_CDSP)
+        //ensure test-backend-ops get the correct backend name when inference approach is 1(HWACCEL_CDSP)
         memcpy(g_qnn_mgr[device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
     }
 
@@ -5237,7 +5236,7 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
     qnn_perf op_perf                            = qnn_perf(graph_name);
     op_perf.start();
 
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         ggmlhexagon_compute(ctx, op);
         op_perf.info();
         return;
@@ -5629,7 +5628,7 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
     qnn_perf op_perf                            = qnn_perf(graph_name);
     op_perf.start();
 
-    if (DIRECT_USE_CDSP == g_qnn_params.inference_approach) {
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
         ggmlhexagon_compute(ctx, op);
         op_perf.info();
         return;
