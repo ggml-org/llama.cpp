@@ -11846,10 +11846,11 @@ llm_graph_result_ptr llama_model::build_graph(
                         GGML_ABORT("invalid graph type");
                 };
             } break;
-            //case LLM_ARCH_T5ENCODER:
-            //    {
-            //        llm.build_t5_enc(gf);
-            //    } break;
+        case LLM_ARCH_T5ENCODER:
+            {
+                llm = std::make_unique<llm_build_t5_enc>(*this, params, gf);
+            }
+            break;
         case LLM_ARCH_JAIS:
             {
                 llm = std::make_unique<llm_build_jais>(*this, params, gf);
