@@ -36,8 +36,6 @@ class LLamaAndroid {
         }
     }.asCoroutineDispatcher()
 
-    private val nlen: Int = 64
-
     private external fun log_to_android()
     private external fun load_model(filename: String): Long
     private external fun free_model(model: Long)
@@ -102,7 +100,7 @@ class LLamaAndroid {
                     val context = new_context(model)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
-                    val batch = new_batch(512, 0, 1)
+                    val batch = new_batch(DEFAULT_BATCH_SIZE, 0, 1)
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
                     val sampler = new_sampler()
@@ -116,17 +114,25 @@ class LLamaAndroid {
         }
     }
 
-    fun send(message: String, formatChat: Boolean = false): Flow<String> = flow {
+    fun send(
+        message: String,
+        formatChat: Boolean = false,
+        predictLength: Int = DEFAULT_PREDICT_LENGTH,
+    ): Flow<String> = flow {
         when (val state = threadLocalState.get()) {
             is State.Loaded -> {
-                val ncur = IntVar(completion_init(state.context, state.batch, message, formatChat, nlen))
-                while (ncur.value <= nlen) {
-                    val str = completion_loop(state.context, state.batch, state.sampler, nlen, ncur)
-                    if (str == null) {
-                        break
-                    }
+                val nCur = IntVar(
+                    completion_init(state.context, state.batch, message, formatChat, predictLength)
+                )
+
+                while (nCur.value <= predictLength) {
+                    val str = completion_loop(
+                        state.context, state.batch, state.sampler, predictLength, nCur
+                    ) ?: break
+
                     emit(str)
                 }
+
                 kv_cache_clear(state.context)
             }
             else -> {}
@@ -155,6 +161,9 @@ class LLamaAndroid {
     }
 
     companion object {
+        private const val DEFAULT_BATCH_SIZE = 512
+        private const val DEFAULT_PREDICT_LENGTH = 128
+
         private class IntVar(value: Int) {
             @Volatile
             var value: Int = value
