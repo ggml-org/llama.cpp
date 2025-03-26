@@ -502,8 +502,7 @@ static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer,
         return;  // Nothing to do
     }
     if (tensor->data == nullptr) {
-        std::cerr << "Error: Tensor data pointer is null." << std::endl;
-        std::exit(1);
+        GGML_ABORT("Error: Tensor data pointer is null.\n");
     }
     void * target_ptr = static_cast<char *>(tensor->data) + offset;
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memset(target_ptr, value, size)));
