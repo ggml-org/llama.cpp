@@ -253,9 +253,6 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
         auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
         auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
 
-        // add the default CPU buffer type which will be used as a fallback if the lora needs to be loaded to an extra buft
-        buft_extra.emplace_back(ggml_backend_dev_buffer_type(cpu_dev));
-
         auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
             ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
 
@@ -289,8 +286,11 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
         // do not load loras to extra buffer types (i.e. bufts for repacking) -> use the CPU in that case
         for (auto & ex : buft_extra) {
             if (ex == buft) {
-                LLAMA_LOG_WARN("%s: lora for '%s' cannot use buft '%s'\n", __func__, model_tensor->name, ggml_backend_buft_name(buft));
-                buft = buft_extra[0];
+                LLAMA_LOG_WARN("%s: lora for '%s' cannot use buft '%s', fallback to CPU\n", __func__, model_tensor->name, ggml_backend_buft_name(buft));
+
+                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                buft = ggml_backend_dev_buffer_type(cpu_dev);
+
                 break;
             }
         }
