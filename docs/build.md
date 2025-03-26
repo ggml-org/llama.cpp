@@ -218,6 +218,7 @@ By default, all supported compute capabilities are enabled. To customize this be
 
 ```bash
 cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+cmake --build build --config Release
 ```
 
 This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
