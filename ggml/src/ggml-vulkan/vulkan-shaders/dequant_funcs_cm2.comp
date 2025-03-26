@@ -178,7 +178,7 @@ float16_t dequantFuncQ4_K(const in decodeBufQ4_K bl, const in uint blockCoords[2
 
     uvec4 v = bl128.block.q4k[0];
 
-    const f16vec2 loadd = unpackFloat2x16(v.x);
+    const vec2 loadd = vec2(unpackFloat2x16(v.x));
 
     uint32_t sc;
     uint32_t mbyte;
@@ -199,15 +199,15 @@ float16_t dequantFuncQ4_K(const in decodeBufQ4_K bl, const in uint blockCoords[2
     sc &= 0x3F;
     mbyte &= 0x3F;
 
-    const float16_t d = loadd.x * float16_t(sc);
-    const float16_t m = loadd.y * float16_t(mbyte);
+    const float d = loadd.x * float(sc);
+    const float m = loadd.y * float(mbyte);
 
     uint qs = uint32_t(bl16.block.qs[((idx & 0xC0) >> 2) + ((idx & 0x1E) >> 1)]);
     qs = (qs >> (b * 4 + 8 * (idx & 1))) & 0xF;
 
-    float16_t ret = d * float16_t(qs) - m;
+    float ret = d * float(qs) - m;
 
-    return ret;
+    return float16_t(ret);
 }
 
 layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufQ5_K {
@@ -311,8 +311,8 @@ float16_t dequantFuncIQ1_S(const in decodeBufIQ1_S bl, const in uint blockCoords
     const float16_t d = bl.block.d;
     const uint idx = coordInBlock[1];
 
-    const uint ib32 = idx / 32;
-    const uint ib8 = idx / 8;
+    const uint ib32 = (idx & 0xE0) >> 5;
+    const uint ib8 = (idx & 0xF8) >> 3;
 
     const uint qh = bl.block.qh[ib32];
     const uint qs = bl.block.qs[ib8];
@@ -330,14 +330,20 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ1
    block_iq1_m block;
 };
 
+layout(buffer_reference, std430, buffer_reference_align = 8) buffer decodeBufIQ1_M_packed64 {
+   block_iq1_m_packed64 block;
+};
+
 float16_t dequantFuncIQ1_M(const in decodeBufIQ1_M bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
-    const u16vec4 scales = u16vec4(bl.block.scales[0], bl.block.scales[1], bl.block.scales[2], bl.block.scales[3]) >> 12;
-    const float16_t d = uint16BitsToHalf(scales.x | (scales.y << 4) | (scales.z << 8) | (scales.w << 12));
+    decodeBufIQ1_M_packed64 bl64 = decodeBufIQ1_M_packed64(bl);
     const uint idx = coordInBlock[1];
 
-    const uint ib8 = idx / 8;
-    const uint ib16 = idx / 16;
+    uvec2 scales = unpack32(bl64.block.scales);
+    const float16_t d = uint16BitsToHalf(uint16_t(((scales.x & 0xF000) >> 12) | ((scales.x & 0xF0000000) >> 24) | ((scales.y & 0xF000) >> 4) | ((scales.y & 0xF0000000) >> 16)));
+
+    const uint ib8 = (idx & 0xF8) >> 3;
+    const uint ib16 = (idx & 0xF0) >> 4;
     const int i8 = int(idx % 8);
     const uint sc = bl.block.scales[ib8 / 8];
     const uint qs = bl.block.qs[ib8];

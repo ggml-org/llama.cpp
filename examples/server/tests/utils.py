@@ -302,7 +302,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "tinyllamas/stories260K.gguf"
         server.model_alias = "tinyllama-2"
-        server.n_ctx = 256
+        server.n_ctx = 512
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 64

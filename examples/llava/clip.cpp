@@ -2989,7 +2989,10 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
     assert(itype < GGML_TYPE_COUNT);
     ggml_type type = static_cast<ggml_type>(itype);
 
-    auto * ctx_clip = clip_model_load(fname_inp, 2);
+    auto * ctx_clip = clip_init(fname_inp, clip_context_params{
+        /* use_gpu */   false,
+        /* verbosity */ 2,
+    });
 
     const auto & ctx_src = ctx_clip->ctx_gguf;
     const auto & ctx_data = ctx_clip->ctx_data;

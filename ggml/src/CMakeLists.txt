@@ -1,4 +1,5 @@
 include(CheckCXXCompilerFlag)
+include("../cmake/common.cmake")
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
 
@@ -23,33 +24,6 @@ if (NOT MSVC)
         link_libraries     (-fsanitize=undefined)
     endif()
 endif()
-
-function(ggml_get_flags CCID CCVER)
-    set(C_FLAGS "")
-    set(CXX_FLAGS "")
-
-    if (CCID MATCHES "Clang")
-        set(C_FLAGS   -Wunreachable-code-break -Wunreachable-code-return)
-        set(CXX_FLAGS -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi)
-
-        if (
-            (CCID STREQUAL "Clang"      AND CCVER VERSION_GREATER_EQUAL 3.8.0) OR
-            (CCID STREQUAL "AppleClang" AND CCVER VERSION_GREATER_EQUAL 7.3.0)
-        )
-            list(APPEND C_FLAGS -Wdouble-promotion)
-        endif()
-    elseif (CCID STREQUAL "GNU")
-        set(C_FLAGS   -Wdouble-promotion)
-        set(CXX_FLAGS -Wno-array-bounds)
-
-        if (CCVER VERSION_GREATER_EQUAL 8.1.0)
-            list(APPEND CXX_FLAGS -Wextra-semi)
-        endif()
-    endif()
-
-    set(GF_C_FLAGS   ${C_FLAGS}   PARENT_SCOPE)
-    set(GF_CXX_FLAGS ${CXX_FLAGS} PARENT_SCOPE)
-endfunction()
 
 if (GGML_FATAL_WARNINGS)
     if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -102,7 +76,11 @@ if (GGML_CCACHE)
             set(GGML_CCACHE_VARIANT sccache)
         endif()
         # TODO: should not be set globally
-        set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${GGML_CCACHE_VARIANT}")
+        if (GGML_SYCL AND GGML_CCACHE_FOUND AND WIN32)
+            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "ccache compiler_type=icl")
+        else ()
+            set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${GGML_CCACHE_VARIANT}")
+        endif ()
         set(ENV{CCACHE_SLOPPINESS} time_macros)
         message(STATUS "${GGML_CCACHE_VARIANT} found, compilation results will be cached. Disable with GGML_CCACHE=OFF.")
     else()
@@ -349,6 +327,10 @@ endif()
 
 if (CMAKE_SYSTEM_NAME MATCHES "Android")
     target_link_libraries(ggml-base PRIVATE dl)
+endif()
+
+if(CMAKE_SYSTEM_NAME MATCHES "visionOS")
+    target_compile_definitions(ggml-base PUBLIC _DARWIN_C_SOURCE)
 endif()
 
 if (BUILD_SHARED_LIBS)
