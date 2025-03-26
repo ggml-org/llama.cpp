@@ -1370,9 +1370,9 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
 }
 
 // read and create ggml_context containing the tensors and their data
-struct clip_ctx * clip_model_load(const char * fname, const int verbosity, const bool use_gpu) {
+struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
     return clip_init(fname, clip_context_params{
-        /* use_gpu */   use_gpu,
+        /* use_gpu */   true,
         /* verbosity */ verbosity,
     });
 }
@@ -2989,7 +2989,10 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
     assert(itype < GGML_TYPE_COUNT);
     ggml_type type = static_cast<ggml_type>(itype);
 
-    auto * ctx_clip = clip_model_load(fname_inp, 2, false);
+    auto * ctx_clip = clip_init(fname_inp, clip_context_params{
+        /* use_gpu */   false,
+        /* verbosity */ 2,
+    });
 
     const auto & ctx_src = ctx_clip->ctx_gguf;
     const auto & ctx_data = ctx_clip->ctx_data;

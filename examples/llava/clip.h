@@ -45,7 +45,7 @@ struct clip_context_params {
 };
 
 // deprecated, use clip_init
-CLIP_API struct clip_ctx * clip_model_load(const char * fname, const int verbosity=1, const bool use_gpu=true);
+CLIP_API struct clip_ctx * clip_model_load(const char * fname, int verbosity);
 
 CLIP_API struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_params);
 
