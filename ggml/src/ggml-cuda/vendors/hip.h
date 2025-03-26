@@ -150,7 +150,7 @@
 #define CDNA
 #endif
 
-#if defined(__gfx1200__) || defined(__gfx1201__)
+#if defined(__GFX12__)
 #define RDNA4
 #endif
 
