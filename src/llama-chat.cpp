@@ -169,7 +169,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GIGACHAT;
     } else if (tmpl_contains("<|role_start|>")) {
         return LLM_CHAT_TEMPLATE_MEGREZ;
-    } else if (tmpl_contains("Ассистент:")) {
+    } else if (tmpl_contains(" Ассистент:")) {
         return LLM_CHAT_TEMPLATE_YANDEX;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
@@ -572,8 +572,9 @@ int32_t llm_chat_apply_template(
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX){
         // Yandex template
+
         ss << "<s>";
-        // Process messages
+
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);
             if (role == "user") {
