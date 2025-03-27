@@ -691,6 +691,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+       { "-CPnP", "--cpu-pnp-strategy" }, "N",
+        string_format("set CPU PnP strategy : 0-disabled, 1-efficiency (default: %d)\n", params.cpuparams.cpu_pnp_strategy),
+        [](common_params& params, int strategy) {
+           if (strategy < 0 || strategy > 1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.cpuparams.cpu_pnp_strategy = (enum ggml_cpu_pnp_strategy)strategy;
+        }
+    ));
+    add_opt(common_arg(
+       { "-CPnPb", "--cpu-pnp-strategy-batch" }, "N",
+        string_format("set CPU PnP strategy batch  : 0-disabled, 1-efficiency (default: %d)\n", params.cpuparams.cpu_pnp_strategy),
+        [](common_params& params, int strategy) {
+           if (strategy < 0 || strategy > 1) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.cpuparams_batch.cpu_pnp_strategy = (enum ggml_cpu_pnp_strategy)strategy;
+        }
+    ));
+    add_opt(common_arg(
         {"--poll"}, "<0...100>",
         string_format("use polling level to wait for work (0 - no polling, default: %u)\n", (unsigned) params.cpuparams.poll),
         [](common_params & params, const std::string & value) {
