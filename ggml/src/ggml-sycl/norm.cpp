@@ -397,7 +397,7 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
     }
 }
 
-void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) try {
+void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -413,14 +413,9 @@ void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) try {
     memcpy(&eps, dst->op_params, sizeof(float));
 
     norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
-} catch (sycl::exception const &exc) {
-
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
 }
 
-void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) try {
+void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -437,14 +432,9 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) t
 
     int group_size = dst->src[0]->ne[0] * dst->src[0]->ne[1] * ((dst->src[0]->ne[2] + num_groups - 1) / num_groups);
     group_norm_f32_sycl(src0_dd, dst_dd, num_groups, eps, group_size, dst->src[0]->ne[0] * dst->src[0]->ne[1] * dst->src[0]->ne[2], main_stream, ctx.device);
-} catch (sycl::exception const &exc) {
-
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
 }
 
-void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) try {
+void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -461,11 +451,6 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) t
     memcpy(&eps, dst->op_params, sizeof(float));
 
     rms_norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
-} catch (sycl::exception const &exc) {
-
-    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-              << ", line:" << __LINE__ << std::endl;
-    std::exit(1);
 }
 
 void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
