@@ -130,10 +130,8 @@ class  qnn_instance;
 struct qnn_parameter;
 struct ggml_backend_qnn_context;
 
-static void * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
 static void   ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void   ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
-
 static void   ggmlqnn_compute_repeat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void   ggmlqnn_compute_leaky_relu(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void   ggmlqnn_compute_concat(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
@@ -158,6 +156,10 @@ static void   ggmlqnn_compute_get_rows(ggml_backend_qnn_context * ctx, ggml_tens
 static void   ggmlqnn_compute_upsample_nearest2d(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void   ggmlqnn_compute_timestep_embedding(ggml_backend_qnn_context * ctx, ggml_tensor * dst);
 static void   ggmlqnn_compute_diag_mask(ggml_backend_qnn_context * ctx, ggml_tensor * dst, float value);
+
+static size_t ggmlqnn_get_op_index(const ggml_tensor * tensor);
+static void * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
+static void   ggmlqnn_get_opkey_from_op(const ggml_tensor * op, std::string & output);
 
 #if 0//def NDEBUG
 #define GGMLQNN_DEBUG                                   0
@@ -349,8 +351,16 @@ struct ggml_backend_qnn_context {
 struct qnn_op_caps {
     bool supported;
     ggml_op op;
-    const char * qnn_op_name;
     const size_t input_param_count;
+    const char * qnn_op_name;
+};
+
+struct hexagon_op_caps {
+    bool supported;
+    ggml_op op;
+    const size_t input_param_count;
+    const char * hexagon_op_name;
+    ggmlhexagon_op_func_t dsp_op_func;
 };
 
 struct qnn_parameter {
@@ -531,18 +541,19 @@ static domain hexagon_supported_domains[] = {
         {CDSP1_DOMAIN_ID, CDSP1_DOMAIN}
 };
 
+//supported ggml op by HWACCEL_QNN
 static constexpr const qnn_op_caps ggmlqnn_k_op_caps[] = {
-        {true,  GGML_OP_NONE, nullptr, 0},
+        {true,  GGML_OP_NONE, 0},
         {false, GGML_OP_DUP},
-        {true,  GGML_OP_ADD, QNN_OP_ELEMENT_WISE_ADD, 2},
+        {true,  GGML_OP_ADD, 2, QNN_OP_ELEMENT_WISE_ADD},
         {false, GGML_OP_ADD1},
         {false, GGML_OP_ACC},
-        {true,  GGML_OP_SUB, QNN_OP_ELEMENT_WISE_SUBTRACT, 2},
-        {true,  GGML_OP_MUL, QNN_OP_ELEMENT_WISE_MULTIPLY, 2},
-        {true,  GGML_OP_DIV, QNN_OP_ELEMENT_WISE_DIVIDE, 2},
+        {true,  GGML_OP_SUB, 2, QNN_OP_ELEMENT_WISE_SUBTRACT},
+        {true,  GGML_OP_MUL, 2, QNN_OP_ELEMENT_WISE_MULTIPLY},
+        {true,  GGML_OP_DIV, 2, QNN_OP_ELEMENT_WISE_DIVIDE},
         {false, GGML_OP_SQR},
-        {true,  GGML_OP_SQRT, QNN_OP_ELEMENT_WISE_SQUARE_ROOT, 1},
-        {true,  GGML_OP_LOG, QNN_OP_ELEMENT_WISE_LOG, 1},
+        {true,  GGML_OP_SQRT, 1, QNN_OP_ELEMENT_WISE_SQUARE_ROOT},
+        {true,  GGML_OP_LOG, 1, QNN_OP_ELEMENT_WISE_LOG},
         {false, GGML_OP_SIN},
         {false, GGML_OP_COS},
         {false, GGML_OP_SUM},
@@ -559,7 +570,7 @@ static constexpr const qnn_op_caps ggmlqnn_k_op_caps[] = {
         {false, GGML_OP_RMS_NORM_BACK},
         {false, GGML_OP_GROUP_NORM},
         {false, GGML_OP_L2_NORM},
-        {true,  GGML_OP_MUL_MAT, QNN_OP_MAT_MUL, 2},
+        {true,  GGML_OP_MUL_MAT, 2, QNN_OP_MAT_MUL},
         {false, GGML_OP_MUL_MAT_ID},
         {false, GGML_OP_OUT_PROD},
         {false, GGML_OP_SCALE},
@@ -638,7 +649,117 @@ static_assert(ggmlqnn_k_op_caps[GGML_OP_ADD].supported,     "GGML_OP_ADD is not 
 static_assert(ggmlqnn_k_op_caps[GGML_OP_MUL].supported,     "GGML_OP_MUL is not true");
 static_assert(ggmlqnn_k_op_caps[GGML_OP_MUL_MAT].supported, "GGML_OP_MUL_MAT is not true");
 static_assert(std::size(ggmlqnn_k_op_caps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
-        "pls check ggmlqnn_k_op_caps and ensure is corresponding to latest ggml.h");
+              "pls check ggmlqnn_k_op_caps and ensure is corresponding to latest ggml.h");
+
+//supported ggml op by HWACCEL_CDSP
+static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
+        {true,  GGML_OP_NONE, 0},
+        {false, GGML_OP_DUP},
+        {true,  GGML_OP_ADD, 2, "ggmlop_dsp_add", ggmlop_dsp_add},
+        {false, GGML_OP_ADD1},
+        {false, GGML_OP_ACC},
+        {true,  GGML_OP_SUB, 2, "ggmlop_dsp_sub", ggmlop_dsp_sub},
+        {true,  GGML_OP_MUL, 2, "ggmlop_dsp_mul", ggmlop_dsp_mul},
+        {true,  GGML_OP_DIV, 2, "ggmlop_dsp_div", ggmlop_dsp_div},
+        {false, GGML_OP_SQR},
+        {false,  GGML_OP_SQRT},
+        {false,  GGML_OP_LOG},
+        {false, GGML_OP_SIN},
+        {false, GGML_OP_COS},
+        {false, GGML_OP_SUM},
+        {false, GGML_OP_SUM_ROWS},
+        {false, GGML_OP_MEAN},
+        {false, GGML_OP_ARGMAX},
+        {false, GGML_OP_COUNT_EQUAL},
+        {false, GGML_OP_REPEAT},
+        {false, GGML_OP_REPEAT_BACK},
+        {false, GGML_OP_CONCAT},
+        {false, GGML_OP_SILU_BACK},
+        {false, GGML_OP_NORM},
+        {false, GGML_OP_RMS_NORM},
+        {false, GGML_OP_RMS_NORM_BACK},
+        {false, GGML_OP_GROUP_NORM},
+        {false, GGML_OP_L2_NORM},
+        {true,  GGML_OP_MUL_MAT, 2, "ggmlop_dsp_mulmat", ggmlop_dsp_mulmat},
+        {false, GGML_OP_MUL_MAT_ID},
+        {false, GGML_OP_OUT_PROD},
+        {false, GGML_OP_SCALE},
+        {false, GGML_OP_SET},
+        {false, GGML_OP_CPY},
+        {false, GGML_OP_CONT},
+        {false, GGML_OP_RESHAPE},
+        {false, GGML_OP_VIEW},
+        {false, GGML_OP_PERMUTE},
+        {false, GGML_OP_TRANSPOSE},
+        {false, GGML_OP_GET_ROWS},
+        {false, GGML_OP_GET_ROWS_BACK},
+        {false, GGML_OP_DIAG},
+        {false, GGML_OP_DIAG_MASK_INF},
+        {false, GGML_OP_DIAG_MASK_ZERO},
+        {false, GGML_OP_SOFT_MAX},
+        {false, GGML_OP_SOFT_MAX_BACK},
+        {false, GGML_OP_ROPE},
+        {false, GGML_OP_ROPE_BACK},
+        {false, GGML_OP_CLAMP},
+        {false, GGML_OP_CONV_TRANSPOSE_1D},
+        {false, GGML_OP_IM2COL},
+        {false, GGML_OP_IM2COL_BACK},
+        {false, GGML_OP_CONV_TRANSPOSE_2D},
+        {false, GGML_OP_POOL_1D},
+        {false, GGML_OP_POOL_2D},
+        {false, GGML_OP_POOL_2D_BACK},
+        {false, GGML_OP_UPSCALE},
+        {false, GGML_OP_PAD},
+        {false, GGML_OP_PAD_REFLECT_1D},
+        {false, GGML_OP_ARANGE},
+        {false, GGML_OP_TIMESTEP_EMBEDDING},
+        {false, GGML_OP_ARGSORT},
+        {false, GGML_OP_LEAKY_RELU},
+        {false, GGML_OP_FLASH_ATTN_EXT},
+        {false, GGML_OP_FLASH_ATTN_BACK},
+        {false, GGML_OP_SSM_CONV},
+        {false, GGML_OP_SSM_SCAN},
+        {false, GGML_OP_WIN_PART},
+        {false, GGML_OP_WIN_UNPART},
+        {false, GGML_OP_GET_REL_POS},
+        {false, GGML_OP_ADD_REL_POS},
+        {false, GGML_OP_RWKV_WKV6},
+        {false, GGML_OP_GATED_LINEAR_ATTN},
+        {false, GGML_OP_RWKV_WKV7},
+        {false, GGML_OP_UNARY},
+        {false, GGML_OP_MAP_UNARY},
+        {false, GGML_OP_MAP_BINARY},
+        {false, GGML_OP_MAP_CUSTOM1_F32},
+        {false, GGML_OP_MAP_CUSTOM2_F32},
+        {false, GGML_OP_MAP_CUSTOM3_F32},
+        {false, GGML_OP_MAP_CUSTOM1},
+        {false, GGML_OP_MAP_CUSTOM2},
+        {false, GGML_OP_MAP_CUSTOM3},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS_BACK},
+        {false, GGML_OP_OPT_STEP_ADAMW},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ABS)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SGN)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_NEG)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_STEP)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_TANH)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ELU)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_RELU)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SIGMOID)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU_QUICK)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SILU)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSWISH)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSIGMOID)},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP)}
+};
+
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_NONE].supported,    "GGML_OP_NONE is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_ADD].supported,     "GGML_OP_ADD is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL].supported,     "GGML_OP_MUL is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL_MAT].supported, "GGML_OP_MUL_MAT is not true");
+static_assert(std::size(ggmlhexagon_k_op_caps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
+              "pls check ggmlhexagon_k_op_caps and ensure is corresponding to latest ggml.h");
 
 // =================================================================================================
 //  section-2: ggml-qnn internal troubleshooting function/class
@@ -1787,57 +1908,6 @@ static int ggmlhexagon_request_status_notifications(int domain_id, void * contex
     return hexagon_error;
 }
 
-//TODO:not work on cDSP currently, this function will affect the performance of cDSP
-static AEEResult ggmlhexagon_set_clocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled) {
-#if 0
-    GGMLQNN_LOG_DEBUG("----------- entering power set clocks");
-
-    HAP_power_request_t request;
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_apptype;
-    request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
-
-    void * benchmark_ctx = (void*)(handle);
-    int retval = HAP_power_set(benchmark_ctx, &request);
-    if (retval)  {
-        GGMLQNN_LOG_WARN("failed first power vote");
-        return AEE_EFAILED;
-    }
-
-    //configure clocks & DCVS mode
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_DCVS_v2;
-    request.dcvs_v2.dcvs_enable = TRUE;
-    request.dcvs_v2.dcvs_params.target_corner = (HAP_dcvs_voltage_corner_t)power_level;
-    if (dcvs_enabled) {
-        request.dcvs_v2.dcvs_params.min_corner = HAP_DCVS_VCORNER_DISABLE;
-        request.dcvs_v2.dcvs_params.max_corner = HAP_DCVS_VCORNER_DISABLE;
-    } else {
-        request.dcvs_v2.dcvs_params.min_corner = request.dcvs_v2.dcvs_params.target_corner;
-        request.dcvs_v2.dcvs_params.max_corner = request.dcvs_v2.dcvs_params.target_corner;
-    }
-    request.dcvs_v2.dcvs_option     = HAP_DCVS_V2_PERFORMANCE_MODE;
-    request.dcvs_v2.set_dcvs_params = TRUE;
-    request.dcvs_v2.set_latency     = TRUE;
-    request.dcvs_v2.latency         = latency;
-    retval = HAP_power_set(benchmark_ctx, &request);
-    if (retval) {
-        GGMLQNN_LOG_WARN("failed to vote for performance mode");
-        return AEE_EFAILED;
-    }
-
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_HVX;
-    request.hvx.power_up = TRUE;
-    retval = HAP_power_set(benchmark_ctx, &request);
-    if (retval) {
-        GGMLQNN_LOG_WARN("failed to vote for HVX power");
-        return AEE_EFAILED;
-    }
-#endif
-    return AEE_SUCCESS;
-}
-
 static void ggmlhexagon_probe_dspinfo(ggml_backend_qnn_context * ctx, size_t * rpcmem_capacity) {
     size_t candidate_size   = 0;
     uint8_t * rpc_buffer    = nullptr;
@@ -2024,9 +2094,9 @@ static int ggmlhexagon_init_dsp(ggml_backend_qnn_context * ctx) {
     if (AEE_SUCCESS == hexagon_error) {
         GGMLQNN_LOG_INFO("succeed to open domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
         GGMLQNN_LOG_INFO("only support GGML_OP_ADD and GGML_OP_MUL_MAT on cDSP currently\n");
+        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
         size_t rpcmem_size = 0;
         ggmlhexagon_probe_dspinfo(ctx, &rpcmem_size);
-        ggmlhexagon_set_clocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
         ggmlhexagon_set_rpc_latency(domain_id, RPC_POLL_QOS, 1000);
     } else {
         GGMLQNN_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
@@ -2077,30 +2147,30 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
     struct dsptensor dsptensor_0;
     struct dsptensor dsptensor_1;
     struct dsptensor dsptensor_2;
+    std::string op_name;
+    ggmlqnn_get_opkey_from_op(op, op_name);
+
+    qnn_perf op_perf(op_name);
+    op_perf.start();
 
     int hexagon_error               = AEE_SUCCESS;
     ggmlhexagon_op_func_t op_func   = nullptr;
-    ggml_tensor * src0              = op->src[0];
-    ggml_tensor * src1              = op->src[1];
-    ggml_tensor * dst               = op;
+    size_t input_tensor_count       = 2;
 
-    switch (op->op) {
-        case GGML_OP_ADD:
-            op_func = ggmlop_dsp_add;
-            break;
-        case GGML_OP_MUL_MAT: {
-            op_func = ggmlop_dsp_mulmat;
-            break;
-        }
-        default:
-            return;
+    ggml_tensor * src0  = op->src[0];
+    ggml_tensor * src1  = op->src[1];
+    ggml_tensor * dst   = op;
+
+    input_tensor_count  =  ggmlhexagon_k_op_caps[ggmlqnn_get_op_index(op)].input_param_count;
+    op_func             =  ggmlhexagon_k_op_caps[ggmlqnn_get_op_index(op)].dsp_op_func;
+    if (nullptr == op_func) {
+        GGMLQNN_LOG_DEBUG("op GGML_OP_%s and dsp func %s not supported on cCSP", ggml_op_name(op->op), ggmlhexagon_k_op_caps[ggmlqnn_get_op_index(op)].hexagon_op_name);
+        return;
     }
 
-    dsptensor_0.data     = src0->data;
-    dsptensor_0.data_len = ggml_nbytes(src0);
-
-    dsptensor_1.data     = src1->data;
-    dsptensor_2.data     = dst->data;
+    dsptensor_0.data        = src0->data;
+    dsptensor_0.data_len    = ggml_nbytes(src0);
+    dsptensor_0.type        = src0->type;
 
     dsptensor_0.ne[0] = src0->ne[0];
     dsptensor_0.ne[1] = src0->ne[1];
@@ -2112,15 +2182,25 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
     dsptensor_0.nb[2] = src0->nb[2];
     dsptensor_0.nb[3] = src0->nb[3];
 
-    dsptensor_1.ne[0] = src1->ne[0];
-    dsptensor_1.ne[1] = src1->ne[1];
-    dsptensor_1.ne[2] = src1->ne[2];
-    dsptensor_1.ne[3] = src1->ne[3];
+    if (2 == input_tensor_count) {
+        dsptensor_1.data        = src1->data;
+        dsptensor_1.type        = src1->type;
+        dsptensor_1.data_len    = ggml_nbytes(src1);
 
-    dsptensor_1.nb[0] = src1->nb[0];
-    dsptensor_1.nb[1] = src1->nb[1];
-    dsptensor_1.nb[2] = src1->nb[2];
-    dsptensor_1.nb[3] = src1->nb[3];
+        dsptensor_1.ne[0] = src1->ne[0];
+        dsptensor_1.ne[1] = src1->ne[1];
+        dsptensor_1.ne[2] = src1->ne[2];
+        dsptensor_1.ne[3] = src1->ne[3];
+
+        dsptensor_1.nb[0] = src1->nb[0];
+        dsptensor_1.nb[1] = src1->nb[1];
+        dsptensor_1.nb[2] = src1->nb[2];
+        dsptensor_1.nb[3] = src1->nb[3];
+    }
+
+    dsptensor_2.data        = dst->data;
+    dsptensor_2.data_len    = ggml_nbytes(dst);
+    dsptensor_2.type        = dst->type;
 
     dsptensor_2.ne[0] = dst->ne[0];
     dsptensor_2.ne[1] = dst->ne[1];
@@ -2132,18 +2212,16 @@ static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tens
     dsptensor_2.nb[2] = dst->nb[2];
     dsptensor_2.nb[3] = dst->nb[3];
 
-    dsptensor_0.data_len = ggml_nbytes(src0);
-    dsptensor_1.data_len = ggml_nbytes(src1);
-    dsptensor_2.data_len = ggml_nbytes(dst);
-
-    dsptensor_0.type = src0->type;
-    dsptensor_1.type = src1->type;
-    dsptensor_2.type = dst->type;
-
+    //GGMLQNN_DUMP_DSPTENSOR(&dsptensor_0);
+    //GGMLQNN_DUMP_DSPTENSOR(&dsptensor_1);
+    //GGMLQNN_DUMP_DSPTENSOR(&dsptensor_2);
     hexagon_error = op_func(ctx->ggmlop_handle, &dsptensor_0, &dsptensor_1, &dsptensor_2);
     if (AEE_SUCCESS != hexagon_error) {
         GGMLQNN_LOG_WARN("ggmlop %s computation fail on cdsp", ggml_op_name(op->op));
     }
+
+    op_perf.info();
+    return;
 }
 
 // =================================================================================================
@@ -2386,7 +2464,7 @@ static size_t ggmlqnn_get_op_input_param_count(const ggml_tensor * op) {
     return ggmlqnn_k_op_caps[op_index].input_param_count;
 }
 
-static void ggmlqnn_get_graphkey_from_op(const ggml_tensor * op, std::string & output) {
+static void ggmlqnn_get_opkey_from_op(const ggml_tensor * op, std::string & output) {
     GGML_ASSERT(op->op != GGML_OP_NONE);
     output += ggml_op_desc(op);
     output += ggmlqnn_get_ggml_type_name(op->type);
@@ -2434,7 +2512,7 @@ static void ggmlqnn_get_graphkey_from_cgraph(const ggml_cgraph * cgraph, std::st
         }
 
         if (is_start) {
-            ggmlqnn_get_graphkey_from_op(cgraph->nodes[0], output);
+            ggmlqnn_get_opkey_from_op(cgraph->nodes[0], output);
             is_start = false;
         } else {
             output += '#';
@@ -4269,36 +4347,38 @@ static bool ggmlqnn_same_types(const ggml_backend_qnn_context * ctx, const ggml_
 }
 
 static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
+    ggmlqnn_dump_op_info(op_tensor);
+    if (!ggmlhexagon_k_op_caps[ggmlqnn_get_op_index(op_tensor)].supported) {
+        return false;
+    }
+
     struct ggml_tensor * src0 = op_tensor->src[0];
     struct ggml_tensor * src1 = op_tensor->src[1];
     const int64_t ne00  = op_tensor->src[0]->ne[0];
-    uint32_t src0_rank  = 0;
+    uint32_t src0_rank  = ggml_n_dims(src0);
     uint32_t src1_rank  = 0;
-    bool support        = false;
-
-    if (nullptr != src0) {
-        src0_rank = ggml_n_dims(src0);
-    }
     if (nullptr != src1) {
         src1_rank = ggml_n_dims(src1);
     }
 
+    //available in the early stage, should be removed in the product stage
+    bool support = false;
     if (g_qnn_params.enable_mulmat_cdsp)
         support = ((op_tensor->op == GGML_OP_ADD) || (op_tensor->op == GGML_OP_MUL_MAT));
     else
         support = (op_tensor->op == GGML_OP_ADD);
-    if (!support)
+    if (!support) {
         return false;
+    }
 
-    ggmlqnn_dump_op_info(op_tensor);
     switch (op_tensor->op) {
         case GGML_OP_ADD:
+        case GGML_OP_SUB:
         {
             if (!ggml_are_same_shape(src0, src1)) {
                 return false;
             }
-
-            return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+            break;
         }
         case GGML_OP_MUL_MAT:
         {
@@ -4315,8 +4395,9 @@ static bool ggmlhexagon_can_handle_op(const ggml_backend_qnn_context * ctx, cons
                 return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
         default:
-            return ggmlqnn_same_types(ctx, op_tensor);
+            break;
     }
+    return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
 }
 
 static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const struct ggml_tensor * op_tensor) {
@@ -4408,6 +4489,11 @@ static bool ggmlqnn_can_handle_op(const ggml_backend_qnn_context * ctx, const st
 static bool ggmlqnn_compute_forward(ggml_backend_t backend, struct ggml_tensor * dst) {
     ggmlqnn_op_func_t func          = nullptr;
     ggml_backend_qnn_context * ctx  = (ggml_backend_qnn_context *)backend->context;
+
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
+        ggmlhexagon_compute(ctx, dst);
+        return true;
+    }
 
     switch (dst->op) {
         case GGML_OP_REPEAT:
@@ -4544,12 +4630,7 @@ struct ggml_backend_qnn_buffer_context {
             free(sub_buffer);
         }
 
-        for (auto * qnn_tensor : qnn_tensors) {
-            free_qnn_tensor(qnn_tensor);
-        }
-
         sub_buffers.clear();
-        qnn_tensors.clear();
     }
     void * buffer       = nullptr;
 
@@ -4557,7 +4638,6 @@ struct ggml_backend_qnn_buffer_context {
 
     size_t buffer_size  = 0;
     std::vector<void *> sub_buffers;
-    std::vector<Qnn_Tensor_t *> qnn_tensors;
 };
 
 static void ggml_backend_qnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -5231,16 +5311,10 @@ static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_ten
     const char * ggml_op_name                   = ggml_op_name_string.c_str();
 
     std::string graph_name;
-    ggmlqnn_get_graphkey_from_op(op, graph_name);
+    ggmlqnn_get_opkey_from_op(op, graph_name);
 
-    qnn_perf op_perf                            = qnn_perf(graph_name);
+    qnn_perf op_perf(graph_name);
     op_perf.start();
-
-    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
-        ggmlhexagon_compute(ctx, op);
-        op_perf.info();
-        return;
-    }
 
     bool enable_npu_rpc = instance->enable_qnn_rpc() && ctx->device == QNN_BACKEND_NPU;
     if (ctx->qnn_singlenode_graph_map.find(graph_name) != ctx->qnn_singlenode_graph_map.end()) {
@@ -5381,7 +5455,7 @@ static void ggmlqnn_compute_mul_mat_4d(ggml_backend_qnn_context * ctx, ggml_tens
     op_perf.start();
 
     std::string graph_name;
-    ggmlqnn_get_graphkey_from_op(op, graph_name);
+    ggmlqnn_get_opkey_from_op(op, graph_name);
     GGMLQNN_LOG_DEBUG("graph name %s\n", graph_name.c_str());
 
     ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
@@ -5623,16 +5697,10 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_qnn_context * ctx, ggml_tensor 
     ggmlqnn_print_tensors_info(__func__, ctx, src0, src1, dst);
 
     std::string graph_name;
-    ggmlqnn_get_graphkey_from_op(op, graph_name);
+    ggmlqnn_get_opkey_from_op(op, graph_name);
 
-    qnn_perf op_perf                            = qnn_perf(graph_name);
+    qnn_perf op_perf(graph_name);
     op_perf.start();
-
-    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
-        ggmlhexagon_compute(ctx, op);
-        op_perf.info();
-        return;
-    }
 
     GGML_ASSERT(src0_rank == src1_rank);
     GGML_ASSERT(src0_rank >= 2); //QNN SDK's limitation, make QNN SDK happy
