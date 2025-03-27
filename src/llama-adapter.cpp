@@ -248,6 +248,8 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
     }
 
     // get extra buffer types of the CPU
+    // TODO: a more general solution for non-CPU extra buft should be imlpemented in the future
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/12593#pullrequestreview-2718659948
     std::vector<ggml_backend_buffer_type_t> buft_extra;
     {
         auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
