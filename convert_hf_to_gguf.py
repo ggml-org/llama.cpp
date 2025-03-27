@@ -1611,7 +1611,11 @@ class LlamaModel(Model):
                 self._set_vocab_llama_hf()
             except (FileNotFoundError, TypeError):
                 # Llama 3
-                self._set_vocab_gpt2()
+                try:
+                    self._set_vocab_gpt2()
+                except:
+                     logger.warning('Will not set tokenizer for that model. For some models it might be okay, check for this one.')
+                     self.gguf_writer.add_tokenizer_model("none")
 
         # Apply to CodeLlama only (and ignore for Llama 3 with a vocab size of 128256)
         if self.hparams.get("vocab_size", 32000) == 32016:
@@ -1639,12 +1643,21 @@ class LlamaModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        if "vocab_size" in hparams:
+            vocab_size = hparams["vocab_size"]
+        elif "text_vocab_size" in hparams:
+            vocab_size = hparams["text_vocab_size"]
+        else:
+            vocab_size = hparams["audio_vocab_size"]
+        self.gguf_writer.add_vocab_size(vocab_size)
 
         if "head_dim" in hparams:
             rope_dim = hparams["head_dim"]
+        elif "num_hidden_layers" in hparams:
+            rope_dim = hparams["num_hidden_layers"]
         else:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
@@ -1704,6 +1717,9 @@ class LlamaModel(Model):
                 return tensors
             else:
                 return []
+
+        if name.find("codebook0_head") or name.find("projection"):
+            return [(name, data_torch)]
 
         return [(self.map_tensor_name(name), data_torch)]
 
@@ -2328,6 +2344,39 @@ class WavTokenizerDecModel(Model):
         self.gguf_writer.add_convnext_block_count     (self.hparams["convnext"]["n_layer"])
 
         self.gguf_writer.add_causal_attention(False)
+
+
+@Model.register("MimiModel")
+class MimiDec(Model):
+    model_arch = gguf.MODEL_ARCH.MIMI_DEC
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        logger.debug(f"Processing tensor: {name}")
+
+        if name.startswith("decoder.") \
+            or name.startswith("decoder_transformer.") \
+            or name.startswith("downsample.") \
+            or name.startswith("encoder.") \
+            or name.startswith("encoder_transformer.") \
+            or name.startswith("upsample.") \
+            or re.match(r"quantizer\..*_residual_vector_quantizer\..*", name):
+            logger.info(f"{name} -> {data_torch.shape}")
+            return [(name, data_torch)]
+
+        logger.info(f"{self.map_tensor_name(name)} -> {data_torch.shape}")
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
+        self.gguf_writer.add_group_norm_eps(self.hparams["norm_eps"])
 
 
 @Model.register("Qwen2MoeForCausalLM")
