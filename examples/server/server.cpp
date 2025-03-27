@@ -489,8 +489,13 @@ struct result_timings {
     double predicted_per_token_ms;
     double predicted_per_second;
 
+    // Optional speculative metrics - only included when > 0
+    int32_t draft_n = 0;
+    int32_t draft_accepted_n = 0;
+    double draft_accept_ratio = 0;
+
     json to_json() const {
-        return {
+        json base = {
             {"prompt_n",               prompt_n},
             {"prompt_ms",              prompt_ms},
             {"prompt_per_token_ms",    prompt_per_token_ms},
@@ -501,6 +506,14 @@ struct result_timings {
             {"predicted_per_token_ms", predicted_per_token_ms},
             {"predicted_per_second",   predicted_per_second},
         };
+
+        if (draft_n > 0) {
+            base["draft_n"] = draft_n;
+            base["draft_accepted_n"] = draft_accepted_n;
+            base["draft_accept_ratio"] = draft_accept_ratio;
+        }
+
+        return base;
     }
 };
 
@@ -1299,6 +1312,11 @@ struct server_slot {
 
     std::function<void(int)> callback_on_release;
 
+    // Speculative decoding stats
+    int32_t n_draft_total = 0;      // Total draft tokens generated
+    int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
+    float draft_accept_ratio = 0.f; // n_draft_accepted/n_draft_total
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -1315,6 +1333,11 @@ struct server_slot {
 
         generated_tokens.clear();
         generated_token_probs.clear();
+
+        // clear speculative decoding stats
+        n_draft_total = 0;
+        n_draft_accepted = 0;
+        draft_accept_ratio = 0.f;
     }
 
     bool is_non_causal() const {
@@ -1380,6 +1403,13 @@ struct server_slot {
         timings.predicted_ms = t_token_generation;
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
         timings.predicted_per_second = 1e3 / t_token_generation * n_decoded;
+
+        // Add speculative metrics
+        if (n_draft_total > 0) {
+            timings.draft_n = n_draft_total;
+            timings.draft_accepted_n = n_draft_accepted;
+            timings.draft_accept_ratio = draft_accept_ratio;
+        }
 
         return timings;
     }
@@ -3290,6 +3320,8 @@ struct server_context {
 
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, slot.cache_tokens, id);
 
+                slot.n_draft_total += draft.size();
+
                 // ignore small drafts
                 if (slot.params.speculative.n_min > (int) draft.size()) {
                     SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.params.speculative.n_min);
@@ -3337,6 +3369,12 @@ struct server_context {
                         metrics.on_prediction(slot);
                         break;
                     }
+                }
+
+                // Update speculative metrics
+                slot.n_draft_accepted += ids.size() - 1; // exclude last sampled token
+                if (slot.n_draft_total > 0) {
+                    slot.draft_accept_ratio = (float)slot.n_draft_accepted / slot.n_draft_total;
                 }
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_past = %d\n", (int) ids.size() - 1, (int) draft.size(), slot.n_past);
