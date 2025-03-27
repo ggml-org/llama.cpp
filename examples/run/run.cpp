@@ -718,6 +718,49 @@ class LlamaData {
         return download(url, bn, true, headers);
     }
 
+    int modelscope_dl(std::string & model, const std::string & bn) {
+        // Find the second occurrence of '/' after protocol string
+        size_t pos = model.find('/');
+        pos        = model.find('/', pos + 1);
+        std::string              hfr;
+        std::string              hff;
+        std::vector<std::string> headers = { "user-agent: llama-cpp", "Accept: application/json"};
+        std::string              url;
+        auto endpoint = MODELSCOPE_DOMAIN_DEFINITION;
+
+        if (pos == std::string::npos) {
+            auto [model_name, _] = extract_model_and_tag(model, "");
+            hfr                             = model_name;
+            std::string manifest_str;
+            url = endpoint + "/api/v1/models/" + hfr + "/repo/files?Revision=master&Recursive=True";
+            if (int ret = download(url, "", false, headers, &manifest_str)) {
+                return ret;
+            }
+            auto all_files = nlohmann::json::parse(manifest_str)["Data"]["Files"];
+
+            std::vector<std::string> all_available_files;
+            for (const auto & _file : all_files) {
+                auto file = _file["Path"].get<std::string>();
+                if (!string_ends_with(file, ".gguf")) {
+                    continue;
+                }
+                if (file.find("Q4_K_M") != std::string::npos || file.find("q4_k_m") != std::string::npos) {
+                    hff = file;
+                }
+                all_available_files.push_back(file);
+            }
+            if (hff.empty()) {
+                hff = all_available_files[0];
+            }
+
+        } else {
+            hfr = model.substr(0, pos);
+            hff = model.substr(pos + 1);
+        }
+        url = endpoint + "/models/" + hfr + "/resolve/master/" + hff;
+        return download(url, bn, true, headers);
+    }
+
     int ollama_dl(std::string & model, const std::string & bn) {
         const std::vector<std::string> headers = { "Accept: application/vnd.docker.distribution.manifest.v2+json" };
         if (model.find('/') == std::string::npos) {
@@ -835,6 +878,12 @@ class LlamaData {
             rm_until_substring(model_, "hf.co/");
             rm_until_substring(model_, "://");
             ret = huggingface_dl(model_, bn);
+        } else if (string_starts_with(model_, "ms://") || string_starts_with(model_, "modelscope://") ||
+            model_.find("modelscope") != std::string::npos || LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            rm_until_substring(model_, "modelscope.cn/");
+            rm_until_substring(model_, "modelscope.ai/");
+            rm_until_substring(model_, "://");
+            ret = modelscope_dl(model_, bn);
         } else if ((string_starts_with(model_, "https://") || string_starts_with(model_, "http://")) &&
                    !string_starts_with(model_, "https://ollama.com/library/")) {
             ret = download(model_, bn, true);

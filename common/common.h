@@ -25,6 +25,26 @@
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
 
+#define MODELSCOPE_DOMAIN_DEFINITION ([]() -> std::string { \
+    const char* ms_endpoint = std::getenv("MODELSCOPE_DOMAIN"); \
+    if (ms_endpoint == nullptr) { \
+        ms_endpoint = "www.modelscope.cn"; \
+    } \
+    return std::string(ms_endpoint); \
+}())
+
+#define LLAMACPP_USE_MODELSCOPE_DEFINITION ([]() -> bool { \
+    const char* use_modelscope = std::getenv("LLAMACPP_USE_MODELSCOPE"); \
+    if (use_modelscope == nullptr) { \
+        use_modelscope = "False"; \
+    } \
+    bool llamacpp_use_modelscope = false; \
+    if (std::string(use_modelscope) == "True" || std::string(use_modelscope) == "true") { \
+        llamacpp_use_modelscope = true; \
+    } \
+    return llamacpp_use_modelscope; \
+}())
+
 struct common_adapter_lora_info {
     std::string path;
     float scale;
@@ -559,9 +579,20 @@ struct llama_model * common_load_model_from_hf(
     const std::string & hf_token,
     const struct llama_model_params & params);
 
+struct llama_model * common_load_model_from_ms(
+    const std::string & repo,
+    const std::string & remote_path,
+    const std::string & local_path,
+    const std::string & ms_token,
+    const struct llama_model_params & params);
+
 std::pair<std::string, std::string> common_get_hf_file(
     const std::string & hf_repo_with_tag,
     const std::string & hf_token);
+
+std::pair<std::string, std::string> common_get_ms_file(
+    const std::string & ms_repo_with_tag,
+    const std::string & ms_token);
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);

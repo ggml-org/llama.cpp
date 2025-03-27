@@ -907,7 +907,11 @@ struct common_init_result common_init_from_params(common_params & params) {
     llama_model * model = nullptr;
 
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
-        model = common_load_model_from_hf(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        if (LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            model = common_load_model_from_ms(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        } else {
+            model = common_load_model_from_hf(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        }
     } else if (!params.model_url.empty()) {
         model = common_load_model_from_url(params.model_url, params.model, params.hf_token, mparams);
     } else {
@@ -1207,6 +1211,12 @@ static bool common_download_file(const std::string & url, const std::string & pa
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
+    std::vector<std::string> _headers = {"User-Agent: llama-cpp"};
+    for (const auto & header : _headers) {
+        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
     // Check if hf-token or bearer-token was specified
     if (!hf_token.empty()) {
         std::string auth_header = "Authorization: Bearer " + hf_token;
@@ -1265,6 +1275,7 @@ static bool common_download_file(const std::string & url, const std::string & pa
     };
 
     common_load_model_from_url_headers headers;
+    bool should_download = false;
 
     {
         typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
@@ -1293,32 +1304,35 @@ static bool common_download_file(const std::string & url, const std::string & pa
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
         curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
         curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
+        if (!LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
+            if (!was_perform_successful) {
+                return false;
+            }
 
-        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
-        if (!was_perform_successful) {
-            return false;
-        }
-
-        long http_code = 0;
-        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code != 200) {
-            // HEAD not supported, we don't know if the file has changed
-            // force trigger downloading
-            force_download = true;
-            LOG_ERR("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+            long http_code = 0;
+            curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+            if (http_code != 200) {
+                // HEAD not supported, we don't know if the file has changed
+                // force trigger downloading
+                force_download = true;
+                LOG_ERR("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+            }
+            should_download = !file_exists || force_download;
+            if (!should_download) {
+                if (!etag.empty() && etag != headers.etag) {
+                    LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
+                    should_download = true;
+                } else if (!last_modified.empty() && last_modified != headers.last_modified) {
+                    LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
+                    should_download = true;
+                }
+            }
+        } else {
+            should_download = !file_exists;
         }
     }
 
-    bool should_download = !file_exists || force_download;
-    if (!should_download) {
-        if (!etag.empty() && etag != headers.etag) {
-            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
-            should_download = true;
-        } else if (!last_modified.empty() && last_modified != headers.last_modified) {
-            LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
-            should_download = true;
-        }
-    }
     if (should_download) {
         std::string path_temporary = path + ".downloadInProgress";
         if (file_exists) {
@@ -1507,6 +1521,20 @@ struct llama_model * common_load_model_from_hf(
     return common_load_model_from_url(model_url, local_path, hf_token, params);
 }
 
+struct llama_model * common_load_model_from_ms(
+        const std::string & repo,
+        const std::string & remote_path,
+        const std::string & local_path,
+        const std::string & ms_token,
+        const struct llama_model_params & params) {
+    std::string model_url = "https://" + MODELSCOPE_DOMAIN_DEFINITION + "/models/";
+    model_url += repo;
+    model_url += "/resolve/master/";
+    model_url += remote_path;
+    // modelscope does not support token in header
+    return common_load_model_from_url(model_url, local_path, "", params);
+}
+
 /**
  * Allow getting the HF file from the HF repo with tag (like ollama), for example:
  * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
@@ -1579,6 +1607,82 @@ std::pair<std::string, std::string> common_get_hf_file(const std::string & hf_re
     }
 
     return std::make_pair(hf_repo, gguf_file.at("rfilename"));
+}
+
+std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_repo_with_tag, const std::string & ms_token) {
+    auto parts = string_split<std::string>(ms_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "Q4_K_M";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+
+    // fetch model info from Hugging Face Hub API
+    json model_info;
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::string res_str;
+    auto endpoint = MODELSCOPE_DOMAIN_DEFINITION;
+
+    std::string url = endpoint + "/api/v1/models/" + hf_repo + "/repo/files?Revision=master&Recursive=True";
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_str);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "user-agent: llama-cpp");
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        throw std::runtime_error("error: cannot make GET request to HF API");
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+    if (res_code == 200) {
+        model_info = nlohmann::json::parse(res_str);
+    } else if (res_code == 401) {
+        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid MS token");
+    } else {
+        throw std::runtime_error(string_format("error from MS API, response code: %ld, data: %s", res_code, res_str.c_str()));
+    }
+
+    auto all_files = model_info["Data"]["Files"];
+
+    std::vector<std::string> all_available_files;
+    std::string gguf_file;
+    std::string upper_tag;
+    upper_tag.reserve(tag.size());
+    std::string lower_tag;
+    lower_tag.reserve(tag.size());
+    std::transform(tag.begin(), tag.end(), std::back_inserter(upper_tag), ::toupper);
+    std::transform(tag.begin(), tag.end(), std::back_inserter(lower_tag), ::tolower);
+    for (const auto & _file : all_files) {
+        auto file = _file["Path"].get<std::string>();
+        if (!string_ends_with(file, ".gguf")) {
+            continue;
+        }
+        if (file.find(upper_tag) != std::string::npos || file.find(lower_tag) != std::string::npos) {
+            gguf_file = file;
+        }
+        all_available_files.push_back(file);
+    }
+    if (gguf_file.empty()) {
+        gguf_file = all_available_files[0];
+    }
+
+    return std::make_pair(hf_repo, gguf_file);
 }
 
 #else

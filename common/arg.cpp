@@ -140,7 +140,12 @@ static void common_params_handle_model_default(
         // short-hand to avoid specifying --hf-file -> default it to --model
         if (hf_file.empty()) {
             if (model.empty()) {
-                auto auto_detected = common_get_hf_file(hf_repo, hf_token);
+                std::pair<std::string, std::string> auto_detected;
+                if (LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+                    auto_detected = common_get_ms_file(hf_repo, hf_token);
+                } else {
+                    auto_detected = common_get_hf_file(hf_repo, hf_token);
+                }
                 if (auto_detected.first.empty() || auto_detected.second.empty()) {
                     exit(1); // built without CURL, error message already printed
                 }
