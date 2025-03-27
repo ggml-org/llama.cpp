@@ -590,6 +590,8 @@ std::pair<std::string, std::string> common_get_hf_file(
     const std::string & hf_repo_with_tag,
     const std::string & hf_token);
 
+bool ms_login(const std::string & token);
+
 std::pair<std::string, std::string> common_get_ms_file(
     const std::string & ms_repo_with_tag,
     const std::string & ms_token);

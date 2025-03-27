@@ -1196,6 +1196,30 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
     return false;
 }
 
+std::filesystem::path create_credential_path() {
+    const char* home_dir = nullptr;
+#ifdef _WIN32
+    home_dir = getenv("USERPROFILE");
+    if (!home_dir) {
+        const char* homeDrive = getenv("HOMEDRIVE");
+        const char* homePath = getenv("HOMEPATH");
+        if (homeDrive && homePath) return std::string(homeDrive) + homePath;
+        char documentsPath[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, documentsPath))) return std::string(documentsPath);
+    }
+#else
+    home_dir = getenv("HOME");
+#endif
+    if (home_dir == nullptr) {
+        return std::string("");
+    }
+    const std::filesystem::path credentials_path = std::filesystem::path(home_dir) / ".modelscope" / "credentials";
+    if (!exists(credentials_path)) {
+        create_directories(credentials_path);
+    }
+    return credentials_path;
+}
+
 static bool common_download_file(const std::string & url, const std::string & path, const std::string & hf_token) {
     // Initialize libcurl
     curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
@@ -1330,6 +1354,8 @@ static bool common_download_file(const std::string & url, const std::string & pa
             }
         } else {
             should_download = !file_exists;
+            const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+            curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
         }
     }
 
@@ -1521,6 +1547,71 @@ struct llama_model * common_load_model_from_hf(
     return common_load_model_from_url(model_url, local_path, hf_token, params);
 }
 
+bool ms_login(const std::string & token) {
+    if (token.empty()) {
+        return false;
+    }
+
+    auto credentials_path = create_credential_path();
+
+    const std::filesystem::path user_file = credentials_path / "user";
+    const std::filesystem::path git_token_file = credentials_path / "git_token";
+    const std::filesystem::path cookie_file = credentials_path / "cookies";
+    std::string url = MODELSCOPE_DOMAIN_DEFINITION + "/api/v1/login";
+    json request_body;
+    request_body["AccessToken"] = token;
+    std::string request_body_str = request_body.dump();
+
+    curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
+    std::string response_string;
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "User-Agent: llama-cpp");
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    auto save_to_file = [](const std::string& filename, const std::string& data) {
+        std::ofstream ofs(filename, std::ios::binary);
+        if (!ofs) {
+            throw std::runtime_error("Cannot write to: " + filename);
+        }
+        ofs << data;
+        ofs.close();
+    };
+
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, request_body_str.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, request_body_str.size());
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response_string);
+    curl_easy_setopt(curl.get(), CURLOPT_COOKIEJAR, cookie_file.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+
+    if (CURLcode res = curl_easy_perform(curl.get()); res != CURLE_OK) {
+        curl_slist_free_all(headers);
+        return false;
+    }
+
+    long http_code = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code != 200) {
+        return false;
+    }
+
+    curl_slist_free_all(headers);
+    json response_json = json::parse(response_string);
+    json data          = response_json["Data"];
+    auto access_token = data["AccessToken"].get<std::string>();
+    save_to_file(git_token_file.c_str(), access_token);
+    save_to_file(user_file.c_str(), data["Username"].get<std::string>() + ":" + data["Email"].get<std::string>());
+    return true;
+}
+
 struct llama_model * common_load_model_from_ms(
         const std::string & repo,
         const std::string & remote_path,
@@ -1531,7 +1622,9 @@ struct llama_model * common_load_model_from_ms(
     model_url += repo;
     model_url += "/resolve/master/";
     model_url += remote_path;
-    // modelscope does not support token in header
+    if (!ms_token.empty()) {
+        ms_login(ms_token);
+    }
     return common_load_model_from_url(model_url, local_path, "", params);
 }
 
@@ -1616,6 +1709,9 @@ std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_re
     if (string_split<std::string>(hf_repo, '/').size() != 2) {
         throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
     }
+    if (!ms_token.empty()) {
+        ms_login(ms_token);
+    }
 
     // fetch model info from Hugging Face Hub API
     json model_info;
@@ -1641,6 +1737,9 @@ std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_re
     http_headers.ptr = curl_slist_append(http_headers.ptr, "user-agent: llama-cpp");
     http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+    curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
 
     CURLcode res = curl_easy_perform(curl.get());
 

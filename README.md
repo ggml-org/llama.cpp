@@ -265,6 +265,20 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 
 You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from Hugging Face by using this CLI argument: `-hf <user>/<model>[:quant]`
 
+llama.cpp also supports downloading and running models from [ModelScope](https://www.modelscope.cn/home), just add an env variable: `LLAMACPP_USE_MODELSCOPE=True` to your command with the same arguments(like `-hf <user>/<model>[:quant]`).
+
+```shell
+LLAMACPP_USE_MODELSCOPE=True llama-cli -hf Qwen/QwQ-32B-GGUF
+```
+
+Pay attention to change the model repo to the **existing repo** of ModelScope. If you want to use a private repo, please make sure you have the rights of the repo and run with the `--hf_token` argument:
+
+```shell
+LLAMACPP_USE_MODELSCOPE=True llama-cli -hf Qwen/QwQ-32B-GGUF --hf_token xxx
+```
+
+> You can change the endpoint of ModelScope by using `MODELSCOPE_DOMAIN=xxx`(like MODELSCOPE_DOMAIN=www.modelscope.ai).
+
 After downloading a model, use the CLI tools to run it locally - see below.
 
 `llama.cpp` requires the model to be stored in the [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) file format. Models in other data formats can be converted to GGUF using the `convert_*.py` Python scripts in this repo.
