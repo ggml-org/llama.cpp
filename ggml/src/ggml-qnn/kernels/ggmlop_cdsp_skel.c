@@ -1,3 +1,7 @@
+//qidl copyright
+//qidl nested=false
+#include "ggmlop_ap_skel.h"
+
 #include <string.h>
 #ifndef _WIN32
 #include "HAP_farf.h"
@@ -7,7 +11,6 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-#include "ggmlop_ap_skel.h"
 
 typedef struct _heap _heap;
 struct _heap {
@@ -273,14 +276,14 @@ static const Type types[4];
 static const Type* const typeArrays[6] = {&(types[0]),&(types[1]),&(types[1]),&(types[0]),&(types[0]),&(types[2])};
 static const StructType structTypes[1] = {{0x6,&(typeArrays[0]),0x30,0x4,0x2c,0x4,0x4,0x4}};
 static const Type types[4] = {{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4},{0x10,{{(const uintptr_t)&(types[0]),(const uintptr_t)0x4}}, 8,0x4},{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)&(types[3]),(const uintptr_t)0x0}}, 9,SLIM_IFPTR32(0x4,0x8)},{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4}};
-static const Parameter parameters[5] = {{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)0x0,0}}, 4,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),3,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),3,0}};
-static const Parameter* const parameterArrays[6] = {(&(parameters[3])),(&(parameters[3])),(&(parameters[4])),(&(parameters[0])),(&(parameters[1])),(&(parameters[2]))};
-static const Method methods[3] = {{REMOTE_SCALARS_MAKEX(0,0,0x2,0x0,0x0,0x1),0x4,0x0,2,2,(&(parameterArrays[3])),0x4,0x1},{REMOTE_SCALARS_MAKEX(0,0,0x0,0x0,0x1,0x0),0x0,0x0,1,1,(&(parameterArrays[5])),0x1,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x3,0x2,0x0,0x0),0x64,0x2c,3,3,(&(parameterArrays[0])),0x4,0x4}};
-static const Method* const methodArrays[4] = {&(methods[0]),&(methods[1]),&(methods[2]),&(methods[2])};
-static const char strings[68] = "mulmat\0flags\0close\0src1\0data\0type\0src0\0open\0dst\0add\0uri\0op\0nb\0ne\0h\0";
-static const uint16_t methodStrings[49] = {0,34,29,62,59,56,7,24,19,29,62,59,56,7,24,44,29,62,59,56,7,24,48,34,29,62,59,56,7,24,19,29,62,59,56,7,24,44,29,62,59,56,7,24,39,52,65,13,65};
-static const uint16_t methodStringsArrays[4] = {44,47,22,0};
-__QAIC_SLIM_EXPORT const Interface __QAIC_SLIM(ggmlop_slim) = {4,&(methodArrays[0]),0,0,&(methodStringsArrays [0]),methodStrings,strings};
+static const Parameter parameters[6] = {{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)0x0,0}}, 4,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),3,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),0,0},{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4,0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),3,0}};
+static const Parameter* const parameterArrays[9] = {(&(parameters[4])),(&(parameters[4])),(&(parameters[5])),(&(parameters[3])),(&(parameters[3])),(&(parameters[3])),(&(parameters[0])),(&(parameters[1])),(&(parameters[2]))};
+static const Method methods[4] = {{REMOTE_SCALARS_MAKEX(0,0,0x2,0x0,0x0,0x1),0x4,0x0,2,2,(&(parameterArrays[6])),0x4,0x1},{REMOTE_SCALARS_MAKEX(0,0,0x0,0x0,0x1,0x0),0x0,0x0,1,1,(&(parameterArrays[8])),0x1,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x1,0x0,0x0,0x0),0xc,0x0,3,3,(&(parameterArrays[3])),0x4,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x3,0x2,0x0,0x0),0x64,0x2c,3,3,(&(parameterArrays[0])),0x4,0x4}};
+static const Method* const methodArrays[8] = {&(methods[0]),&(methods[1]),&(methods[2]),&(methods[3]),&(methods[3]),&(methods[3]),&(methods[3]),&(methods[3])};
+static const char strings[146] = "dsp_setclocks\0dcvs_enable\0power_level\0dsp_mulmat\0dsp_div\0dsp_sub\0dsp_mul\0dsp_add\0latency\0flags\0close\0src1\0data\0type\0src0\0open\0dst\0uri\0op\0nb\0ne\0h\0";
+static const uint16_t methodStrings[119] = {49,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,57,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,65,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,38,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,73,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,0,26,81,14,121,130,143,95,143};
+static const uint16_t methodStringsArrays[8] = {114,117,110,88,66,44,22,0};
+__QAIC_SLIM_EXPORT const Interface __QAIC_SLIM(ggmlop_slim) = {8,&(methodArrays[0]),0,0,&(methodStringsArrays [0]),methodStrings,strings};
 #endif //_GGMLOP_SLIM_H
 extern int adsp_mmap_fd_getinfo(int, uint32_t *);
 #ifdef __cplusplus
@@ -392,7 +395,29 @@ static __inline int _skel_method(int (*_pfn)(remote_handle64, const dsptensor*, 
    _allocator_deinit(_al);
    return _nErr;
 }
-static __inline int _skel_method_1(int (*_pfn)(remote_handle64), uint32_t _sc, remote_arg* _pra) {
+static __inline int _skel_method_1(int (*_pfn)(remote_handle64, int32, int32, int32), remote_handle64 _h, uint32_t _sc, remote_arg* _pra) {
+   remote_arg* _praEnd = 0;
+   uint32_t _in0[1] = {0};
+   uint32_t _in1[1] = {0};
+   uint32_t _in2[1] = {0};
+   uint32_t* _primIn= 0;
+   int _nErr = 0;
+   _praEnd = ((_pra + REMOTE_SCALARS_INBUFS(_sc)) + REMOTE_SCALARS_OUTBUFS(_sc) + REMOTE_SCALARS_INHANDLES(_sc) + REMOTE_SCALARS_OUTHANDLES(_sc));
+   _QAIC_ASSERT(_nErr, REMOTE_SCALARS_INBUFS(_sc)==1);
+   _QAIC_ASSERT(_nErr, REMOTE_SCALARS_OUTBUFS(_sc)==0);
+   _QAIC_ASSERT(_nErr, REMOTE_SCALARS_INHANDLES(_sc)==0);
+   _QAIC_ASSERT(_nErr, REMOTE_SCALARS_OUTHANDLES(_sc)==0);
+   _QAIC_ASSERT(_nErr, (_pra + ((1 + 0) + (((0 + 0) + 0) + 0))) <= _praEnd);
+   _QAIC_ASSERT(_nErr, _pra[0].buf.nLen >= 12);
+   _primIn = _pra[0].buf.pv;
+   _COPY(_in0, 0, _primIn, 0, 4);
+   _COPY(_in1, 0, _primIn, 4, 4);
+   _COPY(_in2, 0, _primIn, 8, 4);
+   _TRY(_nErr, _pfn(_h, (int32)*_in0, (int32)*_in1, (int32)*_in2));
+   _QAIC_CATCH(_nErr) {}
+   return _nErr;
+}
+static __inline int _skel_method_2(int (*_pfn)(remote_handle64), uint32_t _sc, remote_arg* _pra) {
    remote_arg* _praEnd = 0;
    remote_handle64 _in0[1] = {0};
    remote_arg* _praRHandleIn = _pra + REMOTE_SCALARS_INBUFS(_sc) +  REMOTE_SCALARS_OUTBUFS(_sc);
@@ -536,7 +561,7 @@ static __inline int _stub_skel_version_check(char*_in0, int* resVal) {
    _QAIC_CATCH(_nErr) {}
    return 0;
 }
-static __inline int _skel_method_2(int (*_pfn)(const char*, remote_handle64*), uint32_t _sc, remote_arg* _pra) {
+static __inline int _skel_method_3(int (*_pfn)(const char*, remote_handle64*), uint32_t _sc, remote_arg* _pra) {
    remote_arg* _praEnd = 0;
    char* _in0[1] = {0};
    uint32_t _in0Len[1] = {0};
@@ -572,13 +597,21 @@ static __inline int _skel_method_2(int (*_pfn)(const char*, remote_handle64*), u
 __QAIC_SKEL_EXPORT int __QAIC_SKEL(ggmlop_skel_handle_invoke)(remote_handle64 _h, uint32_t _sc, remote_arg* _pra) __QAIC_SKEL_ATTRIBUTE {
    switch(REMOTE_SCALARS_METHOD(_sc)){
       case 0:
-      return _skel_method_2(__QAIC_IMPL(ggmlop_dsp_open), _sc, _pra);
+      return _skel_method_3(__QAIC_IMPL(ggmlop_dsp_open), _sc, _pra);
       case 1:
-      return _skel_method_1(__QAIC_IMPL(ggmlop_dsp_close), _sc, _pra);
+      return _skel_method_2(__QAIC_IMPL(ggmlop_dsp_close), _sc, _pra);
       case 2:
-      return _skel_method(__QAIC_IMPL(ggmlop_dsp_add), _h, _sc, _pra);
+      return _skel_method_1(__QAIC_IMPL(ggmlop_dsp_setclocks), _h, _sc, _pra);
       case 3:
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_add), _h, _sc, _pra);
+      case 4:
       return _skel_method(__QAIC_IMPL(ggmlop_dsp_mulmat), _h, _sc, _pra);
+      case 5:
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_mul), _h, _sc, _pra);
+      case 6:
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_sub), _h, _sc, _pra);
+      case 7:
+      return _skel_method(__QAIC_IMPL(ggmlop_dsp_div), _h, _sc, _pra);
    }
    return AEE_EUNSUPPORTED;
 }

@@ -26,10 +26,15 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include "HAP_perf.h"
 #include "HAP_farf.h"
+#include "HAP_power.h"
+#include "HAP_vtcm_mgr.h"
 #include "HAP_compute_res.h"
-#include "hexagon_types.h"
+
 #include "AEEStdErr.h"
+#include "hexagon_types.h"
+#include "hexagon_protos.h"
 
 #include "ggmlop_ap_skel.h"
 
@@ -52,7 +57,6 @@
 
 #define MIN(a, b)           ((a) < (b) ? (a) : (b))
 #define MAX(a, b)           ((a) > (b) ? (a) : (b))
-#define SWAP(x, y, T)       do { T SWAP = x; (x) = y; (y) = SWAP; } while (0)
 
 #if UINTPTR_MAX == 0xFFFFFFFF
 #define GGML_MEM_ALIGN      4
@@ -65,19 +69,6 @@
 #define static_assert(a, b) do { } while (0)
 
 typedef double      ggml_float;
-typedef uint16_t    ggml_fp16_t;
-typedef struct { uint16_t bits; } ggml_bf16_t;
-
-static void ggmlhexagon_log_internal(int level, const char * file, const char * func, int line, const char * format, ...);
-
-enum ggmlhexagon_log_level {
-    GGMLHEXAGON_LOG_LEVEL_NONE  = 0,
-    GGMLHEXAGON_LOG_LEVEL_DEBUG = 1,
-    GGMLHEXAGON_LOG_LEVEL_INFO  = 2,
-    GGMLHEXAGON_LOG_LEVEL_WARN  = 3,
-    GGMLHEXAGON_LOG_LEVEL_ERROR = 4,
-    GGMLHEXAGON_LOG_LEVEL_CONT  = 5,
-};
 
 #if 0//def NDEBUG
 #define GGMLQNN_DEBUG                                       0
@@ -86,18 +77,13 @@ enum ggmlhexagon_log_level {
 #endif
 
 #define GGMLHEXAGON_LOGBUF_LEN                              4096
-#define GGMLHEXAGON_TMPBUF_LEN                              256
-
-#define GGMLHEXAGON_LOG_ERROR(...)                          ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_ERROR, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
-#define GGMLHEXAGON_LOG_WARN(...)                           ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_WARN , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
-#define GGMLHEXAGON_LOG_INFO(...)                           ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_INFO , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGML_QNN_TMPBUF_LEN                                 256
 #if GGMLQNN_DEBUG
 #define GGMLHEXAGON_LOG_DEBUG(...)                          ggmlhexagon_log_internal(GGMLHEXAGON_LOG_LEVEL_DEBUG, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #else
 #define GGMLHEXAGON_LOG_DEBUG(...)
 #endif
 #define GGMLQNN_DUMP_TENSOR(tensor)                         ggmlhexagon_dump_tensor(tensor, #tensor)
-
 
 #define GGML_TENSOR_LOCALS_1(type, prefix, pointer, array) \
     const type prefix##0 = (pointer)->array[0]; \
@@ -134,6 +120,15 @@ enum ggmlhexagon_log_level {
     GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb) \
     GGML_TENSOR_LOCALS(int64_t, ne1, src1, ne) \
     GGML_TENSOR_LOCALS(size_t,  nb1, src1, nb)
+
+enum ggmlhexagon_log_level {
+    GGMLHEXAGON_LOG_LEVEL_NONE  = 0,
+    GGMLHEXAGON_LOG_LEVEL_DEBUG = 1,
+    GGMLHEXAGON_LOG_LEVEL_INFO  = 2,
+    GGMLHEXAGON_LOG_LEVEL_WARN  = 3,
+    GGMLHEXAGON_LOG_LEVEL_ERROR = 4,
+    GGMLHEXAGON_LOG_LEVEL_CONT  = 5,
+};
 
 enum ggml_type {
     GGML_TYPE_F32     = 0,
@@ -178,17 +173,16 @@ enum ggml_type {
     GGML_TYPE_COUNT   = 39,
 };
 
+static size_t ggml_nbytes(const struct ggml_tensor * tensor);
+static void   ggmlhexagon_log_internal(int level, const char * file, const char * func, int line, const char * format, ...);
+static void   ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
 
-static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
-static void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
-static void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc);
-
-typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
+typedef void  (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
                                  const void * GGML_RESTRICT y, size_t by, int nrc);
-typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
+typedef void  (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
-typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
-typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
+typedef void  (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+typedef void  (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
 struct ggml_type_traits {
     const char             * type_name;
@@ -229,7 +223,7 @@ static const struct ggml_type_traits type_traits[1] = {
 //  section-2: ggml-hexagon kernel's internal troubleshooting function
 // =================================================================================================
 static void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...) {
-    return;
+    //return;
     static char s_ggmlhexagon_log_internal_buf[GGMLHEXAGON_LOGBUF_LEN];
     va_list args;
     va_start(args, format);
@@ -238,26 +232,48 @@ static void ggmlhexagon_log_internal(int level, const char *file, const char *fu
     int len = vsnprintf(s_ggmlhexagon_log_internal_buf + len_prefix,
                         GGMLHEXAGON_LOGBUF_LEN - len_prefix, format, args);
     if (len < (GGMLHEXAGON_LOGBUF_LEN - len_prefix)) {
-
         FARF(ALWAYS, "%s\n", s_ggmlhexagon_log_internal_buf);
     }
     va_end(args);
 }
 
-static void ggmlhexagon_dump_tensor(const ggml_tensor * tensor) {
+static void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor) {
+    //return;
+    float value = 0;
+    char tmpbuf[GGMLHEXAGON_LOGBUF_LEN];
+    size_t buflen = 0;
+    if (tensor->type == GGML_TYPE_F32) {
+        memset(tmpbuf, 0, GGMLHEXAGON_LOG_LEVEL_DEBUG);
+        for (int h = 0; h < tensor->ne[3]; h++) {
+            for (int i = 0; i < tensor->ne[2]; i++) {
+                for (int j = 0; j < tensor->ne[1]; j++) {
+                    for (int k = 0; k < tensor->ne[0]; k++) {
+                        value = ((float *) tensor->data)[h * tensor->ne[2] + i * tensor->ne[1] +
+                                                         j * tensor->ne[0] + k];
+                        buflen += snprintf(tmpbuf + buflen, GGMLHEXAGON_LOGBUF_LEN - buflen, "%-4.2f\t", value);
+                    }
+                    buflen += snprintf(tmpbuf + buflen, GGMLHEXAGON_LOGBUF_LEN - buflen, "\n");
+                }
+            }
+        }
+        GGMLHEXAGON_LOG_DEBUG("\n%s\n", tmpbuf);
+    }
+
+    GGMLHEXAGON_LOG_DEBUG("\n");
+}
+
+static void ggmlhexagon_dump_tensor(const ggml_tensor * tensor, int dump_tensor_data) {
     GGMLHEXAGON_LOG_DEBUG("ne = %5d x %5d x %5d x %5d , nb = (%5zi, %5zi, %5zi, %5zi)\n",
          tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
          tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);
-}
 
-static void ggml_abort(const char * file, int line, const char * fmt, ...) {
-    GGMLHEXAGON_LOG_DEBUG("enter ggml_abort");
-    //abort();
-    return;
+    if ((1 == dump_tensor_data) && (ggml_nbytes(tensor) < 320)) {
+        ggmlhexagon_dump_tensor_elements(tensor);
+    }
 }
 
 // =================================================================================================
-//  section-3: ggml-hexagon kernel's helper function(tiny ggml-dsp, ported from original ggml)
+//  section-3: tiny ggml-dsp(ggml on Hexagon cDSP, ported from original ggml)
 // =================================================================================================
 static const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
     return &type_traits_cpu[type];
@@ -275,6 +291,18 @@ static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const fl
         sumf += (ggml_float) (x[i] * y[i]);
     }
     *s = sumf;
+}
+
+inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) {
+    for (int i = 0; i < n; ++i) z[i]  = x[i]*y[i];
+}
+
+inline static void ggml_vec_div_f32 (const int n, float * z, const float * x, const float * y) {
+    for (int i = 0; i < n; ++i) z[i]  = x[i]/y[i];
+}
+
+inline static void ggml_vec_sub_f32 (const int n, float * z, const float * x, const float * y) {
+    for (int i = 0; i < n; ++i) z[i]  = x[i] - y[i];
 }
 
 static const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
@@ -401,6 +429,15 @@ inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, co
     for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i];
 }
 
+static void ggml_abort(const char * file, int line, const char * fmt, ...) {
+    GGMLHEXAGON_LOG_DEBUG("enter ggml_abort");
+    abort();
+    return;
+}
+
+// =================================================================================================
+//  section-4: ggml-hexagon kernel helper function
+// =================================================================================================
 int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
     void *tptr = NULL;
     FARF(HIGH, "uri %s", uri);
@@ -416,16 +453,67 @@ int ggmlop_dsp_close(remote_handle64 handle) {
     return 0;
 }
 
+AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    HAP_power_request_t request;
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_apptype;
+    request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
+
+    void * ggmop_ctx = (void*)(handle);
+    int retval = HAP_power_set(ggmop_ctx, &request);
+    if (retval)  {
+        GGMLHEXAGON_LOG_DEBUG("failed first power vote");
+        return AEE_EFAILED;
+    }
+
+    //configure clocks & DCVS mode
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_DCVS_v2;
+    request.dcvs_v2.dcvs_enable = TRUE;
+    request.dcvs_v2.dcvs_params.target_corner = (HAP_dcvs_voltage_corner_t)power_level;
+    if (dcvs_enabled) {
+        request.dcvs_v2.dcvs_params.min_corner = HAP_DCVS_VCORNER_DISABLE;
+        request.dcvs_v2.dcvs_params.max_corner = HAP_DCVS_VCORNER_DISABLE;
+    } else {
+        request.dcvs_v2.dcvs_params.min_corner = request.dcvs_v2.dcvs_params.target_corner;
+        request.dcvs_v2.dcvs_params.max_corner = request.dcvs_v2.dcvs_params.target_corner;
+    }
+    request.dcvs_v2.dcvs_option     = HAP_DCVS_V2_PERFORMANCE_MODE;
+    request.dcvs_v2.set_dcvs_params = TRUE;
+    request.dcvs_v2.set_latency     = TRUE;
+    request.dcvs_v2.latency         = latency;
+    retval = HAP_power_set(ggmop_ctx, &request);
+    if (retval) {
+        GGMLHEXAGON_LOG_DEBUG("failed to vote for performance mode");
+        return AEE_EFAILED;
+    }
+
+    memset(&request, 0, sizeof(HAP_power_request_t));
+    request.type = HAP_power_set_HVX;
+    request.hvx.power_up = TRUE;
+    retval = HAP_power_set(ggmop_ctx, &request);
+    if (retval) {
+        GGMLHEXAGON_LOG_DEBUG("failed to vote for HVX power");
+        return AEE_EFAILED;
+    }
+    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
+    return AEE_SUCCESS;
+}
+
 // =================================================================================================
-//  section-4: ggml-hexagon kernel function
+//  section-5: ggml-hexagon kernel function: offload ggmlop to cDSP through Hexagon C API and SIMD instructions
 // =================================================================================================
 static void ggml_compute_forward_add_f32(
-        struct ggml_tensor * src0,
-        struct ggml_tensor * src1,
+        const struct ggml_tensor * src0,
+        const struct ggml_tensor * src1,
         struct ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
     memcpy(dst->ne, src1->ne, 16);
     memcpy(dst->nb, src1->nb, 16);
+    ggmlhexagon_dump_tensor(src0, 1);
+    ggmlhexagon_dump_tensor(src1, 1);
+    ggmlhexagon_dump_tensor(dst, 1);
 
     GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
 
@@ -458,9 +546,17 @@ static void ggml_compute_forward_add_f32(
             float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
             for (int64_t r = 0; r < nr0; ++r) {
 #ifdef GGML_USE_ACCELERATE
-                vDSP_vadd(src0_ptr + r*ne10, 1, src1_ptr, 1, dst_ptr + r*ne10, 1, ne10);
+                //vDSP_vadd(src0_ptr + r*ne10, 1, src1_ptr, 1, dst_ptr + r*ne10, 1, ne10);
+                HVX_Vector *va = (HVX_Vector *) src1_ptr;
+                HVX_Vector *vb = (HVX_Vector *) src0_ptr + r * ne10;
+                HVX_Vector *vc = (HVX_Vector *) dst_ptr + r * ne10;
+                int total_vectors = ne10 / FLOATS_PER_VECTOR;
+                GGMLHEXAGON_LOG_DEBUG("total_vectors %d", total_vectors);
+                for (int i = 0; i < total_vectors; ++i) {
+                    *vc++ = Q6_Vqf32_vadd_Vqf32Vqf32(*va++, *vb++);
+                }
 #else
-                ggml_vec_add_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+        ggml_vec_add_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
 #endif
             }
         }
@@ -492,7 +588,7 @@ static void ggml_compute_forward_add_f32(
 
 int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst)
 {
-    GGMLHEXAGON_LOG_DEBUG("enter ggmlop_dsp_add\n");
+    GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
     switch (src0->type) {
         case GGML_TYPE_F32:
         {
@@ -508,13 +604,13 @@ int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tenso
             GGML_ABORT("fatal error");
         }
     }
-    GGMLHEXAGON_LOG_DEBUG("leave ggmlop_dsp_add\n");
+    GGMLHEXAGON_LOG_DEBUG("leave %s\n", __func__);
     return 0;
 }
 
 static void ggml_compute_forward_mul_mat_one_chunk(
-        const struct ggml_tensor * src0,
-        const struct ggml_tensor * src1,
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
         struct ggml_tensor * dst,
         const enum ggml_type type,
         const int32_t num_rows_per_vec_dot,
@@ -522,9 +618,9 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         const int32_t ir0_end,
         const int32_t ir1_start,
         const int32_t ir1_end) {
-    ggmlhexagon_dump_tensor(src0);
-    ggmlhexagon_dump_tensor(src1);
-    ggmlhexagon_dump_tensor(dst);
+    ggmlhexagon_dump_tensor(src0, 0);
+    ggmlhexagon_dump_tensor(src1, 0);
+    ggmlhexagon_dump_tensor(dst, 0);
 
     dst->ne[0] = src0->ne[1];
     dst->ne[1] = src1->ne[1];
@@ -535,7 +631,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     dst->nb[1] = dst->nb[0] * (dst->ne[0] / ggml_blck_size(src1->type));
     dst->nb[2] = dst->nb[1] * dst->ne[1];
     dst->nb[3] = dst->nb[2] * dst->ne[2];
-    ggmlhexagon_dump_tensor(dst);
+    ggmlhexagon_dump_tensor(dst, 0);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -613,9 +709,10 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 }
 
  int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-     ggmlhexagon_dump_tensor(src0);
-     ggmlhexagon_dump_tensor(src1);
-     ggmlhexagon_dump_tensor(dst);
+     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+     ggmlhexagon_dump_tensor(src0, 0);
+     ggmlhexagon_dump_tensor(src1, 0);
+     ggmlhexagon_dump_tensor(dst, 0);
 
      dst->ne[0] = src0->ne[1];
      dst->ne[1] = src1->ne[1];
@@ -626,7 +723,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
      dst->nb[1] = dst->nb[0] * (dst->ne[0] / ggml_blck_size(src1->type));
      dst->nb[2] = dst->nb[1] * dst->ne[1];
      dst->nb[3] = dst->nb[2] * dst->ne[2];
-     ggmlhexagon_dump_tensor(dst);
+     ggmlhexagon_dump_tensor(dst, 0);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -735,6 +832,276 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         }
         current_chunk++;
     }
-
+     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
     return 0;
+}
+
+static void ggml_compute_forward_sub_f32(
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        struct ggml_tensor * dst) {
+
+    memcpy(dst->ne, src1->ne, 16);
+    memcpy(dst->nb, src1->nb, 16);
+
+    assert(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+
+    const int ith = 0;
+    const int nth = 1;
+
+    const int nr  = ggml_nrows(src0);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    if (nb10 == sizeof(float)) {
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src1 is broadcastable across src0 and dst in i1, i2, i3
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+            const int64_t nr0 = ne00 / ne10;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+            float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+
+            for (int64_t r = 0; r < nr0; ++r) {
+#ifdef GGML_USE_ACCELERATE
+                vDSP_vsub(src1_ptr, 1, src0_ptr + r*ne10, 1, dst_ptr + r*ne10, 1, ne10);
+#else
+                ggml_vec_sub_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+#endif
+            }
+        }
+    } else {
+        // src1 is not contiguous
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src1 is broadcastable across src0 and dst in i1, i2, i3
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+
+            for (int64_t i0 = 0; i0 < ne0; ++i0) {
+                const int64_t i10 = i0 % ne10;
+                float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + i10*nb10);
+
+                dst_ptr[i0] = src0_ptr[i0] - *src1_ptr;
+            }
+        }
+    }
+}
+int ggmlop_dsp_sub(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+        {
+            ggml_compute_forward_sub_f32(src0, src1, dst);
+        } break;
+        default:
+        {
+            GGML_ABORT("fatal error");
+        }
+    }
+    return 0;
+}
+
+static void ggml_compute_forward_mul_f32(
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        struct ggml_tensor * dst) {
+
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    memcpy(dst->ne, src1->ne, 16);
+    memcpy(dst->nb, src1->nb, 16);
+
+
+    GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+
+    const int ith = 0;
+    const int nth = 1;
+
+    const int64_t nr = ggml_nrows(src0);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    if (nb10 == sizeof(float)) {
+        for (int64_t ir = ith; ir < nr; ir += nth) {
+            // src0 and dst are same shape => same indices
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+            const int64_t nr0 = ne00 / ne10;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+            float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+
+            for (int64_t r = 0 ; r < nr0; ++r) {
+#ifdef GGML_USE_ACCELERATE
+                UNUSED(ggml_vec_mul_f32);
+
+                vDSP_vmul(src0_ptr + r*ne10, 1, src1_ptr, 1, dst_ptr + r*ne10, 1, ne10);
+#else
+                ggml_vec_mul_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+#endif
+            }
+        }
+    } else {
+        // src1 is not contiguous
+        for (int64_t ir = ith; ir < nr; ir += nth) {
+            // src0 and dst are same shape => same indices
+            // src1 is broadcastable across src0 and dst in i1, i2, i3
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+
+            for (int64_t i0 = 0; i0 < ne00; ++i0) {
+                const int64_t i10 = i0 % ne10;
+                float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + i10*nb10);
+
+                dst_ptr[i0] = src0_ptr[i0] * (*src1_ptr);
+            }
+        }
+    }
+}
+
+int ggmlop_dsp_mul(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+        {
+            if (src1->type == GGML_TYPE_F32) {
+                ggml_compute_forward_mul_f32(src0, src1, dst);
+            } else {
+                GGML_ABORT("fatal error");
+            }
+            break;
+        }
+        default:
+        {
+            GGML_ABORT("fatal error");
+        }
+    }
+    GGMLHEXAGON_LOG_DEBUG("leave %s\n", __func__);
+    return 0;
+}
+static void ggml_compute_forward_div_f32(
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        struct ggml_tensor * dst) {
+
+    memcpy(dst->ne, src1->ne, 16);
+    memcpy(dst->nb, src1->nb, 16);
+
+    GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+
+    const int ith = 0;
+    const int nth = 1;
+
+    const int64_t nr = ggml_nrows(src0);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    if (nb10 == sizeof(float)) {
+        for (int64_t ir = ith; ir < nr; ir += nth) {
+            // src0 and dst are same shape => same indices
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+            const int64_t nr0 = ne00 / ne10;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+            float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+
+            for (int64_t r = 0; r < nr0; ++r) {
+#ifdef GGML_USE_ACCELERATE
+                UNUSED(ggml_vec_div_f32);
+
+                vDSP_vdiv(src1_ptr, 1, src0_ptr + r*ne10, 1, dst_ptr + r*ne10, 1, ne10);
+#else
+                ggml_vec_div_f32(ne10, dst_ptr + r*ne10, src0_ptr + r*ne10, src1_ptr);
+#endif
+            }
+        }
+    } else {
+        // src1 is not contiguous
+        for (int64_t ir = ith; ir < nr; ir += nth) {
+            // src0 and dst are same shape => same indices
+            // src1 is broadcastable across src0 and dst in i1, i2, i3
+            const int64_t i03 = ir/(ne02*ne01);
+            const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+            const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+            const int64_t i13 = i03 % ne13;
+            const int64_t i12 = i02 % ne12;
+            const int64_t i11 = i01 % ne11;
+
+            float * dst_ptr  = (float *) ((char *) dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
+            float * src0_ptr = (float *) ((char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+
+            for (int64_t i0 = 0; i0 < ne00; ++i0) {
+                const int64_t i10 = i0 % ne10;
+                float * src1_ptr = (float *) ((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + i10*nb10);
+
+                dst_ptr[i0] = src0_ptr[i0] / (*src1_ptr);
+            }
+        }
+    }
+}
+
+int ggmlop_dsp_div(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+        {
+            ggml_compute_forward_div_f32(src0, src1, dst);
+        } break;
+
+        default:
+        {
+            GGML_ABORT("fatal error");
+        }
+    }
 }
