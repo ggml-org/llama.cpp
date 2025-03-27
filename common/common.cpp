@@ -1733,8 +1733,7 @@ std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_re
 #if defined(_WIN32)
     curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
 #endif
-    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "user-agent: llama-cpp");
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
     http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
 
