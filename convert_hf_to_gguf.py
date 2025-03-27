@@ -2330,6 +2330,37 @@ class WavTokenizerDecModel(Model):
         self.gguf_writer.add_causal_attention(False)
 
 
+@Model.register("SNACDec")
+class SNACDecModel(Model):
+    model_arch = gguf.MODEL_ARCH.SNAC_DEC
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, Tensor]]:
+        del bid  # unused
+
+        logger.debug(f"Processing tensor: {name}")
+
+        if (name.startswith("decoder.") or
+            re.match(r"quantizer\.quantizers\.\d+\.codebook\.weight", name) or
+            re.match(r"quantizer\.quantizers\.\d+\.out_proj\..*", name)):
+            logger.info(f"{name} -> {data_torch.shape}")
+            return [(name, data_torch)]
+        else:
+            logger.debug(f"Skipping {name!r}")
+            return []
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
+        self.gguf_writer.add_quantizer_count(len(self.hparams["vq_strides"]))
+        self.gguf_writer.add_features_length(self.hparams["codebook_dim"])
+        self.gguf_writer.add_quantizer_strides(self.hparams["vq_strides"])
+        self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])
+        self.gguf_writer.add_decoder_upsample_rates(self.hparams["decoder_rates"])
+        self.gguf_writer.add_decoder_channel_dims(self.hparams["decoder_channel_dims"])
+
 @Model.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(Model):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE

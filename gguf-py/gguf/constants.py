@@ -173,6 +173,13 @@ class Keys:
         EMBEDDING_LENGTH = "{arch}.convnext.embedding_length"
         BLOCK_COUNT      = "{arch}.convnext.block_count"
 
+    class AudioCodec:
+        QUANTIZER_COUNT = "{arch}.audio_codec.quantizer_count"
+        CODEBOOK_DIM = "{arch}.audio_codec.codebook_dim"
+        QUANTIZER_STRIDES = "{arch}.audio_codec.quantizer_strides"
+        DECODER_UPSAMPLE_RATES = "{arch}.audio_codec.decoder_upsample_rates"
+        DECODER_CHANNEL_DIMS = "{arch}.audio_codec.decoder_channel_dims"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -286,6 +293,7 @@ class MODEL_ARCH(IntEnum):
     GRANITE_MOE      = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
+    SNAC_DEC         = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -425,6 +433,7 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    UPSAMPLE_CONV        = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -488,6 +497,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
+    MODEL_ARCH.SNAC_DEC:         "snac-dec",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -627,6 +637,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    MODEL_TENSOR.UPSAMPLE_CONV:             "upsample_conv.{bid}",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1650,6 +1661,16 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.POSNET_ATTN_K,
         MODEL_TENSOR.POSNET_ATTN_V,
         MODEL_TENSOR.POSNET_ATTN_OUT,
+    ],
+    MODEL_ARCH.SNAC_DEC: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.CONV1D,
+        MODEL_TENSOR.CONV1D,
+        MODEL_TENSOR.CONVNEXT_DW,
+        MODEL_TENSOR.CONVNEXT_GAMMA,
+        MODEL_TENSOR.UPSAMPLE_CONV,
+        MODEL_TENSOR.CONV1D,
+        MODEL_TENSOR.OUTPUT,
     ],
     # TODO
 }
