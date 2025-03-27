@@ -4459,15 +4459,24 @@ int main(int argc, char ** argv) {
         llama_backend_free();
     };
 
-    // bind HTTP listen port
     bool was_bound = false;
-    if (params.port == 0) {
-        int bound_port = svr->bind_to_any_port(params.hostname);
-        if ((was_bound = (bound_port >= 0))) {
-            params.port = bound_port;
-        }
+    if (string_ends_with(std::string(params.hostname), ".sock")) {
+        LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
+        svr->set_address_family(AF_UNIX);
+        // bind_to_port requires a second arg, any value other than 0 should
+        // simply get ignored
+        was_bound = svr->bind_to_port(params.hostname, 8080);
     } else {
-        was_bound = svr->bind_to_port(params.hostname, params.port);
+        LOG_INF("%s: binding port with default address family\n", __func__);
+        // bind HTTP listen port
+        if (params.port == 0) {
+            int bound_port = svr->bind_to_any_port(params.hostname);
+            if ((was_bound = (bound_port >= 0))) {
+                params.port = bound_port;
+            }
+        } else {
+            was_bound = svr->bind_to_port(params.hostname, params.port);
+        }
     }
 
     if (!was_bound) {
