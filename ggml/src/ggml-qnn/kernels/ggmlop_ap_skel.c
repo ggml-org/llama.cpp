@@ -1,3 +1,6 @@
+//qidl copyright
+//qidl nested=false
+#include "ggmlop_ap_skel.h"
 #include <string.h>
 #ifndef _WIN32
 #include "HAP_farf.h"
@@ -8,7 +11,6 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-#include "ggmlop_ap_skel.h"
 
 typedef struct _heap _heap;
 struct _heap {
@@ -274,14 +276,14 @@ static const Type types[4];
 static const Type* const typeArrays[6] = {&(types[0]),&(types[1]),&(types[1]),&(types[0]),&(types[0]),&(types[2])};
 static const StructType structTypes[1] = {{0x6,&(typeArrays[0]),0x30,0x4,0x2c,0x4,0x4,0x4}};
 static const Type types[4] = {{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4},{0x10,{{(const uintptr_t)&(types[0]),(const uintptr_t)0x4}}, 8,0x4},{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)&(types[3]),(const uintptr_t)0x0}}, 9,SLIM_IFPTR32(0x4,0x8)},{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4}};
-static const Parameter parameters[5] = {{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)0x0,0}}, 4,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),3,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),3,0}};
-static const Parameter* const parameterArrays[6] = {(&(parameters[3])),(&(parameters[3])),(&(parameters[4])),(&(parameters[0])),(&(parameters[1])),(&(parameters[2]))};
-static const Method methods[3] = {{REMOTE_SCALARS_MAKEX(0,0,0x2,0x0,0x0,0x1),0x4,0x0,2,2,(&(parameterArrays[3])),0x4,0x1},{REMOTE_SCALARS_MAKEX(0,0,0x0,0x0,0x1,0x0),0x0,0x0,1,1,(&(parameterArrays[5])),0x1,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x3,0x2,0x0,0x0),0x64,0x2c,3,3,(&(parameterArrays[0])),0x4,0x4}};
-static const Method* const methodArrays[4] = {&(methods[0]),&(methods[1]),&(methods[2]),&(methods[2])};
-static const char strings[68] = "mulmat\0flags\0close\0src1\0data\0type\0src0\0open\0dst\0add\0uri\0op\0nb\0ne\0h\0";
-static const uint16_t methodStrings[49] = {0,34,29,62,59,56,7,24,19,29,62,59,56,7,24,44,29,62,59,56,7,24,48,34,29,62,59,56,7,24,19,29,62,59,56,7,24,44,29,62,59,56,7,24,39,52,65,13,65};
-static const uint16_t methodStringsArrays[4] = {44,47,22,0};
-__QAIC_SLIM_EXPORT const Interface __QAIC_SLIM(ggmlop_slim) = {4,&(methodArrays[0]),0,0,&(methodStringsArrays [0]),methodStrings,strings};
+static const Parameter parameters[6] = {{SLIM_IFPTR32(0x8,0x10),{{(const uintptr_t)0x0,0}}, 4,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),3,0},{SLIM_IFPTR32(0x4,0x8),{{(const uintptr_t)0xdeadc0de,(const uintptr_t)0}}, 0,SLIM_IFPTR32(0x4,0x8),0,0},{0x4,{{(const uintptr_t)0,(const uintptr_t)1}}, 2,0x4,0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),0,0},{SLIM_IFPTR32(0x34,0x40),{{(const uintptr_t)&(structTypes[0]),0}}, 22,SLIM_IFPTR32(0x4,0x8),3,0}};
+static const Parameter* const parameterArrays[9] = {(&(parameters[4])),(&(parameters[4])),(&(parameters[5])),(&(parameters[3])),(&(parameters[3])),(&(parameters[3])),(&(parameters[0])),(&(parameters[1])),(&(parameters[2]))};
+static const Method methods[4] = {{REMOTE_SCALARS_MAKEX(0,0,0x2,0x0,0x0,0x1),0x4,0x0,2,2,(&(parameterArrays[6])),0x4,0x1},{REMOTE_SCALARS_MAKEX(0,0,0x0,0x0,0x1,0x0),0x0,0x0,1,1,(&(parameterArrays[8])),0x1,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x1,0x0,0x0,0x0),0xc,0x0,3,3,(&(parameterArrays[3])),0x4,0x0},{REMOTE_SCALARS_MAKEX(0,0,0x3,0x2,0x0,0x0),0x64,0x2c,3,3,(&(parameterArrays[0])),0x4,0x4}};
+static const Method* const methodArrays[8] = {&(methods[0]),&(methods[1]),&(methods[2]),&(methods[3]),&(methods[3]),&(methods[3]),&(methods[3]),&(methods[3])};
+static const char strings[146] = "dsp_setclocks\0dcvs_enable\0power_level\0dsp_mulmat\0dsp_div\0dsp_sub\0dsp_mul\0dsp_add\0latency\0flags\0close\0src1\0data\0type\0src0\0open\0dst\0uri\0op\0nb\0ne\0h\0";
+static const uint16_t methodStrings[119] = {49,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,57,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,65,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,38,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,73,116,111,140,137,134,89,106,101,111,140,137,134,89,106,126,111,140,137,134,89,106,0,26,81,14,121,130,143,95,143};
+static const uint16_t methodStringsArrays[8] = {114,117,110,88,66,44,22,0};
+__QAIC_SLIM_EXPORT const Interface __QAIC_SLIM(ggmlop_slim) = {8,&(methodArrays[0]),0,0,&(methodStringsArrays [0]),methodStrings,strings};
 #endif //_GGMLOP_SLIM_H
 
 
@@ -293,6 +295,25 @@ __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_open)(const char* uri, remote_hand
 }
 __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_close)(remote_handle64 h) __QAIC_STUB_ATTRIBUTE {
    return __QAIC_REMOTE(remote_handle64_close)(h);
+}
+static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uint32_t _in0[1], uint32_t _in1[1], uint32_t _in2[1]) {
+   remote_arg _pra[1] = {0};
+   uint32_t _primIn[3]= {0};
+   int _nErr = 0;
+   _pra[0].buf.pv = (void*)_primIn;
+   _pra[0].buf.nLen = sizeof(_primIn);
+   _COPY(_primIn, 0, _in0, 0, 4);
+   _COPY(_primIn, 4, _in1, 0, 4);
+   _COPY(_primIn, 8, _in2, 0, 4);
+   _TRY_FARF(_nErr, __QAIC_REMOTE(remote_handle64_invoke)(_handle, REMOTE_SCALARS_MAKEX(0, _mid, 1, 0, 0, 0), _pra));
+   _CATCH_FARF(_nErr) {
+      _QAIC_FARF(RUNTIME_ERROR, "ERROR 0x%x: handle=0x%"PRIx64", scalar=0x%x, method ID=%d: %s failed\n", _nErr , _handle, REMOTE_SCALARS_MAKEX(0, _mid, 1, 0, 0, 0), _mid, __func__);
+   }
+   return _nErr;
+}
+__QAIC_STUB_EXPORT AEEResult __QAIC_STUB(ggmlop_dsp_setclocks)(remote_handle64 _handle, int32 power_level, int32 latency, int32 dcvs_enable) __QAIC_STUB_ATTRIBUTE {
+   uint32_t _mid = 2;
+   return _stub_method(_handle, _mid, (uint32_t*)&power_level, (uint32_t*)&latency, (uint32_t*)&dcvs_enable);
 }
 static __inline int _stub_unpack(_ATTRIBUTE_UNUSED remote_arg* _praROutPost, _ATTRIBUTE_UNUSED remote_arg* _ppraROutPost[1], _ATTRIBUTE_UNUSED void* _primROut, _ATTRIBUTE_UNUSED uint32_t _rout0[1], _ATTRIBUTE_UNUSED uint32_t _rout1[4], _ATTRIBUTE_UNUSED uint32_t _rout2[4], _ATTRIBUTE_UNUSED uint32_t _rout3[1], _ATTRIBUTE_UNUSED uint32_t _rout4[1], _ATTRIBUTE_UNUSED char* _rout5[1], _ATTRIBUTE_UNUSED uint32_t _rout5Len[1]) {
    int _nErr = 0;
@@ -354,7 +375,7 @@ static __inline void _count_1(int _numIn[1], int _numROut[1], int _numInH[1], in
    _numInH[0] += 0;
    _numROutH[0] += 0;
 }
-static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uintptr_t _in0[SLIM_IFPTR32(13, 8)], uintptr_t _in1[SLIM_IFPTR32(13, 8)], uintptr_t _rout2[SLIM_IFPTR32(13, 8)]) {
+static __inline int _stub_method_1(remote_handle64 _handle, uint32_t _mid, uintptr_t _in0[SLIM_IFPTR32(13, 8)], uintptr_t _in1[SLIM_IFPTR32(13, 8)], uintptr_t _rout2[SLIM_IFPTR32(13, 8)]) {
    remote_arg* _pra = 0;
    int _numIn[1] = {0};
    int _numROut[1] = {0};
@@ -420,10 +441,22 @@ static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uintptr
    return _nErr;
 }
 __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_add)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
-   uint32_t _mid = 2;
-   return _stub_method(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
+   uint32_t _mid = 3;
+   return _stub_method_1(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
 }
 __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_mulmat)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
-   uint32_t _mid = 3;
-   return _stub_method(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
+   uint32_t _mid = 4;
+   return _stub_method_1(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
+}
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_mul)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
+   uint32_t _mid = 5;
+   return _stub_method_1(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
+}
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_sub)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
+   uint32_t _mid = 6;
+   return _stub_method_1(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
+}
+__QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_div)(remote_handle64 _handle, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_STUB_ATTRIBUTE {
+   uint32_t _mid = 7;
+   return _stub_method_1(_handle, _mid, (uintptr_t*)src0, (uintptr_t*)src1, (uintptr_t*)dst);
 }
