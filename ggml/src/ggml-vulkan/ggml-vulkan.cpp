@@ -8764,6 +8764,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 default:
                     return false;
                 }
+                if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                    // different head sizes of K and V are not supported yet
+                    return false;
+                }
                 if (op->src[0]->type != GGML_TYPE_F32) {
                     return false;
                 }
