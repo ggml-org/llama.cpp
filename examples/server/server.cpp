@@ -1453,6 +1453,15 @@ struct server_slot {
                 t_prompt_processing, n_prompt_tokens_processed, t_prompt, n_prompt_second,
                 t_token_generation, n_decoded, t_gen, n_gen_second,
                 t_prompt_processing + t_token_generation, n_prompt_tokens_processed + n_decoded);
+
+        if (n_draft_total > 0) {
+            const float draft_ratio = (float) n_draft_accepted / n_draft_total;
+            SLT_INF(*this,
+                    "\n"
+                    "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
+                    draft_ratio, n_draft_accepted, n_draft_total
+            );
+        }
     }
 
     json to_json() const {
