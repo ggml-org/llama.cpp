@@ -219,9 +219,12 @@ typedef struct {
     int32_t  ne11;
     int32_t  ne_12_2; // assume K and V are same shape
     int32_t  ne_12_3;
-    uint64_t nb_12_1;
-    uint64_t nb_12_2;
-    uint64_t nb_12_3;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb21;
+    uint64_t nb22;
+    uint64_t nb23;
     uint64_t nb31;
     int32_t  ne1;
     int32_t  ne2;
