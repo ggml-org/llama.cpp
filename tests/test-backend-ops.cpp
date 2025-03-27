@@ -4412,7 +4412,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
 
-    for (int hs : { 64, 80, 128, 256, }) {
+    for (int hs : { 64, 80, 128, 192, 256, }) {
         for (bool mask : { true, false } ) {
             for (float max_bias : { 0.0f, 8.0f }) {
                 if (!mask && max_bias > 0.0f) continue;
