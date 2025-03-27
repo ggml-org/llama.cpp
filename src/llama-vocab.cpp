@@ -332,7 +332,6 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_SMOLLM:
             case LLAMA_VOCAB_PRE_TYPE_CODESHELL:
             case LLAMA_VOCAB_PRE_TYPE_EXAONE:
-            case LLAMA_VOCAB_PRE_TYPE_TRILLION:
             case LLAMA_VOCAB_PRE_TYPE_MINERVA:
                 regex_exprs = {
                     "\\p{N}",
@@ -343,6 +342,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_MPT:
             case LLAMA_VOCAB_PRE_TYPE_OLMO:
             case LLAMA_VOCAB_PRE_TYPE_JAIS:
+            case LLAMA_VOCAB_PRE_TYPE_TRILLION:
                 regex_exprs = {
                     "'s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)",
                 };
