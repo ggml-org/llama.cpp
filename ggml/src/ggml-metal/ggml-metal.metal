@@ -48,7 +48,7 @@ void dequantize_f16(device const half4x4 * src, short il, thread type4x4 & reg) 
 
 template <typename type4>
 void dequantize_f16_t4(device const half4 * src, short il, thread type4 & reg) {
-    reg = (type4)(*(src + il));
+    reg = (type4)(*(src));
 }
 
 #if defined(GGML_METAL_USE_BF16)
@@ -59,7 +59,7 @@ void dequantize_bf16(device const bfloat4x4 * src, short il, thread type4x4 & re
 
 template <typename type4>
 void dequantize_bf16_t4(device const bfloat4 * src, short il, thread type4 & reg) {
-    reg = (type4)(*(src + il));
+    reg = (type4)(*(src));
 }
 #endif
 
@@ -3644,7 +3644,7 @@ kernel void kernel_flash_attn_ext_vec(
     const short DK4 = DK/4;
     const short DV4 = DV/4;
     const short NW  = N_SIMDWIDTH;
-    const short NL  = NW/NE; // note: this can be adjusted to support different head sizes simdgroup work loads
+    const short NL  = NW/NE; // note: this can be adjusted to support different head sizes and simdgroup work loads
     const short SH  = 2*C;   // shared memory per simdgroup
 
     const short T = DK + nsg*SH; // shared memory size per query in (half)
@@ -3656,7 +3656,7 @@ kernel void kernel_flash_attn_ext_vec(
     threadgroup half * sm  = (threadgroup half *) (shmem_f16 + sgitg*SH + C + Q*DK); // scratch buffer for mask
     threadgroup o4_t * sr4 = (threadgroup o4_t *) (shmem_f16 + sgitg*DV     + Q*T);  // scratch buffer for the results
 
-    // store the result for all queries in local memory in 8x8 matrices (the O matrix from the paper)
+    // store the result for all queries in local memory (the O matrix from the paper)
     o4_t lo[DV4/NL];
 
     // load heads from Q to shared memory
@@ -3756,7 +3756,7 @@ kernel void kernel_flash_attn_ext_vec(
                         mqk += dot((float4) mk, (float4) sq4[i]);
                     }
 
-                    static_assert(NE > 1, "NE must be > 1");
+                    static_assert(NE > 1, "NE must be > 1"); // note: not sure why NE == 1 fails
 
                     // simdgroup reduce (NE = 4)
                     // [ 0 ..  7] -> [ 0]

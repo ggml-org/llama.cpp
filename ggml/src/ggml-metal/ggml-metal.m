@@ -3834,6 +3834,7 @@ static void ggml_metal_encode_node(
 
                 // TODO: add vec kernels for (ne00%64 == 0) and maybe also for (ne00%32 == 0)
                 //       for now avoiding mainly to keep the number of templates/kernels a bit lower
+                //       these are now trivial to add after: https://github.com/ggml-org/llama.cpp/pull/12612
                 if (ne01 >= 4 || (ne00%128 != 0 && ne00 != 192)) {
                     switch (src1->type) {
                         case GGML_TYPE_F16:
