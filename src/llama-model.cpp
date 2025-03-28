@@ -256,7 +256,7 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
     return nullptr;
 }
 
-// CPU: ACCEL -> CPU extra -> GPU host -> CPU
+// CPU: ACCEL -> GPU host -> CPU extra -> CPU
 static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & devices) {
     buft_list_t buft_list;
 
@@ -272,32 +272,6 @@ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & de
         }
     }
 
-    bool has_gpu_device = false;
-    for (auto * dev : devices) {
-        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-            has_gpu_device = true;
-            break;
-        }
-    }
-
-    // add extra buffer types, only if no GPU device is present
-    // ref: https://github.com/ggml-org/llama.cpp/issues/12481#issuecomment-2743136094
-    if (!has_gpu_device) {
-        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
-        auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
-            ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
-        if (ggml_backend_dev_get_extra_bufts_fn) {
-            ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
-            while (extra_bufts && *extra_bufts) {
-                buft_list.emplace_back(cpu_dev, *extra_bufts);
-                ++extra_bufts;
-            }
-        }
-    } else {
-        LLAMA_LOG_WARN("%s: disabling extra buffer types (i.e. repacking) since a GPU device is available\n", __func__);
-    }
-
     // add a host buffer type
     // storing the tensors in a host buffer is useful when the processing of large batches
     // is offloaded to a GPU device, since it reduces the time spent on data transfers
@@ -309,6 +283,20 @@ static buft_list_t make_cpu_buft_list(const std::vector<ggml_backend_dev_t> & de
         if (buft) {
             buft_list.emplace_back(dev, buft);
             break;
+        }
+    }
+
+    // add extra buffer types, only if no GPU device is present
+    // ref: https://github.com/ggml-org/llama.cpp/issues/12481#issuecomment-2743136094
+    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+    auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+        ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+    if (ggml_backend_dev_get_extra_bufts_fn) {
+        ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
+        while (extra_bufts && *extra_bufts) {
+            buft_list.emplace_back(cpu_dev, *extra_bufts);
+            ++extra_bufts;
         }
     }
 
