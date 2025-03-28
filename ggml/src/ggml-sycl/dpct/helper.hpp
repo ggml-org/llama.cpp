@@ -16,8 +16,17 @@
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
 #include <syclcompat/math.hpp>
-#include <oneapi/math.hpp>
 #include <map>
+
+#ifdef GGML_SYCL_USE_INTEL_ONEMKL
+#include <oneapi/mkl.hpp>
+// Allow to use the same namespace for Intel oneMKL and oneMath
+namespace oneapi {
+    namespace math = mkl;
+}
+#else
+#include <oneapi/math.hpp>
+#endif
 
 #include "ggml.h"
 
@@ -91,20 +100,18 @@ template <typename Ts> struct matrix_info_t {
 };
 
 inline auto get_onemath_backend(sycl::queue& queue)
-#ifdef GGML_SYCL_GENERIC
+#if defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
   -> sycl::queue&
 #endif
 {
 // If the backend is known at compile-time, use oneMath backend_selector to use
 // compile-time dispatching and avoid the need to dlopen libraries. Otherwise
 // fallback to runtime dispatching.
-#if defined(GGML_SYCL_INTEL)
-    return oneapi::math::backend_selector<oneapi::math::backend::mklgpu>{ queue };
-#elif defined(GGML_SYCL_NVIDIA)
+#if defined(GGML_SYCL_NVIDIA)
     return oneapi::math::backend_selector<oneapi::math::backend::cublas>{ queue };
 #elif defined(GGML_SYCL_AMD)
     return oneapi::math::backend_selector<oneapi::math::backend::rocblas>{ queue };
-#elif defined(GGML_SYCL_GENERIC)
+#elif defined(GGML_SYCL_GENERIC) || defined(GGML_SYCL_USE_INTEL_ONEMKL)
     return queue;
 #else
     static_assert(false, "Unsupported backend");

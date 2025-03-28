@@ -72,71 +72,77 @@ if (GGML_SYCL_GRAPH)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
 endif()
 
-find_package(oneMath QUIET)
-if (NOT oneMath_FOUND)
-    message("-- oneMath not found: oneMath will be automatically downloaded")
-    # Use FetchContent to automatically pull and build oneMath
-    include(FetchContent)
-    set(BUILD_FUNCTIONAL_TESTS False)
-    set(BUILD_EXAMPLES False)
-    set(TARGET_DOMAINS blas)
-    if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
-        set(ENABLE_MKLCPU_BACKEND False)
-        set(ENABLE_MKLGPU_BACKEND False)
-        set(ENABLE_CUBLAS_BACKEND True)
-    elseif (GGML_SYCL_TARGET STREQUAL "AMD")
-        set(ENABLE_MKLCPU_BACKEND False)
-        set(ENABLE_MKLGPU_BACKEND False)
-        set(ENABLE_ROCBLAS_BACKEND True)
-        # Ensure setting a string variable here is not overriden by oneMath CACHE variables
-        cmake_policy(SET CMP0126 NEW)
-        # Setting the device architecture is only needed and useful for AMD devices in oneMath
-        set(HIP_TARGETS ${GGML_SYCL_DEVICE_ARCH} CACHE STRING "oneMath HIP target" FORCE)
-    endif()
-    FetchContent_Declare(
-        ONEMATH
-        GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
-        GIT_TAG c255b1b4c41e2ee3059455c1f96a965d6a62568a
-    )
-    FetchContent_MakeAvailable(ONEMATH)
-    # Create alias to match with find_package targets name
-    function(onemath_alias target)
-        if (TARGET ${target}_obj)
-            # Silence verbose warnings from external libraries
-            target_compile_options(${target}_obj PRIVATE -w)
-        endif()
-        if (TARGET ${target})
-            add_library(ONEMATH::${target} ALIAS ${target})
-        endif()
-    endfunction()
-    onemath_alias(onemath)
-    onemath_alias(onemath_blas_mklcpu)
-    onemath_alias(onemath_blas_mklgpu)
-    onemath_alias(onemath_blas_cublas)
-    onemath_alias(onemath_blas_rocblas)
-endif()
-
-# Below oneMath compile-time dispatching is used for better performance
+# Link against Intel oneMKL or oneMath
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
-    target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_mklgpu)
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_INTEL)
-elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
-    target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_cublas)
-    target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
-    target_link_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NVIDIA)
-elseif (GGML_SYCL_TARGET STREQUAL "AMD")
-    if (NOT GGML_SYCL_DEVICE_ARCH)
-        message(ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
-    endif()
-    target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_rocblas)
-    target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
-    target_link_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_AMD)
+    # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
+    # See https://github.com/uxlfoundation/oneMath/issues/654
+    find_package(MKL REQUIRED)
+    target_link_libraries(ggml-sycl PRIVATE MKL::MKL MKL::MKL_SYCL)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
 else()
-    # Fallback to oneMath runtime dispatcher
-    target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath)
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GENERIC)
+    find_package(oneMath QUIET)
+    if (NOT oneMath_FOUND)
+        message("-- oneMath not found: oneMath will be automatically downloaded")
+        # Use FetchContent to automatically pull and build oneMath
+        include(FetchContent)
+        set(BUILD_FUNCTIONAL_TESTS False)
+        set(BUILD_EXAMPLES False)
+        set(TARGET_DOMAINS blas)
+        if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
+            set(ENABLE_MKLCPU_BACKEND False)
+            set(ENABLE_MKLGPU_BACKEND False)
+            set(ENABLE_CUBLAS_BACKEND True)
+        elseif (GGML_SYCL_TARGET STREQUAL "AMD")
+            set(ENABLE_MKLCPU_BACKEND False)
+            set(ENABLE_MKLGPU_BACKEND False)
+            set(ENABLE_ROCBLAS_BACKEND True)
+            # Ensure setting a string variable here is not overriden by oneMath CACHE variables
+            cmake_policy(SET CMP0126 NEW)
+            # Setting the device architecture is only needed and useful for AMD devices in oneMath
+            set(HIP_TARGETS ${GGML_SYCL_DEVICE_ARCH} CACHE STRING "oneMath HIP target" FORCE)
+        endif()
+        FetchContent_Declare(
+            ONEMATH
+            GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
+            GIT_TAG c255b1b4c41e2ee3059455c1f96a965d6a62568a
+        )
+        FetchContent_MakeAvailable(ONEMATH)
+        # Create alias to match with find_package targets name
+        function(onemath_alias target)
+            if (TARGET ${target}_obj)
+                # Silence verbose warnings from external libraries
+                target_compile_options(${target}_obj PRIVATE -w)
+            endif()
+            if (TARGET ${target})
+                add_library(ONEMATH::${target} ALIAS ${target})
+            endif()
+        endfunction()
+        onemath_alias(onemath)
+        onemath_alias(onemath_blas_mklcpu)
+        onemath_alias(onemath_blas_mklgpu)
+        onemath_alias(onemath_blas_cublas)
+        onemath_alias(onemath_blas_rocblas)
+    endif()
+
+    # Below oneMath compile-time dispatching is used for better performance
+    if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
+        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_cublas)
+        target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
+        target_link_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NVIDIA)
+    elseif (GGML_SYCL_TARGET STREQUAL "AMD")
+        if (NOT GGML_SYCL_DEVICE_ARCH)
+            message(ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
+        endif()
+        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_rocblas)
+        target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
+        target_link_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_AMD)
+    else()
+        # Fallback to oneMath runtime dispatcher
+        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath)
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GENERIC)
+    endif()
 endif()
 
 if (GGML_SYCL_DEVICE_ARCH)
