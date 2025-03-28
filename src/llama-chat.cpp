@@ -59,6 +59,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "granite",           LLM_CHAT_TEMPLATE_GRANITE           },
     { "gigachat",          LLM_CHAT_TEMPLATE_GIGACHAT          },
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
+    { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -168,6 +169,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GIGACHAT;
     } else if (tmpl_contains("<|role_start|>")) {
         return LLM_CHAT_TEMPLATE_MEGREZ;
+    } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("'HUMAN'")) {
+        return LLM_CHAT_TEMPLATE_BAILING;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -566,6 +569,23 @@ int32_t llm_chat_apply_template(
 
         if (add_ass) {
             ss << "<|role_start|>assistant<|role_end|>";
+        }
+    }  else if (tmpl == LLM_CHAT_TEMPLATE_BAILING) {
+        // Bailing (Ling) template
+        for (auto message : chat) {
+            std::string role(message->role);
+
+            if (role == "user") {
+                role = "HUMAN";
+            } else {
+                std::transform(role.begin(), role.end(), role.begin(), ::toupper);
+            }
+
+            ss << "<role>" << role << "</role>" << message->content;
+        }
+
+        if (add_ass) {
+            ss << "<role>ASSISTANT</role>";
         }
     } else {
         // template not supported
