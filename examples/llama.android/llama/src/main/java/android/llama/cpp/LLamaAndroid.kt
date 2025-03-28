@@ -24,7 +24,7 @@ class LLamaAndroid {
 
             // Set llama log handler to Android
             log_to_android()
-            backend_init(false)
+            backend_init()
 
             Log.d(tag, system_info())
 
@@ -37,103 +37,96 @@ class LLamaAndroid {
     }.asCoroutineDispatcher()
 
     private external fun log_to_android()
-    private external fun load_model(filename: String): Long
-    private external fun free_model(model: Long)
-    private external fun new_context(model: Long): Long
-    private external fun free_context(context: Long)
-    private external fun backend_init(numa: Boolean)
-    private external fun backend_free()
-    private external fun new_batch(nTokens: Int, embd: Int, nSeqMax: Int): Long
-    private external fun free_batch(batch: Long)
-    private external fun new_sampler(model: Long): Long
-    private external fun free_sampler(sampler: Long)
-    private external fun bench_model(
-        context: Long,
-        model: Long,
-        batch: Long,
-        pp: Int,
-        tg: Int,
-        pl: Int,
-        nr: Int
-    ): String
-
     private external fun system_info(): String
+    private external fun backend_init()
 
-    private external fun completion_init(
-        context: Long,
-        batch: Long,
-        text: String,
-        formatChat: Boolean,
-        nLen: Int
-    ): Int
+    private external fun load_model(filename: String): Int
+    private external fun ctx_init(): Int
+    private external fun clean_up()
 
-    private external fun completion_loop(
-        context: Long,
-        batch: Long,
-        sampler: Long,
-        nLen: Int,
-        ncur: IntVar
-    ): String?
+    private external fun bench_model(pp: Int, tg: Int, pl: Int, nr: Int): String
 
-    private external fun kv_cache_clear(context: Long)
+    private external fun process_system_prompt(system_prompt: String): Int
+    private external fun process_user_prompt(user_prompt: String, nLen: Int): Int
+    private external fun predict_loop(): String?
 
-    suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
-        return withContext(runLoop) {
-            when (val state = threadLocalState.get()) {
-                is State.Loaded -> {
-                    Log.d(tag, "bench(): $state")
-                    bench_model(state.context, state.model, state.batch, pp, tg, pl, nr)
-                }
-
-                else -> throw IllegalStateException("No model loaded")
-            }
-        }
-    }
-
-    suspend fun load(pathToModel: String) {
+    suspend fun load(pathToModel: String, formattedSystemPrompt: String? = null) {
         withContext(runLoop) {
             when (threadLocalState.get()) {
                 is State.Idle -> {
                     val model = load_model(pathToModel)
-                    if (model == 0L)  throw IllegalStateException("load_model() failed")
+                    if (model != 0)  throw IllegalStateException("Load model failed")
 
-                    val context = new_context(model)
-                    if (context == 0L) throw IllegalStateException("new_context() failed")
-
-                    val batch = new_batch(DEFAULT_BATCH_SIZE, 0, 1)
-                    if (batch == 0L) throw IllegalStateException("new_batch() failed")
-
-                    val sampler = new_sampler(model)
-                    if (sampler == 0L) throw IllegalStateException("new_sampler() failed")
+                    val result = ctx_init()
+                    if (result != 0) throw IllegalStateException("Initialization failed with error code: $result")
 
                     Log.i(tag, "Loaded model $pathToModel")
-                    threadLocalState.set(State.Loaded(model, context, batch, sampler))
+                    threadLocalState.set(State.ModelLoaded)
+
+                    formattedSystemPrompt?.let {
+                        initWithSystemPrompt(formattedSystemPrompt)
+                    } ?: {
+                        threadLocalState.set(State.ReadyForUserPrompt)
+                    }
                 }
                 else -> throw IllegalStateException("Model already loaded")
             }
         }
     }
 
-    fun send(
-        message: String,
-        formatChat: Boolean = false,
-        predictLength: Int = DEFAULT_PREDICT_LENGTH,
-    ): Flow<String> = flow {
-        when (val state = threadLocalState.get()) {
-            is State.Loaded -> {
-                val nCur = IntVar(
-                    completion_init(state.context, state.batch, message, formatChat, predictLength)
-                )
-
-                while (nCur.value <= predictLength) {
-                    val str = completion_loop(
-                        state.context, state.batch, state.sampler, predictLength, nCur
-                    ) ?: break
-
-                    emit(str)
+    suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
+        return withContext(runLoop) {
+            when (val state = threadLocalState.get()) {
+                is State.ModelLoaded -> {
+                    Log.d(tag, "bench(): $state")
+                    bench_model(pp, tg, pl, nr)
                 }
 
-                // kv_cache_clear(state.context)
+                // TODO-hyin: catch exception in ViewController; disable button when state incorrect
+                else -> throw IllegalStateException("No model loaded")
+            }
+        }
+    }
+
+    private suspend fun initWithSystemPrompt(systemPrompt: String) {
+        withContext(runLoop) {
+            when (threadLocalState.get()) {
+                is State.ModelLoaded -> {
+                    process_system_prompt(systemPrompt).let {
+                        if (it != 0) {
+                            throw IllegalStateException("Failed to process system prompt: $it")
+                        }
+                    }
+
+                    Log.i(tag, "System prompt processed!")
+                    threadLocalState.set(State.ReadyForUserPrompt)
+                }
+                else -> throw IllegalStateException("Model not loaded")
+            }
+        }
+    }
+
+    fun sendMessage(
+        formattedUserPrompt: String,
+        nPredict: Int = DEFAULT_PREDICT_LENGTH,
+    ): Flow<String> = flow {
+        when (threadLocalState.get()) {
+            is State.ReadyForUserPrompt -> {
+                process_user_prompt(formattedUserPrompt, nPredict).let {
+                    if (it != 0) {
+                        Log.e(tag, "Failed to process user prompt: $it")
+                        return@flow
+                    }
+                }
+
+                Log.i(tag, "User prompt processed! Generating assistant prompt...")
+                while (true) {
+                    val str = predict_loop() ?: break
+                    if (str.isNotEmpty()) {
+                        emit(str)
+                    }
+                }
+                Log.i(tag, "Assistant generation complete!")
             }
             else -> {}
         }
@@ -146,13 +139,9 @@ class LLamaAndroid {
      */
     suspend fun unload() {
         withContext(runLoop) {
-            when (val state = threadLocalState.get()) {
-                is State.Loaded -> {
-                    free_context(state.context)
-                    free_model(state.model)
-                    free_batch(state.batch)
-                    free_sampler(state.sampler);
-
+            when (threadLocalState.get()) {
+                is State.ModelLoaded -> {
+                    clean_up()
                     threadLocalState.set(State.Idle)
                 }
                 else -> {}
@@ -161,24 +150,12 @@ class LLamaAndroid {
     }
 
     companion object {
-        private const val DEFAULT_BATCH_SIZE = 512
         private const val DEFAULT_PREDICT_LENGTH = 128
-
-        private class IntVar(value: Int) {
-            @Volatile
-            var value: Int = value
-                private set
-
-            fun inc() {
-                synchronized(this) {
-                    value += 1
-                }
-            }
-        }
 
         private sealed interface State {
             data object Idle: State
-            data class Loaded(val model: Long, val context: Long, val batch: Long, val sampler: Long): State
+            data object ModelLoaded: State
+            data object ReadyForUserPrompt: State
         }
 
         // Enforce only one instance of Llm.

@@ -45,7 +45,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
         messages += ""
 
         viewModelScope.launch {
-            llamaAndroid.send(text)
+            llamaAndroid.sendMessage(text)
                 .catch {
                     Log.e(tag, "send() failed", it)
                     messages += it.message!!
