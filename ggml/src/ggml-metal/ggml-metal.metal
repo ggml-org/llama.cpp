@@ -3199,13 +3199,6 @@ kernel void kernel_flash_attn_ext(
         const short ikv2 = iq2/(args.ne02/args.ne_12_2);
         const short ikv3 = iq3/(args.ne03/args.ne_12_3);
 
-        // load the queries from shared memory into local memory
-        q8x8_t mq[DK8];
-
-        for (short i = 0; i < DK8; ++i) {
-            simdgroup_load(mq[i], sq + i*8, DK);
-        }
-
         const bool has_mask = mask != q;
 
         half slope = 1.0f;
@@ -3265,7 +3258,9 @@ kernel void kernel_flash_attn_ext(
                             k8x8_t mk;
                             simdgroup_load(mk, pk + i*8, args.nb11/sizeof(k_t), 0, true); // transpose // TODO: use ne10
 
-                            simdgroup_multiply_accumulate(mqk, mq[i], mk, mqk);
+                            q8x8_t mq;
+                            simdgroup_load(mq, sq + i*8, DK);
+                            simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
                         }
                     } else {
                         for (short ii = 0; ii < DK16; ii += 4) {
@@ -3284,12 +3279,15 @@ kernel void kernel_flash_attn_ext(
                                 #pragma unroll(4)
                                 for (short k = 0; k < 4; ++k) {
                                     k8x8_t mk;
+                                    q8x8_t mq;
 
                                     simdgroup_load(mk, sk + 16*k + 0*8, 4*16, 0, true); // transpose
-                                    simdgroup_multiply_accumulate(mqk, mq[2*(ii + k) + 0], mk, mqk);
+                                    simdgroup_load(mq, sq + (2*(ii + k) + 0)*8, DK);
+                                    simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
 
                                     simdgroup_load(mk, sk + 16*k + 1*8, 4*16, 0, true); // transpose
-                                    simdgroup_multiply_accumulate(mqk, mq[2*(ii + k) + 1], mk, mqk);
+                                    simdgroup_load(mq, sq + (2*(ii + k) + 1)*8, DK);
+                                    simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
                                 }
                             } else {
                                 if (ii + tx < DK16) {
@@ -3302,12 +3300,15 @@ kernel void kernel_flash_attn_ext(
 
                                 for (short k = 0; k < 4 && ii + k < DK16; ++k) {
                                     k8x8_t mk;
+                                    q8x8_t mq;
 
                                     simdgroup_load(mk, sk + 16*k + 0*8, 4*16, 0, true); // transpose
-                                    simdgroup_multiply_accumulate(mqk, mq[2*(ii + k) + 0], mk, mqk);
+                                    simdgroup_load(mq, sq + (2*(ii + k) + 0)*8, DK);
+                                    simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
 
                                     simdgroup_load(mk, sk + 16*k + 1*8, 4*16, 0, true); // transpose
-                                    simdgroup_multiply_accumulate(mqk, mq[2*(ii + k) + 1], mk, mqk);
+                                    simdgroup_load(mq, sq + (2*(ii + k) + 1)*8, DK);
+                                    simdgroup_multiply_accumulate(mqk, mq, mk, mqk);
                                 }
                             }
                         }
