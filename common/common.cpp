@@ -1196,7 +1196,7 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
     return false;
 }
 
-std::filesystem::path create_credential_path() {
+static std::filesystem::path create_credential_path() {
     const char* home_dir = nullptr;
 #ifdef _WIN32
     home_dir = getenv("USERPROFILE");
@@ -1352,9 +1352,13 @@ static bool common_download_file(const std::string & url, const std::string & pa
                 }
             }
         } else {
+            //ModelScope does not support check etag and last-modified.
             should_download = !file_exists;
-            const std::filesystem::path cookie_file = create_credential_path() / "cookies";
-            curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+            if (!hf_token.empty()) {
+                //Login was done in the previous logic.
+                const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+                curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+            }
         }
     }
 
@@ -1624,7 +1628,7 @@ struct llama_model * common_load_model_from_ms(
     if (!ms_token.empty()) {
         ms_login(ms_token);
     }
-    return common_load_model_from_url(model_url, local_path, "", params);
+    return common_load_model_from_url(model_url, local_path, ms_token, params);
 }
 
 /**
@@ -1702,14 +1706,22 @@ std::pair<std::string, std::string> common_get_hf_file(const std::string & hf_re
 }
 
 std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_repo_with_tag, const std::string & ms_token) {
+    //Download from ModelScope model repository, quant is optional and case-insensitive.
+    //default to the input tag or Q4_K_M, will fall back to first GGUF file in the repo if quant is not specified and tag is not found.
     auto parts = string_split<std::string>(ms_repo_with_tag, ':');
-    std::string tag = parts.size() > 1 ? parts.back() : "Q4_K_M";
+    std::string tag = parts.size() > 1 ? parts.back() : "q4_k_m";
     std::string hf_repo = parts[0];
     if (string_split<std::string>(hf_repo, '/').size() != 2) {
         throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
     }
     if (!ms_token.empty()) {
         ms_login(ms_token);
+    }
+
+    std::transform(tag.begin(), tag.end(), std::begin(tag), ::tolower);
+    if (tag == "latest" || tag.empty()) {
+        //ModelScope does not support latest tag
+        tag = "q4_k_m";
     }
 
     // fetch model info from Hugging Face Hub API
@@ -1736,13 +1748,15 @@ std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_re
     http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
     curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
 
-    const std::filesystem::path cookie_file = create_credential_path() / "cookies";
-    curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+    if (!ms_token.empty()) {
+        const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+        curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+    }
 
     CURLcode res = curl_easy_perform(curl.get());
 
     if (res != CURLE_OK) {
-        throw std::runtime_error("error: cannot make GET request to HF API");
+        throw std::runtime_error("error: cannot make GET request to MS API");
     }
 
     long res_code;
@@ -1759,18 +1773,13 @@ std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_re
 
     std::vector<std::string> all_available_files;
     std::string gguf_file;
-    std::string upper_tag;
-    upper_tag.reserve(tag.size());
-    std::string lower_tag;
-    lower_tag.reserve(tag.size());
-    std::transform(tag.begin(), tag.end(), std::back_inserter(upper_tag), ::toupper);
-    std::transform(tag.begin(), tag.end(), std::back_inserter(lower_tag), ::tolower);
     for (const auto & _file : all_files) {
         auto file = _file["Path"].get<std::string>();
+        std::transform(file.begin(), file.end(), std::begin(file), ::tolower);
         if (!string_ends_with(file, ".gguf")) {
             continue;
         }
-        if (file.find(upper_tag) != std::string::npos || file.find(lower_tag) != std::string::npos) {
+        if (file.find(tag) != std::string::npos) {
             gguf_file = file;
         }
         all_available_files.push_back(file);

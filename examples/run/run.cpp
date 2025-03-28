@@ -719,20 +719,27 @@ class LlamaData {
     }
 
     int modelscope_dl(std::string & model, const std::string & bn) {
-        // Find the second occurrence of '/' after protocol string
+        //Download from ModelScope model repository, quant is optional and case-insensitive.
+        //default to the input tag or Q4_K_M, will fall back to first GGUF file in the repo if quant is not specified and tag is not found.
         size_t pos = model.find('/');
         pos        = model.find('/', pos + 1);
-        std::string              hfr;
-        std::string              hff;
-        std::vector<std::string> headers = { "user-agent: llama-cpp", "Accept: application/json"};
+        std::string              msr;
+        std::string              msf;
+        std::vector<std::string> headers = { "User-Agent: llama-cpp", "Accept: application/json"};
         std::string              url;
         auto endpoint = MODELSCOPE_DOMAIN_DEFINITION;
 
         if (pos == std::string::npos) {
-            auto [model_name, _] = extract_model_and_tag(model, "");
-            hfr                             = model_name;
+            auto [model_name, tag] = extract_model_and_tag(model, "");
+            msr                             = model_name;
+            rm_until_substring(tag, "/manifests/");
+            std::transform(tag.begin(), tag.end(), std::begin(tag), ::tolower);
+            if (tag == "latest" || tag.empty()) {
+                //ModelScope does not support latest tag
+                tag = "q4_k_m";
+            }
             std::string manifest_str;
-            url = endpoint + "/api/v1/models/" + hfr + "/repo/files?Revision=master&Recursive=True";
+            url = endpoint + "/api/v1/models/" + msr + "/repo/files?Revision=master&Recursive=True";
             if (int ret = download(url, "", false, headers, &manifest_str)) {
                 return ret;
             }
@@ -741,23 +748,24 @@ class LlamaData {
             std::vector<std::string> all_available_files;
             for (const auto & _file : all_files) {
                 auto file = _file["Path"].get<std::string>();
+                std::transform(file.begin(), file.end(), std::begin(file), ::tolower);
                 if (!string_ends_with(file, ".gguf")) {
                     continue;
                 }
-                if (file.find("Q4_K_M") != std::string::npos || file.find("q4_k_m") != std::string::npos) {
-                    hff = file;
+                if (file.find(tag) != std::string::npos) {
+                    msf = file;
                 }
                 all_available_files.push_back(file);
             }
-            if (hff.empty()) {
-                hff = all_available_files[0];
+            if (msf.empty()) {
+                msf = all_available_files[0];
             }
 
         } else {
-            hfr = model.substr(0, pos);
-            hff = model.substr(pos + 1);
+            msr = model.substr(0, pos);
+            msf = model.substr(pos + 1);
         }
-        url = endpoint + "/models/" + hfr + "/resolve/master/" + hff;
+        url = endpoint + "/models/" + msr + "/resolve/master/" + msf;
         return download(url, bn, true, headers);
     }
 

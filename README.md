@@ -265,27 +265,11 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 
 You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from Hugging Face by using this CLI argument: `-hf <user>/<model>[:quant]`
 
-llama.cpp also supports downloading and running models from [ModelScope](https://www.modelscope.cn/home), there are two ways to use models in ModelScope:
+Altenatively, model can be fetched from [ModelScope](https://www.modelscope.cn) with CLI argument of `-ms <user>/<model>[:quant]`, for example, `llama-cli -ms Qwen/QwQ-32B-GGUF`. You may find models on ModelScope compatible with `llama.cpp` through:
 
-1. Add an env variable: `LLAMACPP_USE_MODELSCOPE=True` to your command with the same arguments of Hugging Face(like `-hf <user>/<model>[:quant]`).
+- [Trending] https://www.modelscope.cn/models?libraries=GGUF
 
-```shell
-LLAMACPP_USE_MODELSCOPE=True llama-cli -hf Qwen/QwQ-32B-GGUF
-```
-
-2. Use modelscope arguments instead of the ones of Hugging Face: `-ms <user>/<model>[:quant] -msf xxx.gguf -mst xxx_token` 
-
-```shell
-llama-cli -ms Qwen/QwQ-32B-GGUF
-```
-
-Pay attention to change the model repo to the **existing repo** of ModelScope. If you want to use a private repo, please make sure you have the rights of the repo and run with the `--ms_token` argument:
-
-```shell
-llama-cli -ms Qwen/QwQ-32B-GGUF --ms_token xxx
-```
-
-> You can change the endpoint of ModelScope by using `MODELSCOPE_DOMAIN=xxx`(like MODELSCOPE_DOMAIN=www.modelscope.ai).
+> You can change the download endpoint of ModelScope by using `MODELSCOPE_DOMAIN=xxx`(like MODELSCOPE_DOMAIN=www.modelscope.ai).
 
 After downloading a model, use the CLI tools to run it locally - see below.
 
