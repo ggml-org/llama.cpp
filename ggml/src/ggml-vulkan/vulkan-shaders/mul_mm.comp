@@ -10,6 +10,10 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 #endif
 
+#ifdef DATA_A_BF16
+#extension GL_EXT_bfloat16 : enable
+#endif
+
 #ifdef COOPMAT
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_KHR_memory_scope_semantics : enable
@@ -202,8 +206,8 @@ void main() {
 #endif
 
 #ifdef COOPMAT
-    coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
-    coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
+    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
+    coopmat<FLOAT_TYPE, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
     coopmat<ACC_TYPE, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> sums[cms_per_row * cms_per_col];
 
     [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col; i++) {
@@ -246,6 +250,21 @@ void main() {
                 buf_a[(loadc_a + l) * SHMEM_STRIDE + loadr_a] = FLOAT_TYPE(data_a[pos_a + (loadc_a + l) * p.stride_a + loadr_a]);
             } else {
                 buf_a[(loadc_a + l) * SHMEM_STRIDE + loadr_a] = FLOAT_TYPE(0.0f);
+            }
+#endif
+#elif defined(DATA_A_BF16)
+#if LOAD_VEC_A == 4
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * SHMEM_STRIDE + loadr_a * LOAD_VEC_A;
+            buf_a[buf_idx    ] = uintBitsToBFloat16EXT(data_a[idx].x);
+            buf_a[buf_idx + 1] = uintBitsToBFloat16EXT(data_a[idx].y);
+            buf_a[buf_idx + 2] = uintBitsToBFloat16EXT(data_a[idx].z);
+            buf_a[buf_idx + 3] = uintBitsToBFloat16EXT(data_a[idx].w);
+#else
+            if (ir * BM + loadc_a + l < p.M && block + loadr_a < end_k) {
+                buf_a[(loadc_a + l) * SHMEM_STRIDE + loadr_a] = uintBitsToBFloat16EXT(data_a[pos_a + (loadc_a + l) * p.stride_a + loadr_a]);
+            } else {
+                buf_a[(loadc_a + l) * SHMEM_STRIDE + loadr_a] = uintBitsToBFloat16EXT(uint16_t(0));
             }
 #endif
 #elif defined(DATA_A_Q4_0)
