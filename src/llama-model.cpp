@@ -6323,7 +6323,7 @@ struct llm_build_qwen2moe : public llm_graph_context {
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                         il);
-            cb(cur, "ffn_moe_out", il);
+            cb(moe_out, "ffn_moe_out", il);
 
             // FFN shared expert
             {
