@@ -348,6 +348,7 @@ extern "C" {
     // CPU buffer types are always available
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
+    GGML_API ggml_backend_buffer_type_t ggml_backend_numa_buffer_type(void);
 
 #ifdef  __cplusplus
 }
