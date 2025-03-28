@@ -1229,8 +1229,6 @@ static bool common_download_file(const std::string & url, const std::string & pa
         return false;
     }
 
-    bool force_download = false;
-
     // Set the URL, allow to follow http redirection
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
@@ -1329,6 +1327,7 @@ static bool common_download_file(const std::string & url, const std::string & pa
         curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
         curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
         if (!LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            bool force_download = false;
             bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
             if (!was_perform_successful) {
                 return false;

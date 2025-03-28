@@ -34,6 +34,14 @@ common_arg & common_arg::set_env(const char * env) {
     return *this;
 }
 
+static void set_ms_env() {
+#ifdef _WIN32
+    SetEnvironmentVariableA("LLAMACPP_USE_MODELSCOPE", "True")
+#else
+    setenv("LLAMACPP_USE_MODELSCOPE", "True", 1);
+#endif
+}
+
 common_arg & common_arg::set_sparam() {
     is_sparam = true;
     return *this;
@@ -211,6 +219,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     std::string arg;
     const std::string arg_prefix = "--";
     common_params & params = ctx_arg.params;
+    std::vector<std::string> ms_params = {
+        "-ms", "-msr", "--ms-repo",
+        "-msv", "-msrv", "--ms-repo-v"
+    };
 
     std::unordered_map<std::string, common_arg *> arg_to_options;
     for (auto & opt : ctx_arg.options) {
@@ -224,6 +236,18 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         std::string value;
         if (opt.get_value_from_env(value)) {
             try {
+                for (auto msp: ms_params) {
+                    bool ms_arg = false;
+                    for (auto _arg: opt.args) {
+                        if (std::string(_arg) == msp) {
+                            ms_arg = true;
+                        }
+                    }
+                    if (ms_arg && !value.empty()) {
+                        set_ms_env();
+                        break;
+                    }
+                }
                 if (opt.handler_void && (value == "1" || value == "true")) {
                     opt.handler_void(params);
                 }
@@ -271,6 +295,15 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             // arg with single value
             check_arg(i);
             std::string val = argv[++i];
+
+            for (auto msp: ms_params) {
+                // Check whether is modelscope params
+                if (msp == arg && !val.empty()) {
+                    set_ms_env();
+                    break;
+                }
+            }
+
             if (opt.handler_int) {
                 opt.handler_int(params, std::stoi(val));
                 continue;
@@ -1849,6 +1882,43 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.hf_token = value;
         }
     ).set_env("HF_TOKEN"));
+    add_opt(common_arg(
+        {"-ms", "-msr", "--ms-repo"}, "<user>/<model>[:quant]",
+        "ModelScope model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "example: unsloth/phi-4-GGUF:q4_k_m\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.hf_repo = value;
+        }
+    ).set_env("LLAMA_ARG_MS_REPO"));
+    add_opt(common_arg(
+        {"-msf", "--ms-file"}, "FILE",
+        "ModelScope model file. If specified, it will override the quant in --ms-repo (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.hf_file = value;
+        }
+    ).set_env("LLAMA_ARG_MS_FILE"));
+    add_opt(common_arg(
+        {"-msv", "-msrv", "--ms-repo-v"}, "<user>/<model>[:quant]",
+        "ModelScope model repository for the vocoder model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.hf_repo = value;
+        }
+    ).set_env("LLAMA_ARG_MS_REPO_V"));
+    add_opt(common_arg(
+        {"-msfv", "--ms-file-v"}, "FILE",
+        "ModelScope model file for the vocoder model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.hf_file = value;
+        }
+    ).set_env("LLAMA_ARG_MS_FILE_V"));
+    add_opt(common_arg(
+        {"-mst", "--ms-token"}, "TOKEN",
+        "ModelScope access token (default: value from MS_TOKEN environment variable)",
+        [](common_params & params, const std::string & value) {
+            params.hf_token = value;
+        }
+    ).set_env("MS_TOKEN"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
         "file to load context from (repeat to specify multiple files)",
