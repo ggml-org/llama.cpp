@@ -5312,6 +5312,11 @@ struct llm_build_bert : public llm_graph_context {
                 cur = build_lora_mm(model.layers[il].wqkv, cur);
                 cb(cur, "wqkv", il);
 
+                if (model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
+                    cur = ggml_add(ctx0, cur, model.layers[il].bqkv);
+                    cb(cur, "bqkv", il);
+                }
+
                 Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd,     n_tokens, cur->nb[1], 0*sizeof(float)*(n_embd)));
                 Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd)));
                 Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd + n_embd_gqa)));
@@ -5364,13 +5369,29 @@ struct llm_build_bert : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            if (model.arch == LLM_ARCH_BERT) {
+            if (hparams.moe_every_n_layers > 0 && il % hparams.moe_every_n_layers == 1) {
+                // MoE branch
+                cur = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        nullptr,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        hparams.n_expert,
+                        hparams.n_expert_used,
+                        LLM_FFN_GELU,
+                        true, false,
+                        0.0f,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il);
+                cb(cur, "ffn_moe_out", il);
+            } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
                 cur = build_ffn(cur,
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                         NULL,
                         LLM_FFN_GELU, LLM_FFN_SEQ, il);
+                cb(cur, "ffn_out", il);
             } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
                 cur = build_ffn(cur,
                         model.layers[il].ffn_up,   NULL,                        NULL,
@@ -5378,6 +5399,7 @@ struct llm_build_bert : public llm_graph_context {
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                         NULL,
                         LLM_FFN_GELU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
             } else {
                 cur = build_ffn(cur,
                         model.layers[il].ffn_up,   NULL, NULL,
@@ -5385,8 +5407,8 @@ struct llm_build_bert : public llm_graph_context {
                         model.layers[il].ffn_down, NULL, NULL,
                         NULL,
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
             }
-            cb(cur, "ffn_out", il);
 
             // attentions bypass the intermediate layer
             cur = ggml_add(ctx0, cur, ffn_inp);
