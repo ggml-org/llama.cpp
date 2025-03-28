@@ -158,6 +158,7 @@ static void   ggmlqnn_compute_timestep_embedding(ggml_backend_qnn_context * ctx,
 static void   ggmlqnn_compute_diag_mask(ggml_backend_qnn_context * ctx, ggml_tensor * dst, float value);
 
 static size_t ggmlqnn_get_op_index(const ggml_tensor * tensor);
+static const char * ggmlqnn_get_hwaccel_approach_name(int hwaccle_approach);
 static void * ggmlqnn_type_trait(ggml_backend_qnn_context * ctx, ggml_tensor * op);
 static void   ggmlqnn_get_opkey_from_op(const ggml_tensor * op, std::string & output);
 
@@ -875,6 +876,33 @@ static void ggmlqnn_dump_tensor(const ggml_tensor * tensor, const char * name) {
     GGMLQNN_LOG_DEBUG("\n");
 }
 
+static void ggmlqnn_get_timestring(char * p_currenttime) {
+    time_t n_seconds    = 0;
+    struct tm * p_tm    = nullptr;
+
+    if (nullptr == p_currenttime)
+        return;
+
+    time(&n_seconds);
+    p_tm = localtime(&n_seconds);
+    snprintf(p_currenttime, GGML_QNN_TMPBUF_LEN, "%04d-%02d-%02d,%02d:%02d:%02d",
+             p_tm->tm_year + 1900, p_tm->tm_mon + 1, p_tm->tm_mday,
+             p_tm->tm_hour, p_tm->tm_min, p_tm->tm_sec);
+}
+
+static void ggmlqnn_print_running_timestamp(ggml_backend_qnn_context * ctx) {
+    GGMLQNN_LOG_INFO("hwaccel approach is %d(%s)", g_qnn_params.hwaccel_approach,
+                     ggmlqnn_get_hwaccel_approach_name(g_qnn_params.hwaccel_approach));
+    char timestamp[GGML_QNN_TMPBUF_LEN];
+    ggmlqnn_get_timestring(timestamp);
+    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
+        GGMLQNN_LOG_INFO("only offload GGML_OP_ADD : %s", g_qnn_params.enable_q_mulmat ? "NO" : "YES");
+    } else {
+        GGMLQNN_LOG_INFO("only offload GGML_OP_ADD: NO");
+    }
+    GGMLQNN_LOG_INFO("running timestamp:%s", timestamp);
+}
+
 class qnn_perf {
 public:
     qnn_perf(const std::string & perf_name) : _perf_name(std::move(perf_name)) {};
@@ -1063,20 +1091,6 @@ static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
     GGML_UNUSED(maxlen);
     return strdup(source);
 #endif
-}
-
-static void ggmlqnn_get_timestring(char * p_currenttime) {
-    time_t n_seconds    = 0;
-    struct tm * p_tm    = nullptr;
-
-    if (nullptr == p_currenttime)
-        return;
-
-    time(&n_seconds);
-    p_tm = localtime(&n_seconds);
-    snprintf(p_currenttime, GGML_QNN_TMPBUF_LEN, "%04d-%02d-%02d-%02d-%02d-%02d",
-             p_tm->tm_year + 1900, p_tm->tm_mon + 1, p_tm->tm_mday,
-             p_tm->tm_hour, p_tm->tm_min, p_tm->tm_sec);
 }
 
 // =================================================================================================
@@ -2123,7 +2137,7 @@ bail:
 
 static void ggmlhexagon_close_cdsp(ggml_backend_qnn_context * ctx) {
     int hexagon_error  = AEE_SUCCESS;
-    GGMLQNN_LOG_DEBUG("enter %s", __func__);
+    GGMLQNN_LOG_INFO("enter %s", __func__);
     if (-1 != ctx->ggmlop_handle) {
         hexagon_error = ggmlop_dsp_close(ctx->ggmlop_handle);
         if (AEE_SUCCESS != hexagon_error) {
@@ -2139,7 +2153,7 @@ static void ggmlhexagon_close_cdsp(ggml_backend_qnn_context * ctx) {
         ctx->rpc_mempool_len    = 0;
         ctx->domain_id          = -1;
     }
-    GGMLQNN_LOG_DEBUG("leave %s", __func__);
+    GGMLQNN_LOG_INFO("leave %s", __func__);
 }
 
 static void ggmlhexagon_compute(ggml_backend_qnn_context * ctx, struct ggml_tensor * op) {
@@ -3693,7 +3707,7 @@ int qnn_instance::qnn_finalize() {
     int ret_status = 0;
     Qnn_ErrorHandle_t error = QNN_SUCCESS;
 
-    GGMLQNN_LOG_DEBUG("enter %s\n", __func__);
+    GGMLQNN_LOG_INFO("enter %s\n", __func__);
     ggmlqnn_reset_idx();
 
     free_rpcmem();
@@ -3760,7 +3774,7 @@ int qnn_instance::qnn_finalize() {
     unload_backend();
     unload_system();
 
-    GGMLQNN_LOG_DEBUG("leave %s\n", __func__);
+    GGMLQNN_LOG_INFO("leave %s\n", __func__);
     return ret_status;
 }
 
@@ -4149,20 +4163,13 @@ static Qnn_OpConfig_t ggmlqnn_create_op_config(const char * name, const char * p
     return opcfg;
 }
 
-static Qnn_Tensor_t *   ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn_GraphHandle_t graph_handle,
-                                                      const ggml_tensor * tensor, const char * name,
-                                                      Qnn_TensorType_t qnn_tensor_type,
-                                                      Qnn_DataType_t qnn_data_type,
-                                                      uint32_t rank, uint32_t * dims,
-                                                      void * data, uint32_t data_size,
-                                                      bool b_transpose = false);
 static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn_GraphHandle_t graph_handle,
                                                     const ggml_tensor * tensor, const char * name,
                                                     Qnn_TensorType_t qnn_tensor_type,
                                                     Qnn_DataType_t qnn_data_type,
                                                     uint32_t rank, uint32_t * dims,
                                                     void * data, uint32_t data_size,
-                                                    bool b_transpose) {
+                                                    bool b_transpose = false) {
     Qnn_ErrorHandle_t error         = QNN_SUCCESS;
     char tensor_name[GGML_MAX_NAME] = {};
 
@@ -4196,14 +4203,6 @@ static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn
 
         ggmlqnn_get_qnn_dimensions_from_ggml_dimensions(transpose_dims, reverse_dims, ggml_n_dims(tensor));
         tensor_dims = transpose_dims;
-#if 0
-        for (size_t idx = 0; idx < 4; idx++) {
-            GGMLQNN_LOG_DEBUG("origin dim[%d]=%d\n", idx, reverse_dims[idx]);
-        }
-        for (size_t idx = 0; idx < 4; idx++) {
-            GGMLQNN_LOG_DEBUG("trans  dim[%d]=%d\n", idx, transpose_dims[idx]);
-        }
-#endif
     }
 
     Qnn_Tensor_t qnn_tensor = {
@@ -4763,11 +4762,6 @@ static const char * ggml_backend_qnn_name(ggml_backend_t backend) {
 static void ggml_backend_qnn_free(ggml_backend_t backend) {
     GGMLQNN_LOG_DEBUG("enter %s", __func__ );
     ggml_backend_qnn_context * ctx = (ggml_backend_qnn_context *)backend->context;
-    GGMLQNN_LOG_DEBUG("device idx %d, name:%s", ctx->device, g_qnn_mgr[ctx->device].name);
-
-    if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
-        ggmlhexagon_close_cdsp(ctx);
-    }
 
     qnn_instance * instance = (qnn_instance*)g_qnn_mgr[ctx->device].instance;
     if (instance != nullptr) {
@@ -4791,8 +4785,13 @@ static void ggml_backend_qnn_free(ggml_backend_t backend) {
     }
 
     if (g_qnn_mgr[ctx->device].backend != nullptr) {
+        if (HWACCEL_CDSP == g_qnn_params.hwaccel_approach) {
+            ggmlhexagon_close_cdsp(ctx);
+        }
+
         delete backend;
         g_qnn_mgr[ctx->device].backend = nullptr;
+        ggmlqnn_print_running_timestamp(ctx);
     }
     GGMLQNN_LOG_DEBUG("leave %s", __func__ );
 }
@@ -5155,7 +5154,7 @@ const char * ggml_backend_qnn_get_devname(size_t dev_num) {
 
 static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_lib_path) {
     int result = 0;
-    GGMLQNN_LOG_INFO("inference approach=%d(%s)", g_qnn_params.hwaccel_approach,
+    GGMLQNN_LOG_INFO("hwaccel approach=%d(%s)", g_qnn_params.hwaccel_approach,
                      ggmlqnn_get_hwaccel_approach_name(g_qnn_params.hwaccel_approach));
 
     qnn_instance * instance = nullptr;
@@ -5219,7 +5218,7 @@ ggml_backend_t ggml_backend_qnn_init(size_t device, const char * qnn_lib_path) {
         return g_qnn_mgr[device].backend;
     }
 
-    //don't initialize QNN when inference approach is offload ggml op to Hexagon cDSP directly
+    //don't initialize QNN when hwaccel approach is offload ggml op to Hexagon cDSP directly
     if (HWACCEL_CDSP != g_qnn_params.hwaccel_approach) {
         qnn_instance * instance = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
         if (nullptr == instance)
@@ -5287,7 +5286,7 @@ static inline bool ggmlqnn_is_valid_params(ggml_backend_qnn_context * ctx, const
 }
 
 /*
- * provide a general skeleton to offload ggml op to QNN backend or Hexagon cDSP: perform element-wise
+ * provide a general skeleton to offload ggml op to QNN backend: perform element-wise
  * operation on 1/2 input tensors and 1 output tensors
 */
 static void ggmlqnn_compute_elementwise(ggml_backend_qnn_context * ctx, ggml_tensor * op) {
