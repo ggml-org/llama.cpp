@@ -2863,12 +2863,9 @@ static void ggml_metal_encode_node(
 
                 // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
                 // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-                // !!!
-                // TODO: for now, always use mat-vec kernels until we figure out how to improve the
-                //       indirect matrix multiplication
-                // !!!
                 if ([device supportsFamily:MTLGPUFamilyApple7] &&
                         ne00 % 32 == 0 && ne00 >= 64 &&
+                        ne01 / ne02 >= 512 &&    // NOTE: this is based on Mixtral shapes, might need adjustments
                         dst_rows > dst_rows_min) {
                     // some Metal matrix data types require aligned pointers
                     // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf (Table 2.5)
