@@ -105,7 +105,7 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
 else()
     find_package(oneMath QUIET)
     if (NOT oneMath_FOUND)
-        message("-- oneMath not found: oneMath will be automatically downloaded")
+        message(STATUS "oneMath not found: oneMath will be automatically downloaded")
         # Use FetchContent to automatically pull and build oneMath
         include(FetchContent)
         set(BUILD_FUNCTIONAL_TESTS False)
