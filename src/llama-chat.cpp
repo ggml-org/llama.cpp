@@ -570,7 +570,7 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << "<|role_start|>assistant<|role_end|>";
         }
-    } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX){
+    } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX) {
         // Yandex template
 
         ss << "<s>";
