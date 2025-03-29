@@ -705,6 +705,9 @@ class Model:
         if chkhsh == "ccc2ef013c104be7bae2965776d611e1d7a8a2a9c547dd93a682c9a9fc80352e":
             # ref: https://huggingface.co/Xenova/gpt-4o
             res = "gpt-4o"
+        if chkhsh == "7dec86086fcc38b66b7bc1575a160ae21cf705be7718b9d5598190d7c12db76f":
+            # ref: https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k
+            res = "superbpe"
 
         if res is None:
             logger.warning("\n")
@@ -1749,7 +1752,7 @@ class Mistral3Model(LlamaModel):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
@@ -2266,7 +2269,7 @@ class Qwen2Model(Model):
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
 
-@Model.register("Qwen2VLForConditionalGeneration")
+@Model.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
 class Qwen2VLModel(Model):
     model_arch = gguf.MODEL_ARCH.QWEN2VL
 
@@ -3382,7 +3385,7 @@ class Gemma3Model(Model):
 
     # we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = Model.load_hparams(kwargs["dir_model"])
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
         if "text_config" in hparams:
             hparams = {**hparams, **hparams["text_config"]}
             kwargs["hparams"] = hparams
@@ -3800,8 +3803,6 @@ class MambaModel(Model):
     _tok_embd = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
         output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
         tok_embd_name = self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD)
 
@@ -3810,6 +3811,10 @@ class MambaModel(Model):
         if name.endswith(".A_log"):
             logger.debug("A_log --> A ==> " + new_name)
             data_torch = -torch.exp(data_torch)
+
+        # [4 1 8192 1] -> [4 8192 1 1]
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):
+            data_torch = data_torch.squeeze()
 
         # assuming token_embd.weight is seen before output.weight
         if self._tok_embd is not None and new_name == output_name:
@@ -4412,6 +4417,29 @@ class DeepseekV2Model(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("PLMForCausalLM")
+class PLMModel(Model):
+    model_arch = gguf.MODEL_ARCH.PLM
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+        self.gguf_writer.add_key_length(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
 
 
 @Model.register("T5WithLMHeadModel")
@@ -5355,7 +5383,7 @@ def main() -> None:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
 
-        model_instance = model_class(dir_model=dir_model, ftype=output_type, fname_out=fname_out,
+        model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,

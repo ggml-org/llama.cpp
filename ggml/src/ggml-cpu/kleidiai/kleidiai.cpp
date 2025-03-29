@@ -124,8 +124,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             size_t sr = kernel->get_sr();
 
             // Calculate number of columns to be processed per thread
-            const bool use_multithread = lhs_info->require_aligned_m_idx && m <= mr ? false : true;
-            const size_t num_m_per_thread = use_multithread ? kai_roundup(m, nth) / nth : m;
+            const size_t num_m_per_thread = kai_roundup(m, mr * nth) / nth;
             const size_t m_start = ith * num_m_per_thread;
             size_t m_to_process = num_m_per_thread;
             if ((m_start + m_to_process) > m) {
@@ -135,11 +134,11 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             if(m_start < m) {
                 // Transform LHS
                 const size_t src_stride        = src1->nb[1];
-                const float * src_ptr          = reinterpret_cast<const float *>(lhs + lhs_info->get_offset(0, dst->src[1]->nb[1]));
+                const float * src_ptr          = reinterpret_cast<const float *>(lhs + lhs_info->get_offset(m_start, dst->src[1]->nb[1]));
                 const size_t lhs_packed_offset = lhs_info->get_packed_offset(m_start, k, QK4_0, mr, kr, sr);
                 void * lhs_packed_ptr          = static_cast<void *>(lhs_packed + lhs_packed_offset);
 
-                lhs_info->pack_func(m_to_process, k, QK4_0, mr, kr, sr, m_start, src_ptr, src_stride, lhs_packed_ptr);
+                lhs_info->pack_func(m_to_process, k, QK4_0, mr, kr, sr, 0, src_ptr, src_stride, lhs_packed_ptr);
             }
 
             ggml_barrier(params->threadpool);
