@@ -4372,7 +4372,6 @@ static void ggml_compute_forward_add(
         struct ggml_tensor * dst) {
 
     const struct ggml_tensor * src0 = dst->src[0];
-    const struct ggml_tensor * src1 = dst->src[1];
 
     switch (src0->type) {
         case GGML_TYPE_F32:
