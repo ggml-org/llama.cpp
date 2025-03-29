@@ -1495,6 +1495,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
+        {"--ignore-context-overflow"},
+        string_format("ignores context window overflow when computing scores (default: %s)", params.ctx_overflow ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.ctx_overflow = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
         {"--kl-divergence"},
         "computes KL-divergence to logits provided via --kl-divergence-base",
         [](common_params & params) {
