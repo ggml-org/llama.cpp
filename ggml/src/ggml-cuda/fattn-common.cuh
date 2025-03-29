@@ -315,14 +315,14 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
 
     float vals[sizeof(int)] = {0.0f};
 #pragma unroll
-    for (int l = 0; l < sizeof(int); ++l) {
+    for (int l = 0; l < int(sizeof(int)); ++l) {
         vals[l] = scale * x[4*threadIdx.x + l];
     }
 
     float amax = fabsf(vals[0]);
     float sum  = vals[0];
 #pragma unroll
-    for (int l = 1; l < sizeof(int); ++l) {
+    for (int l = 1; l < int(sizeof(int)); ++l) {
         amax = fmaxf(amax, fabsf(vals[l]));
         sum += vals[l];
     }
@@ -338,7 +338,7 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
 
     if (d != 0.0f) {
 #pragma unroll
-        for (int l = 0; l < sizeof(int); ++l) {
+        for (int l = 0; l < int(sizeof(int)); ++l) {
             q8[l] = roundf(vals[l] / d);
         }
     }
@@ -638,7 +638,7 @@ static __global__ void flash_attn_combine_results(
     float VKQ_denominator = 0.0f;
     for (int l = 0; l < parallel_blocks; ++l) {
         const float diff = meta[l].x - kqmax;
-        const float KQ_max_scale = expf(diff);
+        float KQ_max_scale = expf(diff);
         const uint32_t ftz_mask = 0xFFFFFFFF * (diff > SOFTMAX_FTZ_THRESHOLD);
         *((uint32_t *) &KQ_max_scale) &= ftz_mask;
 
@@ -649,6 +649,7 @@ static __global__ void flash_attn_combine_results(
     dst[blockIdx.z*D + tid] = VKQ_numerator / VKQ_denominator;
 }
 
+[[noreturn]]
 static void on_no_fattn_vec_case(const int D) {
     if (D == 64) {
         fprintf(stderr, "Unsupported KV type combination for head_size 64.\n");

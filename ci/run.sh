@@ -69,7 +69,7 @@ fi
 if [ ! -z ${GG_BUILD_MUSA} ]; then
     # Use qy1 by default (MTT S80)
     MUSA_ARCH=${MUSA_ARCH:-21}
-    CMAKE_EXTRA="-DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
 ## helpers
 
