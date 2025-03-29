@@ -72,3 +72,14 @@ $ bin/llama-cli -m ../models/tinyllama-1b/ggml-model-f16.gguf -p "Hello, my name
 
 This way you can offload model layers to both local and remote devices.
 
+### Local cache
+
+The RPC server can use a local cache to store large tensors and avoid transferring them over the network.
+This can speed up model loading significantly, especially when using large models.
+To enable the cache, use the `-c` option:
+
+```bash
+$ bin/rpc-server -c
+```
+
+By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory and can be controlled via the `LLAMA_CACHE` environment variable.

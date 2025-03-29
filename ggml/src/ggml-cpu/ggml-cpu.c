@@ -3110,17 +3110,17 @@ static void ggml_compute_forward_dup_same_cont(
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
 
-    // parallelize by elements
-    const int ne = ggml_nelements(dst);
-    const int dr = (ne + nth - 1) / nth;
-    const int ie0 = dr * ith;
-    const int ie1 = MIN(ie0 + dr, ne);
+    // parallelize by blocks
+    const int nk = ggml_nelements(src0)/ggml_blck_size(src0->type);
+    const int dr = (nk + nth - 1) / nth;
+    const int k0 = dr * ith;
+    const int k1 = MIN(k0 + dr, nk);
 
-    if (ie0 < ie1) {
+    if (k0 < k1) {
         memcpy(
-            ((char *)  dst->data + ie0*nb0),
-            ((char *) src0->data + ie0*nb0),
-            (ie1 - ie0) * nb0);
+            ((char *)  dst->data + k0*nb0),
+            ((char *) src0->data + k0*nb0),
+            (k1 - k0) * nb0);
     }
 }
 
@@ -4055,7 +4055,6 @@ static void ggml_compute_forward_dup_f32(
 static void ggml_compute_forward_dup_bytes(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
-
     const struct ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
@@ -4069,9 +4068,9 @@ static void ggml_compute_forward_dup_bytes(
     }
 
     const size_t type_size = ggml_type_size(src0->type);
+
     const int ith = params->ith; // thread index
     const int nth = params->nth; // number of threads
-
 
     // parallelize by rows
     const int nr = ne01;
@@ -4082,10 +4081,10 @@ static void ggml_compute_forward_dup_bytes(
     const int ir1 = MIN(ir0 + dr, nr);
 
     if (src0->type == dst->type &&
-        ne00 == ne0 &&
+        ggml_are_same_shape(src0, dst) &&
         nb00 == type_size && nb0 == type_size) {
         // copy by rows
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
         for (int64_t i03 = 0; i03 < ne03; i03++) {
             for (int64_t i02 = 0; i02 < ne02; i02++) {
                 for (int64_t i01 = ir0; i01 < ir1; i01++) {
@@ -4140,17 +4139,20 @@ static void ggml_compute_forward_dup_bytes(
     }
 
     // dst counters
-
-    int64_t i10 = 0;
+    int64_t k10 = 0;
     int64_t i11 = 0;
     int64_t i12 = 0;
     int64_t i13 = 0;
 
+    // number of blocks in a row
+    const int64_t nk00 = ne00 / ggml_blck_size(src0->type);
+    const int64_t nk0  = ne0  / ggml_blck_size(dst->type);
+
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
-            i10 += ne00 * ir0;
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * ir0;
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -4162,14 +4164,14 @@ static void ggml_compute_forward_dup_bytes(
                 }
             }
             for (int64_t i01 = ir0; i01 < ir1; i01++) {
-                for (int64_t i00 = 0; i00 < ne00; i00++) {
-                    const char * src0_ptr = ((char *) src0->data + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
-                          char * dst_ptr  = ((char *)  dst->data + i10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
+                for (int64_t k00 = 0; k00 < nk00; k00++) {
+                    const char * src0_ptr = ((char *) src0->data + k00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+                          char * dst_ptr  = ((char *)  dst->data + k10*nb0  + i11*nb1  + i12*nb2  + i13*nb3);
 
                     memcpy(dst_ptr, src0_ptr, type_size);
 
-                    if (++i10 == ne0) {
-                        i10 = 0;
+                    if (++k10 == nk0) {
+                        k10 = 0;
                         if (++i11 == ne1) {
                             i11 = 0;
                             if (++i12 == ne2) {
@@ -4182,9 +4184,9 @@ static void ggml_compute_forward_dup_bytes(
                     }
                 }
             }
-            i10 += ne00 * (ne01 - ir1);
-            while (i10 >= ne0) {
-                i10 -= ne0;
+            k10 += nk00 * (ne01 - ir1);
+            while (k10 >= nk0) {
+                k10 -= nk0;
                 if (++i11 == ne1) {
                     i11 = 0;
                     if (++i12 == ne2) {
@@ -12236,10 +12238,11 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t D = neq0;
-    const int64_t N = neq1;
+    const int64_t DK = nek0;
+    const int64_t DV = nev0;
+    const int64_t N  = neq1;
 
-    GGML_ASSERT(ne0 == D);
+    GGML_ASSERT(ne0 == DV);
     GGML_ASSERT(ne2 == N);
 
     // input tensor rows must be contiguous
@@ -12247,12 +12250,11 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     GGML_ASSERT(nbk0 == ggml_type_size(k->type));
     GGML_ASSERT(nbv0 == ggml_type_size(v->type));
 
-    GGML_ASSERT(neq0 == D);
-    GGML_ASSERT(nek0 == D);
-    GGML_ASSERT(nev0 == D);
+    GGML_ASSERT(neq0 == DK);
+    GGML_ASSERT(nek0 == DK);
+    GGML_ASSERT(nev0 == DV);
 
     GGML_ASSERT(neq1 == N);
-    GGML_ASSERT(nev0 == D);
 
     // dst cannot be transposed or permuted
     GGML_ASSERT(nb0 == sizeof(float));
@@ -12318,15 +12320,15 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         float S = 0.0f;      // sum
         float M = -INFINITY; // maximum KQ value
 
-        float       * VKQ32 = (float       *) params->wdata + ith*(3*D + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
-        float       * V32   =                 (VKQ32 + 1*D); // (temporary) FP32 V buffer
-        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*D); // (temporary) FP16 VKQ accumulator
-        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*D); // (temporary) buffer for Q converted to quantized/FP16
+        float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
+        float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
+        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
 
         if (v->type == GGML_TYPE_F16) {
-            memset(VKQ16, 0, D*sizeof(ggml_fp16_t));
+            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
         } else {
-            memset(VKQ32, 0, D*sizeof(float));
+            memset(VKQ32, 0, DV*sizeof(float));
         }
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
@@ -12340,7 +12342,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int iv2 = iq2 / rv2;
 
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        q_to_vec_dot(pq, Q_q, D);
+        q_to_vec_dot(pq, Q_q, DK);
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
@@ -12354,7 +12356,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             float s; // KQ value
 
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            kq_vec_dot(D, &s, 0, k_data, 0, Q_q, 0, 1);
+            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
             s = s*scale; // scale KQ value
 
@@ -12378,14 +12380,14 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                     ms = expf(Mold - M);
 
                     // V = V*expf(Mold - M)
-                    ggml_vec_scale_f16(D, VKQ16, ms);
+                    ggml_vec_scale_f16(DV, VKQ16, ms);
                 } else {
                     // no new maximum, ms == 1.0f, vs != 1.0f
                     vs = expf(s - M);
                 }
 
                 // V += v*expf(s - M)
-                ggml_vec_mad_f16(D, VKQ16, (const ggml_fp16_t *) v_data, vs);
+                ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
             } else {
                 if (s > M) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
@@ -12393,30 +12395,30 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                     ms = expf(Mold - M);
 
                     // V = V*expf(Mold - M)
-                    ggml_vec_scale_f32(D, VKQ32, ms);
+                    ggml_vec_scale_f32(DV, VKQ32, ms);
                 } else {
                     // no new maximum, ms == 1.0f, vs != 1.0f
                     vs = expf(s - M);
                 }
 
-                v_to_float(v_data, V32, D);
+                v_to_float(v_data, V32, DV);
 
                 // V += v*expf(s - M)
-                ggml_vec_mad_f32(D, VKQ32, V32, vs);
+                ggml_vec_mad_f32(DV, VKQ32, V32, vs);
             }
 
             S = S*ms + vs; // scale and increment sum with partial sum
         }
 
         if (v->type == GGML_TYPE_F16) {
-            for (int64_t d = 0; d < D; ++d) {
+            for (int64_t d = 0; d < DV; ++d) {
                 VKQ32[d] = GGML_FP16_TO_FP32(VKQ16[d]);
             }
         }
 
         // V /= S
         const float S_inv = 1.0f/S;
-        ggml_vec_scale_f32(D, VKQ32, S_inv);
+        ggml_vec_scale_f32(DV, VKQ32, S_inv);
 
         // dst indices
         const int i1 = iq1;
@@ -14308,7 +14310,9 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     }
 
     // extra_buffer op?
-    if (ggml_cpu_extra_compute_forward(params, tensor)) return;
+    if (ggml_cpu_extra_compute_forward(params, tensor)) {
+        return;
+    }
 
     switch (tensor->op) {
         case GGML_OP_DUP:
@@ -15273,7 +15277,6 @@ struct ggml_cplan ggml_graph_plan(
         size_t cur = 0;
 
         if (!ggml_cpu_extra_work_size(n_threads, node, &cur)) {
-
             switch (node->op) {
                 case GGML_OP_CPY:
                 case GGML_OP_DUP:
@@ -15382,9 +15385,10 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
-                        const int64_t ne00 = node->src[0]->ne[0]; // D
+                        const int64_t ne10 = node->src[1]->ne[0]; // DK
+                        const int64_t ne20 = node->src[2]->ne[0]; // DV
 
-                        cur = 3*sizeof(float)*ne00*n_tasks; // 3x head size/thread
+                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
