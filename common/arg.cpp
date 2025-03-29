@@ -36,7 +36,7 @@ common_arg & common_arg::set_env(const char * env) {
 
 static void set_ms_env() {
 #ifdef _WIN32
-    SetEnvironmentVariableA("LLAMACPP_USE_MODELSCOPE", "True")
+    putenv("LLAMACPP_USE_MODELSCOPE=True");
 #else
     setenv("LLAMACPP_USE_MODELSCOPE", "True", 1);
 #endif

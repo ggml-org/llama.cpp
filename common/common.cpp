@@ -1200,13 +1200,6 @@ static std::filesystem::path create_credential_path() {
     const char* home_dir = nullptr;
 #ifdef _WIN32
     home_dir = getenv("USERPROFILE");
-    if (!home_dir) {
-        const char* homeDrive = getenv("HOMEDRIVE");
-        const char* homePath = getenv("HOMEPATH");
-        if (homeDrive && homePath) return std::string(homeDrive) + homePath;
-        char documentsPath[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathA(NULL, CSIDL_PERSONAL, NULL, SHGFP_TYPE_CURRENT, documentsPath))) return std::string(documentsPath);
-    }
 #else
     home_dir = getenv("HOME");
 #endif
@@ -1610,8 +1603,8 @@ bool ms_login(const std::string & token) {
     json response_json = json::parse(response_string);
     json data          = response_json["Data"];
     auto access_token = data["AccessToken"].get<std::string>();
-    save_to_file(git_token_file.c_str(), access_token);
-    save_to_file(user_file.c_str(), data["Username"].get<std::string>() + ":" + data["Email"].get<std::string>());
+    save_to_file(git_token_file.generic_string(), access_token);
+    save_to_file(user_file.generic_string(), data["Username"].get<std::string>() + ":" + data["Email"].get<std::string>());
     return true;
 }
 
@@ -1800,6 +1793,26 @@ struct llama_model * common_load_model_from_url(
         const struct llama_model_params & /*params*/) {
     LOG_WRN("%s: llama.cpp built without libcurl, downloading from an url not supported.\n", __func__);
     return nullptr;
+}
+
+struct llama_model * common_load_model_from_ms(
+        const std::string & /*repo*/,
+        const std::string & /*remote_path*/,
+        const std::string & /*local_path*/,
+        const std::string & /*ms_token*/,
+        const struct llama_model_params & /*params*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return nullptr;
+}
+
+bool ms_login(const std::string & /*token*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return false;
+}
+
+std::pair<std::string, std::string> common_get_ms_file(const std::string & /*ms_repo_with_tag*/, const std::string & /*ms_token*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return std::make_pair("", "");
 }
 
 struct llama_model * common_load_model_from_hf(
