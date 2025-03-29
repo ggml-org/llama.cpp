@@ -1,4 +1,5 @@
-message(STATUS "Using QNN backend")
+project(ggml-qnn)
+message(STATUS "Using HEXAGON backend")
 message("CMAKE_SYSTEM_NAME : ${CMAKE_SYSTEM_NAME}")
 
 if(NOT DEFINED QNN_SDK_PATH)
@@ -9,8 +10,9 @@ if(NOT DEFINED HEXAGON_SDK_PATH)
     message(FATAL_ERROR "HEXAGON_SDK_PATH not defined")
 endif()
 
-message("QNN_SDK_PATH:     ${QNN_SDK_PATH}")
+message("QNN_SDK_PATH    : ${QNN_SDK_PATH}")
 message("HEXAGON_SDK_PATH: ${HEXAGON_SDK_PATH}")
+message("HTP_ARCH_VERSION: ${HTP_ARCH_VERSION}")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     find_library(LOG_LIB log)
@@ -37,7 +39,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     include_directories(${HEXAGON_SDK_PATH}/libs/atomic/android_Debug_aarch64/ship)
     include_directories(${CMAKE_SOURCE_DIR}/ggml/src/ggml-qnn/)
     include_directories(${CMAKE_SOURCE_DIR}/ggml/src/ggml-qnn/kernels/)
-
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(QNN_DEFAULT_LIB_SEARCH_PATH "C:\\" CACHE STRING "customized library search path for QNN backend")
 else()
@@ -55,3 +56,20 @@ target_link_libraries(ggml-qnn PRIVATE ${QNN_LINK_LIBRARIES})
 
 string(REGEX REPLACE "/$" "" QNN_DEFAULT_LIB_SEARCH_PATH "${QNN_DEFAULT_LIB_SEARCH_PATH}")
 target_compile_definitions(ggml-qnn PRIVATE QNN_DEFAULT_LIB_SEARCH_PATH="${QNN_DEFAULT_LIB_SEARCH_PATH}/")
+
+function(ggml_hexagon_build_kernel KNAME)
+    message(STATUS "ggml_hexagon: build kernel ${KNAME}")
+
+    add_custom_command(
+        TARGET ${PROJECT_NAME}
+        POST_BUILD
+        COMMAND echo "current working path:`pwd`\n"
+        COMMAND echo "${CMAKE_CURRENT_LIST_DIR}/kernels"
+        COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ clean
+        COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ HEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} HTP_ARCH_VERSION=${HTP_ARCH_VERSION}
+        COMMAND echo "`pwd`"
+        COMMENT "build hexagon-kernel"
+    )
+endfunction()
+
+ggml_hexagon_build_kernel("cdsp")
