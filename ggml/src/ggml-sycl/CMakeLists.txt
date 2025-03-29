@@ -82,6 +82,11 @@ target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 
 if (WIN32)
+    if( ${CMAKE_GENERATOR} MATCHES "Visual Studio" AND NOT (${CMAKE_GENERATOR_TOOLSET} MATCHES "Intel C"))
+        set_target_properties(ggml-sycl PROPERTIES VS_PLATFORM_TOOLSET "Intel C++ Compiler 2025")
+        set(CMAKE_CXX_COMPILER "icx")
+        set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
+    endif()
     find_package(IntelSYCL REQUIRED)
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)

@@ -493,6 +493,12 @@ b. Enable oneAPI running environment:
 "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64
 ```
 
+- if you are using Powershell, enable the runtime environment with the following:
+
+```
+cmd.exe "/K" '"C:\Program Files (x86)\Intel\oneAPI\setvars.bat" && powershell'
+```
+
 c. Verify installation
 
 In the oneAPI command line, run the following to print the available SYCL devices:
@@ -565,6 +571,29 @@ You can use Visual Studio to open llama.cpp folder as a CMake project. Choose th
 *Notes:*
 
 - In case of a minimal experimental setup, the user can build the inference executable only through `cmake --build build --config Release -j --target llama-cli`.
+
+4. Visual Studio Project
+
+You can use Visual Studio projects to build and work on llama.cpp on Windows. You need to convert the CMake Project into a `.sln` file.
+
+If you want to use Intel C++ compiler for the entire llama.cpp project:
+```
+cmake -B build -G "Visual Studio 17 2022" -T "Intel C++ Compiler 2025" -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release
+```
+
+If you want to use Intel C++ Compiler only for ggml-sycl:
+```
+cmake -B build -G "Visual Studio 17 2022"  -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release -DSYCL_INCLUDE_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\include" -DSYCL_LIBRARY_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\lib"
+```
+
+In both cases, after the Visual Studio is created open it, right click on `ggml-sycl` and open properties. In the left column open `C/C++` sub menu and select `DPC++`. In the option window on the right set `Enable SYCL offload` to `yes` and apply changes.
+
+Properties -> C\C++ -> DPC++ -> Enable SYCL offload(yes)
+
+Now you can build llama.cpp with SYCL backend as a Visual Studio project.
+
+*Notes:*
+- you can avoid to specify `SYCL_INCLUDE_DIR` and `SYCL_LIBRARY_DIR` if set the two env vars `SYCL_INCLUDE_DIR_HINT` and `SYCL_LIBRARY_DIR_HINT`.
 
 ### III. Run the inference
 
