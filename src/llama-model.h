@@ -85,6 +85,7 @@ enum llm_type {
     LLM_TYPE_10B_128x3_66B,
     LLM_TYPE_57B_A14B,
     LLM_TYPE_27B,
+    LLM_TYPE_290B,
 };
 
 struct llama_layer_posnet {
