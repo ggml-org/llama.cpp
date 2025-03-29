@@ -330,7 +330,7 @@ struct hexagon_appcfg_t {
     int hwaccel_approach;       // 0: HWACCEL_QNN 1: HWACCEL_QNN_SINGLEGRAPH 2: HWACCEL_CDSP
     int hexagon_backend;        // 0: HEXAGON_BACKEND_QNNCPU 1: HEXAGON_BACKEND_QNNGPU 2: HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP
     int enable_mulmat_cdsp;     // enable/disable offload mulmat to cDSP
-    int enable_q_mulmat;        // enable/disable offload fp32 & all quantized type mulmat to cDSP
+    int enable_q_mulmat;        // enable/disable offload fp32 & quantized mulmat to cDSP
     const char * cfgfilename;
     const char * runtimelib_path;
 };
@@ -1395,6 +1395,7 @@ static void * ggmlhexagon_type_trait(ggml_backend_hexagon_context * ctx, ggml_te
 }
 
 static void ggmlhexagon_set_runtime_path(size_t device, const std::string & path) {
+#if defined(__ANDROID__)
     if ((HEXAGON_BACKEND_QNNNPU == device) || (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach)) {
         if (0 == setenv("LD_LIBRARY_PATH",
                         (path +
@@ -1424,6 +1425,7 @@ static void ggmlhexagon_set_runtime_path(size_t device, const std::string & path
                                   ggml_backend_hexagon_get_devname(device));
         }
     }
+#endif
 }
 
 static void ggmlhexagon_load_cfg() {
@@ -4874,7 +4876,8 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     }
 
     return 0;
-    bail:
+
+bail:
     if (ggmlop_domain_uri) {
         free(ggmlop_domain_uri);
     }
@@ -5344,7 +5347,7 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
 
 static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
-    return "qnn-buffer";
+    return "hexagon-buffer";
 }
 
 static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
@@ -5399,7 +5402,7 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     ggml_backend_hexagon_context * ctx = (ggml_backend_hexagon_context *)backend->context;
 
     qnn_instance * instance = (qnn_instance*)g_hexagon_mgr[ctx->device].instance;
-    if (instance != nullptr) {
+    if (nullptr != instance) {
         std::map<std::string, qnn_singlenode_res_t>::iterator singlenode_graph_it;
         for (singlenode_graph_it = ctx->qnn_singlenode_graph_map.begin();
              singlenode_graph_it != ctx->qnn_singlenode_graph_map.end(); singlenode_graph_it++) {
@@ -5856,11 +5859,9 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
         return nullptr;
     }
 
-#if defined(__ANDROID__)
     std::string path = qnn_lib_path;
     GGMLHEXAGON_LOG_DEBUG("lib_path %s", path.c_str());
     ggmlhexagon_set_runtime_path(device, path);
-#endif
 
     if (nullptr != g_hexagon_mgr[device].backend) {
         GGMLHEXAGON_LOG_DEBUG("backend %d(%s) already loaded", device,
@@ -5893,7 +5894,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
             ggml_backend_hexagon_free(hexagon_backend);
             return nullptr;
         }
-        //ensure test-backend-ops get the correct backend name when inference approach is 1(HWACCEL_CDSP)
+        //ensure test-backend-ops get the correct backend name when hwaccel approach is 2(HWACCEL_CDSP)
         memcpy(g_hexagon_mgr[device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
     } else {
         //got fully description of SoC when hwaccel approach is HWACCEL_QNN and backend is HEXAGON_BACKEND_QNNNPU
