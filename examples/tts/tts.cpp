@@ -699,11 +699,13 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
             const std::string voice_data = audio_data;
 
             auto tmp = common_tokenize(vocab, voice_data, false, true);
-            printf("\n\n");
+
+            std::ostringstream tokens_oss;
             for (size_t i = 0; i < tmp.size(); ++i) {
-                printf("%d, ", tmp[i]);
+                tokens_oss << tmp[i] << ", ";
             }
-            printf("\n\n");
+            LOG_INF("\n\n%s: llama tokens: %s\n\n", __func__, tokens_oss.str().c_str());
+
             prompt_add(prompt_inp, tmp);
 #else
             prompt_add(prompt_inp, llama_tokens {
