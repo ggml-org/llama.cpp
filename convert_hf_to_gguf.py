@@ -708,6 +708,9 @@ class Model:
         if chkhsh == "7dec86086fcc38b66b7bc1575a160ae21cf705be7718b9d5598190d7c12db76f":
             # ref: https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k
             res = "superbpe"
+        if chkhsh == "1994ffd01900cfb37395608534236ecd63f2bd5995d6cb1004dda1af50240f15":
+            # ref: https://huggingface.co/trillionlabs/Trillion-7B-preview
+            res = "trillion"
 
         if res is None:
             logger.warning("\n")
