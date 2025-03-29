@@ -683,3 +683,25 @@ const char * const LLM_KV_SPLIT_COUNT         = "split.count";
 const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 
 }
+
+//
+// Audio utils
+//
+
+struct wav_header {
+    char riff[4] = {'R', 'I', 'F', 'F'};
+    uint32_t chunk_size;
+    char wave[4] = {'W', 'A', 'V', 'E'};
+    char fmt[4] = {'f', 'm', 't', ' '};
+    uint32_t fmt_chunk_size = 16;
+    uint16_t audio_format = 1; // PCM
+    uint16_t num_channels = 1; // Mono
+    uint32_t sample_rate;
+    uint32_t byte_rate;
+    uint16_t block_align;
+    uint16_t bits_per_sample = 16;
+    char data[4] = {'d', 'a', 't', 'a'};
+    uint32_t data_size;
+};
+
+bool save_wav16(const std::string & fname, const std::vector<float> & data, int sample_rate);
