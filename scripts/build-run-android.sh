@@ -1,5 +1,5 @@
 #!/bin/bash
-# build llama.cpp + ggml-qnn for Snapdragon mobile SoC equipped Android phone on Linux
+# build llama.cpp + ggml-hexagon for Snapdragon mobile SoC equipped Android phone on Linux
 
 set -e
 
@@ -32,6 +32,7 @@ function dump_vars()
 {
     echo -e "ANDROID_NDK:          ${ANDROID_NDK}"
     echo -e "QNN_SDK_PATH:         ${QNN_SDK_PATH}"
+    echo -e "HEXAGON_SDK_PATH:     ${HEXAGON_SDK_PATH}"
 }
 
 
@@ -46,6 +47,8 @@ function check_hexagon_sdk()
     if [ ! -d ${HEXAGON_SDK_PATH} ]; then
         echo -e "HEXAGON_SDK_PATH ${HEXAGON_SDK_PATH} not exist, pls install it accordingly...\n"
         exit 0
+    else
+        printf "Qualcomm Hexagon SDK already exist:${HEXAGON_SDK_PATH} \n\n"
     fi
 }
 
@@ -117,7 +120,7 @@ function check_and_download_ndk()
 
 function build_arm64
 {
-    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_QNN=ON -DQNN_SDK_PATH=${QNN_SDK_PATH} -DHEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} -DHTP_ARCH_VERSION=${HTP_ARCH_VERSION}
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Release -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_HEXAGON=ON -DQNN_SDK_PATH=${QNN_SDK_PATH} -DHEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} -DHTP_ARCH_VERSION=${HTP_ARCH_VERSION}
     cd out/android
     make -j16
     show_pwd
@@ -166,7 +169,7 @@ function update_qnn_libs()
 
 function update_qnn_cfg()
 {
-    adb push ./scripts/ggml-qnn.cfg ${REMOTE_PATH}/
+    adb push ./scripts/ggml-hexagon.cfg ${REMOTE_PATH}/
 }
 
 
@@ -197,7 +200,7 @@ function prepare_run_on_phone()
     fi
     adb push ./out/android/bin/${program} ${REMOTE_PATH}/
     adb shell chmod +x ${REMOTE_PATH}/${program}
-    adb push ggml/src/ggml-qnn/kernels/libggmlop_skel${HTP_ARCH_VERSION}.so  ${REMOTE_PATH}/libggmlop_skel.so
+    adb push ggml/src/ggml-hexagon/kernels/libggmlop_skel${HTP_ARCH_VERSION}.so  ${REMOTE_PATH}/libggmlop_skel.so
 }
 
 function run_llamacli()
@@ -236,31 +239,14 @@ function run_test-op()
 {
     prepare_run_on_phone test-backend-ops
 
-    qnnbackendname=qnn-cpu
-    case $qnnbackend in
-        0)
-        qnnbackendname=qnn-cpu
-        ;;
-        1)
-        qnnbackendname=qnn-gpu
-        ;;
-        2)
-        qnnbackendname=qnn-npu
-        ;;
-        *)
-        qnnbackendname=qnn-cpu
-        ;;
-    esac
-
-    #debug
     echo "adb shell cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname "
 
     echo "\n"
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/test-backend-ops test -o $opname -b $qnnbackendname "
+               && ${REMOTE_PATH}/test-backend-ops test -o $opname "
 
 }
 
@@ -353,7 +339,7 @@ function show_usage()
     echo "  $0 build"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
-    echo "  $0 run_testop          [ADD/MUL_MAT]  [0 (QNN_CPU) / 1 (QNN_GPU) / 2 (QNN_NPU)]"
+    echo "  $0 run_testop          [ADD/MUL_MAT]"
     echo "  $0 run_llamacli"
     echo "  $0 run_llamabench"
 
@@ -399,16 +385,10 @@ elif [ $# == 1 ]; then
         show_usage
         exit 1
     fi
-elif [ $# == 3 ]; then
+elif [ $# == 2 ]; then
     opname=$2
 #TODO: check opname in oplist
 #opname can be found via print_oplist:
-
-    qnnbackend=$3
-    if [ ${qnnbackend} -gt 3 ]; then
-        show_usage
-        exit 1
-    fi
 
     run_test-op
     exit 0
