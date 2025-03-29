@@ -9403,7 +9403,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
         // Intel drivers don't support coopmat properly yet
-        return true;
+        return false;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
