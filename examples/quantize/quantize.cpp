@@ -105,11 +105,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type]\n", executable);
-    printf("       [--token-embedding-type] [--attention-qkv-type] [--attention-q-type] [--attention-k-type] [--attention-v-type] [--attention-qa-type]\n");
-    printf("       [--attention-qb-type] [--attention-kva-type] [--attention-kvb-type] [--attention-output-type] [--feedforward-up-type] [--feedforward-gate-type]\n");
-    printf("       [--feedforward-down-type] [--feedforward-gate-exp-type] [--feedforward-down-exp-type] [--feedforward-up-exp-type] [--feedforward-gate-shexp-type]\n");
-    printf("       [--feedforward-down-shexp-type] [--feedforward-up-shexp-type] [--classifier-type] [--classifier-output-type] [--override-kv]\n");
-    printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
+    printf("       [--token-embedding-type] [--tensor-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -118,26 +114,8 @@ static void usage(const char * executable) {
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
-    printf("  --attention-qkv-type ggml_type: use this ggml_type for the attn_qkv.weight tensor\n");
-    printf("  --attention-q-type ggml_type: use this ggml_type for the attn_q.weight tensor\n");
-    printf("  --attention-k-type ggml_type: use this ggml_type for the attn_k.weight tensor\n");
-    printf("  --attention-v-type ggml_type: use this ggml_type for the attn_v.weight tensor\n");
-    printf("  --attention-qa-type ggml_type: use this ggml_type for the attn_q_a.weight tensor\n");
-    printf("  --attention-qb-type ggml_type: use this ggml_type for the attn_q_b.weight tensor\n");
-    printf("  --attention-kva-type ggml_type: use this ggml_type for the attn_kv_a_mqa.weight tensor\n");
-    printf("  --attention-kvb-type ggml_type: use this ggml_type for the attn_kv_b.weight tensor\n");
-    printf("  --attention-output-type ggml_type: use this ggml_type for the attn_output.weight tensor\n");
-    printf("  --feedforward-up-type ggml_type: use this ggml_type for the ffn_up.weight tensor\n");
-    printf("  --feedforward-gate-type ggml_type: use this ggml_type for the ffn_gate.weight tensor\n");
-    printf("  --feedforward-down-type ggml_type: use this ggml_type for the ffn_down.weight tensor\n");
-    printf("  --feedforward-up-exp-type ggml_type: use this ggml_type for the ffn_up_exp.weight tensor\n");
-    printf("  --feedforward-gate-exp-type ggml_type: use this ggml_type for the ffn_gate_exp.weight tensor\n");
-    printf("  --feedforward-down-exp-type ggml_type: use this ggml_type for the ffn_down_exp.weight tensor\n");
-    printf("  --feedforward-up-shexp-type ggml_type: use this ggml_type for the ffn_up_shexp.weight tensor\n");
-    printf("  --feedforward-gate-shexp-type ggml_type: use this ggml_type for the ffn_gate_shexp.weight tensor\n");
-    printf("  --feedforward-down-shexp-type ggml_type: use this ggml_type for the ffn_down_shexp.weight tensor\n");
-    printf("  --classifier-type ggml_type: use this ggml_type for the cls.weight tensor\n");
-    printf("  --classifier-output-type ggml_type: use this ggml_type for the cls.output.weight tensor\n");
+    printf("  --tensor-type TENSOR=TYPE: quantize this tensor to this ggml_type. example: --tensor-type attn_q=q8_0\n");
+    printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -268,6 +246,95 @@ static ggml_type parse_ggml_type(const char * arg) {
     return GGML_TYPE_COUNT;
 }
 
+// Allowed tensors for arbitrary quantization with --tensor-type option
+static const std::vector<std::string> ALLOWED_TENSOR_TYPE = {
+    "attn_k",
+    "attn_kv_a_mqa",
+    "attn_kv_b",
+    "attn_out",
+    "attn_q_a",
+    "attn_q_b",
+    "attn_q",
+    "attn_qkv",
+    "attn_v",
+    "channel_mix_key",
+    "channel_mix_receptance",
+    "channel_mix_value",
+    "cls_out",
+    "cls",
+    "dec_attn_k",
+    "dec_attn_out",
+    "dec_attn_q",
+    "dec_attn_v",
+    "dec_cross_attn_k",
+    "dec_cross_attn_out",
+    "dec_cross_attn_q",
+    "dec_cross_attn_v",
+    "ffn_act",
+    "ffn_down_exp",
+    "ffn_down_shexp",
+    "ffn_down",
+    "ffn_gate_exp",
+    "ffn_gate_shexp",
+    "ffn_gate",
+    "ffn_up_exp",
+    "ffn_up_shexp",
+    "ffn_up",
+    "ssm_in",
+    "ssm_out",
+    "time_mix_gate",
+    "time_mix_key",
+    "time_mix_output",
+    "time_mix_receptance",
+    "time_mix_value",
+};
+
+// changes to this struct must be replicated in llama-quant.cpp
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
+};
+
+static bool string_parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
+    const char * sep = strchr(data, '=');
+    if (sep == nullptr) {
+        printf("\n%s: malformed tensor type '%s'\n\n", __func__, data);
+        return false;
+    }
+
+    const size_t tn_len = sep - data;
+    if (tn_len == 0) {
+        printf("\n%s: missing tensor name\n\n", __func__);
+        return false;
+    }
+
+    if (const size_t qt_len = strlen(sep); qt_len == 1) {
+        printf("\n%s: missing quantization type\n\n", __func__);
+        return false;
+    }
+
+    std::string tn(data, tn_len);
+    std::transform(tn.begin(), tn.end(), tn.begin(), tolower);
+    sep++;
+    const std::string qt(sep);
+
+    if (find(ALLOWED_TENSOR_TYPE.begin(), ALLOWED_TENSOR_TYPE.end(), tn) == ALLOWED_TENSOR_TYPE.end()) {
+        printf("\n%s: invalid tensor name '%s'\n\n", __func__, tn.c_str());
+        return false;
+    }
+
+    if (parse_ggml_type(qt.c_str()) == GGML_TYPE_COUNT) {
+        printf("\n%s: invalid quantization type '%s'\n\n", __func__, qt.c_str());
+        return false;
+    }
+
+    tensor_quantization tqz;
+    tqz.name = tn;
+    tqz.quant = parse_ggml_type(qt.c_str());
+    tensor_type.emplace_back(std::move(tqz));
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -279,6 +346,7 @@ int main(int argc, char ** argv) {
     std::string imatrix_file;
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
+    std::vector<tensor_quantization> tensor_types;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -301,184 +369,8 @@ int main(int argc, char ** argv) {
             } else {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--attention-qkv-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_qkv_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_qkv_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-q-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_q_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_q_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-k-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_k_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_k_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-v-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_v_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_v_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-qa-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_qa_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_qa_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-qb-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_qb_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_qb_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-kva-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_kva_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_kva_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-kvb-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_kvb_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_kvb_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--attention-output-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.attn_output_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.attn_output_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-up-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_up_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_up_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-gate-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_gate_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_gate_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-down-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_down_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_down_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-up-exp-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_up_exp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_up_exp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-gate-exp-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_gate_exp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_gate_exp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-down-exp-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_down_exp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_down_exp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-up-shexp_type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_up_shexp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_up_shexp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-gate-shexp-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_gate_shexp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_gate_shexp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--feedforward-down-shexp-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.ffn_down_shexp_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.ffn_down_shexp_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--classifier-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.cls_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.cls_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
-                usage(argv[0]);
-            }
-        } else if (strcmp(argv[arg_idx], "--classifier-output-type") == 0) {
-            if (arg_idx < argc-1) {
-                params.cls_output_tensor_type = parse_ggml_type(argv[++arg_idx]);
-                if (params.cls_output_tensor_type == GGML_TYPE_COUNT) {
-                    usage(argv[0]);
-                }
-            } else {
+        } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
+            if (arg_idx == argc-1 || !string_parse_tensor_type(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
@@ -564,6 +456,9 @@ int main(int argc, char ** argv) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
         params.kv_overrides = &kv_overrides;
+    }
+    if (!tensor_types.empty()) {
+        params.tensor_types = &tensor_types;
     }
 
     llama_backend_init();
