@@ -4,6 +4,11 @@ You can also use the [GGUF-my-repo](https://huggingface.co/spaces/ggml-org/gguf-
 
 Note: It is synced from llama.cpp `main` every 6 hours.
 
+Using llama-quantize, needs cmake to create excutables. Install cmake as per your operating system.
+https://cmake.org/download/
+
+
+
 Example usage:
 
 ```bash
@@ -16,6 +21,18 @@ ls ./models
 # [Optional] for PyTorch .bin models like Mistral-7B
 ls ./models
 <folder containing weights and tokenizer json>
+
+#clone git repository llama.cpp
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+
+# create build directory and run cmake
+mkdir build && cd build && cmake ../examples/quantize
+
+# build files are created in root directory(llama.cpp)
+# run make in root directory to create executables
+cd .. && make
+
 
 # install Python dependencies
 python3 -m pip install -r requirements.txt
