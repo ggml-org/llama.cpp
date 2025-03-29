@@ -3249,7 +3249,7 @@ struct server_context {
 
                 const int tok_idx = slot.i_batch - i;
 
-                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx, true);
 
                 slot.i_batch = -1;
 
@@ -3347,7 +3347,7 @@ struct server_context {
                 llama_decode(ctx, slot.batch_spec);
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft);
+                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft, true);
 
                 slot.n_past    += ids.size();
                 slot.n_decoded += ids.size();
