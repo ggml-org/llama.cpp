@@ -14,7 +14,7 @@ struct common_speculative {
     struct llama_context * ctx;
     struct common_sampler * smpl;
 
-    llama_batch batch;
+    llama_batch_ext_ptr batch;
     llama_tokens prompt;
 };
 
@@ -23,7 +23,7 @@ struct common_speculative * common_speculative_init(
     auto * result = new common_speculative {
         /* .ctx    = */ ctx_dft,
         /* .smpl   = */ nullptr,
-        /* .batch  = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
+        /* .batch  = */ llama_batch_ext_ptr(ctx_dft),
         /* .prompt = */ {},
     };
 
@@ -68,8 +68,6 @@ void common_speculative_free(struct common_speculative * spec) {
     }
 
     common_sampler_free(spec->smpl);
-
-    llama_batch_free(spec->batch);
 
     delete spec;
 }
@@ -206,40 +204,40 @@ llama_tokens common_speculative_gen_draft(
     }
 
     // prepare a batch to evaluate any new tokens in the prompt
-    common_batch_clear(batch);
+    batch.clear();
 
     for (size_t i = i_start + reuse_n; i < prompt_tgt.size(); ++i) {
         //LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_tgt[i]);
-        common_batch_add(batch, prompt_tgt[i], i - i_start, { 0 }, false);
+        batch.add_text(prompt_tgt[i], i - i_start, 0, false);
 
         prompt.push_back(prompt_tgt[i]);
     }
 
     // we should rarely end-up here during normal decoding
-    if (batch.n_tokens > 0) {
+    if (batch.n_tokens() > 0) {
         //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
 
-        llama_decode(ctx, batch);
+        llama_decode_ext(ctx, batch.get());
     }
 
     const llama_pos n_past = prompt.size();
 
     LOG_DBG("%s: n_past = %d\n", __func__, n_past);
 
-    common_batch_clear(batch);
-    common_batch_add  (batch, id_last, n_past, { 0 }, true);
+    batch.clear();
+    batch.add_text(id_last, n_past, 0, true);
 
     prompt.push_back(id_last);
 
     //LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx, prompt).c_str());
 
-    llama_decode(ctx, batch);
+    llama_decode_ext(ctx, batch.get());
 
     common_sampler_reset(smpl);
 
     // sample n_draft tokens from the draft model
     for (int i = 0; i < params.n_draft; ++i) {
-        common_batch_clear(batch);
+        batch.clear();
 
         common_sampler_sample(smpl, ctx, 0, true);
 
@@ -266,10 +264,10 @@ llama_tokens common_speculative_gen_draft(
             break;
         }
 
-        common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
+        batch.add_text( id, n_past + i + 1, 0, true);
 
         // evaluate the drafted tokens on the draft model
-        llama_decode(ctx, batch);
+        llama_decode_ext(ctx, batch.get());
 
         prompt.push_back(id);
     }

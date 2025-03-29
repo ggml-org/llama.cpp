@@ -45,7 +45,7 @@ class LLamaAndroid {
     private external fun free_context(context: Long)
     private external fun backend_init(numa: Boolean)
     private external fun backend_free()
-    private external fun new_batch(nTokens: Int, embd: Int, nSeqMax: Int): Long
+    private external fun new_batch(context: Long): Long
     private external fun free_batch(batch: Long)
     private external fun new_sampler(): Long
     private external fun free_sampler(sampler: Long)
@@ -102,7 +102,7 @@ class LLamaAndroid {
                     val context = new_context(model)
                     if (context == 0L) throw IllegalStateException("new_context() failed")
 
-                    val batch = new_batch(512, 0, 1)
+                    val batch = new_batch(context)
                     if (batch == 0L) throw IllegalStateException("new_batch() failed")
 
                     val sampler = new_sampler()

@@ -826,7 +826,7 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
         // create a llama_batch
         // we use this object to submit token data for decoding
-        llama_batch batch = llama_batch_init(std::max(prompt_inp.size(), (size_t) n_parallel), 0, n_parallel);
+        llama_batch_ext_ptr batch(ctx_ttc);
 
         std::vector<llama_seq_id> seq_ids(n_parallel, 0);
         for (int32_t i = 0; i < n_parallel; ++i) {
@@ -835,14 +835,14 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
         // evaluate the initial prompt
         for (size_t i = 0; i < prompt_inp.size(); ++i) {
-            common_batch_add(batch, prompt_inp[i], i, seq_ids, false);
+            batch.add_text(prompt_inp[i], i, seq_ids, false);
         }
-        GGML_ASSERT(batch.n_tokens == (int) prompt_inp.size());
+        GGML_ASSERT(batch.n_tokens() == (int) prompt_inp.size());
 
         // llama_decode will output logits only for the last token of the prompt
-        batch.logits[batch.n_tokens - 1] = true;
+        llama_batch_ext_set_output_last(batch.get());
 
-        if (llama_decode(ctx_ttc, batch) != 0) {
+        if (llama_decode_ext(ctx_ttc, batch.get()) != 0) {
             LOG_ERR("%s: llama_decode() failed\n", __func__);
             return 1;
         }
@@ -861,16 +861,16 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
         // remember the batch index of the last token for each parallel sequence
         // we need this to determine which logits to sample from
-        std::vector<int32_t> i_batch(n_parallel, batch.n_tokens - 1);
+        std::vector<int32_t> i_batch(n_parallel, batch.n_tokens() - 1);
 
-        int n_past   = batch.n_tokens;
+        int n_past   = batch.n_tokens();
         int n_decode = 0;
 
         bool next_token_uses_guide_token = true;
 
         while (n_decode <= n_predict) {
             // prepare the next batch
-            common_batch_clear(batch);
+            batch.clear();
 
             // sample the next token for each parallel sequence / stream
             for (int32_t i = 0; i < n_parallel; ++i) {
@@ -926,14 +926,14 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
                     //LOG_CNT("%d", i);
                 }
 
-                i_batch[i] = batch.n_tokens;
+                i_batch[i] = batch.n_tokens();
 
                 // push this new token for next evaluation
-                common_batch_add(batch, new_token_id, n_past, { i }, true);
+                batch.add_text(new_token_id, n_past, i, true);
             }
 
             // all streams are finished
-            if (batch.n_tokens == 0) {
+            if (batch.n_tokens() == 0) {
                 break;
             }
 
@@ -941,13 +941,11 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
             n_past += 1;
 
             // evaluate the current batch with the transformer model
-            if (llama_decode(ctx_ttc, batch)) {
+            if (llama_decode_ext(ctx_ttc, batch.get())) {
                 LOG_ERR("%s : failed to eval, return code %d\n", __func__, 1);
                 return 1;
             }
         }
-
-        llama_batch_free(batch);
 
         LOG("\n");
         LOG_INF("%s: time for decoder:       %.3f ms\n", __func__, (ggml_time_us() - t_dec_start) / 1000.0f);
@@ -1016,14 +1014,14 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
 
     const int n_codes = codes.size();
 
-    llama_batch batch = llama_batch_init(n_codes, 0, 1);
+    llama_batch_ext_ptr batch(ctx_cts);
 
     for (size_t i = 0; i < codes.size(); ++i) {
-        common_batch_add(batch, codes[i], i, { 0 }, true); // TODO: all logits?
+        batch.add_text(codes[i], i, 0, true); // TODO: all logits?
     }
-    GGML_ASSERT(batch.n_tokens == n_codes);
+    GGML_ASSERT(batch.n_tokens() == n_codes);
 
-    if (llama_decode(ctx_cts, batch) != 0) {
+    if (llama_decode_ext(ctx_cts, batch.get()) != 0) {
         LOG_ERR("%s: llama_decode() failed\n", __func__);
         return 1;
     }

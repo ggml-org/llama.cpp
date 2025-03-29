@@ -1,4 +1,5 @@
 #include "llama.h"
+#include "llama-cpp.h"
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -143,7 +144,7 @@ int main(int argc, char ** argv) {
 
     // prepare a batch for the prompt
 
-    llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+    auto batch = llama_batch_ext_ptr::init_from_text(ctx, prompt_tokens.data(), prompt_tokens.size(), 0, 0, true);
 
     // main loop
 
@@ -151,14 +152,14 @@ int main(int argc, char ** argv) {
     int n_decode = 0;
     llama_token new_token_id;
 
-    for (int n_pos = 0; n_pos + batch.n_tokens < n_prompt + n_predict; ) {
+    for (int n_pos = 0; n_pos + batch.n_tokens() < n_prompt + n_predict; ) {
         // evaluate the current batch with the transformer model
-        if (llama_decode(ctx, batch)) {
+        if (llama_decode_ext(ctx, batch.get())) {
             fprintf(stderr, "%s : failed to eval, return code %d\n", __func__, 1);
             return 1;
         }
 
-        n_pos += batch.n_tokens;
+        n_pos += batch.n_tokens();
 
         // sample the next token
         {
@@ -180,7 +181,8 @@ int main(int argc, char ** argv) {
             fflush(stdout);
 
             // prepare the next batch with the sampled token
-            batch = llama_batch_get_one(&new_token_id, 1);
+            batch.clear();
+            batch.add_text(new_token_id, n_pos, 0, true);
 
             n_decode += 1;
         }

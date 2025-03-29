@@ -101,7 +101,8 @@ static bool eval_tokens(struct llama_context * ctx_llama, std::vector<llama_toke
         if (n_eval > n_batch) {
             n_eval = n_batch;
         }
-        if (llama_decode(ctx_llama, llama_batch_get_one(&tokens[i], n_eval))) {
+        auto batch = llama_batch_ext_ptr::init_from_text(ctx_llama, &tokens[i], n_eval, *n_past, 0, true);
+        if (llama_decode_ext(ctx_llama, batch.get())) {
             LOG_ERR("%s : failed to eval. token %d/%d (batch size %d, n_past %d)\n", __func__, i, N, n_batch, *n_past);
             return false;
         }

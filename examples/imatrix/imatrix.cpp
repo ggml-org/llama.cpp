@@ -497,7 +497,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
         // clear the KV cache
         llama_kv_self_clear(ctx);
 
-        llama_batch batch = llama_batch_init(n_batch, 0, 1);
+        llama_batch_ext * batch = llama_batch_ext_init(ctx);
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -511,14 +511,15 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
                 tokens[batch_start] = llama_vocab_bos(vocab);
             }
 
-            common_batch_clear(batch);
+            llama_batch_ext_clear(batch);
             for (int i = 0; i < batch_size; i++) {
-                common_batch_add(batch, tokens[batch_start + i], j*n_batch + i, {0}, true);
+                const llama_seq_id seq_id = 0;
+                llama_batch_ext_add_text(batch, tokens[batch_start + i], j*n_batch + i, &seq_id, 1, true);
             }
 
-            if (llama_decode(ctx, batch)) {
+            if (llama_decode_ext(ctx, batch)) {
                 LOG_ERR("%s : failed to eval\n", __func__);
-                llama_batch_free(batch);
+                llama_batch_ext_free(batch);
                 return false;
             }
 
@@ -531,7 +532,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
             }
         }
 
-        llama_batch_free(batch);
+        llama_batch_ext_free(batch);
 
         const auto t_end = std::chrono::high_resolution_clock::now();
 
