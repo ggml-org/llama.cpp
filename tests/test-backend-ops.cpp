@@ -4760,11 +4760,7 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-#ifdef GGML_USE_QNN
-        ggml_backend_t backend = ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i));
-#else
         ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
-#endif
         GGML_ASSERT(backend != NULL);
 
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
