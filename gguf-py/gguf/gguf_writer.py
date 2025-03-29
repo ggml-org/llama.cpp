@@ -392,6 +392,23 @@ class GGUFWriter:
         if pad != 0:
             fp.write(bytes([0] * pad))
 
+    def write_data(self, data: bytes[Any]) -> None:
+        if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
+            raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
+        assert self.fout is not None
+
+        file_id = -1
+        for i, tensors in enumerate(self.tensors):
+            if len(tensors) > 0:
+                file_id = i
+                break
+
+        fout = self.fout[file_id]
+
+        self.write_padding(fout, fout.tell())
+        fout.write(data)
+        self.write_padding(fout, len(data))
+
     def write_tensor_data(self, tensor: np.ndarray[Any, Any]) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
