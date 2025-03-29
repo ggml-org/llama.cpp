@@ -54,16 +54,29 @@ function(ggml_opencl_add_kernel KNAME)
 endfunction()
 
 set(GGML_OPENCL_KERNELS
-    ggml-opencl
-    ggml-opencl_mm
-    ggml-opencl_cvt
-    ggml-opencl_gemv_noshuffle
-    ggml-opencl_gemv_noshuffle_general
-    ggml-opencl_mul_mat_Ab_Bi_8x4
-    ggml-opencl_transpose_16
-    ggml-opencl_transpose_32
-    ggml-opencl_transpose_32_16
-    ggml-opencl_im2col
+    add
+    clamp
+    cpy
+    cvt
+    diag_mask_inf
+    gelu
+    gemv_noshuffle_general
+    gemv_noshuffle
+    get_rows
+    im2col
+    mul_mat_Ab_Bi_8x4
+    mul_mv_q4_0
+    mul_mv_q6_k
+    mul_mv
+    mul
+    norm
+    relu
+    rms_norm
+    rope
+    scale
+    silu
+    softmax
+    transpose
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})

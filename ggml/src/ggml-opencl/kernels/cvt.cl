@@ -66,13 +66,44 @@ struct block_q4_0
 };
 
 //------------------------------------------------------------------------------
-// mul_vec_q_n_f32_flat_noshuffle
-//
-// This variation uses flat arrays (struct of arrays, SOA) representation for
-// quant tensors. It also uses non shuffled bit order for weights.
-//
-// The shuffled version is kept in the original file because moving it here
-// seems to result in worse performance for adreno.
+// kernel_convert_block_q4_0
+// Convert the block_q4_0 format to 2 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q4_0(
+    global struct block_q4_0 * src0,
+    global uchar * dst_q,
+    global half  * dst_d
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q4_0(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_q4_0 * dst
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK4_0/2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q4_0_noshuffle
+// Flatten q4_0 weights and unshuffle the bits
 //------------------------------------------------------------------------------
 
 kernel void kernel_convert_block_q4_0_noshuffle(
