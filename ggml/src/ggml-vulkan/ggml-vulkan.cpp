@@ -1965,11 +1965,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
             CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f16acc,  matmul_iq4_nl_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         }
 
-        // if (device->coopmat_int_support) {
-        //     CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f16acc, matmul_q4_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
-        //     CREATE_MMQ(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0].f16acc, matmul_q8_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
-        // }
-
         CREATE_MM(GGML_TYPE_F32, pipeline_matmul_id_f32, matmul_id_f32_f32, , wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_id_f16, matmul_id_f16, wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
         CREATE_MM2(GGML_TYPE_F16, pipeline_matmul_id_f16_f32, matmul_id_f16_f32, wg_denoms, warptile, vk_mat_mat_push_constants, 4, _id);
@@ -2077,7 +2072,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM(GGML_TYPE_IQ4_XS,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_XS].f16acc,  matmul_iq4_xs_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f16acc,  matmul_iq4_nl_f32,  _f16acc, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
 
-        if (device->coopmat_int_support) {
+        if (device->integer_dot_product) {
             CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f16acc, matmul_q4_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ(GGML_TYPE_Q4_1, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_1].f16acc, matmul_q4_1_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ(GGML_TYPE_Q5_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q5_0].f16acc, matmul_q5_0_q8_1, _f16acc, mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
@@ -2162,7 +2157,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_MM(GGML_TYPE_IQ4_XS,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_XS].f32acc,  matmul_iq4_xs_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM(GGML_TYPE_IQ4_NL,  pipeline_dequant_mul_mat_mat[GGML_TYPE_IQ4_NL].f32acc,  matmul_iq4_nl_f32,  , mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
 
-        if (device->coopmat_int_support) {
+        if (device->integer_dot_product) {
             CREATE_MMQ(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0].f32acc, matmul_q4_0_q8_1, , mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ(GGML_TYPE_Q4_1, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_1].f32acc, matmul_q4_1_q8_1, , mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ(GGML_TYPE_Q5_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q5_0].f32acc, matmul_q5_0_q8_1, , mmq_wg_denoms, warptile_mmq_int, vk_mat_mat_push_constants, 3, );
@@ -2203,7 +2198,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t rm_stdq = 1;
     uint32_t rm_kq = 2;
     if (device->vendor_id == VK_VENDOR_ID_AMD) {
-        if (device->subgroup_min_size == 64 && device->subgroup_max_size == 64) { // GCN
+        if (device->architecture == AMD_GCN) {
             rm_stdq = 2;
             rm_kq = 4;
         }
@@ -3409,18 +3404,13 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_pipeline(ggml_backend_vk_conte
 
     // MMQ
     if (src1_type == GGML_TYPE_Q8_1) {
-        switch (src0_type) {
-            case GGML_TYPE_Q4_0:
-            case GGML_TYPE_Q4_1:
-            case GGML_TYPE_Q5_0:
-            case GGML_TYPE_Q5_1:
-            case GGML_TYPE_Q8_0:
-                break;
-            default:
-                return nullptr;
+        vk_matmul_pipeline pipelines = ctx->device->pipeline_dequant_mul_mat_mat_q8_1[src0_type].f16acc;
+
+        if (pipelines->s == nullptr && pipelines->m == nullptr && pipelines->l == nullptr) {
+            return nullptr;
         }
 
-        return ctx->device->pipeline_dequant_mul_mat_mat_q8_1[src0_type].f16acc;
+        return pipelines;
     }
 
     if (src1_type != GGML_TYPE_F32 && !ctx->device->coopmat2) {
@@ -7402,115 +7392,117 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     free(x_chk);
 }
 
-typedef uint16_t ggml_half;
-typedef uint32_t ggml_half2;
-
-#define QK8_1 32
-typedef struct {
-    union {
-        struct {
-            ggml_half d; // delta
-            ggml_half s; // d * sum(qs[i])
-        } GGML_COMMON_AGGR_S;
-        ggml_half2 ds;
-    } GGML_COMMON_AGGR_U;
-    int8_t qs[QK8_1]; // quants
-} block_q8_1;
-
-static void ggml_vk_test_quantize(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {
-    VK_LOG_DEBUG("ggml_vk_test_quantize(" << ne << ")");
-    GGML_ASSERT(quant == GGML_TYPE_Q8_1);
-
-    const size_t x_sz = sizeof(float) * ne;
-    const size_t qx_sz = ne * ggml_type_size(quant)/ggml_blck_size(quant);
-    float * x = (float *) malloc(x_sz);
-    block_q8_1 * qx     = (block_q8_1 *)malloc(qx_sz);
-    block_q8_1 * qx_res = (block_q8_1 *)malloc(qx_sz);
-    vk_buffer x_buf = ggml_vk_create_buffer_check(ctx->device, x_sz, vk::MemoryPropertyFlagBits::eDeviceLocal);
-    vk_buffer qx_buf = ggml_vk_create_buffer_check(ctx->device, qx_sz, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-    for (size_t i = 0; i < ne; i++) {
-        x[i] = rand() / (float)RAND_MAX;
-    }
-
-    vk_pipeline p = ggml_vk_get_quantize_pipeline(ctx, quant);
-
-    ggml_pipeline_request_descriptor_sets(ctx->device, p, 1);
-
-    if (ctx->device->need_compiles) {
-        ggml_vk_load_shaders(ctx->device);
-    }
-
-    ggml_pipeline_allocate_descriptor_sets(ctx->device);
-
-    ggml_vk_buffer_write(x_buf, 0, x, x_sz);
-
-    vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
-    ggml_vk_ctx_begin(ctx->device, subctx);
-    ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(x_buf), ggml_vk_subbuffer(qx_buf), ne);
-    ggml_vk_ctx_end(subctx);
-
-    auto begin = std::chrono::high_resolution_clock::now();
-
-    ggml_vk_submit(subctx, ctx->fence);
-    VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_quantize waitForFences");
-    ctx->device->device.resetFences({ ctx->fence });
-
-    auto end = std::chrono::high_resolution_clock::now();
-
-    double ms_quant = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0;
-    ggml_vk_buffer_read(qx_buf, 0, qx, qx_sz);
-
-    ggml_vk_quantize_data(x, qx_res, ne, quant);
-
-    int first_err = -1;
-
-    for (size_t i = 0; i < ne / 32; i++) {
-        double error = std::fabs(ggml_fp16_to_fp32(qx_res[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) - ggml_fp16_to_fp32(qx[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d));
-
-        if (first_err < 0 && error > 0.1) {
-            first_err = i;
-        }
-
-        error = std::fabs(ggml_fp16_to_fp32(qx_res[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) - ggml_fp16_to_fp32(qx[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s));
-
-        if (first_err < 0 && error > 0.1) {
-            first_err = i;
-        }
-
-        for (size_t j = 0; j < 32; j++) {
-            uint64_t error = std::abs(qx_res[i].qs[j] - qx[i].qs[j]);
-
-            if (first_err < 0 && error > 1) {
-                first_err = i;
-            }
-        }
-    }
-
-    std::cerr << "TEST QUANTIZE " << ggml_type_name(quant) << " time=" << ms_quant << "ms " << (first_err == -1 ? "CORRECT" : "INCORRECT") << std::endl;
-
-    if (first_err != -1) {
-        std::cerr << "first_error = " << first_err << std::endl;
-        std::cerr << "Actual result: " << std::endl << std::endl;
-        std::cout << "d=" << ggml_fp16_to_fp32(qx[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) << " s=" << ggml_fp16_to_fp32(qx[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) << " ";
-        for (size_t j = 0; j < 32; j++) {
-            std::cout << " qs" << j << "=" << (uint32_t)qx[first_err].qs[j] << " ";
-        }
-        std::cerr << std::endl << std::endl << "Expected result: " << std::endl << std::endl;
-        std::cout << "d=" << ggml_fp16_to_fp32(qx_res[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) << " s=" << ggml_fp16_to_fp32(qx_res[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) << " ";
-        for (size_t j = 0; j < 32; j++) {
-            std::cout << " qs" << j << "=" << (uint32_t)qx_res[first_err].qs[j] << " ";
-        }
-        std::cerr << std::endl;
-    }
-
-    ggml_vk_destroy_buffer(x_buf);
-    ggml_vk_destroy_buffer(qx_buf);
-
-    free(x);
-    free(qx);
-    free(qx_res);
-}
+// This does not work without ggml q8_1 quantization support
+//
+// typedef uint16_t ggml_half;
+// typedef uint32_t ggml_half2;
+//
+// #define QK8_1 32
+// typedef struct {
+//     union {
+//         struct {
+//             ggml_half d; // delta
+//             ggml_half s; // d * sum(qs[i])
+//         } GGML_COMMON_AGGR_S;
+//         ggml_half2 ds;
+//     } GGML_COMMON_AGGR_U;
+//     int8_t qs[QK8_1]; // quants
+// } block_q8_1;
+//
+// static void ggml_vk_test_quantize(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {
+//     VK_LOG_DEBUG("ggml_vk_test_quantize(" << ne << ")");
+//     GGML_ASSERT(quant == GGML_TYPE_Q8_1);
+//
+//     const size_t x_sz = sizeof(float) * ne;
+//     const size_t qx_sz = ne * ggml_type_size(quant)/ggml_blck_size(quant);
+//     float * x = (float *) malloc(x_sz);
+//     block_q8_1 * qx     = (block_q8_1 *)malloc(qx_sz);
+//     block_q8_1 * qx_res = (block_q8_1 *)malloc(qx_sz);
+//     vk_buffer x_buf = ggml_vk_create_buffer_check(ctx->device, x_sz, vk::MemoryPropertyFlagBits::eDeviceLocal);
+//     vk_buffer qx_buf = ggml_vk_create_buffer_check(ctx->device, qx_sz, vk::MemoryPropertyFlagBits::eDeviceLocal);
+//
+//     for (size_t i = 0; i < ne; i++) {
+//         x[i] = rand() / (float)RAND_MAX;
+//     }
+//
+//     vk_pipeline p = ggml_vk_get_quantize_pipeline(ctx, quant);
+//
+//     ggml_pipeline_request_descriptor_sets(ctx->device, p, 1);
+//
+//     if (ctx->device->need_compiles) {
+//         ggml_vk_load_shaders(ctx->device);
+//     }
+//
+//     ggml_pipeline_allocate_descriptor_sets(ctx->device);
+//
+//     ggml_vk_buffer_write(x_buf, 0, x, x_sz);
+//
+//     vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+//     ggml_vk_ctx_begin(ctx->device, subctx);
+//     ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(x_buf), ggml_vk_subbuffer(qx_buf), ne);
+//     ggml_vk_ctx_end(subctx);
+//
+//     auto begin = std::chrono::high_resolution_clock::now();
+//
+//     ggml_vk_submit(subctx, ctx->fence);
+//     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_quantize waitForFences");
+//     ctx->device->device.resetFences({ ctx->fence });
+//
+//     auto end = std::chrono::high_resolution_clock::now();
+//
+//     double ms_quant = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0;
+//     ggml_vk_buffer_read(qx_buf, 0, qx, qx_sz);
+//
+//     ggml_vk_quantize_data(x, qx_res, ne, quant);
+//
+//     int first_err = -1;
+//
+//     for (size_t i = 0; i < ne / 32; i++) {
+//         double error = std::fabs(ggml_fp16_to_fp32(qx_res[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) - ggml_fp16_to_fp32(qx[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d));
+//
+//         if (first_err < 0 && error > 0.1) {
+//             first_err = i;
+//         }
+//
+//         error = std::fabs(ggml_fp16_to_fp32(qx_res[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) - ggml_fp16_to_fp32(qx[i].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s));
+//
+//         if (first_err < 0 && error > 0.1) {
+//             first_err = i;
+//         }
+//
+//         for (size_t j = 0; j < 32; j++) {
+//             uint64_t error = std::abs(qx_res[i].qs[j] - qx[i].qs[j]);
+//
+//             if (first_err < 0 && error > 1) {
+//                 first_err = i;
+//             }
+//         }
+//     }
+//
+//     std::cerr << "TEST QUANTIZE " << ggml_type_name(quant) << " time=" << ms_quant << "ms " << (first_err == -1 ? "CORRECT" : "INCORRECT") << std::endl;
+//
+//     if (first_err != -1) {
+//         std::cerr << "first_error = " << first_err << std::endl;
+//         std::cerr << "Actual result: " << std::endl << std::endl;
+//         std::cout << "d=" << ggml_fp16_to_fp32(qx[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) << " s=" << ggml_fp16_to_fp32(qx[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) << " ";
+//         for (size_t j = 0; j < 32; j++) {
+//             std::cout << " qs" << j << "=" << (uint32_t)qx[first_err].qs[j] << " ";
+//         }
+//         std::cerr << std::endl << std::endl << "Expected result: " << std::endl << std::endl;
+//         std::cout << "d=" << ggml_fp16_to_fp32(qx_res[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d) << " s=" << ggml_fp16_to_fp32(qx_res[first_err].GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.s) << " ";
+//         for (size_t j = 0; j < 32; j++) {
+//             std::cout << " qs" << j << "=" << (uint32_t)qx_res[first_err].qs[j] << " ";
+//         }
+//         std::cerr << std::endl;
+//     }
+//
+//     ggml_vk_destroy_buffer(x_buf);
+//     ggml_vk_destroy_buffer(qx_buf);
+//
+//     free(x);
+//     free(qx);
+//     free(qx_res);
+// }
 
 static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, size_t split_k, size_t shader_size, ggml_type quant, bool mmq = false) {
     VK_LOG_DEBUG("ggml_vk_test_dequant_matmul(" << m << ", " << n << ", " << k << ", " << batch << ", " << num_it << ", " << split_k << ", " << ggml_type_name(quant) << ")");
@@ -7752,8 +7744,6 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
 #if defined(GGML_VULKAN_RUN_TESTS)
-    ggml_vk_test_quantize(ctx, 1024*1024, GGML_TYPE_Q8_1);
-
     const std::vector<size_t> vals {
         512, 512, 128,
         128, 512, 512,
