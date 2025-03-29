@@ -15,9 +15,6 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-    const ggml_tensor *src1, ggml_tensor *dst,
-    const float *src0_d, const float *src1_d,
-    float *dst_d, const queue_ptr &stream);
+void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor *dst);
 
 #endif // GGML_SYCL_GETROWS_HPP
