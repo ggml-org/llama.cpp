@@ -5028,7 +5028,7 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
             //FIXME:remove this filter
             if (ne00 < 32)
                 return false;
-            
+
             //FIXME:remove this filter
             return ggmlhexagon_same_types(ctx, op_tensor);
         }
@@ -5042,8 +5042,8 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
 
             ggmlhexagon_dump_op_info(op_tensor);
             if (g_hexagon_appcfg.enable_q_mulmat)
-                return (src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type))
-                       && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+                return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q6_K
+                       ) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
             else
                 return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
