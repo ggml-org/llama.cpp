@@ -2,6 +2,9 @@ project(ggml-hexagon)
 message(STATUS "Using HEXAGON backend")
 message("CMAKE_SYSTEM_NAME : ${CMAKE_SYSTEM_NAME}")
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(NOT DEFINED QNN_SDK_PATH)
     message(FATAL_ERROR "QNN_SDK_PATH not defined")
 endif()

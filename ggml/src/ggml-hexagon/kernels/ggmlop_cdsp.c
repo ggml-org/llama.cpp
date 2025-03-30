@@ -894,13 +894,13 @@ static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
     return (sign >> 16) | (shl1_w > UINT32_C(0xFF000000) ? UINT16_C(0x7E00) : nonsign);
 }
 
-inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
+static inline float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     uint16_t s;
     memcpy(&s, &f, sizeof(uint16_t));
     return ggml_table_f32_f16[s];
 }
 
-static void ggml_init() {
+static inline void ggml_init(void) {
     for (int i = 0; i < (1 << 16); ++i) {
         union {
             uint16_t u16;
@@ -1609,7 +1609,6 @@ static void ggml_compute_forward_div_f32(
 }
 
 int ggmlop_dsp_div(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-
     switch (src0->type) {
         case GGML_TYPE_F32:
         {
@@ -1621,6 +1620,8 @@ int ggmlop_dsp_div(remote_handle64 h, const ggml_tensor * src0, const ggml_tenso
             GGML_ABORT("fatal error");
         }
     }
+
+    return 0;
 }
 
 static void ggml_compute_forward_mul_mat_one_chunk(
