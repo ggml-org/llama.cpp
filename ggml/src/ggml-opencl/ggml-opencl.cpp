@@ -231,11 +231,20 @@ struct ggml_backend_opencl_context {
     cl_program program_gemv_noshuffle_general;
     cl_program program_gemv_noshuffle;
     cl_program program_get_rows;
-    cl_program program_im2col;
+    cl_program program_im2col_f16;
+    cl_program program_im2col_f32;
     cl_program program_mul_mat_Ab_Bi_8x4;
-    cl_program program_mul_mv_q4_0;
+    cl_program program_mul_mv_q4_0_f32;
+    cl_program program_mul_mv_q4_0_f32_v;
+    cl_program program_mul_mv_q4_0_f32_8x_flat;
+    cl_program program_mul_mv_q4_0_f32_1d_8x_flat;
+    cl_program program_mul_mv_q4_0_f32_1d_16x_flat;
     cl_program program_mul_mv_q6_K;
-    cl_program program_mul_mv;
+    cl_program program_mul_mv_f16_f16;
+    cl_program program_mul_mv_f16_f32_1row;
+    cl_program program_mul_mv_f16_f32_l4;
+    cl_program program_mul_mv_f16_f32;
+    cl_program program_mul_mv_f32_f32;
     cl_program program_mul;
     cl_program program_norm;
     cl_program program_relu;
@@ -243,7 +252,10 @@ struct ggml_backend_opencl_context {
     cl_program program_rope;
     cl_program program_scale;
     cl_program program_silu;
-    cl_program program_softmax;
+    cl_program program_softmax_f32;
+    cl_program program_softmax_f16;
+    cl_program program_softmax_4_f32;
+    cl_program program_softmax_4_f16;
 
     cl_kernel kernel_add, kernel_add_row;
     cl_kernel kernel_mul, kernel_mul_row;
@@ -268,7 +280,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f16_f32;
     cl_kernel kernel_mul_mat_f16_f32_l4;
     cl_kernel kernel_mul_mat_q4_0_f32, kernel_mul_mat_q4_0_f32_v;
-    cl_kernel kernel_convert_block_q4_0, kernel_restore_block_q4_0, kernel_mul_mat_q4_0_f32_flat;
+    cl_kernel kernel_convert_block_q4_0, kernel_restore_block_q4_0;
     cl_kernel kernel_mul_mat_q4_0_f32_8x_flat;
     cl_kernel kernel_convert_block_q4_0_noshuffle;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat, kernel_mul_mat_q4_0_f32_1d_16x_flat;
@@ -527,41 +539,115 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
-    // im2col
+    // im2col_f32
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
-            #include "im2col.cl.h"
+            #include "im2col_f32.cl.h"
         };
 #else
-        const std::string kernel_src = read_file("im2col.cl");
+        const std::string kernel_src = read_file("im2col_f32.cl");
 #endif
-        backend_ctx->program_im2col =
+        backend_ctx->program_im2col_f32 =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_im2col_f32 = clCreateKernel(backend_ctx->program_im2col, "kernel_im2col_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_im2col_f16 = clCreateKernel(backend_ctx->program_im2col, "kernel_im2col_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_im2col_f32 = clCreateKernel(backend_ctx->program_im2col_f32, "kernel_im2col_f32", &err), err));
         GGML_LOG_CONT(".");
     }
 
-    // mul_mv_q4_0
+    // im2col_f16
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
-            #include "mul_mv_q4_0.cl.h"
+            #include "im2col_f16.cl.h"
         };
 #else
-        const std::string kernel_src = read_file("mul_mv_q4_0.cl");
+        const std::string kernel_src = read_file("im2col_f16.cl");
 #endif
-        backend_ctx->program_mul_mv_q4_0 =
+        backend_ctx->program_im2col_f16 =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32             = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_v           = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32_v", &err), err));    
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_flat        = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32_flat", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat     = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32_8x_flat", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat  = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32_1d_8x_flat", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat = clCreateKernel(backend_ctx->program_mul_mv_q4_0, "kernel_mul_mat_q4_0_f32_1d_16x_flat", &err), err));
+        CL_CHECK((backend_ctx->kernel_im2col_f16 = clCreateKernel(backend_ctx->program_im2col_f16, "kernel_im2col_f16", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_q4_0_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_q4_0_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_q4_0_f32.cl");
+#endif
+        backend_ctx->program_mul_mv_q4_0_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32 = clCreateKernel(backend_ctx->program_mul_mv_q4_0_f32, "kernel_mul_mat_q4_0_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_q4_0_f32_v
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_q4_0_f32_v.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_q4_0_f32_v.cl");
+#endif
+        backend_ctx->program_mul_mv_q4_0_f32_v =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_v = clCreateKernel(backend_ctx->program_mul_mv_q4_0_f32_v, "kernel_mul_mat_q4_0_f32_v", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_q4_0_f32_8x_flat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_q4_0_f32_8x_flat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_q4_0_f32_8x_flat.cl");
+#endif
+        backend_ctx->program_mul_mv_q4_0_f32_8x_flat =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_8x_flat = clCreateKernel(backend_ctx->program_mul_mv_q4_0_f32_8x_flat, "kernel_mul_mat_q4_0_f32_8x_flat", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_q4_0_f32_1d_8x_flat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_q4_0_f32_1d_8x_flat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_q4_0_f32_1d_8x_flat.cl");
+#endif
+        backend_ctx->program_mul_mv_q4_0_f32_1d_8x_flat =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_1d_8x_flat = clCreateKernel(backend_ctx->program_mul_mv_q4_0_f32_1d_8x_flat, "kernel_mul_mat_q4_0_f32_1d_8x_flat", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_q4_0_f32_1d_16x_flat
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_q4_0_f32_1d_16x_flat.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_q4_0_f32_1d_16x_flat.cl");
+#endif
+        backend_ctx->program_mul_mv_q4_0_f32_1d_16x_flat =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_q4_0_f32_1d_16x_flat = clCreateKernel(backend_ctx->program_mul_mv_q4_0_f32_1d_16x_flat, "kernel_mul_mat_q4_0_f32_1d_16x_flat", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -581,23 +667,83 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
-    // mul_mv
+    // mul_mv_f16_f16
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
-            #include "mul_mv.cl.h"
+            #include "mul_mv_f16_f16.cl.h"
         };
 #else
-        const std::string kernel_src = read_file("mul_mv.cl");
+        const std::string kernel_src = read_file("mul_mv_f16_f16.cl");
 #endif
-        backend_ctx->program_mul_mv =
+        backend_ctx->program_mul_mv_f16_f16 =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mat_f32_f32      = clCreateKernel(backend_ctx->program_mul_mv, "kernel_mul_mat_f32_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f16      = clCreateKernel(backend_ctx->program_mul_mv, "kernel_mul_mat_f16_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_1row = clCreateKernel(backend_ctx->program_mul_mv, "kernel_mul_mat_f16_f32_1row", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32      = clCreateKernel(backend_ctx->program_mul_mv, "kernel_mul_mat_f16_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4   = clCreateKernel(backend_ctx->program_mul_mv, "kernel_mul_mat_f16_f32_l4", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f16 = clCreateKernel(backend_ctx->program_mul_mv_f16_f16, "kernel_mul_mat_f16_f16", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_f16_f32_1row
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_f16_f32_1row.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_f16_f32_1row.cl");
+#endif
+        backend_ctx->program_mul_mv_f16_f32_1row =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_1row = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_1row, "kernel_mul_mat_f16_f32_1row", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_f16_f32_l4
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_f16_f32_l4.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_f16_f32_l4.cl");
+#endif
+        backend_ctx->program_mul_mv_f16_f32_l4 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_l4   = clCreateKernel(backend_ctx->program_mul_mv_f16_f32_l4, "kernel_mul_mat_f16_f32_l4", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_f16_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_f16_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_f16_f32.cl");
+#endif
+        backend_ctx->program_mul_mv_f16_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32 = clCreateKernel(backend_ctx->program_mul_mv_f16_f32, "kernel_mul_mat_f16_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_f32_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_f32_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_f32_f32.cl");
+#endif
+        backend_ctx->program_mul_mv_f32_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_f32_f32 = clCreateKernel(backend_ctx->program_mul_mv_f32_f32, "kernel_mul_mat_f32_f32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -722,22 +868,67 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
-    // softmax
+    // softmax_f32
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
-            #include "softmax.cl.h"
+            #include "softmax_f32.cl.h"
         };
 #else
-        const std::string kernel_src = read_file("softmax.cl");
+        const std::string kernel_src = read_file("softmax_f32.cl");
 #endif
-        backend_ctx->program_softmax =
+        backend_ctx->program_softmax_f32 =
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max       = clCreateKernel(backend_ctx->program_softmax, "kernel_soft_max", &err), err));
-        CL_CHECK((backend_ctx->kernel_soft_max_4     = clCreateKernel(backend_ctx->program_softmax, "kernel_soft_max_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_soft_max_f16   = clCreateKernel(backend_ctx->program_softmax, "kernel_soft_max_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax, "kernel_soft_max_4_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_soft_max = clCreateKernel(backend_ctx->program_softmax_f32, "kernel_soft_max", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // softmax_f16
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "softmax_f16.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("softmax_f16.cl");
+#endif
+        backend_ctx->program_softmax_f16 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_soft_max_f16 = clCreateKernel(backend_ctx->program_softmax_f16, "kernel_soft_max_f16", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // softmax_4_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "softmax_4_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("softmax_4_f32.cl");
+#endif
+        backend_ctx->program_softmax_4_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_soft_max_4 = clCreateKernel(backend_ctx->program_softmax_4_f32, "kernel_soft_max_4", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // softmax_4_f16
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "softmax_4_f16.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("softmax_4_f16.cl");
+#endif
+        backend_ctx->program_softmax_4_f16 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_soft_max_4_f16", &err), err));
         GGML_LOG_CONT(".");
     }
 

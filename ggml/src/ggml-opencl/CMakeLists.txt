@@ -63,11 +63,20 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_general
     gemv_noshuffle
     get_rows
-    im2col
+    im2col_f32
+    im2col_f16
     mul_mat_Ab_Bi_8x4
-    mul_mv_q4_0
+    mul_mv_f16_f16
+    mul_mv_f16_f32_1row
+    mul_mv_f16_f32_l4
+    mul_mv_f16_f32
+    mul_mv_f32_f32
+    mul_mv_q4_0_f32
+    mul_mv_q4_0_f32_v
+    mul_mv_q4_0_f32_8x_flat
+    mul_mv_q4_0_f32_1d_8x_flat
+    mul_mv_q4_0_f32_1d_16x_flat
     mul_mv_q6_k
-    mul_mv
     mul
     norm
     relu
@@ -75,7 +84,10 @@ set(GGML_OPENCL_KERNELS
     rope
     scale
     silu
-    softmax
+    softmax_4_f32
+    softmax_4_f16
+    softmax_f32
+    softmax_f16
     transpose
 )
 
