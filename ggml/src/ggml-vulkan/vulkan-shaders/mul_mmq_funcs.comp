@@ -40,18 +40,12 @@ i32vec2 repack(uint ib, uint iqs) {
     const u16vec2 quants = u16vec2(data_a[ib].qs[iqs * 2    ],
                                    data_a[ib].qs[iqs * 2 + 1]);
     const uint32_t vui = pack32(quants);
-    const uint32_t qh = (uint32_t(data_a[ib].qh[1]) << 16 | data_a[ib].qh[0]) >> (4 * iqs);
-    int32_t v0 = int32_t(vui & 0x0F0F0F0F);
-    v0 |= int32_t((qh <<  4) & 0x00000010); // 0 ->  4
-    v0 |= int32_t((qh << 11) & 0x00001000); // 1 -> 12
-    v0 |= int32_t((qh << 18) & 0x00100000); // 2 -> 20
-    v0 |= int32_t((qh << 25) & 0x10000000); // 3 -> 28
+    const int32_t qh = int32_t((uint32_t(data_a[ib].qh[1]) << 16 | data_a[ib].qh[0]) >> (4 * iqs));
+    const int32_t v0 = int32_t(vui & 0x0F0F0F0F)
+                     | ((qh & 0xF) * 0x02040810) & 0x10101010; // (0,1,2,3) -> (4,12,20,28)
 
-    int32_t v1 = int32_t((vui >> 4) & 0x0F0F0F0F);
-    v1 |= int32_t((qh >> 12) & 0x00000010); // 16 ->  4
-    v1 |= int32_t((qh >>  5) & 0x00001000); // 17 -> 12
-    v1 |= int32_t((qh <<  2) & 0x00100000); // 18 -> 20
-    v1 |= int32_t((qh <<  9) & 0x10000000); // 19 -> 28
+    const int32_t v1 = int32_t((vui >> 4) & 0x0F0F0F0F)
+                     | (((qh >> 16) & 0xF) * 0x02040810) & 0x10101010; // (16,17,18,19) -> (4,12,20,28)
 
     return i32vec2(v0, v1);
 }
@@ -65,18 +59,12 @@ ACC_TYPE mul_q8_1(int32_t q_sum, float da, vec2 dsb) {
 i32vec2 repack(uint ib, uint iqs) {
     // Use 4-byte loads since a q5_1 block (24 bytes) is divisible by 4
     const uint32_t vui = data_a_packed32[ib].qs[iqs];
-    const uint32_t qh = data_a_packed32[ib].qh >> (4 * iqs);
-    int32_t v0 = int32_t(vui & 0x0F0F0F0F);
-    v0 |= int32_t((qh <<  4) & 0x00000010); // 0 ->  4
-    v0 |= int32_t((qh << 11) & 0x00001000); // 1 -> 12
-    v0 |= int32_t((qh << 18) & 0x00100000); // 2 -> 20
-    v0 |= int32_t((qh << 25) & 0x10000000); // 3 -> 28
+    const int32_t qh = int32_t(data_a_packed32[ib].qh >> (4 * iqs));
+    const int32_t v0 = int32_t(vui & 0x0F0F0F0F)
+                     | ((qh & 0xF) * 0x02040810) & 0x10101010; // (0,1,2,3) -> (4,12,20,28)
 
-    int32_t v1 = int32_t((vui >> 4) & 0x0F0F0F0F);
-    v1 |= int32_t((qh >> 12) & 0x00000010); // 16 ->  4
-    v1 |= int32_t((qh >>  5) & 0x00001000); // 17 -> 12
-    v1 |= int32_t((qh <<  2) & 0x00100000); // 18 -> 20
-    v1 |= int32_t((qh <<  9) & 0x10000000); // 19 -> 28
+    const int32_t v1 = int32_t((vui >> 4) & 0x0F0F0F0F)
+                     | (((qh >> 16) & 0xF) * 0x02040810) & 0x10101010; // (16,17,18,19) -> (4,12,20,28)
 
     return i32vec2(v0, v1);
 }

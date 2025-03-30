@@ -113,8 +113,8 @@ shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
 #include "mul_mmq_funcs.comp"
 
 void main() {
-#if defined(DATA_A_IQ4_NL)
-    init_iq4nl_shmem();
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
 #endif
 
 #ifdef MUL_MAT_ID
@@ -347,9 +347,8 @@ void main() {
                         const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
                         int32_t q_sum = 0;
                         [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
-                            q_sum = dotPacked4x8AccSatEXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
-                                                          cache_b_qs[cc * (BK / 4) + idx_k],
-                                                          q_sum);
+                            q_sum += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
+                                                    cache_b_qs[cc * (BK / 4) + idx_k]);
                         }
 
                         sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc]);
