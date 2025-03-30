@@ -356,10 +356,10 @@ extern "C" {
 
     // model quantization parameters
     typedef struct llama_model_quantize_params {
-        int32_t nthread;                            // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
-        llama_ftype ftype;                    // quantize to this llama_ftype
-        ggml_type output_tensor_type;         // output tensor type
-        ggml_type token_embedding_type;       // token embeddings tensor type
+        int32_t nthread;                      // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
+        enum llama_ftype ftype;               // quantize to this llama_ftype
+        enum ggml_type output_tensor_type;    // output tensor type
+        enum ggml_type token_embedding_type;  // token embeddings tensor type
         bool allow_requantize;                // allow quantizing non-f32/f16 tensors
         bool quantize_output_tensor;          // quantize output.weight
         bool only_copy;                       // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
