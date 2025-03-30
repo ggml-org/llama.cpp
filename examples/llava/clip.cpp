@@ -1396,14 +1396,16 @@ struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_p
         const int n_kv = gguf_get_n_kv(ctx);
         const int ftype = get_u32(ctx, KEY_FTYPE);
         const std::string ftype_str = get_ftype(ftype);
-        const int idx_desc = get_key_idx(ctx, KEY_DESCRIPTION);
-        const std::string description = gguf_get_val_str(ctx, idx_desc);
         const int idx_name = gguf_find_key(ctx, KEY_NAME);
         if (idx_name != -1) { // make name optional temporarily as some of the uploaded models missing it due to a bug
             const std::string name = gguf_get_val_str(ctx, idx_name);
             LOG_INF("%s: model name:   %s\n", __func__, name.c_str());
         }
-        LOG_INF("%s: description:  %s\n", __func__, description.c_str());
+        const int idx_desc = get_key_idx(ctx, KEY_DESCRIPTION);
+        if (idx_desc != -1) { // ditto
+            const std::string description = gguf_get_val_str(ctx, idx_desc);
+            LOG_INF("%s: description:  %s\n", __func__, description.c_str());
+        }
         LOG_INF("%s: GGUF version: %d\n", __func__, gguf_get_version(ctx));
         LOG_INF("%s: alignment:    %zu\n", __func__, gguf_get_alignment(ctx));
         LOG_INF("%s: n_tensors:    %d\n", __func__, n_tensors);
