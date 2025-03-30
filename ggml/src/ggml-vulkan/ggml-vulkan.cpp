@@ -4469,7 +4469,6 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
             ctx->prealloc_size_x = x_sz_upd;
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz_upd) {
-            // Not right for quantize_y
             ctx->prealloc_size_y = y_sz_upd;
         }
         if (split_k > 1 && ctx->prealloc_size_split_k < split_k_size) {
