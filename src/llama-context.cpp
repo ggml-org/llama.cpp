@@ -1317,8 +1317,8 @@ int llama_context::decode(llama_batch & inp_batch) {
             n_outputs = n_outputs_new;
         }
 
-        // non-causal masks do not use the KV cache
-        if (hparams.causal_attn) {
+        // find KV slot
+        {
             kv_self_update();
 
             // if we have enough unused cells before the current head ->
