@@ -571,7 +571,7 @@ int32_t llm_chat_apply_template(
             ss << "<|role_start|>assistant<|role_end|>";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX) {
-        // Yandex template
+        // Yandex template ("\n\n" is defined as EOT token)
 
         ss << "<s>";
 
