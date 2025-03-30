@@ -678,7 +678,7 @@ int main(int argc, char ** argv) {
                 LOG_DBG("n_past = %d\n", n_past);
                 // Display total tokens alongside total time
                 if (params.n_print > 0 && n_past % params.n_print == 0) {
-                    LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
+                    LOG_DBG("\n" LOG_COL_RED "Tokens consumed so far = %d / %d " LOG_COL_DEFAULT "\n", n_past, n_ctx);
                 }
             }
 

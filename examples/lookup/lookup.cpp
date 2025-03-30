@@ -160,7 +160,7 @@ int main(int argc, char ** argv){
 
                 if (params.use_color) {
                     // color accepted draft token
-                    LOG("\033[34m%s\033[0m", token_str.c_str());
+                    LOG(LOG_COL_BLUE "%s" LOG_COL_DEFAULT, token_str.c_str());
                     fflush(stdout);
                 }
                 continue;

@@ -104,6 +104,7 @@
  */
 
 #    include "linenoise.h"
+#    include "log.h"
 
 #    include <ctype.h>
 #    include <errno.h>
@@ -1067,7 +1068,7 @@ static void refreshShowHints(std::string & ab, struct linenoiseState * l, int pc
             ab.append(seq);
             ab.append(hint, hintlen);
             if (color != -1 || bold != 0)
-                ab.append("\033[0m");
+                ab.append(LOG_COL_DEFAULT);
 
             /* Call the function to free the hint returned. */
             if (freeHintsCallback) freeHintsCallback(hint);
