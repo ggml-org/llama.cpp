@@ -180,14 +180,7 @@ static __inline void _qaic_memmove(void* dst, void* src, int size) {
 #ifdef _WIN32
 #define _QAIC_FARF(level, msg, ...) (void)0
 #else
-#define _QAIC_FARF(level, msg, ...) \
-   do {\
-      if(0 == (HAP_debug_v2) ) {\
-         (void)0; \
-      } else { \
-         FARF(level, msg , ##__VA_ARGS__); \
-      } \
-   }while(0)
+#define _QAIC_FARF(level, msg, ...) (void)0
 #endif //_WIN32 for _QAIC_FARF
 
 #define _TRY(ee, func) \

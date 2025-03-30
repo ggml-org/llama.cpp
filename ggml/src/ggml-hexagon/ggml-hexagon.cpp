@@ -8,7 +8,7 @@
  *
  * this single-source-file or self-contained implementation of ggml-hexagon backend has 8 sections:
  * section-1  forward/prototype declaration, global vars, macros, data structures
- * section-2  ggml-qnn internal troubleshooting function/class
+ * section-2  internal troubleshooting function/class
  * section-3  helper function for WoA(Windows on ARM)
  * section-4  general helper function
  * section-5  QNN helper function
@@ -442,7 +442,7 @@ static struct qcom_socinfo g_qnn_soc_info_table[] = {
 // DSP - Choose a quantized model. Quantized models are required when running on the DSP backend
 // HTA - Choose a quantized model. Quantized models are required when running on the HTA backend
 static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICES] = {
-        [HEXAGON_BACKEND_QNNCPU] = {.device               = 0,
+        {       .device               = 0,
                 .name                 = "qnn-cpu",
                 .desc                 = "Qualcomm Kryo CPU",
 #if !defined(__ANDROID__) && !defined(__linux__)
@@ -456,7 +456,7 @@ static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICE
                 .raw_system_interface = {},
                 .socinfo              = {}},
 
-        [HEXAGON_BACKEND_QNNGPU] = {.device               = 1,
+        {       .device               = 1,
                 .name                 = "qnn-gpu",
                 .desc                 = "Qualcomm Adreno GPU",
 #if !defined(__ANDROID__) && !defined(__linux__)
@@ -470,7 +470,7 @@ static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICE
                 .raw_system_interface = {},
                 .socinfo              = {}},
 
-        [HEXAGON_BACKEND_QNNNPU] = {.device               = 2,
+        {       .device               = 2,
                 .name                 = "qnn-npu",
                 .desc                 = "Qualcomm NPU(Hexagon Tensor Processor)",
 #if !defined(__ANDROID__) && !defined(__linux__)
@@ -495,222 +495,222 @@ static domain hexagon_supported_domains[] = {
 
 //supported ggml op by HWACCEL_QNN
 static constexpr const qnn_op_caps ggmlqnn_k_op_caps[] = {
-        {true,  GGML_OP_NONE, 0},
-        {false, GGML_OP_DUP},
+        {true,  GGML_OP_NONE, 0, nullptr},
+        {false, GGML_OP_DUP, 0, nullptr},
         {true,  GGML_OP_ADD, 2, QNN_OP_ELEMENT_WISE_ADD},
-        {false, GGML_OP_ADD1},
-        {false, GGML_OP_ACC},
+        {false, GGML_OP_ADD1, 0, nullptr},
+        {false, GGML_OP_ACC, 0, nullptr},
         {true,  GGML_OP_SUB, 2, QNN_OP_ELEMENT_WISE_SUBTRACT},
         {true,  GGML_OP_MUL, 2, QNN_OP_ELEMENT_WISE_MULTIPLY},
         {true,  GGML_OP_DIV, 2, QNN_OP_ELEMENT_WISE_DIVIDE},
-        {false, GGML_OP_SQR},
+        {false, GGML_OP_SQR, 0, nullptr},
         {true,  GGML_OP_SQRT, 1, QNN_OP_ELEMENT_WISE_SQUARE_ROOT},
         {true,  GGML_OP_LOG, 1, QNN_OP_ELEMENT_WISE_LOG},
-        {false, GGML_OP_SIN},
-        {false, GGML_OP_COS},
-        {false, GGML_OP_SUM},
-        {false, GGML_OP_SUM_ROWS},
-        {false, GGML_OP_MEAN},
-        {false, GGML_OP_ARGMAX},
-        {false, GGML_OP_COUNT_EQUAL},
-        {false, GGML_OP_REPEAT},
-        {false, GGML_OP_REPEAT_BACK},
-        {false, GGML_OP_CONCAT},
-        {false, GGML_OP_SILU_BACK},
-        {false, GGML_OP_NORM},
-        {false, GGML_OP_RMS_NORM},
-        {false, GGML_OP_RMS_NORM_BACK},
-        {false, GGML_OP_GROUP_NORM},
-        {false, GGML_OP_L2_NORM},
+        {false, GGML_OP_SIN, 0, nullptr},
+        {false, GGML_OP_COS, 0, nullptr},
+        {false, GGML_OP_SUM, 0, nullptr},
+        {false, GGML_OP_SUM_ROWS, 0, nullptr},
+        {false, GGML_OP_MEAN, 0, nullptr},
+        {false, GGML_OP_ARGMAX, 0, nullptr},
+        {false, GGML_OP_COUNT_EQUAL, 0, nullptr},
+        {false, GGML_OP_REPEAT, 0, nullptr},
+        {false, GGML_OP_REPEAT_BACK, 0, nullptr},
+        {false, GGML_OP_CONCAT, 0, nullptr},
+        {false, GGML_OP_SILU_BACK, 0, nullptr},
+        {false, GGML_OP_NORM, 0, nullptr},
+        {false, GGML_OP_RMS_NORM, 0, nullptr},
+        {false, GGML_OP_RMS_NORM_BACK, 0, nullptr},
+        {false, GGML_OP_GROUP_NORM, 0, nullptr},
+        {false, GGML_OP_L2_NORM, 0, nullptr},
         {true,  GGML_OP_MUL_MAT, 2, QNN_OP_MAT_MUL},
-        {false, GGML_OP_MUL_MAT_ID},
-        {false, GGML_OP_OUT_PROD},
-        {false, GGML_OP_SCALE},
-        {false, GGML_OP_SET},
-        {false, GGML_OP_CPY},
-        {false, GGML_OP_CONT},
-        {false, GGML_OP_RESHAPE},
-        {false, GGML_OP_VIEW},
-        {false, GGML_OP_PERMUTE},
-        {false, GGML_OP_TRANSPOSE},
-        {false, GGML_OP_GET_ROWS},
-        {false, GGML_OP_GET_ROWS_BACK},
-        {false, GGML_OP_DIAG},
-        {false, GGML_OP_DIAG_MASK_INF},
-        {false, GGML_OP_DIAG_MASK_ZERO},
-        {false, GGML_OP_SOFT_MAX},
-        {false, GGML_OP_SOFT_MAX_BACK},
-        {false, GGML_OP_ROPE},
-        {false, GGML_OP_ROPE_BACK},
-        {false, GGML_OP_CLAMP},
-        {false, GGML_OP_CONV_TRANSPOSE_1D},
-        {false, GGML_OP_IM2COL},
-        {false, GGML_OP_IM2COL_BACK},
-        {false, GGML_OP_CONV_TRANSPOSE_2D},
-        {false, GGML_OP_POOL_1D},
-        {false, GGML_OP_POOL_2D},
-        {false, GGML_OP_POOL_2D_BACK},
-        {false, GGML_OP_UPSCALE},
-        {false, GGML_OP_PAD},
-        {false, GGML_OP_PAD_REFLECT_1D},
-        {false, GGML_OP_ARANGE},
-        {false, GGML_OP_TIMESTEP_EMBEDDING},
-        {false, GGML_OP_ARGSORT},
-        {false, GGML_OP_LEAKY_RELU},
-        {false, GGML_OP_FLASH_ATTN_EXT},
-        {false, GGML_OP_FLASH_ATTN_BACK},
-        {false, GGML_OP_SSM_CONV},
-        {false, GGML_OP_SSM_SCAN},
-        {false, GGML_OP_WIN_PART},
-        {false, GGML_OP_WIN_UNPART},
-        {false, GGML_OP_GET_REL_POS},
-        {false, GGML_OP_ADD_REL_POS},
-        {false, GGML_OP_RWKV_WKV6},
-        {false, GGML_OP_GATED_LINEAR_ATTN},
-        {false, GGML_OP_RWKV_WKV7},
-        {false, GGML_OP_UNARY},
-        {false, GGML_OP_MAP_UNARY},
-        {false, GGML_OP_MAP_BINARY},
-        {false, GGML_OP_MAP_CUSTOM1_F32},
-        {false, GGML_OP_MAP_CUSTOM2_F32},
-        {false, GGML_OP_MAP_CUSTOM3_F32},
-        {false, GGML_OP_MAP_CUSTOM1},
-        {false, GGML_OP_MAP_CUSTOM2},
-        {false, GGML_OP_MAP_CUSTOM3},
-        {false, GGML_OP_CROSS_ENTROPY_LOSS},
-        {false, GGML_OP_CROSS_ENTROPY_LOSS_BACK},
-        {false, GGML_OP_OPT_STEP_ADAMW},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_ABS)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SGN)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_NEG)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_STEP)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_TANH)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_ELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_RELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SIGMOID)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU_QUICK)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SILU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSWISH)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSIGMOID)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP)}
+        {false, GGML_OP_MUL_MAT_ID, 0, nullptr},
+        {false, GGML_OP_OUT_PROD, 0, nullptr},
+        {false, GGML_OP_SCALE, 0, nullptr},
+        {false, GGML_OP_SET, 0, nullptr},
+        {false, GGML_OP_CPY, 0, nullptr},
+        {false, GGML_OP_CONT, 0, nullptr},
+        {false, GGML_OP_RESHAPE, 0, nullptr},
+        {false, GGML_OP_VIEW, 0, nullptr},
+        {false, GGML_OP_PERMUTE, 0, nullptr},
+        {false, GGML_OP_TRANSPOSE, 0, nullptr},
+        {false, GGML_OP_GET_ROWS, 0, nullptr},
+        {false, GGML_OP_GET_ROWS_BACK, 0, nullptr},
+        {false, GGML_OP_DIAG, 0, nullptr},
+        {false, GGML_OP_DIAG_MASK_INF, 0, nullptr},
+        {false, GGML_OP_DIAG_MASK_ZERO, 0, nullptr},
+        {false, GGML_OP_SOFT_MAX, 0, nullptr},
+        {false, GGML_OP_SOFT_MAX_BACK, 0, nullptr},
+        {false, GGML_OP_ROPE, 0, nullptr},
+        {false, GGML_OP_ROPE_BACK, 0, nullptr},
+        {false, GGML_OP_CLAMP, 0, nullptr},
+        {false, GGML_OP_CONV_TRANSPOSE_1D, 0, nullptr},
+        {false, GGML_OP_IM2COL, 0, nullptr},
+        {false, GGML_OP_IM2COL_BACK, 0, nullptr},
+        {false, GGML_OP_CONV_TRANSPOSE_2D, 0, nullptr},
+        {false, GGML_OP_POOL_1D, 0, nullptr},
+        {false, GGML_OP_POOL_2D, 0, nullptr},
+        {false, GGML_OP_POOL_2D_BACK, 0, nullptr},
+        {false, GGML_OP_UPSCALE, 0, nullptr},
+        {false, GGML_OP_PAD, 0, nullptr},
+        {false, GGML_OP_PAD_REFLECT_1D, 0, nullptr},
+        {false, GGML_OP_ARANGE, 0, nullptr},
+        {false, GGML_OP_TIMESTEP_EMBEDDING, 0, nullptr},
+        {false, GGML_OP_ARGSORT, 0, nullptr},
+        {false, GGML_OP_LEAKY_RELU, 0, nullptr},
+        {false, GGML_OP_FLASH_ATTN_EXT, 0, nullptr},
+        {false, GGML_OP_FLASH_ATTN_BACK, 0, nullptr},
+        {false, GGML_OP_SSM_CONV, 0, nullptr},
+        {false, GGML_OP_SSM_SCAN, 0, nullptr},
+        {false, GGML_OP_WIN_PART, 0, nullptr},
+        {false, GGML_OP_WIN_UNPART, 0, nullptr},
+        {false, GGML_OP_GET_REL_POS, 0, nullptr},
+        {false, GGML_OP_ADD_REL_POS, 0, nullptr},
+        {false, GGML_OP_RWKV_WKV6, 0, nullptr},
+        {false, GGML_OP_GATED_LINEAR_ATTN, 0, nullptr},
+        {false, GGML_OP_RWKV_WKV7, 0, nullptr},
+        {false, GGML_OP_UNARY, 0, nullptr},
+        {false, GGML_OP_MAP_UNARY, 0, nullptr},
+        {false, GGML_OP_MAP_BINARY, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM1_F32, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM2_F32, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM3_F32, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM1, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM2, 0, nullptr},
+        {false, GGML_OP_MAP_CUSTOM3, 0, nullptr},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS, 0, nullptr},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS_BACK, 0, nullptr},
+        {false, GGML_OP_OPT_STEP_ADAMW, 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ABS), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SGN), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_NEG), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_STEP), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_TANH), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ELU), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_RELU), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SIGMOID), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU_QUICK), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SILU), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSWISH), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSIGMOID), 0, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP), 0, nullptr}
 };
 
 static_assert(ggmlqnn_k_op_caps[GGML_OP_NONE].supported,    "GGML_OP_NONE is not true");
 static_assert(ggmlqnn_k_op_caps[GGML_OP_ADD].supported,     "GGML_OP_ADD is not true");
 static_assert(ggmlqnn_k_op_caps[GGML_OP_MUL].supported,     "GGML_OP_MUL is not true");
 static_assert(ggmlqnn_k_op_caps[GGML_OP_MUL_MAT].supported, "GGML_OP_MUL_MAT is not true");
-static_assert(std::size(ggmlqnn_k_op_caps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
+static_assert(std::size(ggmlqnn_k_op_caps) == (static_cast<size_t>(GGML_OP_COUNT) + static_cast<size_t>(GGML_UNARY_OP_COUNT)),
               "pls check ggmlqnn_k_op_caps and ensure is corresponding to latest ggml.h");
 
 //supported ggml op by HWACCEL_CDSP
 static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
-        {true,  GGML_OP_NONE, 0},
-        {false, GGML_OP_DUP},
+        {true,  GGML_OP_NONE, 0, nullptr, nullptr},
+        {false, GGML_OP_DUP, 0, nullptr, nullptr},
         {true,  GGML_OP_ADD, 2, "ggmlop_dsp_add", ggmlop_dsp_add},
-        {false, GGML_OP_ADD1},
-        {false, GGML_OP_ACC},
+        {false, GGML_OP_ADD1, 0, nullptr, nullptr},
+        {false, GGML_OP_ACC, 0, nullptr, nullptr},
         {true,  GGML_OP_SUB, 2, "ggmlop_dsp_sub", ggmlop_dsp_sub},
         {true,  GGML_OP_MUL, 2, "ggmlop_dsp_mul", ggmlop_dsp_mul},
         {true,  GGML_OP_DIV, 2, "ggmlop_dsp_div", ggmlop_dsp_div},
-        {false, GGML_OP_SQR},
-        {false,  GGML_OP_SQRT, 1},
-        {false,  GGML_OP_LOG, 1},
-        {false, GGML_OP_SIN},
-        {false, GGML_OP_COS},
-        {false, GGML_OP_SUM},
-        {false, GGML_OP_SUM_ROWS},
-        {false, GGML_OP_MEAN},
-        {false, GGML_OP_ARGMAX},
-        {false, GGML_OP_COUNT_EQUAL},
-        {false, GGML_OP_REPEAT},
-        {false, GGML_OP_REPEAT_BACK},
-        {false, GGML_OP_CONCAT},
-        {false, GGML_OP_SILU_BACK},
-        {false, GGML_OP_NORM},
-        {false, GGML_OP_RMS_NORM},
-        {false, GGML_OP_RMS_NORM_BACK},
-        {false, GGML_OP_GROUP_NORM},
-        {false, GGML_OP_L2_NORM},
+        {false, GGML_OP_SQR, 0, nullptr, nullptr},
+        {false,  GGML_OP_SQRT, 0, nullptr, nullptr},
+        {false,  GGML_OP_LOG, 0, nullptr, nullptr},
+        {false, GGML_OP_SIN, 0, nullptr, nullptr},
+        {false, GGML_OP_COS, 0, nullptr, nullptr},
+        {false, GGML_OP_SUM, 0, nullptr, nullptr},
+        {false, GGML_OP_SUM_ROWS, 0, nullptr, nullptr},
+        {false, GGML_OP_MEAN, 0, nullptr, nullptr},
+        {false, GGML_OP_ARGMAX, 0, nullptr, nullptr},
+        {false, GGML_OP_COUNT_EQUAL, 0, nullptr, nullptr},
+        {false, GGML_OP_REPEAT, 0, nullptr, nullptr},
+        {false, GGML_OP_REPEAT_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_CONCAT, 0, nullptr, nullptr},
+        {false, GGML_OP_SILU_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_NORM, 0, nullptr, nullptr},
+        {false, GGML_OP_RMS_NORM, 0, nullptr, nullptr},
+        {false, GGML_OP_RMS_NORM_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_GROUP_NORM, 0, nullptr, nullptr},
+        {false, GGML_OP_L2_NORM, 0, nullptr, nullptr},
         {true,  GGML_OP_MUL_MAT, 2, "ggmlop_dsp_mulmat", ggmlop_dsp_mulmat},
-        {false, GGML_OP_MUL_MAT_ID},
-        {false, GGML_OP_OUT_PROD},
-        {false, GGML_OP_SCALE},
-        {false, GGML_OP_SET},
-        {false, GGML_OP_CPY},
-        {false, GGML_OP_CONT},
-        {false, GGML_OP_RESHAPE},
-        {false, GGML_OP_VIEW},
-        {false, GGML_OP_PERMUTE},
-        {false, GGML_OP_TRANSPOSE},
-        {false, GGML_OP_GET_ROWS},
-        {false, GGML_OP_GET_ROWS_BACK},
-        {false, GGML_OP_DIAG},
-        {false, GGML_OP_DIAG_MASK_INF},
-        {false, GGML_OP_DIAG_MASK_ZERO},
-        {false, GGML_OP_SOFT_MAX},
-        {false, GGML_OP_SOFT_MAX_BACK},
-        {false, GGML_OP_ROPE},
-        {false, GGML_OP_ROPE_BACK},
-        {false, GGML_OP_CLAMP},
-        {false, GGML_OP_CONV_TRANSPOSE_1D},
-        {false, GGML_OP_IM2COL},
-        {false, GGML_OP_IM2COL_BACK},
-        {false, GGML_OP_CONV_TRANSPOSE_2D},
-        {false, GGML_OP_POOL_1D},
-        {false, GGML_OP_POOL_2D},
-        {false, GGML_OP_POOL_2D_BACK},
-        {false, GGML_OP_UPSCALE},
-        {false, GGML_OP_PAD},
-        {false, GGML_OP_PAD_REFLECT_1D},
-        {false, GGML_OP_ARANGE},
-        {false, GGML_OP_TIMESTEP_EMBEDDING},
-        {false, GGML_OP_ARGSORT},
-        {false, GGML_OP_LEAKY_RELU},
-        {false, GGML_OP_FLASH_ATTN_EXT},
-        {false, GGML_OP_FLASH_ATTN_BACK},
-        {false, GGML_OP_SSM_CONV},
-        {false, GGML_OP_SSM_SCAN},
-        {false, GGML_OP_WIN_PART},
-        {false, GGML_OP_WIN_UNPART},
-        {false, GGML_OP_GET_REL_POS},
-        {false, GGML_OP_ADD_REL_POS},
-        {false, GGML_OP_RWKV_WKV6},
-        {false, GGML_OP_GATED_LINEAR_ATTN},
-        {false, GGML_OP_RWKV_WKV7},
-        {false, GGML_OP_UNARY},
-        {false, GGML_OP_MAP_UNARY},
-        {false, GGML_OP_MAP_BINARY},
-        {false, GGML_OP_MAP_CUSTOM1_F32},
-        {false, GGML_OP_MAP_CUSTOM2_F32},
-        {false, GGML_OP_MAP_CUSTOM3_F32},
-        {false, GGML_OP_MAP_CUSTOM1},
-        {false, GGML_OP_MAP_CUSTOM2},
-        {false, GGML_OP_MAP_CUSTOM3},
-        {false, GGML_OP_CROSS_ENTROPY_LOSS},
-        {false, GGML_OP_CROSS_ENTROPY_LOSS_BACK},
-        {false, GGML_OP_OPT_STEP_ADAMW},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_ABS)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SGN)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_NEG)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_STEP)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_TANH)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_ELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_RELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SIGMOID)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU_QUICK)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_SILU)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSWISH)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSIGMOID)},
-        {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP)}
+        {false, GGML_OP_MUL_MAT_ID, 0, nullptr, nullptr},
+        {false, GGML_OP_OUT_PROD, 0, nullptr, nullptr},
+        {false, GGML_OP_SCALE, 0, nullptr, nullptr},
+        {false, GGML_OP_SET, 0, nullptr, nullptr},
+        {false, GGML_OP_CPY, 0, nullptr, nullptr},
+        {false, GGML_OP_CONT, 0, nullptr, nullptr},
+        {false, GGML_OP_RESHAPE, 0, nullptr, nullptr},
+        {false, GGML_OP_VIEW, 0, nullptr, nullptr},
+        {false, GGML_OP_PERMUTE, 0, nullptr, nullptr},
+        {false, GGML_OP_TRANSPOSE, 0, nullptr, nullptr},
+        {false, GGML_OP_GET_ROWS, 0, nullptr, nullptr},
+        {false, GGML_OP_GET_ROWS_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_DIAG, 0, nullptr, nullptr},
+        {false, GGML_OP_DIAG_MASK_INF, 0, nullptr, nullptr},
+        {false, GGML_OP_DIAG_MASK_ZERO, 0, nullptr, nullptr},
+        {false, GGML_OP_SOFT_MAX, 0, nullptr, nullptr},
+        {false, GGML_OP_SOFT_MAX_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_ROPE, 0, nullptr, nullptr},
+        {false, GGML_OP_ROPE_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_CLAMP, 0, nullptr, nullptr},
+        {false, GGML_OP_CONV_TRANSPOSE_1D, 0, nullptr, nullptr},
+        {false, GGML_OP_IM2COL, 0, nullptr, nullptr},
+        {false, GGML_OP_IM2COL_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_CONV_TRANSPOSE_2D, 0, nullptr, nullptr},
+        {false, GGML_OP_POOL_1D, 0, nullptr, nullptr},
+        {false, GGML_OP_POOL_2D, 0, nullptr, nullptr},
+        {false, GGML_OP_POOL_2D_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_UPSCALE, 0, nullptr, nullptr},
+        {false, GGML_OP_PAD, 0, nullptr, nullptr},
+        {false, GGML_OP_PAD_REFLECT_1D, 0, nullptr, nullptr},
+        {false, GGML_OP_ARANGE, 0, nullptr, nullptr},
+        {false, GGML_OP_TIMESTEP_EMBEDDING, 0, nullptr, nullptr},
+        {false, GGML_OP_ARGSORT, 0, nullptr, nullptr},
+        {false, GGML_OP_LEAKY_RELU, 0, nullptr, nullptr},
+        {false, GGML_OP_FLASH_ATTN_EXT, 0, nullptr, nullptr},
+        {false, GGML_OP_FLASH_ATTN_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_SSM_CONV, 0, nullptr, nullptr},
+        {false, GGML_OP_SSM_SCAN, 0, nullptr, nullptr},
+        {false, GGML_OP_WIN_PART, 0, nullptr, nullptr},
+        {false, GGML_OP_WIN_UNPART, 0, nullptr, nullptr},
+        {false, GGML_OP_GET_REL_POS, 0, nullptr, nullptr},
+        {false, GGML_OP_ADD_REL_POS, 0, nullptr, nullptr},
+        {false, GGML_OP_RWKV_WKV6, 0, nullptr, nullptr},
+        {false, GGML_OP_GATED_LINEAR_ATTN, 0, nullptr, nullptr},
+        {false, GGML_OP_RWKV_WKV7, 0, nullptr, nullptr},
+        {false, GGML_OP_UNARY, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_UNARY, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_BINARY, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM1_F32, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM2_F32, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM3_F32, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM1, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM2, 0, nullptr, nullptr},
+        {false, GGML_OP_MAP_CUSTOM3, 0, nullptr, nullptr},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS, 0, nullptr, nullptr},
+        {false, GGML_OP_CROSS_ENTROPY_LOSS_BACK, 0, nullptr, nullptr},
+        {false, GGML_OP_OPT_STEP_ADAMW, 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ABS), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SGN), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_NEG), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_STEP), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_TANH), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_ELU), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_RELU), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SIGMOID), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_GELU_QUICK), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_SILU), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSWISH), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_HARDSIGMOID), 0, nullptr, nullptr},
+        {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP), 0, nullptr, nullptr}
 };
 
 static_assert(ggmlhexagon_k_op_caps[GGML_OP_NONE].supported,    "GGML_OP_NONE is not true");
 static_assert(ggmlhexagon_k_op_caps[GGML_OP_ADD].supported,     "GGML_OP_ADD is not true");
 static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL].supported,     "GGML_OP_MUL is not true");
 static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL_MAT].supported, "GGML_OP_MUL_MAT is not true");
-static_assert(std::size(ggmlhexagon_k_op_caps) == (GGML_OP_COUNT + GGML_UNARY_OP_COUNT),
+static_assert(std::size(ggmlhexagon_k_op_caps) == (static_cast<size_t>(GGML_OP_COUNT) + static_cast<size_t>(GGML_UNARY_OP_COUNT)),
               "pls check ggmlhexagon_k_op_caps and ensure is corresponding to latest ggml.h");
 
 static int32_t g_qnntensor_idx = 0; //ensure every QNN tensor name is unique
@@ -735,7 +735,7 @@ static void ggmlhexagon_log_internal(ggml_log_level level, const char * file, co
         int len = vsnprintf(s_ggmlhexagon_log_internal_buf + len_prefix, GGMLHEXAGON_LOGBUF_LEN - len_prefix, format, args);
         if (len < (GGMLHEXAGON_LOGBUF_LEN - len_prefix)) {
 #if (defined __ANDROID__) || (defined ANDROID)
-            __android_log_print(ANDROID_LOG_INFO, "ggml-qnn", "%s\n", s_ggmlhexagon_log_internal_buf);
+            __android_log_print(ANDROID_LOG_INFO, "ggml-hexagon", "%s\n", s_ggmlhexagon_log_internal_buf);
             if (GGML_LOG_LEVEL_INFO == level) {
                 printf("%s\n", s_ggmlhexagon_log_internal_buf);
             }
@@ -883,7 +883,7 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
 
 class hexagon_perf {
 public:
-    hexagon_perf(const std::string & perf_name) : _perf_name(std::move(perf_name)) {};
+    hexagon_perf(const std::string & perf_name) : _perf_name(std::move(perf_name)) {}
     hexagon_perf() = delete;
     hexagon_perf(const hexagon_perf & ) = delete;
     hexagon_perf & operator= (const hexagon_perf & ) = delete;
@@ -975,8 +975,8 @@ public:
 private:
     void ltrim(std::string & str) {
         if (str.empty()) return;
-        size_t len = 0;
-        char* temp = (char*)str.c_str();
+        size_t len  = 0;
+        const char * temp = str.c_str();
         while (*temp && isblank(*temp)) {
             ++len;
             ++temp;
@@ -1527,6 +1527,9 @@ static int32_t ggmlqnn_get_idx(int idx_type) {
         default:
             break;
     }
+
+    //it's not make sense, just for fix compiler warning
+    return g_qnntensor_idx;
 }
 
 static intptr_t ggmlqnn_align_to(size_t alignment, intptr_t offset) {
@@ -2731,7 +2734,6 @@ static void ggmlqnn_sdk_logcallback(const char * fmt,
 }
 
 int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
-    BackendIdType backend_id = QNN_BACKEND_ID_NULL;
     GGMLHEXAGON_LOG_DEBUG("enter qni_init\n");
 
     _device_id = HEXAGON_BACKEND_GGML;
@@ -2815,12 +2817,12 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
                 size_t htp_arch                         = (size_t) chipinfo.arch;
                 GGMLHEXAGON_LOG_INFO("htp_type:%d(%s)\n", devinfo->devType,
                              (devinfo->devType == QNN_HTP_DEVICE_TYPE_ON_CHIP) ? "ON_CHIP" : "");
-                soc_info = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize };
+                soc_info = { chipinfo.socModel, htp_arch, chipinfo.vtcmSize, {} };
             }
             _qnn_raw_interface.deviceFreePlatformInfo(nullptr, p_info);
         } else {
             GGMLHEXAGON_LOG_WARN("failed to get platform info, are we in emulator?\n");
-            soc_info = { NONE, UNKNOWN_SM, 0 };
+            soc_info = { NONE, UNKNOWN_SM, 0, {} };
         }
 
         QnnHtpDevice_CustomConfig_t soc_customconfig;
@@ -3443,24 +3445,21 @@ static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn
     }
 
     Qnn_Tensor_t qnn_tensor = {
-            .version= QNN_TENSOR_VERSION_1,
-            {.v1= {
+            .version = QNN_TENSOR_VERSION_1,
+            .v1 = {
                     .id = 0,
                     .name = tensor_name,
                     .type = qnn_tensor_type,
                     .dataFormat = QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER,
                     .dataType = qnn_data_type,
                     .quantizeParams = {.encodingDefinition = QNN_DEFINITION_UNDEFINED,
-                            .quantizationEncoding = QNN_QUANTIZATION_ENCODING_UNDEFINED,
-                            {.scaleOffsetEncoding = {.scale = 0.0000000000000000f, .offset = 0}}},
+                            .quantizationEncoding = QNN_QUANTIZATION_ENCODING_UNDEFINED},
                     .rank = rank,
                     .dimensions = tensor_dims,
                     .memType = QNN_TENSORMEMTYPE_RAW,
                     .clientBuf = {.data = nullptr, .dataSize = 0}
             }
-            }
     };
-
     Qnn_Tensor_t * p_qnn_tensor = (Qnn_Tensor_t *)calloc(1, sizeof(Qnn_Tensor_t));
     if (nullptr == p_qnn_tensor) {
         GGMLHEXAGON_LOG_WARN("calloc failed");
@@ -3488,7 +3487,6 @@ static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn
 
 static Qnn_Tensor_t * ggmlqnn_create_compute_tensor(qnn_instance * instance, Qnn_GraphHandle_t graph_handle,
                           const ggml_tensor * tensor, Qnn_TensorType_t tensor_type) {
-    Qnn_ErrorHandle_t error = QNN_SUCCESS;
     uint32_t dimensions[]   = {(uint32_t) tensor->ne[0], (uint32_t) tensor->ne[1],
                                (uint32_t) tensor->ne[2], (uint32_t) tensor->ne[3]};
     Qnn_DataType_t qnn_data_type = QNN_DATATYPE_FLOAT_32;
@@ -3670,7 +3668,6 @@ static void ggmlqnn_compute_elementwise(ggml_backend_hexagon_context * ctx, ggml
  */
 static void ggmlqnn_compute_mul_mat_4d(ggml_backend_hexagon_context * ctx, ggml_tensor * op) {
     Qnn_ErrorHandle_t error     = QNN_SUCCESS;
-    bool graph_initialized      = false;
     qnn_instance * instance     = ctx->instance;
     QNN_INTERFACE_VER_TYPE qnn_raw_interface = ctx->raw_interface;
 
@@ -3701,7 +3698,6 @@ static void ggmlqnn_compute_mul_mat_4d(ggml_backend_hexagon_context * ctx, ggml_
     Qnn_Tensor_t * p_reshape2_out   = nullptr;
 
     if (ctx->qnn_singlenode_graph_map.find(graph_name) != ctx->qnn_singlenode_graph_map.end()) {
-        graph_initialized = true;
         qnn_singlenode_res_t & graph_item   = ctx->qnn_singlenode_graph_map[graph_name];
         graph_handle                        = std::get<0>(graph_item);
         qnn_ptensors_t & tensors            = std::get<1>(graph_item);
@@ -3759,7 +3755,7 @@ static void ggmlqnn_compute_mul_mat_4d(ggml_backend_hexagon_context * ctx, ggml_
                                                                         QNN_TENSOR_TYPE_STATIC, QNN_DATATYPE_UINT_32, 1,
                                                                         tile_dims, tile_multiples, sizeof(tile_multiples));
 
-        Qnn_Param_t tile_params[]       = {{QNN_PARAMTYPE_TENSOR, "multiples", .tensorParam = *p_tile_multiples}};
+        Qnn_Param_t tile_params[]       = {{.paramType = QNN_PARAMTYPE_TENSOR, .name = "multiples", .tensorParam = *p_tile_multiples}};
         Qnn_Tensor_t tile0_inputs[]     = {*p_reshape0_out};
         Qnn_Tensor_t tile0_outputs[]    = {*p_tile0_out};
         Qnn_OpConfig_t tile0_op         = ggmlqnn_create_op_config("tile0", QNN_OP_PACKAGE_NAME_QTI_AISW,
@@ -3790,7 +3786,7 @@ static void ggmlqnn_compute_mul_mat_4d(ggml_backend_hexagon_context * ctx, ggml_
                                                        QNN_TENSOR_TYPE_NATIVE, QNN_DATATYPE_FLOAT_32, 4,
                                                        permute1_out_dims, nullptr, 0);
 
-        Qnn_Param_t permute1_params[]   = {{QNN_PARAMTYPE_TENSOR, "perm", .tensorParam = *p_perm}};
+        Qnn_Param_t permute1_params[]   = {{.paramType = QNN_PARAMTYPE_TENSOR, .name = "perm", .tensorParam = *p_perm}};
         Qnn_Tensor_t permute1_inputs[]  = {*p_tensor1};
         Qnn_Tensor_t permute1_outputs[] = {*p_permute1_out};
         Qnn_OpConfig_t permute1_op      = ggmlqnn_create_op_config("permute1", QNN_OP_PACKAGE_NAME_QTI_AISW,
@@ -3867,7 +3863,7 @@ static void ggmlqnn_compute_mul_mat_4d(ggml_backend_hexagon_context * ctx, ggml_
  *        `src1` and the weight tensor `src0`, handling transposing, and quantization as needed,
  *        and stores the result in the destination tensor `dst`.
  *
-         there are two key-points in properly handling how to offload mulmat to the QNN backend in ggml-qnn
+         there are two key-points in properly handling how to offload mulmat to the QNN
          1. transpose
             a 3x2 f32 matrix which means 3 rows and 2 columns. in ggml, it could be created from:
             struct ggml_tensor* matrix = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2, 3);
@@ -4002,8 +3998,8 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_hexagon_context * ctx, ggml_ten
 
         //compose QNN graph: add mulmat node
         Qnn_Param_t out_0_params[] = {
-                {QNN_PARAMTYPE_SCALAR, QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1, .scalarParam = {
-                        QNN_DATATYPE_BOOL_8, .bool8Value = 1}}};
+                {.paramType = QNN_PARAMTYPE_SCALAR, .name = QNN_OP_MAT_MUL_PARAM_TRANSPOSE_IN1, .scalarParam = {
+                        .dataType = QNN_DATATYPE_BOOL_8, .bool8Value = 1}}};
         Qnn_Tensor_t out_0_inputs[] = {*p_tensor0, *p_tensor1};
         Qnn_Tensor_t out_0_outputs[] = {*p_tensor2_transpose};
         Qnn_OpConfig_t out_0 = ggmlqnn_create_op_config("mulmat_opconfig",
@@ -4014,7 +4010,7 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_hexagon_context * ctx, ggml_ten
 
         //compose QNN graph: add transpose node
         Qnn_Param_t out_trans1_0_params[] = {
-                {QNN_PARAMTYPE_TENSOR, "perm", .tensorParam = *p_param_tensor}};
+                {.paramType = QNN_PARAMTYPE_TENSOR, .name = "perm", .tensorParam = *p_param_tensor}};
         Qnn_Tensor_t out_trans1_0_inputs[] = {*p_tensor2_transpose};
         Qnn_Tensor_t out_trans1_0_outputs[] = {*p_tensor2};
         Qnn_OpConfig_t out_trans1_0 = ggmlqnn_create_op_config("mulmat_transpose_opconfig",
@@ -4235,7 +4231,7 @@ static int ggmlhexagon_pd_status_notifier_callback(void * context, int domain, i
 static domain * ggmlhexagon_get_domain(int domain_id) {
     int size = sizeof(hexagon_supported_domains) / sizeof(domain);
 
-    for (size_t i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++) {
         if (hexagon_supported_domains[i].id == domain_id)
             return &hexagon_supported_domains[i];
     }
@@ -4250,11 +4246,11 @@ static bool ggmlhexagon_is_cdsp(int domain_id) {
 static bool ggmlhexagon_is_valid_domain_id(int domain_id, int compute_only) {
     int size = sizeof(hexagon_supported_domains) / sizeof(domain);
 
-    if (compute_only) {
+    if (0 != compute_only) {
         return ggmlhexagon_is_cdsp(domain_id);
     }
 
-    for (size_t i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++) {
         if (hexagon_supported_domains[i].id == domain_id)
             return true;
     }
@@ -4265,6 +4261,7 @@ static bool ggmlhexagon_is_valid_domain_id(int domain_id, int compute_only) {
 static int ggmlhexagon_get_domains_info(const char * domain_type, int * num_domains, fastrpc_domain ** domains_info) {
     int hexagon_err = AEE_SUCCESS;
     int ss_info     = 0;
+    void * buffer   = nullptr;
     ss_info = strcmp(domain_type, "NSP")? HPASS: NSP;
     system_req_payload req;
     memset(&req, 0, sizeof(system_req_payload));
@@ -4283,44 +4280,39 @@ static int ggmlhexagon_get_domains_info(const char * domain_type, int * num_doma
     goto bail;
 #endif
 
-    if (remote_system_request) {
-        hexagon_err = remote_system_request(&req);
-        if (hexagon_err != AEE_SUCCESS) {
-            GGMLHEXAGON_LOG_DEBUG("failure in remote_system_request call: %d", hexagon_err);
-            goto bail;
-        }
-        //allocate memory for domain-info array
-        req.sys.max_domains = req.sys.num_domains;
-        void * buffer = calloc(req.sys.num_domains, sizeof(fastrpc_domain));
-        if (nullptr == buffer) {
-            hexagon_err = AEE_ENOMEMORY;
-            GGMLHEXAGON_LOG_DEBUG("unable to allocate memory for req.sys.domains");
-            goto bail;
-        }
-        req.sys.domains = static_cast<fastrpc_domain *>(buffer);
-        hexagon_err = remote_system_request(&req);
-        if (hexagon_err != AEE_SUCCESS) {
-            GGMLHEXAGON_LOG_DEBUG("failure in remote_system_request call: %d.\n", hexagon_err);
-            goto bail;
-        }
-
-        for (int i = 0; i < req.sys.num_domains; i++) {
-            //verify that only requested type domains were returned
-            domain = &req.sys.domains[i];
-            if (domain->type != ss_info) {
-                hexagon_err = -1;
-                GGMLHEXAGON_LOG_DEBUG("incorrect data received from remote_system_request.\n");
-                goto bail;
-            }
-        }
-        *domains_info = req.sys.domains;
-        *num_domains  = req.sys.num_domains;
-    } else {
-        hexagon_err = AEE_EUNSUPPORTED;
+    hexagon_err = remote_system_request(&req);
+    if (hexagon_err != AEE_SUCCESS) {
+        GGMLHEXAGON_LOG_DEBUG("failure in remote_system_request call: %d", hexagon_err);
+        goto bail;
+    }
+    //allocate memory for domain-info array
+    req.sys.max_domains = req.sys.num_domains;
+    buffer = calloc(req.sys.num_domains, sizeof(fastrpc_domain));
+    if (nullptr == buffer) {
+        hexagon_err = AEE_ENOMEMORY;
+        GGMLHEXAGON_LOG_DEBUG("unable to allocate memory for req.sys.domains");
+        goto bail;
+    }
+    req.sys.domains = static_cast<fastrpc_domain *>(buffer);
+    hexagon_err = remote_system_request(&req);
+    if (hexagon_err != AEE_SUCCESS) {
+        GGMLHEXAGON_LOG_DEBUG("failure in remote_system_request call: %d.\n", hexagon_err);
         goto bail;
     }
 
-    bail:
+    for (int i = 0; i < req.sys.num_domains; i++) {
+        //verify that only requested type domains were returned
+        domain = &req.sys.domains[i];
+        if (domain->type != ss_info) {
+            hexagon_err = -1;
+            GGMLHEXAGON_LOG_DEBUG("incorrect data received from remote_system_request.\n");
+            goto bail;
+        }
+    }
+    *domains_info = req.sys.domains;
+    *num_domains  = req.sys.num_domains;
+
+bail:
     if (hexagon_err && !req.sys.domains) {
         free(req.sys.domains);
     }
@@ -4358,7 +4350,7 @@ static int ggmlhexagon_get_dsp_support(int * domain) {
         GGMLHEXAGON_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return hexagon_error;
 }
 
@@ -4405,7 +4397,7 @@ static int ggmlhexagon_get_vtcm_info(int domain, uint32_t attr, uint32_t * capab
         GGMLHEXAGON_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return hexagon_error;
 }
 
@@ -4475,7 +4467,7 @@ static bool ggmlhexagon_is_async_fastrpc_supported(int domain) {
         GGMLHEXAGON_LOG_WARN("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return false;
 }
 
@@ -4505,7 +4497,7 @@ static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
         GGMLHEXAGON_LOG_WARN("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return;
 }
 
@@ -4539,7 +4531,7 @@ static bool ggmlhexagon_is_status_notification_supported(int domain) {
         GGMLHEXAGON_LOG_WARN("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return false;
 }
 
@@ -4585,7 +4577,7 @@ static int ggmlhexagon_get_hmx_support_info(int domain, uint32_t attr, uint32_t 
         GGMLHEXAGON_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return hexagon_error;
 }
 
@@ -4616,7 +4608,7 @@ static int ggmlhexagon_get_hvx_arch_ver(int domain, uint32_t * capability) {
         GGMLHEXAGON_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return hexagon_error;
 }
 
@@ -4667,7 +4659,7 @@ static int ggmlhexagon_get_hvx_support_info(int domain, uint32_t attr, uint32_t 
         GGMLHEXAGON_LOG_DEBUG("remote_dsp_capability interface is not supported on this device");
     }
 
-    bail:
+bail:
     return hexagon_error;
 }
 
@@ -4764,7 +4756,6 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     int use_logical_id              = 0;
     int core_id                     = -1;
     fastrpc_domain * domains_info   = NULL;
-    fastrpc_domain * domain_info    = NULL;
     int num_domains                 = -1;
 
     domain * my_domain              = NULL;
@@ -4782,7 +4773,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, ctx->rpc_mempool_len);
     if (nullptr == ctx->rpc_mempool) {
         hexagon_error = AEE_ENORPCMEMORY;
-        printf("rpc memory alloc failed", hexagon_error);
+        GGMLHEXAGON_LOG_WARN("rpc memory alloc failed %d", hexagon_error);
         ctx->rpc_mempool_len = 0;
         return 2;
     }
@@ -4908,7 +4899,7 @@ bail:
         rpcmem_free(ctx->rpc_mempool);
         ctx->rpc_mempool        = nullptr;
         ctx->rpc_mempool_len    = 0;
-        ctx->ggmlop_handle      = -1;
+        ctx->ggmlop_handle      = 0;
         ctx->domain_id          = -1;
     }
 
@@ -4918,12 +4909,12 @@ bail:
 static void ggmlhexagon_close_cdsp(ggml_backend_hexagon_context * ctx) {
     int hexagon_error  = AEE_SUCCESS;
     GGMLHEXAGON_LOG_INFO("enter %s", __func__);
-    if (-1 != ctx->ggmlop_handle) {
+    if (0 != ctx->ggmlop_handle) {
         hexagon_error = ggmlop_dsp_close(ctx->ggmlop_handle);
         if (AEE_SUCCESS != hexagon_error) {
             GGMLHEXAGON_LOG_WARN("error 0x%x: failed to close ggmlop dsp handle", hexagon_error);
         } else {
-            ctx->ggmlop_handle = -1;
+            ctx->ggmlop_handle = 0;
         }
     }
 
@@ -5031,16 +5022,8 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
 
     const struct ggml_tensor * src0 = op_tensor->src[0];
     const struct ggml_tensor * src1 = op_tensor->src[1];
-    int64_t ne00        = 0;
-    uint32_t src0_rank  = 0;
-    uint32_t src1_rank  = 0;
-    if (nullptr != src0) {
-        src0_rank = ggml_n_dims(src0);
-        ne00      = src0->ne[0];
-    }
-    if (nullptr != src1) {
-        src1_rank = ggml_n_dims(src1);
-    }
+    const int64_t ne00        = src0->ne[0];
+    const uint32_t src0_rank  = ggml_n_dims(src0);
 
     switch (op_tensor->op) {
         case GGML_OP_ADD:
@@ -5689,7 +5672,7 @@ bool ggml_backend_is_hexagon(ggml_backend_t backend) {
     return backend != nullptr && ggml_guid_matches(backend->guid, ggml_backend_hexagon_guid());
 }
 
-void ggml_backend_hexagon_set_n_threads(ggml_backend_t backend, int n_threads) {
+static void ggml_backend_hexagon_set_n_threads(ggml_backend_t backend, int n_threads) {
     GGML_ASSERT(ggml_backend_is_hexagon(backend));
 
     struct ggml_backend_hexagon_context * ctx = (struct ggml_backend_hexagon_context *)backend->context;
@@ -5858,8 +5841,6 @@ static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_
  * @return
  */
 ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_path) {
-    int result = 0;
-
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     //case-3: calling ggml_backend_hexagon_init() directly in user's code
     ggmlhexagon_load_cfg();
