@@ -3658,7 +3658,8 @@ kernel void kernel_flash_attn_ext_vec(
     threadgroup o4_t * sr4 = (threadgroup o4_t *) (shmem_f16 + sgitg*DV     + Q*T);  // scratch buffer for the results
 
     // store the result for all queries in local memory (the O matrix from the paper)
-    o4_t lo[DV4/NL];
+    constexpr short DV4NL = DV4/NL;
+    o4_t lo[DV4NL];
 
     // load heads from Q to shared memory
     device const float4 * q4 = (device const float4 *) ((device const char *) q + (iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03));
@@ -3672,7 +3673,7 @@ kernel void kernel_flash_attn_ext_vec(
     }
 
     // zero out lo
-    for (short i = 0; i < DV4/NL; ++i) {
+    for (short i = 0; i < DV4NL; ++i) {
         lo[i] = (o4_t) 0.0f;
     }
 
@@ -3813,7 +3814,7 @@ kernel void kernel_flash_attn_ext_vec(
                 ss[tiisg] = vs;
 
                 // O = diag(ms)*O
-                #pragma unroll(DV4/NL)
+                #pragma unroll(DV4NL)
                 for (short ii = 0; ii < DV4; ii += NL) {
                     lo[ii/NL] *= ms;
                 }
@@ -3829,7 +3830,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                     const s4_t ms(ss[NE*cc + ty]);
 
-                    #pragma unroll(DV4/NL)
+                    #pragma unroll(DV4NL)
                     for (short ii = 0; ii < DV4; ii += NL) {
                         const short i = ii + tx;
 
