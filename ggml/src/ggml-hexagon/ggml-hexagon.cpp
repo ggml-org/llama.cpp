@@ -1128,6 +1128,7 @@ static const char * ggmlhexagon_get_socmodel_desc(uint32_t soc_model) {
     }
 }
 
+//0x68 -> 68, 0x69 -> 69, 0x73 -> 73, 0x75 -> 75, 0x79 -> 79
 static size_t ggmlhexagon_htparch_hex_to_decimal(size_t htp_arch) {
     //naive algorithm
     int a = htp_arch / 16;
@@ -1472,6 +1473,27 @@ static void ggmlhexagon_load_cfg() {
         g_hexagon_appcfg.precision_mode = 0;
     }
     initialized = true;
+}
+
+static bool ggmlhexagon_check_valid_appcfg() {
+    bool is_valid_appcfg = true;
+
+    if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
+        GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported");
+        is_valid_appcfg = false;
+    }
+
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+        if (HEXAGON_BACKEND_CDSP != g_hexagon_appcfg.hexagon_backend) {
+            GGMLHEXAGON_LOG_INFO("hwaccel_approach HWACCEL_CDSP must match with hexagon_backend HEXAGON_BACKEND_CDSP");
+            is_valid_appcfg = false;
+        }
+    }
+
+    if (!is_valid_appcfg) {
+        GGMLHEXAGON_LOG_INFO("it seems there is wrong configuration in ggml-hexagon.cfg, will using the default ggml backend accordingly");
+    }
+    return is_valid_appcfg;
 }
 
 // =================================================================================================
@@ -5553,8 +5575,7 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
     GGMLHEXAGON_LOG_DEBUG("user's specified hexagon_backend in cfgfile = %d", g_hexagon_appcfg.hexagon_backend);
     GGMLHEXAGON_LOG_DEBUG("user's sepcified qnn runtime lib path in cfgfile = %s", g_hexagon_appcfg.runtimelib_path);
 
-    if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
-        GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported, using default ggml backend");
+    if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
 
@@ -5740,8 +5761,7 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
         return nullptr;
     }
 
-    if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
-        GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported, using default ggml backend");
+    if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
 
@@ -5847,8 +5867,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
     if (nullptr == qnn_lib_path)
         return nullptr;
 
-    if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
-        GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported, using default ggml backend");
+    if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
 
