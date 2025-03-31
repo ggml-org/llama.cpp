@@ -160,7 +160,7 @@ printf "\n**********\n*\n* FINISHED: Remove .zip Extension.\n*\n**********\n\n"
 Let's download a small model. We'll use Google Gemma 1B Instruct v3, a surprisingly capable tiny model.
 ```
 MODEL_FILE="Google-Gemma-1B-Instruct-v3-q8_0.gguf"
-cp /mnt/hyperv/$MODEL_FILE model.gguf
+cp /mnt/hyperv/models/$MODEL_FILE model.gguf
 printf "\n**********\n*\n* FINISHED: Download Model.\n*\n**********\n\n"
 ```
 
