@@ -69,6 +69,12 @@ struct ggml_cl_version {
     cl_uint minor = 0;
 };
 
+struct ggml_cl_compiler_version {
+    int major = -1;
+    int minor = -1;
+    int patch = -1;
+};
+
 // Parses a version string of form "XX.YY ". On an error returns ggml_cl_version with all zeroes.
 static ggml_cl_version parse_cl_version(std::string_view str) {
     size_t major_str_begin = 0;
@@ -173,24 +179,28 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
     return ADRENO_GPU_GEN::ADRENO_UNKNOWN;
 }
 
-static int get_adreno_cl_compiler_version(const char *driver_version) {
+static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *driver_version) {
     std::string driver_ver_str(driver_version);
     size_t compiler_ver_pos = driver_ver_str.find("E031");
     size_t compiler_ver_len = 13;
-    size_t compiler_ver_offset = 5;
+    size_t compiler_major_offset = 5;
+    size_t compiler_minor_offset = 8;
+    size_t compiler_patch_offset = 11;
 
     if (compiler_ver_pos == std::string::npos) {
         compiler_ver_pos = driver_ver_str.find("DX");
         if (compiler_ver_pos == std::string::npos) {
-            return -1;
+            return {};
         }
         compiler_ver_len = 11;
-        compiler_ver_offset = 3;
+        compiler_major_offset = 3;
     }
 
     std::string compiler_ver_str = driver_ver_str.substr(compiler_ver_pos, compiler_ver_len);
-    std::string major_ver_str = compiler_ver_str.substr(compiler_ver_offset, 2);
-    return std::atoi(major_ver_str.c_str());
+    int major = std::atoi(compiler_ver_str.substr(compiler_major_offset, 2).c_str());
+    int minor = std::atoi(compiler_ver_str.substr(compiler_minor_offset, 2).c_str());
+    int patch = std::atoi(compiler_ver_str.substr(compiler_patch_offset, 2).c_str());
+    return { major, minor, patch };
 }
 
 // backend device context
@@ -216,6 +226,7 @@ struct ggml_backend_opencl_context {
     size_t max_alloc_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
+    ggml_cl_compiler_version adreno_cl_compiler_version;
 
     int adreno_wave_size;
 
@@ -1308,9 +1319,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("ggml_opencl: OpenCL driver: %s\n", driver_version);
     backend_ctx->driver_version = driver_version;
 
-    int adreno_cl_compiler_version = get_adreno_cl_compiler_version(driver_version);
+    backend_ctx->adreno_cl_compiler_version = get_adreno_cl_compiler_version(driver_version);
     backend_ctx->has_vector_subgroup_broadcast =
-        adreno_cl_compiler_version >= 47 || adreno_cl_compiler_version == 17;
+        backend_ctx->adreno_cl_compiler_version.major >= 47 ||
+        backend_ctx->adreno_cl_compiler_version.major == 17;
     GGML_LOG_INFO("ggml_opencl: vector subgroup broadcast support: %s\n",
         backend_ctx->has_vector_subgroup_broadcast ? "true" : "false");
 
