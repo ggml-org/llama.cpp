@@ -367,7 +367,7 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
                 sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims,
                     block_dims),
                 [=](sycl::nd_item<3> item_ct1)
-                [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     l2_norm_f32(x, dst, ncols, eps, item_ct1,
                         nullptr, WARP_SIZE);
                 });
@@ -389,7 +389,7 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
                 sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims,
                     block_dims),
                 [=](sycl::nd_item<3> item_ct1)
-                [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     l2_norm_f32(x, dst, ncols, eps, item_ct1,
                         get_pointer(s_sum_acc_ct1), work_group_size);
                 });
