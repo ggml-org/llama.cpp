@@ -348,7 +348,7 @@ void main() {
                         int32_t q_sum = 0;
                         [[unroll]] for (uint idx_k = 0; idx_k < BK / 4; idx_k++) {
                             q_sum += dotPacked4x8EXT(cache_a_qs[cache_a_idx * (BK / 4) + idx_k],
-                                                    cache_b_qs[cc * (BK / 4) + idx_k]);
+                                                     cache_b_qs[cc * (BK / 4) + idx_k]);
                         }
 
                         sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc]);
