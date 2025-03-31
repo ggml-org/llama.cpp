@@ -64,7 +64,7 @@ printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n*******
 ```
 
 ---
-### OPTIONAL: Create website Directory in Archive
+### Create website Directory in Archive
 
 `llama.cpp` has a built in chat UI. If you'd like to provide a custom UI, you should add a `website` directory to the `llama-server-one` archive. `llama.cpp`'s chat UI is optimized for serving inside the project's source code. But we can copy the unoptimized source:
 ```
@@ -77,7 +77,7 @@ zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 printf "\n**********\n*\n* FINISHED: Create website Directory in Archive.\n*\n**********\n\n"
 ```
 
-#### OPTONAL: Verify website Directory in Archive
+#### Verify website Directory in Archive
 
 Verify that the archive has your website:
 ```
@@ -102,29 +102,11 @@ model.gguf
 8080
 --ctx-size
 8192
-...
-EOF
-printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
-```
-
-#### OPTIONAL: Create default-args File with Website
-
-If you added a website to the archive, use this instead:
-```
-cat << EOF > $DEFAULT_ARGS
--m
-model.gguf
---host
-127.0.0.1
---port
-8080
---ctx-size
-8192
 --path
 /zip/website
 ...
 EOF
-printf "\n**********\n*\n* FINISHED: Create Default args File with Website.\n*\n**********\n\n"
+printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
 ```
 
 ---
