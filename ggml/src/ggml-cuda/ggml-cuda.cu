@@ -2423,7 +2423,7 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_CUDA_GRAPH
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-    std::vector<void *> & ggml_cuda_cpy_fn_ptrs, bool use_cuda_graph) {
+    bool use_cuda_graph) {
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
     cuda_ctx->cuda_graph->cpy_dest_ptrs.clear();
@@ -2471,10 +2471,6 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #ifndef NDEBUG
                 GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
 #endif
-            } else {
-                if (std::find(ggml_cuda_cpy_fn_ptrs.begin(), ggml_cuda_cpy_fn_ptrs.end(), ptr) == ggml_cuda_cpy_fn_ptrs.end()) {
-                    ggml_cuda_cpy_fn_ptrs.push_back(ptr);
-                }
             }
         }
 
@@ -2600,8 +2596,7 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 #endif
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-   [[maybe_unused]] std::vector<void *> & ggml_cuda_cpy_fn_ptrs,  bool & graph_evaluated_or_captured, bool & use_cuda_graph,
-    bool & cuda_graph_update_required) {
+    bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
 
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
@@ -2667,10 +2662,6 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     ggml_cuda_set_device(cuda_ctx->device);
 
-    // vector of pointers to CUDA cpy kernels, which are required to identify
-    // kernel parameters which need updated in the graph for each token
-    std::vector<void *> ggml_cuda_cpy_fn_ptrs;
-
 #ifdef USE_CUDA_GRAPH
     static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
 
@@ -2704,8 +2695,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_ctx, cgraph,
-                             ggml_cuda_cpy_fn_ptrs, use_cuda_graph);
+        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_ctx, cgraph, use_cuda_graph);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
         if (use_cuda_graph && cuda_graph_update_required) {
@@ -2733,7 +2723,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     bool graph_evaluated_or_captured = false;
 
-    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, ggml_cuda_cpy_fn_ptrs, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
 
     return GGML_STATUS_SUCCESS;
 }
