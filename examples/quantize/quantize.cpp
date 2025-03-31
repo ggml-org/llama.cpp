@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <fstream>
+#include <cmath>
 #include <cctype>
 
 struct quant_option {

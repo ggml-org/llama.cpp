@@ -5,9 +5,11 @@
 #include "llama-model-loader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cinttypes>
 #include <fstream>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 
