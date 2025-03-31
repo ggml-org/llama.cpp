@@ -1183,6 +1183,8 @@ struct jsonl_printer : public printer {
 struct markdown_printer : public printer {
     std::vector<std::string> fields;
 
+    std::vector<std::string> prev_values;
+
     static int get_field_width(const std::string & field) {
         if (field == "model") {
             return -30;
@@ -1331,8 +1333,10 @@ struct markdown_printer : public printer {
 
     void print_test(const test & t) override {
         std::map<std::string, std::string> vmap = t.get_map();
+        std::vector<std::string> values;
 
         fprintf(fout, "|");
+        size_t i = 0;
         for (const auto & field : fields) {
             std::string value;
             char        buf[128];
@@ -1378,9 +1382,20 @@ struct markdown_printer : public printer {
                 // HACK: the utf-8 character is 2 bytes
                 width += 1;
             }
+            values.push_back(value);
+
+            if (prev_values.size() > i && prev_values.at(i) == value) {
+                value = "";
+            }
+
+
             fprintf(fout, " %*s |", width, value.c_str());
+
+            i++;
         }
         fprintf(fout, "\n");
+
+        prev_values = std::move(values);
     }
 
     void print_footer() override {
