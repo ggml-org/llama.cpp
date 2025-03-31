@@ -4515,7 +4515,7 @@ int main(int argc, char ** argv) {
         return false;
     });
 
-    svr->Get("/chat/", [](const httplib::Request & req, httplib::Response & res) {
+    svr->Get("/chat/", [](const httplib::Request &, httplib::Response & res) {
         res.set_redirect("/chat");
         return false;
     });
