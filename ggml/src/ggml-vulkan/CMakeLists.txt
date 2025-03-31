@@ -59,7 +59,6 @@ if (Vulkan_FOUND)
             set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF CACHE INTERNAL "Whether coopmat2 is supported by glslc")
         else()
             message(STATUS "GL_NV_cooperative_matrix2 supported by glslc")
-            
             set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT ON CACHE INTERNAL "Whether coopmat2 is supported by glslc")
         endif()
     else()
