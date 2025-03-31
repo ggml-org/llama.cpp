@@ -105,6 +105,16 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     int unroll_count = 4;
     uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
+#if K_PER_ITER == 2
+    // If the K dimension is odd, we need lastiter==true on the last iteration
+    // so OOB is computed correctly. Skip some unrolling to make that happen.
+    if ((p.ncols & 1) != 0 &&
+        unrolled_iters == num_iters &&
+        unrolled_iters > 0) {
+        unrolled_iters -= unroll_count;
+    }
+#endif
+
     uint i = 0;
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
@@ -113,8 +123,18 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             i++;
         }
     }
+
     unroll_count = 2;
     unrolled_iters = num_iters & ~(unroll_count - 1);
+
+#if K_PER_ITER == 2
+    if ((p.ncols & 1) != 0 &&
+        unrolled_iters == num_iters &&
+        unrolled_iters > 0) {
+        unrolled_iters -= unroll_count;
+    }
+#endif
+
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {

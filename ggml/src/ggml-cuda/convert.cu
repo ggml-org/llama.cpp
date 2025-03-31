@@ -577,7 +577,7 @@ static __global__ void convert_unary(const void * __restrict__ vx, dst_t * __res
         return;
     }
 
-    const src_t * x = (src_t *) vx;
+    const src_t * x = (const src_t *) vx;
 
     y[i] = x[i];
 }
