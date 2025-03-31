@@ -3485,6 +3485,9 @@ int main(int argc, char ** argv) {
     // llama-server-one START
     // This implements an args file feature inspired by llamafile's.
     #ifdef COSMOCC
+    // Keep the build from showing up as ape in the process list.
+    pthread_setname_np(pthread_self(), "llama-server-one");
+    
     // Args files if present. The names are different to remove confusion during packaging.
     const std::string& argsFilename = "llama-server-one-args";
     const std::string& zipArgsFilename = "/zip/default-args";
