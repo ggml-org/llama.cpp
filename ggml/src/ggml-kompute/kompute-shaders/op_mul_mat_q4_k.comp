@@ -24,8 +24,14 @@ layout (push_constant) uniform parameter {
     int ne01;
     int ne02;
     int ne12;
-    int r2;
-    int r3;
+    uint nb01;
+    uint nb02;
+    uint nb03;
+    uint nb11;
+    uint nb12;
+    uint nb13;
+    uint r2;
+    uint r3;
 } pcs;
 
 void main() {
@@ -50,10 +56,11 @@ void main() {
     const uint i12 = im%pcs.ne12;
     const uint i13 = im/pcs.ne12;
 
-    const uint offset0 = (i12/pcs.r2)*(nb*pcs.ne01) + (i13/pcs.r3)*(nb*pcs.ne01*pcs.ne02);
+    const uint offset0 = first_row*(pcs.nb01/SIZE_OF_BLOCK) + (i12/pcs.r2)*(pcs.nb02/SIZE_OF_BLOCK) + (i13/pcs.r3)*(pcs.nb03/SIZE_OF_BLOCK);
+    const uint offset1 =        r1*pcs.nb11 + (i12       )*pcs.nb12 + (i13       )*pcs.nb13;
 
-    const uint xblk = ib_row + offset0 + pcs.inAOff;
-    const uint y = r1*pcs.ne10 + im*pcs.ne00*pcs.ne1 + pcs.inBOff;
+    const uint xblk = offset0 + pcs.inAOff;
+    const uint y = (offset1 / 4) + pcs.inBOff;
 
     float yl[16];
     float yh[16];
@@ -74,7 +81,7 @@ void main() {
         }
 
         for (int row = 0; row < N_DST; row++) {
-            uint row_idx = row * nb;
+            uint row_idx = row * (pcs.nb01 / SIZE_OF_BLOCK);
 
             uint16_t sc_0 = u8BufToU16(inA[blk_idx + row_idx].scales, iq * 2 + 0);
             uint16_t sc_1 = u8BufToU16(inA[blk_idx + row_idx].scales, iq * 2 + 2);

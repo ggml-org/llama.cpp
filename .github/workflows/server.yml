@@ -76,20 +76,49 @@ jobs:
         run: |
           pip install -r examples/server/tests/requirements.txt
 
-      - name: Verify server deps
-        id: verify_server_deps
+      # Setup nodejs (to be used for verifying bundled index.html)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0'
+
+      - name: WebUI - Install dependencies
+        id: webui_lint
+        run: |
+          cd examples/server/webui
+          npm ci
+
+      - name: WebUI - Check code format
+        id: webui_format
         run: |
           git config --global --add safe.directory $(realpath .)
-          cd examples/server
-          git ls-files --others --modified
+          cd examples/server/webui
           git status
-          ./deps.sh
+
+          npm run format
           git status
-          not_ignored_files="$(git ls-files --others --modified)"
-          echo "Modified files: ${not_ignored_files}"
-          if [ -n "${not_ignored_files}" ]; then
-            echo "Repository is dirty or server deps are not built as expected"
-            echo "${not_ignored_files}"
+          modified_files="$(git status -s)"
+          echo "Modified files: ${modified_files}"
+          if [ -n "${modified_files}" ]; then
+            echo "Files do not follow coding style. To fix: npm run format"
+            echo "${modified_files}"
+            exit 1
+          fi
+
+      - name: Verify bundled index.html
+        id: verify_server_index_html
+        run: |
+          git config --global --add safe.directory $(realpath .)
+          cd examples/server/webui
+          git status
+
+          npm run build
+          git status
+          modified_files="$(git status -s)"
+          echo "Modified files: ${modified_files}"
+          if [ -n "${modified_files}" ]; then
+            echo "Repository is dirty or server/webui is not built as expected"
+            echo "Hint: You may need to follow Web UI build guide in server/README.md"
+            echo "${modified_files}"
             exit 1
           fi
 
@@ -106,9 +135,9 @@ jobs:
               -DGGML_OPENMP=OFF ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
-      - name: Build
-        id: cmake_build
-        if: ${{ matrix.sanitizer != 'THREAD' }}
+      - name: Build (sanitizers)
+        id: cmake_build_sanitizers
+        if: ${{ matrix.sanitizer != '' && matrix.sanitizer != 'THREAD' }}
         run: |
           cmake -B build \
               -DGGML_NATIVE=OFF \
@@ -118,11 +147,32 @@ jobs:
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
+      - name: Build (sanitizers)
+        id: cmake_build
+        if: ${{ matrix.sanitizer == '' }}
+        run: |
+          cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DLLAMA_BUILD_SERVER=ON \
+              -DLLAMA_CURL=ON \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
       - name: Tests
         id: server_integration_tests
+        if: ${{ matrix.sanitizer == '' }}
+        env:
+          GITHUB_ACTIONS: "true"
         run: |
           cd examples/server/tests
           ./tests.sh
+
+      - name: Tests (sanitizers)
+        id: server_integration_tests_sanitizers
+        if: ${{ matrix.sanitizer != '' }}
+        run: |
+          cd examples/server/tests
+          LLAMA_SANITIZE=1 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
@@ -180,7 +230,7 @@ jobs:
         run: |
           cd examples/server/tests
           $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x
+          pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow

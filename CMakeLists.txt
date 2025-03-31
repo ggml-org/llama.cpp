@@ -16,6 +16,7 @@ endif()
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
@@ -27,6 +28,8 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
+
+option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
@@ -46,11 +49,11 @@ if (WIN32)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
-    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/source-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/source-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/execution-charset:utf-8>")
-    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/execution-charset:utf-8>")
+if (MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
 
 #
@@ -79,25 +82,19 @@ option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
 # 3rd party libs
 option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
+option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
 
 # override ggml options
-set(GGML_SANITIZE_THREAD    ${LLAMA_SANITIZE_THREAD})
-set(GGML_SANITIZE_ADDRESS   ${LLAMA_SANITIZE_ADDRESS})
-set(GGML_SANITIZE_UNDEFINED ${LLAMA_SANITIZE_UNDEFINED})
-set(GGML_ALL_WARNINGS       ${LLAMA_ALL_WARNINGS})
-set(GGML_FATAL_WARNINGS     ${LLAMA_FATAL_WARNINGS})
+set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
+set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
 
 # change the default for these ggml options
 if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE_DEFAULT ON)
-endif()
-
-if (NOT DEFINED GGML_AMX)
-    set(GGML_AMX ON)
 endif()
 
 if (NOT DEFINED GGML_CUDA_GRAPHS)
@@ -123,15 +120,67 @@ llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 
+if (NOT MSVC)
+    if (LLAMA_SANITIZE_THREAD)
+        message(STATUS "Using -fsanitize=thread")
+
+        add_compile_options(-fsanitize=thread)
+        link_libraries     (-fsanitize=thread)
+    endif()
+
+    if (LLAMA_SANITIZE_ADDRESS)
+        message(STATUS "Using -fsanitize=address")
+
+        add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+        link_libraries     (-fsanitize=address)
+    endif()
+
+    if (LLAMA_SANITIZE_UNDEFINED)
+        message(STATUS "Using -fsanitize=undefined")
+
+        add_compile_options(-fsanitize=undefined)
+        link_libraries     (-fsanitize=undefined)
+    endif()
+endif()
+
+#
+# 3rd-party
+#
+
+if (LLAMA_USE_SYSTEM_GGML)
+    message(STATUS "Using system-provided libggml, skipping ggml build")
+    find_package(ggml REQUIRED)
+    add_library(ggml ALIAS ggml::ggml)
+endif()
+
+if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
+    add_subdirectory(ggml)
+    # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
 #
 # build the library
 #
 
-if (NOT TARGET ggml)
-    add_subdirectory(ggml)
-    # ... otherwise assume ggml is added by a parent CMakeLists.txt
-endif()
 add_subdirectory(src)
+
+#
+# utils, programs, examples and tests
+#
+
+if (LLAMA_BUILD_COMMON)
+    add_subdirectory(common)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
+    include(CTest)
+    add_subdirectory(tests)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+    add_subdirectory(pocs)
+endif()
 
 #
 # install
@@ -148,27 +197,14 @@ set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location o
 set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
 set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
 
-# At the moment some compile definitions are placed within the ggml/src
-# directory but not exported on the `ggml` target. This could be improved by
-# determining _precisely_ which defines are necessary for the llama-config
-# package.
-#
-set(GGML_TRANSIENT_DEFINES)
-get_target_property(GGML_DIRECTORY ggml SOURCE_DIR)
-get_directory_property(GGML_DIR_DEFINES DIRECTORY ${GGML_DIRECTORY} COMPILE_DEFINITIONS)
-if (GGML_DIR_DEFINES)
-    list(APPEND GGML_TRANSIENT_DEFINES ${GGML_DIR_DEFINES})
-endif()
-get_target_property(GGML_TARGET_DEFINES ggml COMPILE_DEFINITIONS)
-if (GGML_TARGET_DEFINES)
-    list(APPEND GGML_TRANSIENT_DEFINES ${GGML_TARGET_DEFINES})
-endif()
-get_target_property(GGML_LINK_LIBRARIES ggml LINK_LIBRARIES)
-# all public headers
 set(LLAMA_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
-set_target_properties(llama PROPERTIES PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+
+set_target_properties(llama
+    PROPERTIES
+        PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
 configure_package_config_file(
@@ -205,22 +241,4 @@ configure_file(cmake/llama.pc.in
         @ONLY)
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
-        DESTINATION lib/pkgconfig)
-
-#
-# utils, programs, examples and tests
-#
-
-if (LLAMA_BUILD_COMMON)
-    add_subdirectory(common)
-endif()
-
-if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
-    include(CTest)
-    add_subdirectory(tests)
-endif()
-
-if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
-endif()
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)

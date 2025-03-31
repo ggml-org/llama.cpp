@@ -2,6 +2,15 @@
 
 // optimize me. Use template to avoid copy code.
 using namespace AscendC;
+#ifdef ASCEND_310P // 310P not support 4bit get row
+    extern "C" __global__ __aicore__ void ascendc_get_row_q4_0(
+        GM_ADDR input_gm, GM_ADDR indices_gm, GM_ADDR output_gm,
+        GM_ADDR input_ne_gm, GM_ADDR indices_ne_gm, GM_ADDR indices_nb_gm,
+        GM_ADDR output_ne_gm, GM_ADDR output_nb_gm) {
+        // let following test cases can continue run, here just print error information. Of Cource the test case that call this operator is failed.
+        printf("Ascend310P not support 4bit get row.\n");
+    }
+#else
 
 #define BUFFER_NUM 2
 
@@ -110,12 +119,9 @@ class GET_ROW_Q4_0 {
         LocalTensor<float> output_local = output_queue.AllocTensor<float>();
 
         // TODO: cast more data to speed up.
-#ifdef ASCEND_310P
-        // TODO: 310P support quantification
-#else
         Cast(cast_local, input_local, RoundMode::CAST_NONE, QK4_0);
         Cast(output_local, cast_local, RoundMode::CAST_NONE, QK4_0);
-#endif
+
         // Only mul need compile by group.
         half scale = scale_gm.GetValue(scale_offset);
 
@@ -194,3 +200,5 @@ extern "C" __global__ __aicore__ void ascendc_get_row_q4_0(
             indices_nb_ub, output_ne_ub, output_nb_ub);
     op.calculate();
 }
+
+#endif // #ifdef ASCEND_310P

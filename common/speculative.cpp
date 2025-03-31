@@ -5,6 +5,7 @@
 #include "sampling.h"
 
 #include <cstring>
+#include <algorithm>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -62,6 +63,10 @@ struct common_speculative * common_speculative_init(
 }
 
 void common_speculative_free(struct common_speculative * spec) {
+    if (spec == nullptr) {
+        return;
+    }
+
     common_sampler_free(spec->smpl);
 
     llama_batch_free(spec->batch);
@@ -75,10 +80,13 @@ bool common_speculative_are_compatible(
     const struct llama_model * model_tgt = llama_get_model(ctx_tgt);
     const struct llama_model * model_dft = llama_get_model(ctx_dft);
 
-    const bool vocab_type_tgt = llama_vocab_type(model_tgt);
+    const struct llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const struct llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+
+    const bool vocab_type_tgt = llama_vocab_type(vocab_tgt);
     LOG_DBG("%s: vocab_type tgt: %d\n", __func__, vocab_type_tgt);
 
-    const bool vocab_type_dft = llama_vocab_type(model_dft);
+    const bool vocab_type_dft = llama_vocab_type(vocab_dft);
     LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
@@ -87,34 +95,34 @@ bool common_speculative_are_compatible(
         return false;
     }
 
-    if (llama_add_bos_token(model_tgt) != llama_add_bos_token(model_dft) ||
-        llama_add_eos_token(model_tgt) != llama_add_eos_token(model_dft) ||
-        llama_token_bos(model_tgt) != llama_token_bos(model_dft) ||
-        llama_token_eos(model_tgt) != llama_token_eos(model_dft)) {
-        LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
-        LOG_ERR("%s: tgt: bos = %d (%d), eos = %d (%d)\n", __func__, llama_token_bos(model_tgt), llama_add_bos_token(model_tgt), llama_token_eos(model_tgt), llama_add_eos_token(model_tgt));
-        LOG_ERR("%s: dft: bos = %d (%d), eos = %d (%d)\n", __func__, llama_token_bos(model_dft), llama_add_bos_token(model_dft), llama_token_eos(model_dft), llama_add_eos_token(model_dft));
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
+        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
+        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)) {
+        LOG_ERR("%s: draft vocab special tokens must match target vocab to use speculation\n", __func__);
+        LOG_ERR("%s: tgt: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_tgt), llama_vocab_eos(vocab_tgt), llama_vocab_get_add_eos(vocab_tgt));
+        LOG_ERR("%s: dft: bos = %d (%d), eos = %d (%d)\n", __func__, llama_vocab_bos(vocab_dft), llama_vocab_get_add_bos(vocab_dft), llama_vocab_eos(vocab_dft), llama_vocab_get_add_eos(vocab_dft));
         return false;
     }
 
     {
-        const int n_vocab_tgt = llama_n_vocab(model_tgt);
-        const int n_vocab_dft = llama_n_vocab(model_dft);
+        const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+        const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
 
         const int vocab_diff = std::abs(n_vocab_tgt - n_vocab_dft);
 
         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
             LOG_ERR("%s: draft model vocab must closely match target model to use speculation but "
                          "target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
-                    __func__, n_vocab_tgt, llama_n_vocab(model_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+                    __func__, n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return false;
         }
 
         for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_token_get_text(model_tgt, i);
-            const char * token_text_dft = llama_token_get_text(model_dft, i);
+            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
+            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but "
+                LOG_ERR("%s: draft vocab vocab must match target vocab to use speculation but "
                              "token %d content differs - target '%s', draft '%s'\n", __func__, i,
                         common_token_to_piece(ctx_tgt, i).c_str(),
                         common_token_to_piece(ctx_dft, i).c_str());
@@ -165,7 +173,7 @@ llama_tokens common_speculative_gen_draft(
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         prompt.clear();
     } else {
@@ -184,14 +192,14 @@ llama_tokens common_speculative_gen_draft(
         }
 
         if (reuse_i > 0) {
-            llama_kv_cache_seq_rm (ctx, 0, 0, reuse_i);
-            llama_kv_cache_seq_add(ctx, 0, reuse_i, -1, -reuse_i);
+            llama_kv_self_seq_rm (ctx, 0, 0, reuse_i);
+            llama_kv_self_seq_add(ctx, 0, reuse_i, -1, -reuse_i);
 
             prompt.erase(prompt.begin(), prompt.begin() + reuse_i);
         }
 
         if (reuse_n < (int) prompt.size()) {
-            llama_kv_cache_seq_rm (ctx, 0, reuse_n, -1);
+            llama_kv_self_seq_rm (ctx, 0, reuse_n, -1);
 
             prompt.erase(prompt.begin() + reuse_n, prompt.end());
         }
@@ -245,16 +253,16 @@ llama_tokens common_speculative_gen_draft(
         // add drafted token for each sequence
         const llama_token id = cur_p->data[0].id;
 
-        // only collect very high-confidence draft tokens
-        if (cur_p->data[0].p < params.p_min) {
-            break;
-        }
-
         common_sampler_accept(smpl, id, true);
 
         result.push_back(id);
 
         if (params.n_draft <= (int) result.size()) {
+            break;
+        }
+
+        // only collect very high-confidence draft tokens
+        if (cur_p->data[0].p < params.p_min) {
             break;
         }
 

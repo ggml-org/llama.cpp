@@ -44,7 +44,7 @@ extern "C" {
         // base address of the buffer
         void *       (*get_base)     (ggml_backend_buffer_t buffer);
         // (optional) initialize a tensor in the buffer (eg. add tensor extras)
-        void         (*init_tensor)  (ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
+        enum ggml_status (*init_tensor)(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
         // tensor data access
         void         (*memset_tensor)(ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
         void         (*set_tensor)   (ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
@@ -208,30 +208,47 @@ extern "C" {
 
     // Internal backend registry API
     GGML_API void ggml_backend_register(ggml_backend_reg_t reg);
-    GGML_API void ggml_backend_device_register(ggml_backend_dev_t device);
 
     // Add backend dynamic loading support to the backend
-    typedef ggml_backend_reg_t (*ggml_backend_init_t)(void);
 
-    #ifdef GGML_BACKEND_DL
-        #ifdef __cplusplus
-        #    define GGML_BACKEND_DL_IMPL(reg_fn)                                 \
-                extern "C" {                                                     \
-                    GGML_BACKEND_API ggml_backend_reg_t ggml_backend_init(void); \
-                }                                                                \
-                ggml_backend_reg_t ggml_backend_init(void) {                     \
-                    return reg_fn();                                             \
-                }
-        #else
-        #    define GGML_BACKEND_DL_IMPL(reg_fn)                             \
-                GGML_BACKEND_API ggml_backend_reg_t ggml_backend_init(void); \
-                ggml_backend_reg_t ggml_backend_init(void) {                 \
-                    return reg_fn();                                         \
-                }
-        #endif
-    #else
-    #    define GGML_BACKEND_DL_IMPL(reg_fn)
-    #endif
+    // Initialize the backend
+    typedef ggml_backend_reg_t (*ggml_backend_init_t)(void);
+    // Optional: obtain a score for the backend based on the system configuration
+    // Higher scores are preferred, 0 means the backend is not supported in the current system
+    typedef int                (*ggml_backend_score_t)(void);
+
+#ifdef GGML_BACKEND_DL
+#    ifdef __cplusplus
+#        define GGML_BACKEND_DL_IMPL(reg_fn)                             \
+            extern "C" {                                                 \
+            GGML_BACKEND_API ggml_backend_reg_t ggml_backend_init(void); \
+            }                                                            \
+            ggml_backend_reg_t ggml_backend_init(void) {                 \
+                return reg_fn();                                         \
+            }
+#        define GGML_BACKEND_DL_SCORE_IMPL(score_fn)       \
+            extern "C" {                                   \
+            GGML_BACKEND_API int ggml_backend_score(void); \
+            }                                              \
+            int ggml_backend_score(void) {                 \
+                return score_fn();                         \
+            }
+#    else
+#        define GGML_BACKEND_DL_IMPL(reg_fn)                              \
+            GGML_BACKEND_API ggml_backend_reg_t ggml_backend_init(void);  \
+            ggml_backend_reg_t                  ggml_backend_init(void) { \
+                return reg_fn();                                          \
+            }
+#        define GGML_BACKEND_DL_SCORE_IMPL(score_fn)        \
+            GGML_BACKEND_API int ggml_backend_score(void);  \
+            int                  ggml_backend_score(void) { \
+                return score_fn();                          \
+            }
+#    endif
+#else
+#    define GGML_BACKEND_DL_IMPL(reg_fn)
+#    define GGML_BACKEND_DL_SCORE_IMPL(score_fn)
+#endif
 
 #ifdef  __cplusplus
 }

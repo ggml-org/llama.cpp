@@ -1,0 +1,52 @@
+#version 450
+
+#include "rope_common.comp"
+
+layout(binding = 0) buffer restrict readonly  tensorInA { float16_t inA[]; };
+layout(binding = 1) buffer restrict readonly  tensorInB { int       inB[]; };
+layout(binding = 2) buffer restrict readonly  tensorInC { float     inC[]; };
+layout(binding = 3) buffer restrict writeonly tensorOut { float16_t out_[]; };
+
+void main() {
+    const uint i3 = gl_WorkGroupID.z;
+    const uint i2 = gl_WorkGroupID.y;
+    const uint i1 = gl_WorkGroupID.x;
+
+    float corr_dims[2];
+    rope_yarn_corr_dims(pcs.n_dims, pcs.n_ctx_orig, pcs.freq_base, pcs.beta_fast, pcs.beta_slow, corr_dims);
+
+    const float theta_scale = pow(pcs.freq_base, -2.0/pcs.n_dims);
+
+    float theta_base = float(inB[pcs.inBOff + i2]);
+    float inv_ndims = -1.f/pcs.n_dims;
+
+    float cos_theta;
+    float sin_theta;
+
+    for (uint i0 = 2*gl_LocalInvocationIndex; i0 < pcs.ne0; i0 += 2*gl_WorkGroupSize.x) {
+        if (i0 < pcs.n_dims) {
+            uint ic = i0/2;
+
+            float theta = theta_base * pow(pcs.freq_base, inv_ndims*i0);
+
+            const float freq_factor = pcs.has_freq_factors ? inC[pcs.inCOff + ic] : 1.0f;
+
+            rope_yarn(theta/freq_factor, pcs.freq_scale, corr_dims, i0, pcs.ext_factor, pcs.attn_factor, cos_theta, sin_theta);
+
+            const uint src      = uint((i3*pcs.nb03 + i2*pcs.nb02 + i1*pcs.nb01 + ic*pcs.nb00) / 2) + pcs.inAOff; // Based from in
+            const uint dst_data = uint((i3*pcs.nb3  + i2*pcs.nb2  + i1*pcs.nb1  + ic*pcs.nb0)  / 2) + pcs.outOff; // Based from out_
+
+            const float x0 = float(inA[src]);
+            const float x1 = float(inA[src+pcs.n_dims/2]);
+
+            out_[dst_data]              = float16_t(x0*cos_theta - x1*sin_theta);
+            out_[dst_data+pcs.n_dims/2] = float16_t(x0*sin_theta + x1*cos_theta);
+        } else {
+            const uint src      = uint((i3*pcs.nb03 + i2*pcs.nb02 + i1*pcs.nb01 + i0*pcs.nb00) / 2) + pcs.inAOff; // Based from in
+            const uint dst_data = uint((i3*pcs.nb3  + i2*pcs.nb2  + i1*pcs.nb1  + i0*pcs.nb0)  / 2) + pcs.outOff; // Based from out_
+
+            out_[dst_data]   = inA[src];
+            out_[dst_data+1] = inA[src+1];
+        }
+    }
+}

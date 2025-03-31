@@ -144,8 +144,7 @@ static void test_penalties(
 
     sampler_tester tester(probs, probs_expected);
 
-    const size_t n_vocab = probs.size();
-    auto * sampler = llama_sampler_init_penalties(n_vocab, LLAMA_TOKEN_NULL, LLAMA_TOKEN_NULL, last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence, false, false);
+    auto * sampler = llama_sampler_init_penalties(last_tokens.size(), repeat_penalty, alpha_frequency, alpha_presence);
 
     for (size_t i = 0; i < last_tokens.size(); i++) {
         llama_sampler_accept(sampler, last_tokens[i]);
@@ -179,6 +178,17 @@ static void test_dry(
     tester.apply(sampler);
     tester.apply(llama_sampler_init_dist(0));
     DUMP(&tester.cur_p);
+    tester.check();
+}
+
+static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, int n) {
+    sampler_tester tester(probs, probs_expected);
+
+    DUMP(&tester.cur_p);
+    tester.apply(llama_sampler_init_top_n_sigma(n));
+    tester.apply(llama_sampler_init_dist (0));
+    DUMP(&tester.cur_p);
+
     tester.check();
 }
 
@@ -284,7 +294,7 @@ static void test_perf() {
 
     data.reserve(n_vocab);
     for (int i = 0; i < n_vocab; i++) {
-        const float logit = 2.0f*((float)(rand())/RAND_MAX - 0.5f);
+        const float logit = 2.0f*((double)(rand())/RAND_MAX - 0.5);
         data.emplace_back(llama_token_data{i, logit, 0.0f});
     }
 
@@ -348,6 +358,10 @@ int main(void) {
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 2, 6, {{3}});
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 1}, {0.241818f, 0.241818f, 0.241818f, 0.241818f, 0.032727f}, 2.0f, 1.1f, 2, 5, {});
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 4, 7, {});
+
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.571429f, 0.428571f, 0.0f, 0.0f}, 1.00f);
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f, 0.0f, 0.0f, 0.0f}, 0.00f);
+    test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 3.00f);
 
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);

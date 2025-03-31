@@ -8,7 +8,7 @@ extern "C" {
 #endif
 
     // the compute plan that needs to be prepared for ggml_graph_compute()
-    // since https://github.com/ggerganov/ggml/issues/287
+    // since https://github.com/ggml-org/ggml/issues/287
     struct ggml_cplan {
         size_t    work_size; // size of work buffer, calculated by `ggml_graph_plan()`
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
@@ -80,6 +80,7 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_avx        (void);
     GGML_BACKEND_API int ggml_cpu_has_avx_vnni   (void);
     GGML_BACKEND_API int ggml_cpu_has_avx2       (void);
+    GGML_BACKEND_API int ggml_cpu_has_bmi2       (void);
     GGML_BACKEND_API int ggml_cpu_has_f16c       (void);
     GGML_BACKEND_API int ggml_cpu_has_fma        (void);
     GGML_BACKEND_API int ggml_cpu_has_avx512     (void);
@@ -91,35 +92,28 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_neon       (void);
     GGML_BACKEND_API int ggml_cpu_has_arm_fma    (void);
     GGML_BACKEND_API int ggml_cpu_has_fp16_va    (void);
+    GGML_BACKEND_API int ggml_cpu_has_dotprod    (void);
     GGML_BACKEND_API int ggml_cpu_has_matmul_int8(void);
     GGML_BACKEND_API int ggml_cpu_has_sve        (void);
     GGML_BACKEND_API int ggml_cpu_get_sve_cnt    (void);  // sve vector length in bytes
+    GGML_BACKEND_API int ggml_cpu_has_sme        (void);
     // other
     GGML_BACKEND_API int ggml_cpu_has_riscv_v    (void);
     GGML_BACKEND_API int ggml_cpu_has_vsx        (void);
+    GGML_BACKEND_API int ggml_cpu_has_vxe        (void);
     GGML_BACKEND_API int ggml_cpu_has_wasm_simd  (void);
     GGML_BACKEND_API int ggml_cpu_has_llamafile  (void);
 
     // Internal types and functions exposed for tests and benchmarks
 
-    typedef void (*ggml_from_float_to_mat_t)
-                                     (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t nr, int64_t k, int64_t bs);
     typedef void (*ggml_vec_dot_t)  (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x, size_t bx,
                                        const void * GGML_RESTRICT y, size_t by, int nrc);
-    typedef void (*ggml_gemv_t)     (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x,
-                                       const void * GGML_RESTRICT y, int nr, int nc);
-    typedef void (*ggml_gemm_t)     (int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT x,
-                                       const void * GGML_RESTRICT y, int nr, int nc);
 
     struct ggml_type_traits_cpu {
         ggml_from_float_t        from_float;
-        ggml_from_float_to_mat_t from_float_to_mat;
         ggml_vec_dot_t           vec_dot;
         enum ggml_type           vec_dot_type;
         int64_t                  nrows; // number of rows to process simultaneously
-        int64_t                  ncols; // number of columns to process simultaneously
-        ggml_gemv_t              gemv;
-        ggml_gemm_t              gemm;
     };
 
     GGML_BACKEND_API const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type);
@@ -138,13 +132,6 @@ extern "C" {
     GGML_BACKEND_API void ggml_backend_cpu_set_abort_callback(ggml_backend_t backend_cpu, ggml_abort_callback abort_callback, void * abort_callback_data);
 
     GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cpu_reg(void);
-
-#ifdef GGML_USE_CPU_HBM
-    GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cpu_hbm_buffer_type(void);
-#endif
-
-    GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_cpu_aarch64_buffer_type(void);
-    GGML_BACKEND_API bool ggml_backend_cpu_buft_is_aarch64(ggml_backend_buffer_type_t buft);
 
 #ifdef __cplusplus
 }

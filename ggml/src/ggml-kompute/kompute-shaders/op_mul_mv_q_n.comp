@@ -14,10 +14,15 @@ void main() {
     const uint i12 = im%pcs.ne12;
     const uint i13 = im/pcs.ne12;
 
-    const uint offset0 = first_row * nb + (i12/pcs.r2)*(nb*pcs.ne01) + (i13/pcs.r3)*(nb*pcs.ne01*pcs.ne02);
+    // pointers to src0 rows
+    uint ax[N_ROWS];
+    for (int row = 0; row < N_ROWS; ++row) {
+        const uint offset0 = (first_row + row)*(pcs.nb01/SIZE_OF_BLOCK) + (i12/pcs.r2)*(pcs.nb02/SIZE_OF_BLOCK) + (i13/pcs.r3)*(pcs.nb03/SIZE_OF_BLOCK);
 
-    const uint x = offset0; // Based from inA without base offset
-    const uint y = r1*uint(pcs.ne10)+im*pcs.ne00*pcs.ne1+pcs.inBOff; // Based from inB
+        ax[row] = offset0 + pcs.inAOff;
+    }
+
+    const uint y = (r1*pcs.nb11 + i12*pcs.nb12 + i13*pcs.nb13) / 4 + pcs.inBOff;
 
     float sumf[N_ROWS] = {0.0f, 0.0f, 0.0f, 0.0f};
 
@@ -32,8 +37,7 @@ void main() {
 
     for (uint ib = ix; ib < nb; ib += 16) {
         for (int row = 0; row < N_ROWS; row++) {
-            const uint block_index = x + ib + row * nb;
-            sumf[row] += block_q_n_dot_y(block_index, yb, il);
+            sumf[row] += block_q_n_dot_y(ax[row] + ib, yb, il);
         }
 
         yb += BLOCKS_IN_QUANT * 16;

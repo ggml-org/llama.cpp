@@ -19,9 +19,9 @@ void main() {
     if (idx + (num_iter-1)*num_threads < p.ne) {
         [[unroll]] for (uint i = 0; i < num_iter; ++i) {
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
-            data_d[p.d_offset + idx] = D_TYPE(data_a[idx]);
+            data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
-            data_d[p.d_offset + idx] = data_a[idx];
+            data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
 #endif
             idx += num_threads;
         }
@@ -32,9 +32,9 @@ void main() {
             }
 
 #ifndef OPTIMIZATION_ERROR_WORKAROUND
-            data_d[p.d_offset + idx] = D_TYPE(data_a[idx]);
+            data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
-            data_d[p.d_offset + idx] = data_a[idx];
+            data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
 #endif
             idx += num_threads;
         }

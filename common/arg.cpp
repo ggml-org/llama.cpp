@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "sampling.h"
+#include "chat.h"
 
 #include <algorithm>
 #include <climits>
@@ -22,6 +23,11 @@ common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> 
     return *this;
 }
 
+common_arg & common_arg::set_excludes(std::initializer_list<enum llama_example> excludes) {
+    this->excludes = std::move(excludes);
+    return *this;
+}
+
 common_arg & common_arg::set_env(const char * env) {
     help = help + "\n(env: " + env + ")";
     this->env = env;
@@ -35,6 +41,10 @@ common_arg & common_arg::set_sparam() {
 
 bool common_arg::in_example(enum llama_example ex) {
     return examples.find(ex) != examples.end();
+}
+
+bool common_arg::is_exclude(enum llama_example ex) {
+    return excludes.find(ex) != excludes.end();
 }
 
 bool common_arg::get_value_from_env(std::string & output) {
@@ -119,30 +129,73 @@ std::string common_arg::to_string() {
 // utils
 //
 
-static void common_params_handle_model_default(common_params & params) {
-    if (!params.hf_repo.empty()) {
+static void common_params_handle_model_default(
+        std::string & model,
+        const std::string & model_url,
+        std::string & hf_repo,
+        std::string & hf_file,
+        const std::string & hf_token,
+        const std::string & model_default) {
+    if (!hf_repo.empty()) {
         // short-hand to avoid specifying --hf-file -> default it to --model
-        if (params.hf_file.empty()) {
-            if (params.model.empty()) {
-                throw std::invalid_argument("error: --hf-repo requires either --hf-file or --model\n");
+        if (hf_file.empty()) {
+            if (model.empty()) {
+                auto auto_detected = common_get_hf_file(hf_repo, hf_token);
+                if (auto_detected.first.empty() || auto_detected.second.empty()) {
+                    exit(1); // built without CURL, error message already printed
+                }
+                hf_repo = auto_detected.first;
+                hf_file = auto_detected.second;
+            } else {
+                hf_file = model;
             }
-            params.hf_file = params.model;
-        } else if (params.model.empty()) {
+        }
+        // make sure model path is present (for caching purposes)
+        if (model.empty()) {
             // this is to avoid different repo having same file name, or same file name in different subdirs
-            std::string filename = params.hf_repo + "_" + params.hf_file;
+            std::string filename = hf_repo + "_" + hf_file;
             // to make sure we don't have any slashes in the filename
             string_replace_all(filename, "/", "_");
-            params.model = fs_get_cache_file(filename);
+            model = fs_get_cache_file(filename);
         }
-    } else if (!params.model_url.empty()) {
-        if (params.model.empty()) {
-            auto f = string_split<std::string>(params.model_url, '#').front();
+    } else if (!model_url.empty()) {
+        if (model.empty()) {
+            auto f = string_split<std::string>(model_url, '#').front();
             f = string_split<std::string>(f, '?').front();
-            params.model = fs_get_cache_file(string_split<std::string>(f, '/').back());
+            model = fs_get_cache_file(string_split<std::string>(f, '/').back());
         }
-    } else if (params.model.empty()) {
-        params.model = DEFAULT_MODEL_PATH;
+    } else if (model.empty()) {
+        model = model_default;
     }
+}
+
+const std::vector<ggml_type> kv_cache_types = {
+    GGML_TYPE_F32,
+    GGML_TYPE_F16,
+    GGML_TYPE_BF16,
+    GGML_TYPE_Q8_0,
+    GGML_TYPE_Q4_0,
+    GGML_TYPE_Q4_1,
+    GGML_TYPE_IQ4_NL,
+    GGML_TYPE_Q5_0,
+    GGML_TYPE_Q5_1,
+};
+
+static ggml_type kv_cache_type_from_str(const std::string & s) {
+    for (const auto & type : kv_cache_types) {
+        if (ggml_type_name(type) == s) {
+            return type;
+        }
+    }
+    throw std::runtime_error("Unsupported cache type: " + s);
+}
+
+static std::string get_all_kv_cache_types() {
+    std::ostringstream msg;
+    for (const auto & type : kv_cache_types) {
+        msg << ggml_type_name(type) << (&type == &kv_cache_types.back() ? "" : ", ");
+    }
+    return msg.str();
 }
 
 //
@@ -247,7 +300,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    common_params_handle_model_default(params);
+    // TODO: refactor model params in a common struct
+    common_params_handle_model_default(params.model,             params.model_url,             params.hf_repo,             params.hf_file,             params.hf_token, DEFAULT_MODEL_PATH);
+    common_params_handle_model_default(params.speculative.model, params.speculative.model_url, params.speculative.hf_repo, params.speculative.hf_file, params.hf_token, "");
+    common_params_handle_model_default(params.vocoder.model,     params.vocoder.model_url,     params.vocoder.hf_repo,     params.vocoder.hf_file,     params.hf_token, "");
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -268,6 +324,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     if (params.reranking && params.embedding) {
         throw std::invalid_argument("error: either --embedding or --reranking can be specified, but not both");
+    }
+
+    if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
+        throw std::runtime_error(string_format(
+            "error: the supplied chat template is not supported: %s%s\n",
+            params.chat_template.c_str(),
+            params.use_jinja ? "" : "\nnote: llama.cpp was started without --jinja, we only support commonly used templates"
+        ));
     }
 
     return true;
@@ -302,6 +366,112 @@ static void common_params_print_usage(common_params_context & ctx_arg) {
     print_options(specific_options);
 }
 
+static void common_params_print_completion(common_params_context & ctx_arg) {
+    std::vector<common_arg *> common_options;
+    std::vector<common_arg *> sparam_options;
+    std::vector<common_arg *> specific_options;
+
+    for (auto & opt : ctx_arg.options) {
+        if (opt.is_sparam) {
+            sparam_options.push_back(&opt);
+        } else if (opt.in_example(ctx_arg.ex)) {
+            specific_options.push_back(&opt);
+        } else {
+            common_options.push_back(&opt);
+        }
+    }
+
+    printf("_llama_completions() {\n");
+    printf("    local cur prev opts\n");
+    printf("    COMPREPLY=()\n");
+    printf("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+    printf("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n\n");
+
+    printf("    opts=\"");
+    auto print_options = [](const std::vector<common_arg *> & options) {
+        for (const common_arg * opt : options) {
+            for (const char * arg : opt->args) {
+                printf("%s ", arg);
+            }
+        }
+    };
+
+    print_options(common_options);
+    print_options(sparam_options);
+    print_options(specific_options);
+    printf("\"\n\n");
+
+    printf("    case \"$prev\" in\n");
+    printf("        --model)\n");
+    printf("            COMPREPLY=( $(compgen -f -X '!*.gguf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
+    printf("            return 0\n");
+    printf("            ;;\n");
+    printf("        --grammar-file)\n");
+    printf("            COMPREPLY=( $(compgen -f -X '!*.gbnf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
+    printf("            return 0\n");
+    printf("            ;;\n");
+    printf("        --chat-template-file)\n");
+    printf("            COMPREPLY=( $(compgen -f -X '!*.jinja' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
+    printf("            return 0\n");
+    printf("            ;;\n");
+    printf("        *)\n");
+    printf("            COMPREPLY=( $(compgen -W \"${opts}\" -- \"$cur\") )\n");
+    printf("            return 0\n");
+    printf("            ;;\n");
+    printf("    esac\n");
+    printf("}\n\n");
+
+    std::set<std::string> executables = {
+        "llama-batched",
+        "llama-batched-bench",
+        "llama-bench",
+        "llama-cli",
+        "llama-convert-llama2c-to-ggml",
+        "llama-cvector-generator",
+        "llama-embedding",
+        "llama-eval-callback",
+        "llama-export-lora",
+        "llama-gbnf-validator",
+        "llama-gen-docs",
+        "llama-gguf",
+        "llama-gguf-hash",
+        "llama-gguf-split",
+        "llama-gritlm",
+        "llama-imatrix",
+        "llama-infill",
+        "llama-llava-cli",
+        "llama-llava-clip-quantize-cli",
+        "llama-lookahead",
+        "llama-lookup",
+        "llama-lookup-create",
+        "llama-lookup-merge",
+        "llama-lookup-stats",
+        "llama-minicpmv-cli",
+        "llama-parallel",
+        "llama-passkey",
+        "llama-perplexity",
+        "llama-q8dot",
+        "llama-quantize",
+        "llama-quantize-stats",
+        "llama-qwen2vl-cli",
+        "llama-retrieval",
+        "llama-run",
+        "llama-save-load-state",
+        "llama-server",
+        "llama-simple",
+        "llama-simple-chat",
+        "llama-speculative",
+        "llama-speculative-simple",
+        "llama-tokenize",
+        "llama-tts",
+        "llama-vdot"
+    };
+
+    for (const auto& exe : executables) {
+        printf("complete -F _llama_completions %s\n", exe.c_str());
+    }
+}
+
 static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & value) {
     std::vector<ggml_backend_dev_t> devices;
     auto dev_names = string_split<std::string>(value, ',');
@@ -323,6 +493,30 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
     return devices;
 }
 
+static void add_rpc_devices(std::string servers) {
+    auto rpc_servers = string_split<std::string>(servers, ',');
+    if (rpc_servers.empty()) {
+        throw std::invalid_argument("no RPC servers specified");
+    }
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (!rpc_reg) {
+        throw std::invalid_argument("failed to find RPC backend");
+    }
+    typedef ggml_backend_dev_t (*ggml_backend_rpc_add_device_t)(const char * endpoint);
+    ggml_backend_rpc_add_device_t ggml_backend_rpc_add_device_fn = (ggml_backend_rpc_add_device_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_device");
+    if (!ggml_backend_rpc_add_device_fn) {
+        throw std::invalid_argument("failed to find RPC device add function");
+    }
+    for (const auto & server : rpc_servers) {
+        ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
+        if (dev) {
+            ggml_backend_device_register(dev);
+        } else {
+            throw std::invalid_argument("failed to register RPC device");
+        }
+    }
+}
+
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
@@ -339,6 +533,10 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             }
             exit(0);
         }
+        if (ctx_arg.params.completion) {
+            common_params_print_completion(ctx_arg);
+            exit(0);
+        }
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         ctx_arg.params = params_org;
@@ -346,6 +544,18 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
     }
 
     return true;
+}
+
+static std::string list_builtin_chat_templates() {
+    std::vector<const char *> supported_tmpl;
+    int32_t res = llama_chat_builtin_templates(nullptr, 0);
+    supported_tmpl.resize(res);
+    res = llama_chat_builtin_templates(supported_tmpl.data(), supported_tmpl.size());
+    std::ostringstream msg;
+    for (auto & tmpl : supported_tmpl) {
+        msg << tmpl << (&tmpl == &supported_tmpl.back() ? "" : ", ");
+    }
+    return msg.str();
 }
 
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
@@ -373,7 +583,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
      * - if both {LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_*,} are set, we will prioritize the LLAMA_EXAMPLE_* matching current example
      */
     auto add_opt = [&](common_arg arg) {
-        if (arg.in_example(ex) || arg.in_example(LLAMA_EXAMPLE_COMMON)) {
+        if ((arg.in_example(ex) || arg.in_example(LLAMA_EXAMPLE_COMMON)) && !arg.is_exclude(ex)) {
             ctx_arg.options.push_back(std::move(arg));
         }
     };
@@ -393,6 +603,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
             exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--completion-bash"},
+        "print source-able bash completion script for llama.cpp",
+        [](common_params & params) {
+            params.completion = true;
         }
     ));
     add_opt(common_arg(
@@ -547,7 +764,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
         {"-n", "--predict", "--n-predict"}, "N",
-        string_format("number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)", params.n_predict),
+        string_format(
+            ex == LLAMA_EXAMPLE_MAIN || ex == LLAMA_EXAMPLE_INFILL
+                ? "number of tokens to predict (default: %d, -1 = infinity, -2 = until context filled)"
+                : "number of tokens to predict (default: %d, -1 = infinity)",
+            params.n_predict),
         [](common_params & params, int value) {
             params.n_predict = value;
         }
@@ -575,11 +796,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--no-context-shift"},
-        string_format("disables context shift on inifinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
+        string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {
             params.ctx_shift = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
@@ -596,13 +817,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
-        ex == LLAMA_EXAMPLE_MAIN
-            ? "prompt to start generation with\nif -cnv is set, this will be used as system prompt"
-            : "prompt to start generation with",
+        "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
             params.prompt = value;
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-sys", "--system-prompt"}, "PROMPT",
+        "system prompt to use with model (if applicable, depending on chat template)",
+        [](common_params & params, const std::string & value) {
+            params.system_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -626,7 +852,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.prompt.pop_back();
             }
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-sysf", "--system-prompt-file"}, "FNAME",
+        "a file containing the system prompt (default: none)",
+        [](common_params & params, const std::string & value) {
+            std::ifstream file(value);
+            if (!file) {
+                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            }
+            std::copy(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>(), back_inserter(params.system_prompt));
+            if (!params.system_prompt.empty() && params.system_prompt.back() == '\n') {
+                params.system_prompt.pop_back();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
         "an input file (repeat to specify multiple files)",
@@ -653,7 +893,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.prompt = ss.str();
             fprintf(stderr, "Read %zu bytes from binary file %s\n", params.prompt.size(), value.c_str());
         }
-    ));
+    ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-e", "--escape"},
         string_format("process escapes sequences (\\n, \\r, \\t, \\', \\\", \\\\) (default: %s)", params.escape ? "true" : "false"),
@@ -712,15 +952,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-cnv", "--conversation"},
-        string_format(
-            "run in conversation mode:\n"
-            "- does not print special tokens and suffix/prefix\n"
-            "- interactive mode is also enabled\n"
-            "(default: %s)",
-            params.conversation ? "true" : "false"
-        ),
+        "run in conversation mode:\n"
+        "- does not print special tokens and suffix/prefix\n"
+        "- interactive mode is also enabled\n"
+        "(default: auto enabled if chat template is available)",
         [](common_params & params) {
-            params.conversation = true;
+            params.conversation_mode = COMMON_CONVERSATION_MODE_ENABLED;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
+        {"-no-cnv", "--no-conversation"},
+        "force disable conversation mode (default: false)",
+        [](common_params & params) {
+            params.conversation_mode = COMMON_CONVERSATION_MODE_DISABLED;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    add_opt(common_arg(
+        {"-st", "--single-turn"},
+        "run conversation for a single turn only, then exit when done\n"
+        "will not be interactive if first turn is predefined with --prompt\n"
+        "(default: false)",
+        [](common_params & params) {
+            params.single_turn = true;
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN}));
     add_opt(common_arg(
@@ -774,7 +1027,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -801,7 +1054,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--sampling-seq"}, "SEQUENCE",
+        {"--sampling-seq", "--sampler-seq"}, "SEQUENCE",
         string_format("simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str()),
         [](common_params & params, const std::string & value) {
             params.sampling.samplers = common_sampler_types_from_chars(value);
@@ -812,13 +1065,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "ignore end of stream token and continue generating (implies --logit-bias EOS-inf)",
         [](common_params & params) {
             params.sampling.ignore_eos = true;
-        }
-    ).set_sparam());
-    add_opt(common_arg(
-        {"--penalize-nl"},
-        string_format("penalize newline tokens (default: %s)", params.sampling.penalize_nl ? "true" : "false"),
-        [](common_params & params) {
-            params.sampling.penalize_nl = true;
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -851,6 +1097,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--top-nsigma"}, "N",
+        string_format("top-n-sigma sampling (default: %.1f, -1.0 = disabled)", params.sampling.top_n_sigma),
+        [](common_params & params, const std::string & value) {
+            params.sampling.top_n_sigma = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN}).set_sparam());
+    add_opt(common_arg(
         {"--xtc-probability"}, "N",
         string_format("xtc probability (default: %.1f, 0.0 = disabled)", (double)params.sampling.xtc_probability),
         [](common_params & params, const std::string & value) {
@@ -875,6 +1128,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--repeat-last-n"}, "N",
         string_format("last n tokens to consider for penalize (default: %d, 0 = disabled, -1 = ctx_size)", params.sampling.penalty_last_n),
         [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::runtime_error(string_format("error: invalid repeat-last-n = %d\n", value));
+            }
             params.sampling.penalty_last_n = value;
             params.sampling.n_prev = std::max(params.sampling.n_prev, params.sampling.penalty_last_n);
         }
@@ -929,6 +1185,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--dry-penalty-last-n"}, "N",
         string_format("set DRY penalty for the last n tokens (default: %d, 0 = disable, -1 = context size)", params.sampling.dry_penalty_last_n),
         [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::runtime_error(string_format("error: invalid dry-penalty-last-n = %d\n", value));
+            }
             params.sampling.dry_penalty_last_n = value;
         }
     ).set_sparam());
@@ -1162,18 +1421,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_NO_KV_OFFLOAD"));
     add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
-        string_format("KV cache data type for K (default: %s)", params.cache_type_k.c_str()),
+        string_format(
+            "KV cache data type for K\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.cache_type_k)
+        ),
         [](common_params & params, const std::string & value) {
-            // TODO: get the type right here
-            params.cache_type_k = value;
+            params.cache_type_k = kv_cache_type_from_str(value);
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_K"));
     add_opt(common_arg(
         {"-ctv", "--cache-type-v"}, "TYPE",
-        string_format("KV cache data type for V (default: %s)", params.cache_type_v.c_str()),
+        string_format(
+            "KV cache data type for V\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.cache_type_v)
+        ),
         [](common_params & params, const std::string & value) {
-            // TODO: get the type right here
-            params.cache_type_v = value;
+            params.cache_type_v = kv_cache_type_from_str(value);
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
@@ -1307,7 +1576,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             {"--rpc"}, "SERVERS",
             "comma separated list of RPC servers",
             [](common_params & params, const std::string & value) {
-                params.rpc_servers = value;
+                add_rpc_devices(value);
+                GGML_UNUSED(params);
             }
         ).set_env("LLAMA_ARG_RPC"));
     }
@@ -1332,7 +1602,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- isolate: only spawn threads on CPUs on the node that execution started on\n"
         "- numactl: use the CPU map provided by numactl\n"
         "if run without this previously, it is recommended to drop the system page cache before using this\n"
-        "see https://github.com/ggerganov/llama.cpp/issues/1437",
+        "see https://github.com/ggml-org/llama.cpp/issues/1437",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "distribute" || value == "") { params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE; }
             else if (value == "isolate") { params.numa = GGML_NUMA_STRATEGY_ISOLATE; }
@@ -1352,14 +1622,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
-            printf("Available devices:\n");
+            std::vector<ggml_backend_dev_t> rpc_devices;
+            std::vector<ggml_backend_dev_t> all_devices;
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 auto * dev = ggml_backend_dev_get(i);
                 if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                    size_t free, total;
-                    ggml_backend_dev_memory(dev, &free, &total);
-                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                    if (ggml_backend_reg_name(reg) == std::string("RPC")) {
+                        rpc_devices.push_back(dev);
+                    } else {
+                        all_devices.push_back(dev);
+                    }
                 }
+            }
+            // insert RPC devices in front
+            all_devices.insert(all_devices.begin(), rpc_devices.begin(), rpc_devices.end());
+            printf("Available devices:\n");
+            for (size_t i = 0; i < all_devices.size(); ++i) {
+                auto * dev = all_devices[i];
+                size_t free, total;
+                ggml_backend_dev_memory(dev, &free, &total);
+                printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
             }
             exit(0);
         }
@@ -1370,8 +1653,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_gpu_layers = value;
             if (!llama_supports_gpu_offload()) {
-                fprintf(stderr, "warning: not compiled with GPU offload support, --gpu-layers option will be ignored\n");
-                fprintf(stderr, "warning: see main README.md for information on enabling GPU BLAS support\n");
+                fprintf(stderr, "warning: no usable GPU found, --gpu-layers option will be ignored\n");
+                fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
+                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
             }
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
@@ -1455,7 +1739,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0 });
+            params.lora_adapters.push_back({ std::string(value), 1.0, nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -1463,7 +1747,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora-scaled"}, "FNAME", "SCALE",
         "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale) });
+            params.lora_adapters.push_back({ fname, std::stof(scale), nullptr });
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
@@ -1517,19 +1801,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MODEL_URL"));
     add_opt(common_arg(
-        {"-hfr", "--hf-repo"}, "REPO",
-        "Hugging Face model repository (default: unused)",
+        {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
+        "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "example: unsloth/phi-4-GGUF:q4_k_m\n"
+        "(default: unused)",
         [](common_params & params, const std::string & value) {
             params.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
+        {"-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
+        "Same as --hf-repo, but for the draft model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.hf_repo = value;
+        }
+    ).set_env("LLAMA_ARG_HFD_REPO"));
+    add_opt(common_arg(
         {"-hff", "--hf-file"}, "FILE",
-        "Hugging Face model file (default: unused)",
+        "Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)",
         [](common_params & params, const std::string & value) {
             params.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE"));
+    add_opt(common_arg(
+        {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
+        "Hugging Face model repository for the vocoder model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.hf_repo = value;
+        }
+    ).set_env("LLAMA_ARG_HF_REPO_V"));
+    add_opt(common_arg(
+        {"-hffv", "--hf-file-v"}, "FILE",
+        "Hugging Face model file for the vocoder model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.hf_file = value;
+        }
+    ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
         {"-hft", "--hf-token"}, "TOKEN",
         "Hugging Face access token (default: value from HF_TOKEN environment variable)",
@@ -1578,18 +1885,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
     add_opt(common_arg(
         {"-o", "--output", "--output-file"}, "FNAME",
-        string_format("output file (default: '%s')",
-            ex == LLAMA_EXAMPLE_EXPORT_LORA
-                ? params.lora_outfile.c_str()
-                : ex == LLAMA_EXAMPLE_CVECTOR_GENERATOR
-                    ? params.cvector_outfile.c_str()
-                    : params.out_file.c_str()),
+        string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
             params.out_file = value;
-            params.cvector_outfile = value;
-            params.lora_outfile = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -1679,7 +1979,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--host"}, "HOST",
-        string_format("ip address to listen (default: %s)", params.hostname.c_str()),
+        string_format("ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: %s)", params.hostname.c_str()),
         [](common_params & params, const std::string & value) {
             params.hostname = value;
         }
@@ -1698,6 +1998,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.public_path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
+    add_opt(common_arg(
+        {"--no-webui"},
+        string_format("Disable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.webui = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_WEBUI"));
     add_opt(common_arg(
         {"--embedding", "--embeddings"},
         string_format("restrict to only support embedding use case; use only with dedicated embedding models (default: %s)", params.embedding ? "enabled" : "disabled"),
@@ -1812,21 +2119,54 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
-        {"--chat-template"}, "JINJA_TEMPLATE",
-        "set custom jinja chat template (default: template taken from model's metadata)\n"
-        "if suffix/prefix are specified, template will be disabled\n"
-        "only commonly used templates are accepted:\nhttps://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template",
+        {"--jinja"},
+        "use jinja template for chat (default: disabled)",
+        [](common_params & params) {
+            params.use_jinja = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_JINJA"));
+    add_opt(common_arg(
+        {"--reasoning-format"}, "FORMAT",
+        "reasoning format (default: deepseek; allowed values: deepseek, none)\n"
+        "controls whether thought tags are extracted from the response, and in which format they're returned. 'none' leaves thoughts unparsed in `message.content`, 'deepseek' puts them in `message.reasoning_content` (for DeepSeek R1 & Command R7B only).\n"
+        "only supported for non-streamed responses",
         [](common_params & params, const std::string & value) {
-            if (!common_chat_verify_template(value)) {
-                throw std::runtime_error(string_format(
-                    "error: the supplied chat template is not supported: %s\n"
-                    "note: llama.cpp does not use jinja parser, we only support commonly used templates\n",
-                    value.c_str()
-                ));
-            }
+            /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
+            else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
+            else { std::invalid_argument("invalid value"); }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
+    add_opt(common_arg(
+        {"--chat-template"}, "JINJA_TEMPLATE",
+        string_format(
+            "set custom jinja chat template (default: template taken from model's metadata)\n"
+            "if suffix/prefix are specified, template will be disabled\n"
+            "only commonly used templates are accepted (unless --jinja is set before this flag):\n"
+            "list of built-in templates:\n%s", list_builtin_chat_templates().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    add_opt(common_arg(
+        {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
+        string_format(
+            "set custom jinja chat template file (default: template taken from model's metadata)\n"
+            "if suffix/prefix are specified, template will be disabled\n"
+            "only commonly used templates are accepted (unless --jinja is set before this flag):\n"
+            "list of built-in templates:\n%s", list_builtin_chat_templates().c_str()
+        ),
+        [](common_params & params, const std::string & value) {
+            std::ifstream file(value);
+            if (!file) {
+                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            }
+            std::copy(
+                std::istreambuf_iterator<char>(file),
+                std::istreambuf_iterator<char>(),
+                std::back_inserter(params.chat_template));
+        }
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
@@ -1933,7 +2273,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_LOG_VERBOSITY"));
     add_opt(common_arg(
         {"--log-prefix"},
-        "Enable prefx in log messages",
+        "Enable prefix in log messages",
         [](common_params &) {
             common_log_set_prefix(common_log_main(), true);
         }
@@ -2061,35 +2401,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.n_max = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
         {"--draft-min", "--draft-n-min"}, "N",
         string_format("minimum number of draft tokens to use for speculative decoding (default: %d)", params.speculative.n_min),
         [](common_params & params, int value) {
             params.speculative.n_min = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
         {"--draft-p-split"}, "P",
         string_format("speculative decoding split probability (default: %.1f)", (double)params.speculative.p_split),
         [](common_params & params, const std::string & value) {
             params.speculative.p_split = std::stof(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}).set_env("LLAMA_ARG_DRAFT_P_SPLIT"));
     add_opt(common_arg(
         {"--draft-p-min"}, "P",
         string_format("minimum speculative decoding probability (greedy) (default: %.1f)", (double)params.speculative.p_min),
         [](common_params & params, const std::string & value) {
             params.speculative.p_min = std::stof(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_P_MIN"));
     add_opt(common_arg(
         {"-cd", "--ctx-size-draft"}, "N",
         string_format("size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx),
         [](common_params & params, int value) {
             params.speculative.n_ctx = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CTX_SIZE_DRAFT"));
     add_opt(common_arg(
         {"-devd", "--device-draft"}, "<dev1,dev2,..>",
         "comma-separated list of devices to use for offloading the draft model (none = don't offload)\n"
@@ -2104,18 +2444,181 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.n_gpu_layers = value;
             if (!llama_supports_gpu_offload()) {
-                fprintf(stderr, "warning: not compiled with GPU offload support, --gpu-layers-draft option will be ignored\n");
-                fprintf(stderr, "warning: see main README.md for information on enabling GPU BLAS support\n");
+                fprintf(stderr, "warning: no usable GPU found, --gpu-layers-draft option will be ignored\n");
+                fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
+                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_N_GPU_LAYERS_DRAFT"));
     add_opt(common_arg(
         {"-md", "--model-draft"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
             params.speculative.model = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
+
+    add_opt(common_arg(
+        {"-mv", "--model-vocoder"}, "FNAME",
+        "vocoder model for audio generation (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.model = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
+     add_opt(common_arg(
+        {"--tts-use-guide-tokens"},
+        "Use guide tokens to improve TTS word recall",
+        [](common_params & params) {
+            params.vocoder.use_guide_tokens = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--tts-speaker-file"}, "FNAME",
+        "speaker file path for audio generation",
+        [](common_params & params, const std::string & value) {
+            params.vocoder.speaker_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
+
+    // model-specific
+    add_opt(common_arg(
+        {"--tts-oute-default"},
+        string_format("use default OuteTTS models (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
+            params.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
+            params.vocoder.hf_repo = "ggml-org/WavTokenizer";
+            params.vocoder.hf_file = "WavTokenizer-Large-75-F16.gguf";
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
+
+    add_opt(common_arg(
+        {"--embd-bge-small-en-default"},
+        string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
+            params.hf_file = "bge-small-en-v1.5-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--embd-e5-small-en-default"},
+        string_format("use default e5-small-v2 model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
+            params.hf_file = "e5-small-v2-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--embd-gte-small-default"},
+        string_format("use default gte-small model (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
+            params.hf_file = "gte-small-q8_0.gguf";
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.verbose_prompt = true;
+            params.embedding = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-1.5b-default"},
+        string_format("use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-3b-default"},
+        string_format("use default Qwen 2.5 Coder 3B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-7b-default"},
+        string_format("use default Qwen 2.5 Coder 7B (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-7b-spec"},
+        string_format("use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.speculative.n_gpu_layers = 99;
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-qwen-14b-spec"},
+        string_format("use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
+            params.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
+            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.speculative.n_gpu_layers = 99;
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     return ctx_arg;
 }

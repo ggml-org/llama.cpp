@@ -170,7 +170,7 @@ check_convert_script examples/convert_legacy_llama.py
 for py in convert_*.py; do
     # skip convert_hf_to_gguf_update.py
     # TODO: the check is failing for some reason:
-    #       https://github.com/ggerganov/llama.cpp/actions/runs/8875330981/job/24364557177?pr=6920
+    #       https://github.com/ggml-org/llama.cpp/actions/runs/8875330981/job/24364557177?pr=6920
     [[ $py == convert_hf_to_gguf_update.py ]] && continue
 
     check_convert_script "$py"

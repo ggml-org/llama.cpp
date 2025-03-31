@@ -3,9 +3,9 @@
 #include "outprod.hpp"
 
 
-void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst) {
-
+void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
+    const ggml_tensor *src0 = dst->src[0];
+    const ggml_tensor *src1 = dst->src[1];
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
@@ -40,14 +40,14 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, const ggml_tensor* sr
 
     try {
         // Perform matrix multiplication using oneMKL GEMM
-        oneapi::mkl::blas::column_major::gemm(*stream,
-            oneapi::mkl::transpose::nontrans, src1_op,
-            ne0, ne1, ne01,
-            alpha,
-            src0_d, ne00,
-            src1_d, ldb,
-            beta,
-            dst_d, ne0);
+#ifdef GGML_SYCL_NVIDIA
+        oneapi::mkl::blas::column_major::gemm(oneapi::mkl::backend_selector<oneapi::mkl::backend::cublas>{ *stream },
+                                              oneapi::mkl::transpose::nontrans, src1_op, ne0, ne1, ne01, alpha, src0_d,
+                                              ne00, src1_d, ldb, beta, dst_d, ne0);
+#else
+        oneapi::mkl::blas::column_major::gemm(*stream, oneapi::mkl::transpose::nontrans, src1_op, ne0, ne1, ne01, alpha,
+                                              src0_d, ne00, src1_d, ldb, beta, dst_d, ne0);
+#endif
     }
     catch (sycl::exception const& exc) {
         std::cerr << exc.what() << std::endl;

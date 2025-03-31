@@ -17,8 +17,10 @@ Checks: >
     -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
     performance-*,
     portability-*,
+    -portability-simd-intrinsics,
     misc-*,
     -misc-const-correctness,
     -misc-non-private-member-variables-in-classes,
     -misc-no-recursion,
+    -misc-use-anonymous-namespace,
 FormatStyle: none

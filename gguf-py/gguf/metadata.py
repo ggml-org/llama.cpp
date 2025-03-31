@@ -121,19 +121,39 @@ class Metadata:
         if not model_card_path.is_file():
             return {}
 
-        # The model card metadata is assumed to always be in YAML
+        # The model card metadata is assumed to always be in YAML (frontmatter)
         # ref: https://github.com/huggingface/transformers/blob/a5c642fe7a1f25d3bdcd76991443ba6ff7ee34b2/src/transformers/modelcard.py#L468-L473
+        yaml_content: str = ""
         with open(model_card_path, "r", encoding="utf-8") as f:
-            if f.readline() == "---\n":
-                raw = f.read().partition("---\n")[0]
-                data = yaml.safe_load(raw)
-                if isinstance(data, dict):
-                    return data
-                else:
-                    logger.error(f"while reading YAML model card frontmatter, data is {type(data)} instead of dict")
-                    return {}
-            else:
+            content = f.read()
+            lines = content.splitlines()
+            lines_yaml = []
+            if len(lines) == 0:
+                # Empty file
                 return {}
+            if len(lines) > 0 and lines[0] != "---":
+                # No frontmatter
+                return {}
+            for line in lines[1:]:
+                if line == "---":
+                    break # End of frontmatter
+                else:
+                    lines_yaml.append(line)
+            yaml_content = "\n".join(lines_yaml) + "\n"
+
+        # Quick hack to fix the Norway problem
+        # https://hitchdev.com/strictyaml/why/implicit-typing-removed/
+        yaml_content = yaml_content.replace("- no\n", "- \"no\"\n")
+
+        if yaml_content:
+            data = yaml.safe_load(yaml_content)
+            if isinstance(data, dict):
+                return data
+            else:
+                logger.error(f"while reading YAML model card frontmatter, data is {type(data)} instead of dict")
+                return {}
+        else:
+            return {}
 
     @staticmethod
     def load_hf_parameters(model_path: Optional[Path] = None) -> dict[str, Any]:

@@ -12,7 +12,7 @@ $ apt update && apt upgrade -y
 $ apt install git cmake
 ```
 
-Then, follow the [build instructions](https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md), specifically for CMake.
+Then, follow the [build instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md), specifically for CMake.
 
 Once the binaries are built, download your model of choice (e.g., from Hugging Face). It's recommended to place it in the `~/` directory for best performance:
 
@@ -23,10 +23,10 @@ $ curl -L {model-url} -o ~/{model}.gguf
 Then, if you are not already in the repo directory, `cd` into `llama.cpp` and:
 
 ```
-$ ./build/bin/llama-simple -m ~/{model}.gguf -c {context-size} -p "{your-prompt}"
+$ ./build/bin/llama-cli -m ~/{model}.gguf -c {context-size} -p "{your-prompt}"
 ```
 
-Here, we show `llama-simple`, but any of the executables under `examples` should work, in theory. Be sure to set `context-size` to a reasonable number (say, 4096) to start with; otherwise, memory could spike and kill your terminal.
+Here, we show `llama-cli`, but any of the executables under `examples` should work, in theory. Be sure to set `context-size` to a reasonable number (say, 4096) to start with; otherwise, memory could spike and kill your terminal.
 
 To see what it might look like visually, here's an old demo of an interactive session running on a Pixel 5 phone:
 

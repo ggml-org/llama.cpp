@@ -20,12 +20,14 @@ layout (push_constant) uniform parameter {
     uint nb00;
     uint nb01;
     uint nb02;
+    uint nb03;
     int ne10;
     int ne11;
     int ne12;
     uint nb10;
     uint nb11;
     uint nb12;
+    uint nb13;
     int ne0;
     int ne1;
     uint r2;
@@ -42,7 +44,7 @@ void main() {
     const uint i12 = im%pcs.ne12;
     const uint i13 = im/pcs.ne12;
 
-    const uint offset0 = r0*pcs.nb01 + (i12/pcs.r2)*pcs.nb02 + (i13/pcs.r3)*pcs.nb02*pcs.ne02;
+    const uint offset0 = r0*pcs.nb01 + (i12/pcs.r2)*pcs.nb02 + (i13/pcs.r3)*pcs.nb03;
 
     const uint x = offset0 / 2 + pcs.inAOff; // Based from inA
 
@@ -52,7 +54,7 @@ void main() {
             break;
         }
 
-        const uint y = (r1*pcs.nb11 + im*pcs.nb12) / 4 + pcs.inBOff; // Based from inB
+        const uint y = (r1*pcs.nb11 + i12*pcs.nb12 + i13*pcs.nb13) / 4 + pcs.inBOff;
 
         float sumf = 0;
         for (uint i = gl_SubgroupInvocationID.x; i < pcs.ne00; i += gl_SubgroupSize) {

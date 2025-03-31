@@ -3,7 +3,7 @@
 The purpose of this example is to demonstrate a minimal usage of llama.cpp for generating text with a given prompt.
 
 ```bash
-./llama-simple -m ./models/llama-7b-v2/ggml-model-f16.gguf -p "Hello my name is"
+./llama-simple -m ./models/llama-7b-v2/ggml-model-f16.gguf "Hello my name is"
 
 ...
 

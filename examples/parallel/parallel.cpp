@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <algorithm>
 
 // trim whitespace from the beginning and end of a string
 static std::string trim(const std::string & str) {
@@ -132,8 +133,10 @@ int main(int argc, char ** argv) {
     // load the target model
     common_init_result llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model;
-    llama_context * ctx = llama_init.context;
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
@@ -199,7 +202,7 @@ int main(int argc, char ** argv) {
 
         // assign the system KV cache to all parallel sequences
         for (int32_t i = 1; i <= n_clients; ++i) {
-            llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+            llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
         }
 
         LOG_INF("\n");
@@ -231,9 +234,9 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens == 0) {
             // all sequences have ended - clear the entire KV cache
             for (int i = 1; i <= n_clients; ++i) {
-                llama_kv_cache_seq_rm(ctx, i, -1, -1);
+                llama_kv_self_seq_rm(ctx, i, -1, -1);
                 // but keep the system prompt
-                llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+                llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
             }
 
             LOG_INF("%s: clearing the KV cache\n", __func__);
@@ -358,7 +361,7 @@ int main(int argc, char ** argv) {
                 //        client.id, client.seq_id, id, client.n_decoded, client.i_batch, token_str.c_str());
 
                 if (client.n_decoded > 2 &&
-                        (llama_token_is_eog(model, id) ||
+                        (llama_vocab_is_eog(vocab, id) ||
                          (params.n_predict > 0 && client.n_decoded + client.n_prompt >= params.n_predict) ||
                          client.response.find("User:") != std::string::npos ||
                          client.response.find('\n') != std::string::npos)) {
@@ -369,8 +372,8 @@ int main(int argc, char ** argv) {
                     }
 
                     // delete only the generated part of the sequence, i.e. keep the system prompt in the cache
-                    llama_kv_cache_seq_rm(ctx,    client.id + 1, -1, -1);
-                    llama_kv_cache_seq_cp(ctx, 0, client.id + 1, -1, -1);
+                    llama_kv_self_seq_rm(ctx,    client.id + 1, -1, -1);
+                    llama_kv_self_seq_cp(ctx, 0, client.id + 1, -1, -1);
 
                     const auto t_main_end = ggml_time_us();
 
@@ -415,9 +418,6 @@ int main(int argc, char ** argv) {
     llama_perf_context_print(ctx);
 
     llama_batch_free(batch);
-
-    llama_free(ctx);
-    llama_free_model(model);
 
     llama_backend_free();
 

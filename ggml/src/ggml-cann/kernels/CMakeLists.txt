@@ -25,6 +25,6 @@ ascendc_library(ascendc_kernels STATIC
     ${SRC_FILES}
 )
 
-message(STATUS "CANN: compile ascend kernels witch SOC_VERSION:${SOC_VERSION}.")
+message(STATUS "CANN: compile ascend kernels witch SOC_TYPE:${SOC_TYPE}, SOC_VERSION:${SOC_VERSION}, compile macro:-D${SOC_TYPE_COMPILE_OPTION}.")
 ascendc_compile_definitions(ascendc_kernels PRIVATE "-D${SOC_TYPE_COMPILE_OPTION}")
 # ascendc_compile_definitions(ascendc_kernels PRIVATE -DASCENDC_DUMP)

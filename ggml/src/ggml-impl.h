@@ -3,6 +3,8 @@
 // GGML internal header
 
 #include "ggml.h"
+#include "gguf.h"
+
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h> // load `stdlib.h` before other headers to work around MinGW bug: https://sourceforge.net/p/mingw-w64/bugs/192/
@@ -14,7 +16,7 @@
 #include <arm_sve.h>
 #endif // __ARM_FEATURE_SVE
 
-#if defined(__ARM_NEON) && !defined(__CUDACC__)
+#if defined(__ARM_NEON) && !defined(__CUDACC__) && !defined(__MUSACC__)
 // if YCM cannot find <arm_neon.h>, make a symbolic link to it, for example:
 //
 //   $ ln -sfn /Library/Developer/CommandLineTools/usr/lib/clang/13.1.6/include/arm_neon.h ./src/
@@ -30,11 +32,13 @@
 extern "C" {
 #endif
 
-#undef MIN
-#undef MAX
+#ifndef MIN
+#    define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
 
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#ifndef MAX
+#    define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
 
 // required for mmap as gguf only guarantees 32-byte alignment
 #define TENSOR_ALIGNMENT 32
@@ -72,8 +76,8 @@ static inline int ggml_up(int n, int m) {
 //
 
 GGML_ATTRIBUTE_FORMAT(2, 3)
-void ggml_log_internal        (enum ggml_log_level level, const char * format, ...);
-void ggml_log_callback_default(enum ggml_log_level level, const char * text, void * user_data);
+GGML_API void ggml_log_internal        (enum ggml_log_level level, const char * format, ...);
+GGML_API void ggml_log_callback_default(enum ggml_log_level level, const char * text, void * user_data);
 
 #define GGML_LOG(...)       ggml_log_internal(GGML_LOG_LEVEL_NONE , __VA_ARGS__)
 #define GGML_LOG_INFO(...)  ggml_log_internal(GGML_LOG_LEVEL_INFO , __VA_ARGS__)
@@ -302,20 +306,20 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph, int i0, int i1);
 
 // Memory allocation
 
-void * ggml_aligned_malloc(size_t size);
-void ggml_aligned_free(void * ptr, size_t size);
+GGML_API void * ggml_aligned_malloc(size_t size);
+GGML_API void ggml_aligned_free(void * ptr, size_t size);
 
 // FP16 to FP32 conversion
 
 #if defined(__ARM_NEON)
-    #ifdef _MSC_VER
+    #if defined(_MSC_VER) || (defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11)
         typedef uint16_t ggml_fp16_internal_t;
     #else
         typedef __fp16 ggml_fp16_internal_t;
     #endif
 #endif
 
-#if defined(__ARM_NEON) && !defined(_MSC_VER)
+#if defined(__ARM_NEON) && !defined(_MSC_VER) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11)
     #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
     #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
 
@@ -376,6 +380,35 @@ void ggml_aligned_free(void * ptr, size_t size);
             /* in */   "f"(f));
         return r;
     }
+
+#elif defined(__riscv) && defined(GGML_RV_ZFH)
+
+    static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
+        float f;
+        __asm__(
+            "fmv.h.x %[f], %[h]\n\t"
+            "fcvt.s.h %[f], %[f]"
+            : [f] "=&f" (f)
+            : [h] "r" (h)
+        );
+        return f;
+    }
+
+    static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
+        ggml_fp16_t res;
+        __asm__(
+            "fcvt.h.s %[f], %[f]\n\t"
+            "fmv.x.h %[h], %[f]"
+            : [h] "=&r" (res)
+            : [f] "f" (f)
+        );
+        return res;
+    }
+
+    #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
+    #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
+    #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
+    #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
 #else
 
@@ -552,3 +585,12 @@ static inline ggml_bf16_t ggml_compute_fp32_to_bf16(float s) {
 #ifdef __cplusplus
 }
 #endif
+
+#ifdef __cplusplus
+#include <vector>
+
+// expose GGUF internals for test code
+GGML_API size_t gguf_type_size(enum gguf_type type);
+GGML_API struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params);
+GGML_API void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta);
+#endif // __cplusplus

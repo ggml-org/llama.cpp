@@ -39,7 +39,7 @@
 "
 "   :call llama#init()
 "
-" more info: https://github.com/ggerganov/llama.cpp/pull/9787
+" more info: https://github.com/ggml-org/llama.cpp/pull/9787
 "
 
 " colors (adjust to your liking)

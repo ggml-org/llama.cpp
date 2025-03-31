@@ -16,6 +16,8 @@
 #include "common.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
+typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v);
 
 static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
@@ -24,6 +26,29 @@ static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
     const dfloat d = x[ib].d;
 
     const int vui = x[ib].qs[iqs];
+
+    v.x() = vui & 0xF;
+    v.y() = vui >> 4;
+
+#ifdef GGML_SYCL_F16
+    // v = v - {8.0f, 8.0f};
+    // v = v * {d, d};
+    v.s0() = (v.s0() - 8.0f) * d;
+    v.s1() = (v.s1() - 8.0f) * d;
+
+#else
+    v.x() = (v.x() - 8.0f) * d;
+    v.y() = (v.y() - 8.0f) * d;
+#endif // GGML_SYCL_F16
+}
+
+static __dpct_inline__ void dequantize_q4_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    // const block_q4_0 * x = (const block_q4_0 *) vx;
+
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr+ib);
+
+    const int vui = *((const uint8_t *)qs+iqs);
 
     v.x() = vui & 0xF;
     v.y() = vui >> 4;
@@ -165,6 +190,36 @@ static void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restri
         y[l+ 0] = d * (q[l] & 0xF) + dm;
         y[l+16] = d * (q[l] >>  4) + dm;
     }
+}
+
+template<typename dst_t>
+static void dequantize_block_q4_0_reorder(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
+                                  const sycl::nd_item<3> &item_ct1) {
+
+    const int64_t i = item_ct1.get_group(2);
+    auto k=nb32;
+    // assume 32 threads
+    const int64_t tid = item_ct1.get_local_id(2);
+    const int lane_ib = i * WARP_SIZE + tid;
+
+    if (lane_ib >= k / QK4_0) {
+        return;
+    }
+
+    dst_t * y_ptr = yy + lane_ib * QK4_0;
+
+    auto qs = (const uint8_t*)vx + lane_ib * QK4_0 / 2;
+    auto s_ptr = (const sycl::half*)((const uint8_t*)vx + k / 2) + lane_ib;
+
+    const float d = float(*s_ptr);
+
+#pragma unroll
+    for (int l = 0; l < QK4_0 / 2; ++l) {
+        int vq = qs[l];
+        y_ptr[l + 0] = d * ((vq & 0xF) - 8);
+        y_ptr[l + 16] = d * ((vq >> 4) - 8);
+    }
+
 }
 
 template<typename dst_t>

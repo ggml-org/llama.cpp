@@ -22,13 +22,14 @@ if(NOT SOC_TYPE)
     detect_ascend_soc_type(SOC_VERSION)
     set(SOC_TYPE "${SOC_VERSION}")
     message(STATUS "CANN: SOC_VERSION auto-detected is:${SOC_VERSION}")
-else()
-    string(TOLOWER ${SOC_TYPE} SOC_VERSION)
 endif()
 
-# Construct Soc specify compile option: ASCEND_#Soc_Major_SN. Such as ASCEND_910B, ASCEND310P.
+string(TOLOWER ${SOC_TYPE} SOC_VERSION) # SOC_VERSION need lower
+
+# Construct Soc specify compile option: ASCEND_#Soc_Major_SN. Such as ASCEND_910B, ASCEND_310P.
 string(REGEX MATCH "[0-9]+[a-zA-Z]" SOC_TYPE_MAJOR_SN "${SOC_VERSION}")
 set(SOC_TYPE_COMPILE_OPTION "ASCEND_${SOC_TYPE_MAJOR_SN}")
+string(TOUPPER ${SOC_TYPE_COMPILE_OPTION} SOC_TYPE_COMPILE_OPTION)
 
 if (CANN_INSTALL_DIR)
     # Only Support Linux.

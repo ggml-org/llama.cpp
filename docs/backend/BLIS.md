@@ -27,13 +27,6 @@ We recommend using openmp since it's easier to modify the cores being used.
 
 ### llama.cpp compilation
 
-Makefile:
-
-```bash
-make GGML_BLIS=1 -j
-# make GGML_BLIS=1 llama-benchmark-matmult
-```
-
 CMake:
 
 ```bash

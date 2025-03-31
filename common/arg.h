@@ -12,6 +12,7 @@
 
 struct common_arg {
     std::set<enum llama_example> examples = {LLAMA_EXAMPLE_COMMON};
+    std::set<enum llama_example> excludes = {};
     std::vector<const char *> args;
     const char * value_hint   = nullptr; // help text or example for arg value
     const char * value_hint_2 = nullptr; // for second arg value
@@ -53,9 +54,11 @@ struct common_arg {
     ) : args(args), value_hint(value_hint), value_hint_2(value_hint_2), help(help), handler_str_str(handler) {}
 
     common_arg & set_examples(std::initializer_list<enum llama_example> examples);
+    common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
     common_arg & set_env(const char * env);
     common_arg & set_sparam();
     bool in_example(enum llama_example ex);
+    bool is_exclude(enum llama_example ex);
     bool get_value_from_env(std::string & output);
     bool has_value_from_env();
     std::string to_string();
