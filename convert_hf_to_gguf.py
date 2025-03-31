@@ -5146,7 +5146,7 @@ class BailingMoeModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if "head_dim" in hparams:
+        if hparams.get("head_dim"):
             rope_dim = hparams["head_dim"]
         else:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
