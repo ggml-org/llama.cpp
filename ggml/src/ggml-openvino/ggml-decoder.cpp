@@ -92,8 +92,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             if (ggml_is_contiguous(node)) {
                 std::string src1_name = std::string(node->src[1]->name);
                 inputs[src0_name] = node->src[0];
-                // inputs[src1_name] = node->src[1];
-                // outputs[node_name] = node;
                 src1_name = std::string(node->src[1]->view_src->name);
                 inputs[src1_name] = node->src[1];
                 node_name = std::string(node->view_src->name);
@@ -110,9 +108,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
                                             static_cast<size_t>(node->src[0]->ne[0])};
                 auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input1_shape);
                 m_params.push_back(input1_param);
-                // ov::Shape input2_shape = { static_cast<size_t>(node->src[1]->ne[2]),
-                //                             static_cast<size_t>(node->src[1]->ne[1]),
-                //                             static_cast<size_t>(node->src[1]->ne[0])};
                 ov::Shape input2_shape = { static_cast<size_t>(node->src[1]->ne[2]),
                                             static_cast<size_t>(node->src[1]->ne[1]),
                                             static_cast<size_t>(node->src[1]->view_src->ne[0])};
@@ -122,8 +117,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             } else {
                 std::string src1_name = std::string(node->src[1]->name);
                 inputs[src0_name] = node->src[0];
-                // inputs[src1_name] = node->src[1];
-                // outputs[node_name] = node;
                 src1_name = std::string(node->src[1]->view_src->name);
                 inputs[src1_name] = node->src[1];
                 node_name = std::string(node->view_src->name);
@@ -152,44 +145,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         case GGML_OP_VIEW:
         {
             inputs[src0_name] = node->src[0];
-            // if (node->ne[0] == 21504 || node->ne[0] == 7
-            //     || node->ne[0] == 3072 && node->src[0]->ne[0] == 98304
-            //     || node->ne[0] == 1 && node->src[0]->ne[0] == 98304) {
-            // // if (node->ne[0] == 21504 || node->ne[0] == 7) {
-            //     node_name = std::string(node->view_src->name);
-            //     outputs[node_name] = node;
-            // } else {
-            //     outputs[node_name] = node;
-            // }
-            // if (node->ne[0] == 3072 && node->ne[1] == 1 && node->ne[2] == 1) {
-            //     outputs[src0_name] = node;
-            //     m_output_names.push_back(src0_name);
-            // } else {
-            //     outputs[node_name] = node;
-            //     m_output_names.push_back(node_name);
-            // }
             outputs[node_name] = node;
             m_input_names.push_back(src0_name);
             m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
             m_output_names.push_back(node_name);
-
-            // ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
-            //                             static_cast<size_t>(node->src[0]->ne[1]),
-            //                             static_cast<size_t>(node->src[0]->ne[0])};
-            // auto type = get_input_type(src0_name);
-            // auto input_param = std::make_shared<ov::op::v0::Parameter>(type, input_shape);
-            // m_params.push_back(input_param);
-
-            // if (node->ne[0] > node->ne[1] && (node->ne[0] * node->nb[0] != node->nb[1]) && node->ne[2] == 1) {
-            //     m_continuous = false;
-            // } else {
-            //     m_continuous = true;
-
-            // }
-            // m_continuous = false;
-
-            // [TODO]: multiple cases
-
             break;
         }
         // SCALE
@@ -211,11 +170,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             }
             std::string src1_name = std::string(node->src[1]->name);
             inputs[src0_name] = node->src[0];
-            // if (node->ne[0] == 32 &&node->src[0]->type == GGML_TYPE_I32) {
-            //     static_cast<int32_t*>(inputs[src0_name]->data)[0] = 1;
-            // } else if (node->ne[0] == 32 && node->src[0]->type == GGML_TYPE_F16) {
-            //     static_cast<uint16_t*>(inputs[src0_name]->data)[0] = static_cast<uint16_t>(1);
-            // }
             inputs[src1_name] = node->src[1];
             outputs[node_name] = node;
             m_input_names.push_back(src0_name);

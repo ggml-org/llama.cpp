@@ -1045,25 +1045,12 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
                 ggml_backend_openvino_transpose(cgraph->nodes[i]);
             } else if (std::find(cpy_indices.begin(), cpy_indices.end(), i) != cpy_indices.end()) {
                 ggml_backend_openvino_cpy(cgraph->nodes[i]);
-            // } else if (std::find(permute_indices.begin(), permute_indices.end(), i) != permute_indices.end()) {
-            //     ggml_backend_openvino_permute(cgraph->nodes[i]);
             } else if (std::find(view_indices.begin(), view_indices.end(), i) != view_indices.end()) {
                 ggml_backend_openvino_view(cgraph->nodes[i]);
             } else if (std::find(cont_indices.begin(), cont_indices.end(), i) != cont_indices.end()) {
                 ggml_backend_openvino_dup_bytes(cgraph->nodes[i]);
             } else if (std::find(reshape_indices.begin(), reshape_indices.end(), i) != reshape_indices.end()) {
                 ggml_backend_openvino_reshape(cgraph->nodes[i]);
-
-            // } else if (std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) != mul_mat_indices.end()) {
-            //     ggml_backend_openvino_mul_mat(cgraph->nodes[i]);
-            // } else if (std::find(view_indices_prompt.begin(), view_indices_prompt.end(), i) != view_indices_prompt.end()) {
-            //     ggml_backend_openvino_view(cgraph->nodes[i]);
-            // }else if (std::find(view_split.begin(), view_split.end(), i) != view_split.end()) {
-            //     ggml_backend_openvino_view(cgraph->nodes[i]);
-            // }else if (std::find(cpy_split_16.begin(), cpy_split_16.end(), i) != cpy_split_16.end()) {
-            //     ggml_backend_openvino_cpy(cgraph->nodes[i]);
-            // }else if (std::find(cpy_split_19.begin(), cpy_split_19.end(), i) != cpy_split_19.end()) {
-            //     ggml_backend_openvino_cpy(cgraph->nodes[i]);
             } else {
                 // Process a range of nodes with openvino_frontend_compute
                 int start_index = i;
@@ -1071,16 +1058,9 @@ static enum ggml_status ggml_backend_openvino_graph_compute(ggml_backend_t backe
                         && std::find(add_indices.begin(), add_indices.end(), i) == add_indices.end()
                         && std::find(transpose_indices.begin(), transpose_indices.end(), i) == transpose_indices.end()
                         && std::find(cpy_indices.begin(), cpy_indices.end(), i) == cpy_indices.end()
-                        // && std::find(permute_indices.begin(), permute_indices.end(), i) == permute_indices.end()
                         && std::find(view_indices.begin(), view_indices.end(), i) == view_indices.end()
                         && std::find(cont_indices.begin(), cont_indices.end(), i) == cont_indices.end()
                         && std::find(reshape_indices.begin(), reshape_indices.end(), i) == reshape_indices.end()
-
-                        // && std::find(mul_mat_indices.begin(), mul_mat_indices.end(), i) == mul_mat_indices.end()
-                        // && (std::find(view_indices_prompt.begin(), view_indices_prompt.end(), i) == view_indices_prompt.end())
-                        // && std::find(view_split.begin(), view_split.end(), i) == view_split.end()
-                        // && std::find(cpy_split_16.begin(), cpy_split_16.end(), i) == cpy_split_16.end()
-                        // && std::find(cpy_split_19.begin(), cpy_split_19.end(), i) == cpy_split_19.end()
                         ) {
                     i++;
                 }
