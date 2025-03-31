@@ -15,42 +15,36 @@ class LLamaAndroid {
      * JNI methods
      * @see llama-android.cpp
      */
-    private external fun log_to_android()
-    private external fun system_info(): String
-    private external fun backend_init()
+    private external fun systemInfo(): String
 
-    private external fun load_model(filename: String): Int
-    private external fun ctx_init(): Int
-    private external fun clean_up()
+    private external fun loadModel(filename: String): Int
+    private external fun initContext(): Int
+    private external fun cleanUp()
 
-    private external fun bench_model(pp: Int, tg: Int, pl: Int, nr: Int): String
+    private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
 
-    private external fun process_system_prompt(system_prompt: String): Int
-    private external fun process_user_prompt(user_prompt: String, nLen: Int): Int
-    private external fun predict_loop(): String?
+    private external fun processSystemPrompt(systemPrompt: String): Int
+    private external fun processUserPrompt(userPrompt: String, nPredict: Int): Int
+    private external fun predictLoop(): String?
 
     /**
      * Thread local state
      */
     private sealed interface State {
-        data object Idle: State
-        data object ModelLoaded: State
-        data object ReadyForUserPrompt: State
+        data object NotInitialized: State
+        data object EnvReady: State
+        data object AwaitingUserPrompt: State
+        data object Processing: State
     }
-    private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.Idle }
+    private val threadLocalState: ThreadLocal<State> = ThreadLocal.withInitial { State.NotInitialized }
 
     private val runLoop: CoroutineDispatcher = Executors.newSingleThreadExecutor {
-        thread(start = false, name = "Llm-RunLoop") {
+        thread(start = false, name = LLAMA_THREAD) {
             Log.d(TAG, "Dedicated thread for native code: ${Thread.currentThread().name}")
 
             // No-op if called more than once.
-            System.loadLibrary("llama-android")
-
-            // Set llama log handler to Android
-            log_to_android()
-            backend_init()
-
-            Log.d(TAG, system_info())
+            System.loadLibrary(LIB_LLAMA_ANDROID)
+            Log.d(TAG, systemInfo())
 
             it.run()
         }.apply {
@@ -61,26 +55,26 @@ class LLamaAndroid {
     }.asCoroutineDispatcher()
 
     /**
-     * Load the LLM, then process the system prompt if provided
+     * Load the LLM, then process the formatted system prompt if provided
      */
     suspend fun load(pathToModel: String, formattedSystemPrompt: String? = null) {
         withContext(runLoop) {
             when (threadLocalState.get()) {
-                is State.Idle -> {
-                    val model = load_model(pathToModel)
-                    if (model != 0)  throw IllegalStateException("Load model failed")
+                is State.NotInitialized -> {
+                    val modelResult = loadModel(pathToModel)
+                    if (modelResult != 0)  throw IllegalStateException("Load model failed: $modelResult")
 
-                    val result = ctx_init()
-                    if (result != 0) throw IllegalStateException("Initialization failed with error code: $result")
+                    val initResult = initContext()
+                    if (initResult != 0) throw IllegalStateException("Initialization failed with error code: $initResult")
 
                     Log.i(TAG, "Loaded model $pathToModel")
-                    threadLocalState.set(State.ModelLoaded)
+                    threadLocalState.set(State.EnvReady)
 
                     formattedSystemPrompt?.let {
                         initWithSystemPrompt(formattedSystemPrompt)
                     } ?: {
                         Log.w(TAG, "No system prompt to process.")
-                        threadLocalState.set(State.ReadyForUserPrompt)
+                        threadLocalState.set(State.AwaitingUserPrompt)
                     }
                 }
                 else -> throw IllegalStateException("Model already loaded")
@@ -94,15 +88,16 @@ class LLamaAndroid {
     private suspend fun initWithSystemPrompt(formattedMessage: String) {
         withContext(runLoop) {
             when (threadLocalState.get()) {
-                is State.ModelLoaded -> {
+                is State.EnvReady -> {
                     Log.i(TAG, "Process system prompt...")
-                    process_system_prompt(formattedMessage).let {
+                    threadLocalState.set(State.Processing)
+                    processSystemPrompt(formattedMessage).let {
                         if (it != 0)
                             throw IllegalStateException("Failed to process system prompt: $it")
                     }
 
                     Log.i(TAG, "System prompt processed!")
-                    threadLocalState.set(State.ReadyForUserPrompt)
+                    threadLocalState.set(State.AwaitingUserPrompt)
                 }
                 else -> throw IllegalStateException(
                     "Failed to process system prompt: Model not loaded!"
@@ -112,31 +107,36 @@ class LLamaAndroid {
     }
 
     /**
-     * Send plain text user prompt to LLM
+     * Send formatted user prompt to LLM
      */
     fun sendUserPrompt(
         formattedMessage: String,
         nPredict: Int = DEFAULT_PREDICT_LENGTH,
     ): Flow<String> = flow {
-        when (threadLocalState.get()) {
-            is State.ReadyForUserPrompt -> {
-                process_user_prompt(formattedMessage, nPredict).let {
-                    if (it != 0) {
-                        Log.e(TAG, "Failed to process user prompt: $it")
+        when (val state = threadLocalState.get()) {
+            is State.AwaitingUserPrompt -> {
+                Log.i(TAG, "Sending user prompt...")
+                threadLocalState.set(State.Processing)
+                processUserPrompt(formattedMessage, nPredict).let { result ->
+                    if (result != 0) {
+                        Log.e(TAG, "Failed to process user prompt: $result")
                         return@flow
                     }
                 }
 
                 Log.i(TAG, "User prompt processed! Generating assistant prompt...")
                 while (true) {
-                    val str = predict_loop() ?: break
-                    if (str.isNotEmpty()) {
-                        emit(str)
-                    }
+                    predictLoop()?.let { utf8token ->
+                        if (utf8token.isNotEmpty()) emit(utf8token)
+                    } ?: break
                 }
+
                 Log.i(TAG, "Assistant generation complete!")
+                threadLocalState.set(State.AwaitingUserPrompt)
             }
-            else -> {}
+            else -> {
+                Log.w(TAG, "User prompt discarded due to incorrect state: $state")
+            }
         }
     }.flowOn(runLoop)
 
@@ -146,9 +146,9 @@ class LLamaAndroid {
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
         return withContext(runLoop) {
             when (val state = threadLocalState.get()) {
-                is State.ModelLoaded -> {
+                is State.EnvReady -> {
                     Log.d(TAG, "bench(): $state")
-                    bench_model(pp, tg, pl, nr)
+                    benchModel(pp, tg, pl, nr)
                 }
 
                 // TODO-hyin: catch exception in ViewController; disable button when state incorrect
@@ -164,12 +164,14 @@ class LLamaAndroid {
      */
     suspend fun unload() {
         withContext(runLoop) {
-            when (threadLocalState.get()) {
-                is State.ModelLoaded -> {
-                    clean_up()
-                    threadLocalState.set(State.Idle)
+            when (val state = threadLocalState.get()) {
+                is State.EnvReady, State.AwaitingUserPrompt -> {
+                    cleanUp()
+                    threadLocalState.set(State.NotInitialized)
                 }
-                else -> {}
+                else -> {
+                    Log.w(TAG, "Cannot unload model due to incorrect state: $state")
+                }
             }
         }
     }
@@ -177,7 +179,10 @@ class LLamaAndroid {
     companion object {
         private val TAG = this::class.simpleName
 
-        private const val DEFAULT_PREDICT_LENGTH = 128
+        private const val LIB_LLAMA_ANDROID = "llama-android"
+        private const val LLAMA_THREAD = "llama-thread"
+
+        private const val DEFAULT_PREDICT_LENGTH = 64
 
         // Enforce only one instance of Llm.
         private val _instance: LLamaAndroid = LLamaAndroid()
