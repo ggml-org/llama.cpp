@@ -1,4 +1,4 @@
-#include "ssm_scan.cuh"
+#include "ssm-scan.cuh"
 
 // #include <cuda_runtime.h>
 // static __device__ void global_to_shared(const float *src, float *dst) {

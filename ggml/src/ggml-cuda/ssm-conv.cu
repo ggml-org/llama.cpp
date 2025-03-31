@@ -1,4 +1,4 @@
-#include "ssm_conv.cuh"
+#include "ssm-conv.cuh"
 
 template <size_t split_d_inner, size_t d_conv>
 static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float * __restrict__ src1,
