@@ -347,15 +347,16 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int 
 
 // Copy destination pointers to GPU to be available when pointer indirection is in use
 
-void ggml_backend_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size) {
+void ggml_backend_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, cudaStream_t stream) {
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
     if(cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
         if (cuda_graph->dest_ptrs_d != nullptr) cudaFree(cuda_graph->dest_ptrs_d);
+        cudaStreamSynchronize(stream);
         cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *));
         cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
     }
     // copy destination pointers to GPU
-    cudaMemcpy(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice);
+    cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream);
     cuda_graph->graph_cpynode_index = 0; // reset index
 #endif
 }

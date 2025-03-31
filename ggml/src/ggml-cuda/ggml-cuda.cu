@@ -2486,7 +2486,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
     if(use_cuda_graph)
     {
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
-        ggml_backend_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size());
+        ggml_backend_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size(), cuda_ctx->stream());
     }
 
     return use_cuda_graph;
