@@ -6,7 +6,6 @@ on:
 jobs:
   ubuntu-latest-riscv64-cpu-cross:
     runs-on: ubuntu-latest
-    if: ${{ false }}  # todo: re-enable this when riscv compile error fixed
 
     steps:
       - uses: actions/checkout@v4
@@ -42,7 +41,6 @@ jobs:
 
   ubuntu-latest-riscv64-vulkan-cross:
     runs-on: ubuntu-latest
-    if: ${{ false }}  # todo: re-enable this when riscv compile error fixed
 
     steps:
       - uses: actions/checkout@v4
