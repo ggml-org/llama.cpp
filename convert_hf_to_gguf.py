@@ -3557,8 +3557,8 @@ class RWKV6Qwen2Model(Rwkv6Model):
         head_size = hidden_size // num_attention_heads
         rms_norm_eps = self.hparams["rms_norm_eps"]
         intermediate_size = self.hparams["intermediate_size"]
-        time_mix_extra_dim = 64 if hidden_size >= 4096 else 32
-        time_decay_extra_dim = 128 if hidden_size >= 4096 else 64
+        time_mix_extra_dim = self.hparams.get("lora_rank_tokenshift", 64 if hidden_size >= 4096 else 32)
+        time_decay_extra_dim = self.hparams.get("lora_rank_decay", 128 if hidden_size >= 4096 else 64)
 
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
