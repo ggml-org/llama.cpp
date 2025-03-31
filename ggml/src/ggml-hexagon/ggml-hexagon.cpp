@@ -151,6 +151,7 @@ struct ggml_backend_hexagon_context;
 #define QNN_VER_PTR(x)                                  (&((x).v1))
 #define RPCMEM_DEFAULT_FLAGS                            1
 #define RPCMEM_HEAP_ID_SYSTEM                           25
+#define SIZE_IN_MB                                      (1 << 20)
 #define STATUS_CONTEXT                                  0x12345678
 
 #define CHECK_QNN_API(error, result)                                            \
@@ -277,30 +278,13 @@ struct ggml_backend_hexagon_context {
     int n_threads;
 
     //Hexagon resource management for the general approach through Hexagaon cDSP
+    size_t rpc_mempool_capacity;
     size_t rpc_mempool_len;
+    size_t rpc_mempool_usage;
     void * rpc_mempool;
+    int rpc_mempool_handle;
     remote_handle64 ggmlop_handle;
     int domain_id;
-};
-
-struct ggml_backend_hexagon_buffer_context {
-    ~ggml_backend_hexagon_buffer_context() {
-        if (buffer) {
-            ggml_aligned_free(buffer, 0);
-        }
-
-        for (auto * sub_buffer : sub_buffers) {
-            free(sub_buffer);
-        }
-
-        sub_buffers.clear();
-    }
-    void * buffer       = nullptr;
-
-    struct ggml_backend_hexagon_context * backend_ctx = nullptr;
-
-    size_t buffer_size  = 0;
-    std::vector<void *> sub_buffers;
 };
 
 struct qnn_op_caps {
@@ -331,6 +315,7 @@ struct hexagon_appcfg_t {
     int hexagon_backend;        // 0: HEXAGON_BACKEND_QNNCPU 1: HEXAGON_BACKEND_QNNGPU 2: HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP
     int enable_mulmat_cdsp;     // enable/disable offload mulmat to cDSP
     int enable_q_mulmat;        // enable/disable offload fp32 & quantized mulmat to cDSP
+    int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
     const char * cfgfilename;
     const char * runtimelib_path;
 };
@@ -348,6 +333,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .hexagon_backend        = HEXAGON_BACKEND_CDSP,
         .enable_mulmat_cdsp     = 0,
         .enable_q_mulmat        = 0,
+        .enable_rpc_ion_mempool = 0,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -873,8 +859,9 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
                          ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
     ggmlhexagon_get_timestring(timestamp);
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-        GGMLHEXAGON_LOG_INFO("only offload GGML_OP_ADD: %s", g_hexagon_appcfg.enable_mulmat_cdsp ? "NO" : "YES");
+        GGMLHEXAGON_LOG_INFO("offload GGML_OP_MULMAT: %s", g_hexagon_appcfg.enable_mulmat_cdsp ? "YES" : "NO");
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
+        GGMLHEXAGON_LOG_INFO("using rpc ion memory pool: %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
     } else {
         GGMLHEXAGON_LOG_INFO("only offload GGML_OP_ADD: NO");
     }
@@ -1451,17 +1438,18 @@ static void ggmlhexagon_load_cfg() {
     });
     std::string precision_mode;
     qnncfg_instance.get_intvalue("general", "print_qnn_internal_log", g_hexagon_appcfg.print_qnn_internal_log, 0);
-    qnncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 0);
+    qnncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
     qnncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
     qnncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
-    qnncfg_instance.get_intvalue("general", "hwaccel_approach", g_hexagon_appcfg.hwaccel_approach, 0);
-    qnncfg_instance.get_intvalue("general", "hexagon_backend", g_hexagon_appcfg.hexagon_backend, 2);
+    qnncfg_instance.get_intvalue("general", "hwaccel_approach", g_hexagon_appcfg.hwaccel_approach, HWACCEL_CDSP);
+    qnncfg_instance.get_intvalue("general", "hexagon_backend", g_hexagon_appcfg.hexagon_backend, HEXAGON_BACKEND_CDSP);
     qnncfg_instance.get_intvalue("qnn", "hvx_threads", g_hexagon_appcfg.hvx_threads, 4);
     qnncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_hexagon_appcfg.vtcm_size_in_mb, 8);
-    qnncfg_instance.get_intvalue("qnn", "enable_dlbc", g_hexagon_appcfg.enable_dlbc, 0);
+    qnncfg_instance.get_intvalue("qnn", "enable_dlbc", g_hexagon_appcfg.enable_dlbc, 1);
     qnncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
-    qnncfg_instance.get_intvalue("cdsp", "enable_mulmat_cdsp", g_hexagon_appcfg.enable_mulmat_cdsp, 0);
+    qnncfg_instance.get_intvalue("cdsp", "enable_mulmat_cdsp", g_hexagon_appcfg.enable_mulmat_cdsp, 1);
     qnncfg_instance.get_intvalue("cdsp", "enable_q_mulmat", g_hexagon_appcfg.enable_q_mulmat, 0);
+    qnncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 1);
     GGMLHEXAGON_LOG_INFO("hwaccel_approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend=%d(%s)", g_hexagon_appcfg.hexagon_backend,
@@ -3170,7 +3158,6 @@ int qnn_instance::htp_init_perfinfra() {
 void qnn_instance::htp_probe_rpc_meminfo() {
     size_t candidate_size   = 0;
     uint8_t * rpc_buffer    = nullptr;
-    const int SIZE_IN_MB    = (1 << 20);
     size_t probe_slots[]    = {1024, 1536, 2048 - 48, 2048};
     size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
     for (size_t idx = 0; idx < probe_counts; idx++) {
@@ -4479,7 +4466,7 @@ static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
 /*
         qos          |  latency
         -----------------------
-        RPC_PM_QOS   |  300
+        RPC_PM_QOS   |  100
         RPC_POLL_QOS |  1000
 */
         data.enable   = qos;
@@ -4685,11 +4672,10 @@ static int ggmlhexagon_request_status_notifications(int domain_id, void * contex
     return hexagon_error;
 }
 
-static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx, size_t * rpcmem_capacity) {
+static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     size_t candidate_size   = 0;
     uint8_t * rpc_buffer    = nullptr;
-    const int SIZE_IN_MB    = (1 << 20);
-    size_t probe_slots[]    = {1024, 1536, 2048 - 48, 2048};
+    size_t probe_slots[]    = {1024, 1536, 2000, 2048};
     size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
@@ -4702,10 +4688,52 @@ static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx, size_t
             rpc_buffer = nullptr;
         }
     }
+    ctx->rpc_mempool_capacity = candidate_size * SIZE_IN_MB;
+    GGMLHEXAGON_LOG_DEBUG("rpc memory capacity %ld(%d M) for device %d",
+                          ctx->rpc_mempool_capacity, ctx->rpc_mempool_capacity / SIZE_IN_MB, ctx->device);
+    GGMLHEXAGON_LOG_INFO("capacity of rpc memory %d MB", ctx->rpc_mempool_capacity / SIZE_IN_MB);
 
-    *rpcmem_capacity = candidate_size;
-    GGMLHEXAGON_LOG_INFO("capacity of rpc ion memory %d MB", *rpcmem_capacity);
+    if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        //FIXME: reasonable rpc memory pool size
+        ctx->rpc_mempool_len = 1024 * SIZE_IN_MB;
+        if (ctx->rpc_mempool_len > ctx->rpc_mempool_capacity) {
+            GGMLHEXAGON_LOG_WARN("rpc mempool is too big");
+            return;
+        }
+        //FIXME: use ion memory pool currently, it seems there is unknown bug with DMA memory pool
+        ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
+                                        ctx->rpc_mempool_len);
+        if (nullptr == ctx->rpc_mempool) {
+            GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %d failed", ctx->rpc_mempool_len);
+            return;
+        } else {
+            GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d M)",
+                                  ctx->rpc_mempool, ctx->rpc_mempool_len,
+                                  ctx->rpc_mempool_len / SIZE_IN_MB);
+        }
+        ctx->rpc_mempool_handle = rpcmem_to_fd(ctx->rpc_mempool);
+        GGMLHEXAGON_LOG_DEBUG("rpc mempool handle %d", ctx->rpc_mempool_handle);
+        remote_register_buf(ctx->rpc_mempool, ctx->rpc_mempool_len, ctx->rpc_mempool_handle);
+    }
 
+    return;
+}
+
+static void ggmlhexagon_deinit_rpcmempool(ggml_backend_hexagon_context * ctx) {
+    if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        if (ctx->rpc_mempool) {
+            //deregister rpc memory pool
+            remote_register_buf(ctx->rpc_mempool, ctx->rpc_mempool_len, -1);
+            GGMLHEXAGON_LOG_DEBUG("free rpc mempool %p", ctx->rpc_mempool);
+            rpcmem_free(ctx->rpc_mempool);
+            ctx->rpc_mempool = nullptr;
+            ctx->rpc_mempool_len = 0;
+            ctx->rpc_mempool_capacity = 0;
+        }
+    }
+}
+
+static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx) {
     uint32_t dsp_version = 0;
     ggmlhexagon_get_hvx_arch_ver(ctx->domain_id, &dsp_version);
 
@@ -4727,22 +4755,40 @@ static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx, size_t
     uint32_t vtcm_page  = 0;
     ggmlhexagon_get_vtcm_info(ctx->domain_id, VTCM_COUNT, &vtcm_count);
     ggmlhexagon_get_vtcm_info(ctx->domain_id, VTCM_PAGE, &vtcm_page);
-    GGMLHEXAGON_LOG_DEBUG("vtcm_count %d", vtcm_count);
-    GGMLHEXAGON_LOG_DEBUG("vtcm_page %d", vtcm_page);
+    GGMLHEXAGON_LOG_INFO("vtcm_count %d", vtcm_count);
+    GGMLHEXAGON_LOG_INFO("vtcm_page %d", vtcm_page);
 
     uint32_t hmx_depth = 0;
     uint32_t hmx_spatial = 0;
     ggmlhexagon_get_hmx_support_info(ctx->domain_id, HMX_SUPPORT_DEPTH, &hmx_depth);
     ggmlhexagon_get_hmx_support_info(ctx->domain_id, HMX_SUPPORT_SPATIAL, &hmx_spatial);
-    GGMLHEXAGON_LOG_DEBUG("hmx_depth %d", hmx_depth);
-    GGMLHEXAGON_LOG_DEBUG("hmx_spatial %d", hmx_spatial);
+    GGMLHEXAGON_LOG_INFO("hmx_depth %d", hmx_depth);
+    GGMLHEXAGON_LOG_INFO("hmx_spatial %d", hmx_spatial);
 
     uint32_t hvx_support_128b = 0;
     ggmlhexagon_get_hvx_support_info(ctx->domain_id, HVX_SUPPORT_128B, &hvx_support_128b);
-    GGMLHEXAGON_LOG_DEBUG("hvx_support_128b %d", hvx_support_128b);
+    GGMLHEXAGON_LOG_INFO("hvx_support_128b %d", hvx_support_128b);
 
-    GGMLHEXAGON_LOG_DEBUG("unsigned pd supported %d", ggmlhexagon_get_unsignedpd_support());
-    GGMLHEXAGON_LOG_DEBUG("async fastrpc supported %d", ggmlhexagon_is_async_fastrpc_supported(ctx->domain_id));
+    GGMLHEXAGON_LOG_INFO("unsigned pd supported %d", ggmlhexagon_get_unsignedpd_support());
+    GGMLHEXAGON_LOG_INFO("async fastrpc supported %d", ggmlhexagon_is_async_fastrpc_supported(ctx->domain_id));
+}
+
+static void ggmlhexagon_deinit_cdsp(ggml_backend_hexagon_context * ctx) {
+    int hexagon_error  = AEE_SUCCESS;
+    GGMLHEXAGON_LOG_INFO("enter %s", __func__);
+    if (0 != ctx->ggmlop_handle) {
+        hexagon_error = ggmlop_dsp_close(ctx->ggmlop_handle);
+        if (AEE_SUCCESS != hexagon_error) {
+            GGMLHEXAGON_LOG_WARN("error 0x%x: failed to close ggmlop dsp handle", hexagon_error);
+        } else {
+            ctx->ggmlop_handle = 0;
+        }
+    }
+
+    ggmlhexagon_deinit_rpcmempool(ctx);
+
+    ctx->domain_id                = -1;
+    GGMLHEXAGON_LOG_INFO("leave %s", __func__);
 }
 
 static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
@@ -4767,16 +4813,11 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     if (nullptr == ctx)
         return 1;
     GGMLHEXAGON_LOG_INFO("init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
-    //TODO: reasonable rpc memory pool size and use it practically
-    ctx->ggmlop_handle = -1;
-    ctx->rpc_mempool_len  = (1 << 20) * 512;
-    ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, ctx->rpc_mempool_len);
-    if (nullptr == ctx->rpc_mempool) {
-        hexagon_error = AEE_ENORPCMEMORY;
-        GGMLHEXAGON_LOG_WARN("rpc memory alloc failed %d", hexagon_error);
-        ctx->rpc_mempool_len = 0;
-        return 2;
+    if (nullptr != ctx->rpc_mempool) {
+        GGMLHEXAGON_LOG_INFO("already init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
+        return 0;
     }
+    ctx->ggmlop_handle = -1;
 
     if (-1 == domain_id) {
         if (nullptr != domain_type) {
@@ -4877,16 +4918,19 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     hexagon_error = ggmlop_dsp_open(ggmlop_domain_uri, &ctx->ggmlop_handle);
     if (AEE_SUCCESS == hexagon_error) {
         GGMLHEXAGON_LOG_INFO("succeed to open domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
-        GGMLHEXAGON_LOG_INFO("only support GGML_OP_ADD and GGML_OP_MUL_MAT on cDSP currently");
-        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_V2_DUTY_CYCLE_MODE, 40, 1);
-        size_t rpcmem_size = 0;
-        ggmlhexagon_probe_dspinfo(ctx, &rpcmem_size);
-        ggmlhexagon_set_rpc_latency(domain_id, RPC_POLL_QOS, 1000);
+        GGMLHEXAGON_LOG_INFO("only support offload GGML_OP_ADD and GGML_OP_MUL_MAT to cDSP currently");
+        ggmlhexagon_probe_dspinfo(ctx);
+        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1);
+        ggmlhexagon_set_rpc_latency(domain_id, RPC_PM_QOS, 100);
+        ggmlhexagon_init_rpcmempool(ctx);
     } else {
         GGMLHEXAGON_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
                              ggmlhexagon_get_dsp_name(domain_id));
         goto bail;
     }
+
+    //ensure test-backend-ops get the correct backend name when hwaccel approach is 2(HWACCEL_CDSP)
+    memcpy(g_hexagon_mgr[ctx->device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
 
     return 0;
 
@@ -4895,36 +4939,9 @@ bail:
         free(ggmlop_domain_uri);
     }
 
-    if (ctx->rpc_mempool) {
-        rpcmem_free(ctx->rpc_mempool);
-        ctx->rpc_mempool        = nullptr;
-        ctx->rpc_mempool_len    = 0;
-        ctx->ggmlop_handle      = 0;
-        ctx->domain_id          = -1;
-    }
+    ggmlhexagon_deinit_cdsp(ctx);
 
     return -1;
-}
-
-static void ggmlhexagon_close_cdsp(ggml_backend_hexagon_context * ctx) {
-    int hexagon_error  = AEE_SUCCESS;
-    GGMLHEXAGON_LOG_INFO("enter %s", __func__);
-    if (0 != ctx->ggmlop_handle) {
-        hexagon_error = ggmlop_dsp_close(ctx->ggmlop_handle);
-        if (AEE_SUCCESS != hexagon_error) {
-            GGMLHEXAGON_LOG_WARN("error 0x%x: failed to close ggmlop dsp handle", hexagon_error);
-        } else {
-            ctx->ggmlop_handle = 0;
-        }
-    }
-
-    if (ctx->rpc_mempool) {
-        rpcmem_free(ctx->rpc_mempool);
-        ctx->rpc_mempool        = nullptr;
-        ctx->rpc_mempool_len    = 0;
-        ctx->domain_id          = -1;
-    }
-    GGMLHEXAGON_LOG_INFO("leave %s", __func__);
 }
 
 static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_tensor * op) {
@@ -5024,7 +5041,7 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
     const struct ggml_tensor * src1 = op_tensor->src[1];
     const int64_t ne00        = src0->ne[0];
     const uint32_t src0_rank  = ggml_n_dims(src0);
-
+    const uint32_t src1_rank  = ggml_n_dims(src1);
     switch (op_tensor->op) {
         case GGML_OP_ADD:
         case GGML_OP_SUB:
@@ -5033,21 +5050,11 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
                 return false;
             }
 
-            //FIXME:remove this filter
-            if (ne00 < 32)
-                return false;
-
-            //FIXME:remove this filter
+            //TODO: offload quantize GGML_OP_ADD to cDSP
             return ggmlhexagon_same_types(ctx, op_tensor);
         }
         case GGML_OP_MUL_MAT:
         {
-            ggmlhexagon_dump_op_info(op_tensor);
-
-            //TODO:3d&4d matrix mulmat on cDSP
-            if (src0_rank != 2)
-                return false;
-
             ggmlhexagon_dump_op_info(op_tensor);
             if (g_hexagon_appcfg.enable_q_mulmat)
                 return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q6_K
@@ -5282,6 +5289,32 @@ static bool ggmlhexagon_compute_forward(ggml_backend_t backend, struct ggml_tens
     return true;
 }
 
+struct ggml_backend_hexagon_buffer_context {
+    ~ggml_backend_hexagon_buffer_context() {
+        GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
+        if (buffer) {
+            if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+                GGMLHEXAGON_LOG_DEBUG("rpcmem %p, size %d", buffer, buffer_size);
+                //do nonthing here because rpc mempool was used for HWACCEL_CDSP
+            } else {
+                ggml_aligned_free(buffer, 0);
+            }
+        }
+
+        for (auto * sub_buffer : sub_buffers) {
+            free(sub_buffer);
+        }
+
+        sub_buffers.clear();
+    }
+    void * buffer       = nullptr;
+
+    struct ggml_backend_hexagon_context * backend_ctx = nullptr;
+
+    size_t buffer_size  = 0;
+    std::vector<void *> sub_buffers;
+};
+
 static void ggml_backend_hexagon_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_hexagon_buffer_context * ctx = (ggml_backend_hexagon_buffer_context *)buffer->context;
     delete ctx;
@@ -5357,7 +5390,12 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
 
 static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
            ggml_backend_buffer_type_t buft, size_t size) {
-    ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context;
+    GGMLHEXAGON_LOG_DEBUG("enter %s, size %d", __func__, size);
+    struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(buft->context);
+    GGML_ASSERT(nullptr != ctx);
+    GGMLHEXAGON_LOG_DEBUG("device %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
+
+    ggml_backend_hexagon_buffer_context * buffer_ctx = new ggml_backend_hexagon_buffer_context;
 
     size_t size_page = 0;
 #if defined(__ANDROID__) || defined(__linux__)
@@ -5368,17 +5406,31 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     size_page = systeminfo.dwPageSize;
 #endif
     size_t size_aligned = size;
+    GGMLHEXAGON_LOG_DEBUG("size_aligned %d", size_aligned);
     if ((size_aligned % size_page) != 0) {
         size_aligned += (size_page - (size_aligned % size_page));
     }
-    ctx->buffer         = ggml_aligned_malloc(size_aligned);
-    ctx->buffer_size    = size_aligned;
-    if (nullptr == ctx->buffer) {
+    GGMLHEXAGON_LOG_DEBUG("size_aligned %d", size_aligned);
+    if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        GGMLHEXAGON_LOG_DEBUG("rpc mempool len %d", ctx->rpc_mempool_len);
+        GGMLHEXAGON_LOG_DEBUG("rpc mempool usage %d", ctx->rpc_mempool_usage);
+        GGML_ASSERT(ctx->rpc_mempool_usage <= ctx->rpc_mempool_len);
+        buffer_ctx->buffer = (static_cast<char*>(ctx->rpc_mempool)) + ctx->rpc_mempool_usage;
+        GGMLHEXAGON_LOG_DEBUG("buffer_ctx->buffer %p", buffer_ctx->buffer);
+        GGML_ASSERT(nullptr != buffer_ctx->buffer);
+        ctx->rpc_mempool_usage += size_aligned;
+    } else {
+        buffer_ctx->buffer = ggml_aligned_malloc(size_aligned);
+    }
+    buffer_ctx->buffer_size = size_aligned;
+    if (nullptr == buffer_ctx->buffer) {
         GGMLHEXAGON_LOG_WARN("%s: failed to allocate %d MiB\n", __func__, size / (1 << 20));
         return nullptr;
+    } else {
+        GGMLHEXAGON_LOG_DEBUG("%s: succeed to allocate %d MiB\n", __func__, size / (1 << 20));
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_hexagon_buffer_interface, ctx, size);
+    return ggml_backend_buffer_init(buft, ggml_backend_hexagon_buffer_interface, buffer_ctx, size);
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
@@ -5429,7 +5481,7 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
 
     if (g_hexagon_mgr[ctx->device].backend != nullptr) {
         if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-            ggmlhexagon_close_cdsp(ctx);
+            ggmlhexagon_deinit_cdsp(ctx);
         }
 
         delete backend;
@@ -5461,7 +5513,7 @@ static enum ggml_status ggmlhexagon_backend_graph_compute_general(ggml_backend_t
 }
 
 static const char * ggml_backend_hexagon_device_get_name(ggml_backend_dev_t dev) {
-    struct ggml_backend_hexagon_context *ctx = static_cast<ggml_backend_hexagon_context *>(dev->context);
+    struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(dev->context);
     if (nullptr == ctx) {
         GGMLHEXAGON_LOG_ERROR("pls check why ctx is null");
         return "unknown";
@@ -5470,6 +5522,7 @@ static const char * ggml_backend_hexagon_device_get_name(ggml_backend_dev_t dev)
 }
 
 static const char * ggml_backend_hexagon_device_get_description(ggml_backend_dev_t dev) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(dev->context);
     static char hexagon_device_desc[GGMLHEXAGON_TMPBUF_LEN];
     if (nullptr == ctx) {
@@ -5510,15 +5563,21 @@ static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_
         size_t rpc_ion_memsize = 0;
         size_t rpc_ion_usage   = 0;
         if (HWACCEL_CDSP != g_hexagon_appcfg.hwaccel_approach) {
+            //TODO: uniform rpc_ion_memsize and rpc_ion_usage between HWACCEL_CDSP and HWACCEL_QNN
             rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
             rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
+            *total = rpc_ion_memsize * SIZE_IN_MB;
+            *free = (rpc_ion_memsize - rpc_ion_usage) * SIZE_IN_MB;
+            GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize);
+            GGMLHEXAGON_LOG_DEBUG("rpc usage %d M", rpc_ion_usage);
         } else {
-            ggmlhexagon_probe_dspinfo(ctx, &rpc_ion_memsize);
+            rpc_ion_memsize = ctx->rpc_mempool_capacity;
+            rpc_ion_usage   = ctx->rpc_mempool_usage;
+            *total = rpc_ion_memsize;
+            *free  = (rpc_ion_memsize - rpc_ion_usage);
+            GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize / SIZE_IN_MB);
+            GGMLHEXAGON_LOG_DEBUG("rpc usage %d M", rpc_ion_usage / SIZE_IN_MB);
         }
-        GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize);
-        GGMLHEXAGON_LOG_DEBUG("rpc usage %d M", rpc_ion_usage);
-        *total = rpc_ion_memsize * (1 << 20);
-        *free = (rpc_ion_memsize - rpc_ion_usage) * (1 << 20);
     }
 }
 
@@ -5536,6 +5595,7 @@ static enum ggml_backend_dev_type ggml_backend_hexagon_device_get_type(ggml_back
 
 static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev,
                                               struct ggml_backend_dev_props * props) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
     props->name        = ggml_backend_hexagon_device_get_name(dev);
     props->description = ggml_backend_hexagon_device_get_description(dev);
     props->type        = ggml_backend_hexagon_device_get_type(dev);
@@ -5591,7 +5651,7 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_buffer_type(size_t device
         return nullptr;
     }
 
-    static struct ggml_backend_buffer_type ggml_backend_buffer_type_qnn = {
+    static struct ggml_backend_buffer_type ggml_backend_buffer_type_hexagon = {
             /* .iface   = */ {
                                      /* .get_name         = */ ggml_backend_hexagon_buffer_type_name,
                                      /* .alloc_buffer     = */ ggml_backend_hexagon_buffer_type_alloc_buffer,
@@ -5601,14 +5661,22 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_buffer_type(size_t device
                                      /* .is_host          = */ ggml_backend_hexagon_buffer_is_host
                              },
             /* .device  = */ nullptr,
-            /* .context = */ nullptr,
+            /* .context = */ &g_hexagon_mgr[device_index],
     };
 
-    return &ggml_backend_buffer_type_qnn;
+    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+        //here is the trick:
+        //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
+        //and we need to re-use the g_hexagon_mgr
+        //so context is g_hexagon_mgr[HEXAGON_BACKEND_CDSP] rather than g_hexagon_mgr[0]
+        ggml_backend_buffer_type_hexagon.context = &g_hexagon_mgr[HEXAGON_BACKEND_CDSP];
+    }
+
+    return &ggml_backend_buffer_type_hexagon;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_buffer_type(ggml_backend_dev_t dev) {
-    ggml_backend_hexagon_context * ctx = (ggml_backend_hexagon_context *) dev->context;
+    ggml_backend_hexagon_context * ctx = (ggml_backend_hexagon_context *)dev->context;
     return ggml_backend_hexagon_buffer_type(ctx->device);
 }
 
@@ -5680,7 +5748,12 @@ static void ggml_backend_hexagon_set_n_threads(ggml_backend_t backend, int n_thr
 }
 
 int ggml_backend_hexagon_get_device_count() {
-    return GGML_HEXAGON_MAX_DEVICES;
+    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+        GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        return 1;
+    } else {
+        return GGML_HEXAGON_MAX_DEVICES;
+    }
 }
 
 struct ggml_backend_hexagon_reg_context {
@@ -5694,7 +5767,12 @@ static const char * ggml_backend_hexagon_reg_get_name(ggml_backend_reg_t reg) {
 
 static size_t ggml_backend_hexagon_reg_get_device_count(ggml_backend_reg_t reg) {
     GGML_UNUSED(reg);
-    return GGML_HEXAGON_MAX_DEVICES;
+    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+        GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        return 1;
+    } else {
+        return GGML_HEXAGON_MAX_DEVICES;
+    }
 }
 
 static ggml_backend_dev_t ggml_backend_hexagon_reg_get_device(ggml_backend_reg_t reg, size_t index) {
@@ -5703,8 +5781,13 @@ static ggml_backend_dev_t ggml_backend_hexagon_reg_get_device(ggml_backend_reg_t
 
     GGMLHEXAGON_LOG_DEBUG("index %d", index);
     ggml_backend_hexagon_reg_context * ctx = (ggml_backend_hexagon_reg_context *)reg->context;
-    GGML_ASSERT(index < ctx->devices.size());
-    return ctx->devices[index];
+    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+        GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        return ctx->devices[0];
+    } else {
+        GGML_ASSERT(index < ctx->devices.size());
+        return ctx->devices[index];
+    }
 }
 
 static void * ggml_backend_hexagon_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
@@ -5760,12 +5843,29 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
                 } else {
                     ggml_backend_hexagon_device_interface.supports_op = ggmlhexagon_can_handle_op_through_qnn;
                 }
-                ggml_backend_dev_t dev = new ggml_backend_device {
+                GGMLHEXAGON_LOG_DEBUG("create backend device for device %d", i);
+                ggml_backend_dev_t dev = new ggml_backend_device{
                         /* .iface       = */ ggml_backend_hexagon_device_interface,
                         /* .reg         = */ &reg,
                         /* .context     = */ &g_hexagon_mgr[i]
                 };
+                if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+                    //here is the trick:
+                    //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
+                    //and we need to re-use the g_hexagon_mgr
+                    //so context is g_hexagon_mgr[HEXAGON_BACKEND_CDSP] rather than g_hexagon_mgr[0]
+                    dev->context = &g_hexagon_mgr[HEXAGON_BACKEND_CDSP];
+                }
                 ctx->devices.push_back(dev);
+
+                if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+                    GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+                    int result = ggmlhexagon_init_dsp(&g_hexagon_mgr[HEXAGON_BACKEND_CDSP]);
+                    if (0 != result) {
+                        GGMLHEXAGON_LOG_INFO("init hexagon dsp failure");
+                    }
+                    GGML_ASSERT(0 == result);
+                }
             }
 
             reg = ggml_backend_reg {
@@ -5783,13 +5883,13 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
 }
 
 const char * ggml_backend_hexagon_get_devname(size_t dev_num) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-        if (dev_num == HEXAGON_BACKEND_GGML)
-            return "ggml";
-        else
+       if (HEXAGON_BACKEND_CDSP == dev_num)
             return "HEXAGON_BACKEND_CDSP";
     }
 
+    //fallback
     switch (dev_num) {
         case HEXAGON_BACKEND_QNNCPU:
             return "HEXAGON_BACKEND_QNN_CPU";
@@ -5860,9 +5960,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
     }
 
     std::string path = qnn_lib_path;
-    GGMLHEXAGON_LOG_DEBUG("lib_path %s", path.c_str());
     ggmlhexagon_set_runtime_path(device, path);
-
     if (nullptr != g_hexagon_mgr[device].backend) {
         GGMLHEXAGON_LOG_DEBUG("backend %d(%s) already loaded", device,
                          ggml_backend_hexagon_get_devname(device));
@@ -5876,9 +5974,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
         if (nullptr == instance)
             return nullptr;
     }
-
     ggml_backend_hexagon_interface.graph_compute = ggmlhexagon_backend_graph_compute_general;
-
     ggml_backend_t hexagon_backend = new ggml_backend{
             /* .guid      = */ ggml_backend_hexagon_guid(),
             /* .iface     = */ ggml_backend_hexagon_interface,
@@ -5894,8 +5990,6 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
             ggml_backend_hexagon_free(hexagon_backend);
             return nullptr;
         }
-        //ensure test-backend-ops get the correct backend name when hwaccel approach is 2(HWACCEL_CDSP)
-        memcpy(g_hexagon_mgr[device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
     } else {
         //got fully description of SoC when hwaccel approach is HWACCEL_QNN and backend is HEXAGON_BACKEND_QNNNPU
         GGMLHEXAGON_LOG_INFO("device name %s", ggml_backend_hexagon_device_get_description(hexagon_backend->device));
