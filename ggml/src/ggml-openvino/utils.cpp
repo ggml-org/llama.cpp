@@ -44,24 +44,8 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
             //     std::cout << "CONT input shape: " << input_shape << std::endl;
             // }
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
-        // } else if (op_node_name == "CPY" && (!check_if_contiguous || input_shape[2] == 1)) { //[TODO]: Temporarily determine whether the node corresponding to the input tensor of the Phi-3 model CPY is continuous
-        // } else if (op_node_name == "CPY") {
-        //     std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
-        //     ov::element::Type input_type = ggml_decoder->get_input_type(name);
-        //     size_t element_size = input_type.size();
-        //     // ov::Shape phys_shape;
-        //     static int iter = 0;
-        //     if (iter++ % 2 == 0) {
-        //         // phys_shape = {1, input_shape[1], input_stride[2] / element_size};
-        //         input_tensor = ov::Tensor(ov::element::f32, input_shape, input_data);
-        //     } else {
-        //         ov::Shape flat_shape = {1, 1, input_stride[0] / element_size};
-        //         input_tensor = ov::Tensor(ov::element::f16, flat_shape, input_data);
-        //     }
-        } else {
-            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
             // if(!flag) {
-            //     std::cout << std::left  << "[ " << std::setw(2) << inp << " ]: "
+            //     std::cout << std::left  << "*[" << std::setw(2) << inp << "]*: "
             //     << "Input Name: " << std::setw(20) << name
             //     << "Type: " << std::setw(5) << ggml_decoder->get_input_type(name)
             //     << "OP: " << std::setw(10) << op_node_name
@@ -77,14 +61,21 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
             //     << std::right
             //     << std::endl;
             // }
-            // if (op_node_name == "MUL_MAT") {
+        } else {
+            input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
+            // if(!flag) {
             //     std::cout << std::left  << "[ " << std::setw(2) << inp << " ]: "
-            //     << "Input MUL_MAT name: " << std::setw(20) << name
+            //     << "Input Name: " << std::setw(20) << name
+            //     << "Type: " << std::setw(5) << ggml_decoder->get_input_type(name)
+            //     << "OP: " << std::setw(10) << op_node_name
+            //     << "CONT: " << check_if_contiguous
             //     << ", shape: " << std::setw(4) << input_tensor.get_shape()[0] << " " << std::setw(4) << input_tensor.get_shape()[1] << " " << input_tensor.get_shape()[2]
             //     << ", address: "
             //     << std::setw(15) << input_tensor.data() << " "
             //     << std::setw(15) << ((float*)input_tensor.data())[0]
             //     << std::setw(15) << ((float*)input_tensor.data())[1]
+            //     << ", ne[0]-1: "
+            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]-1]
             //     << ", ne[0]: "
             //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]] << std::right
             //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] + 1] << std::right
@@ -219,6 +210,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //                 << std::setw(15) << tensor->data << " "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[0])
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[1])
+        //                 << ", ne[0]-1: "
+        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0] - 1])
         //                 << ", ne[0]: "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0]]) << std::right
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0] + 1]) << std::right
@@ -234,6 +227,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //                 << std::setw(15) << tensor->data << " "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[0])
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[1])
+        //                 << ", ne[0]-1: "
+        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0] - 1])
         //                 << ", ne[0]: "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0]]) << std::right
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0] + 1]) << std::right
@@ -250,6 +245,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //                 << std::setw(15) << tensor->data << " "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[0])
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[1])
+        //                 << ", ne[0]-1: "
+        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0] - 1])
         //                 << ", ne[0]: "
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0]]) << std::right
         //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0] + 1]) << std::right
@@ -265,6 +262,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //         << std::setw(15) << input_tensor.data() << " "
         //         << std::setw(15) << ((float*)input_tensor.data())[0]
         //         << std::setw(15) << ((float*)input_tensor.data())[1]
+        //         << ", ne[0]-1: "
+        //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] - 1]
         //         << ", ne[0]: "
         //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]] << std::right
         //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] + 1] << std::right
@@ -281,6 +280,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //         << std::setw(15) << input_tensor_27.data() << " "
         //         << std::setw(15) << ((float*)input_tensor_27.data())[0]
         //         << std::setw(15) << ((float*)input_tensor_27.data())[1]
+        //         << ", ne[0]-1: "
+        //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0] - 1]
         //         << ", ne[0]: "
         //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0]] << std::right
         //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0] + 1] << std::right
@@ -297,6 +298,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //         << std::setw(15) << input_tensor_29.data() << " "
         //         << std::setw(15) << ((float*)input_tensor_29.data())[0]
         //         << std::setw(15) << ((float*)input_tensor_29.data())[1]
+        //         << ", ne[0]-1: "
+        //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0] - 1]
         //         << ", ne[0]: "
         //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0]] << std::right
         //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0] + 1] << std::right
@@ -313,6 +316,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         //         << std::setw(15) << input_tensor_30.data() << " "
         //         << std::setw(15) << ((float*)input_tensor_30.data())[0]
         //         << std::setw(15) << ((float*)input_tensor_30.data())[1]
+        //         << ", ne[0]-1: "
+        //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0] - 1]
         //         << ", ne[0]: "
         //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0]] << std::right
         //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0] + 1] << std::right

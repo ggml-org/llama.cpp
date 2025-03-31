@@ -161,6 +161,13 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
             // } else {
             //     outputs[node_name] = node;
             // }
+            // if (node->ne[0] == 3072 && node->ne[1] == 1 && node->ne[2] == 1) {
+            //     outputs[src0_name] = node;
+            //     m_output_names.push_back(src0_name);
+            // } else {
+            //     outputs[node_name] = node;
+            //     m_output_names.push_back(node_name);
+            // }
             outputs[node_name] = node;
             m_input_names.push_back(src0_name);
             m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
