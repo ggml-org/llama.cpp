@@ -3358,8 +3358,8 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
     cl_command_queue queue = backend_ctx->queue;
 
-    ggml_backend_opencl_device_context * dev_ctx =
-        (ggml_backend_opencl_device_context *)backend->device->context;
+    //ggml_backend_opencl_device_context * dev_ctx =
+    //    (ggml_backend_opencl_device_context *)backend->device->context;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -3390,13 +3390,20 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
 
     // Note, this kernel declares local memory in kernel args and the size
     // depends on subgroup size.
-    // Retrieve subgroup size.
     // Note, this requires OpenCL 2.1 and above
+    // For now we use fixed subgroup size to simplify support for OpenCL 2.0.
     size_t sgs;
-    CL_CHECK(clGetKernelSubGroupInfo(kernel, dev_ctx->device,
-        CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE,
-        sizeof(local_work_size), local_work_size,
-        sizeof(size_t), &sgs, NULL));
+    //CL_CHECK(clGetKernelSubGroupInfo(kernel, dev_ctx->device,
+    //    CL_KERNEL_MAX_SUB_GROUP_SIZE_FOR_NDRANGE,
+    //    sizeof(local_work_size), local_work_size,
+    //    sizeof(size_t), &sgs, NULL));
+    if (backend_ctx->gpu_family == ADRENO) {
+        sgs = 64;
+    } else if (backend_ctx->gpu_family == INTEL) {
+        sgs = 32;
+    } else {
+        GGML_ASSERT(false && "Unsupported GPU");
+    }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong),  &offset0));
