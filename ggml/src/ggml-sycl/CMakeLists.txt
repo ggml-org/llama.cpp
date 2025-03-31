@@ -100,7 +100,7 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
     # See https://github.com/uxlfoundation/oneMath/issues/654
     find_package(MKL REQUIRED)
-    target_link_libraries(ggml-sycl PRIVATE MKL::MKL MKL::MKL_SYCL)
+    target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
 else()
     find_package(oneMath QUIET)
