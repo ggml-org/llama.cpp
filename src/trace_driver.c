@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include "ggml-quants.h"
 #include "trace_driver.h"
 
 void tensor_export(const struct ggml_tensor * tensor, const char * fname) {
@@ -165,6 +166,91 @@ void dump_tensor_first_n(const struct ggml_tensor * tensor, int n, FILE * fout) 
         }
       }
     }
+}
+
+void compare_tensor(const struct ggml_tensor *a, const struct ggml_tensor *b) {
+  assert(a->type == b->type);
+  assert(ggml_nelements(a) == ggml_nelements(b));
+
+  int nelems = ggml_nelements(a);
+
+  float max_err = 0.0f;
+  float min_err = 100000.0f;
+  float total_err = 0.0f;
+  float avg_err = 0.0f;
+  float *a_f32;
+  float *b_f32;
+  switch (a->type) {
+    case GGML_TYPE_F32:
+    case GGML_TYPE_F16:
+    case GGML_TYPE_BF16: {
+      a_f32 = (float *)a->data;
+      b_f32 = (float *)b->data;
+      break;
+    }
+    case GGML_TYPE_Q4_0: {
+      void *a_data = a->data;
+      void *b_data = b->data;
+
+      a_f32 = malloc(nelems * sizeof(float));
+      b_f32 = malloc(nelems * sizeof(float));
+
+      dequantize_row_q4_0(a_data, a_f32, nelems);
+      dequantize_row_q4_0(b_data, b_f32, nelems);
+      break;
+    }
+    case GGML_TYPE_Q8_0: {
+      void *a_data = a->data;
+      void *b_data = b->data;
+
+      a_f32 = malloc(nelems * sizeof(float));
+      b_f32 = malloc(nelems * sizeof(float));
+
+      dequantize_row_q8_0(a_data, a_f32, nelems);
+      dequantize_row_q8_0(b_data, b_f32, nelems);
+      break;
+    }
+    default: {
+      assert(false);
+    }
+  }
+
+  for (int i = 0; i < nelems; ++i) {
+    float err = abs(a_f32[i] - b_f32[i]);
+    total_err += err;
+    if (max_err < err) {
+      max_err = err;
+    }
+    if (min_err > err) {
+      min_err = err;
+    }
+  }
+
+  avg_err = total_err / nelems;
+
+  printf("max_error = %.5f, min_error = %.5f, total_error = %.5f, avg_error = %.5f\n", max_err, min_err, total_err, avg_err);
+}
+
+void print_q4_tensor(const struct ggml_tensor *a) {
+  void *d4_data = a->data;
+  int nelems = ggml_nelements(a);
+  printf("nelems = %d\n", nelems);
+
+  float *fp32_data = malloc(nelems * sizeof(float));
+  dequantize_row_q4_0(d4_data, fp32_data, nelems);
+
+  for (int i = 0; i < 10; ++i) {
+    printf("fp32_data[%d] = %f\n", i, fp32_data[i]);
+  }
+}
+
+void print_tensor(const struct ggml_tensor *tensor, FILE *fout) {
+  const int64_t *ne = tensor->ne;
+  const size_t  *nb = tensor->nb;
+
+  fprintf(fout, "shape = {%d, %d, %d, %d}, stride = {%d, %d, %d, %d}\n",
+    ne[0], ne[1], ne[2], ne[3],
+    nb[0], nb[1], nb[2], nb[3]);
 }
 
 void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
