@@ -129,6 +129,8 @@
 class  qnn_instance;
 struct ggml_backend_hexagon_context;
 
+static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx);
+
 #if 0//def NDEBUG
 #define GGMLHEXAGON_DEBUG                               0
 #else
@@ -241,7 +243,7 @@ enum qcom_chipset_soc_model {
     SM8475 = 42,  // v69, SD 8+ Gen 1
     SM8550 = 43,  // v73, SD 8 Gen 2
     SM8650 = 57,  // v75, SD 8 Gen 3
-    SM8750 = 69,  // v79, SD 8 Gen 4
+    SM8750 = 69,  // v79, SD 8 Elite(aka 8 Gen 4)
 #if !defined(__ANDROID__) && !defined(__linux__)
     SC7280X     = 44,
     SC8280X     = 37,
@@ -316,6 +318,7 @@ struct hexagon_appcfg_t {
     int enable_mulmat_cdsp;     // enable/disable offload mulmat to cDSP
     int enable_q_mulmat;        // enable/disable offload fp32 & quantized mulmat to cDSP
     int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
+    int enable_rpc_dma_mempool; // enable/disable rpc dma memory pool
     const char * cfgfilename;
     const char * runtimelib_path;
 };
@@ -334,6 +337,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .enable_mulmat_cdsp     = 0,
         .enable_q_mulmat        = 0,
         .enable_rpc_ion_mempool = 0,
+        .enable_rpc_dma_mempool = 0,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -394,7 +398,7 @@ static struct qcom_socinfo g_qnn_soc_info_table[] = {
                 .soc_model         = SM8750,
                 .htp_arch          = V79,
                 .vtcm_size_in_mb   = 8,
-                .soc_desc          = "Qualcomm SnapDragon 8 Gen 4"},
+                .soc_desc          = "Qualcomm SnapDragon 8 Elite(aka 8 Gen 4)"},
 
 #if !defined(__ANDROID__) && !defined(__linux__)
         /* Qualcomm SnapDragon 7c Gen 2 */
@@ -862,6 +866,8 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
         GGMLHEXAGON_LOG_INFO("offload GGML_OP_MULMAT: %s", g_hexagon_appcfg.enable_mulmat_cdsp ? "YES" : "NO");
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
         GGMLHEXAGON_LOG_INFO("using rpc ion memory pool: %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
+        GGMLHEXAGON_LOG_INFO("using rpc dma memory pool: %s", g_hexagon_appcfg.enable_rpc_dma_mempool ? "YES" : "NO");
+        ggmlhexagon_probe_dspinfo(ctx);
     } else {
         GGMLHEXAGON_LOG_INFO("only offload GGML_OP_ADD: NO");
     }
@@ -1450,6 +1456,7 @@ static void ggmlhexagon_load_cfg() {
     qnncfg_instance.get_intvalue("cdsp", "enable_mulmat_cdsp", g_hexagon_appcfg.enable_mulmat_cdsp, 1);
     qnncfg_instance.get_intvalue("cdsp", "enable_q_mulmat", g_hexagon_appcfg.enable_q_mulmat, 0);
     qnncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 1);
+    qnncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
     GGMLHEXAGON_LOG_INFO("hwaccel_approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend=%d(%s)", g_hexagon_appcfg.hexagon_backend,
@@ -4814,7 +4821,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         return 1;
     GGMLHEXAGON_LOG_INFO("init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
     if (nullptr != ctx->rpc_mempool) {
-        GGMLHEXAGON_LOG_INFO("already init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
+        GGMLHEXAGON_LOG_DEBUG("already init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
         return 0;
     }
     ctx->ggmlop_handle = -1;
@@ -5480,13 +5487,14 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
     }
 
     if (g_hexagon_mgr[ctx->device].backend != nullptr) {
+        //print timestamp and dsp information before deinit cdsp, useful for troubleshooting
+        ggmlhexagon_print_running_timestamp(ctx);
         if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
             ggmlhexagon_deinit_cdsp(ctx);
         }
 
         delete backend;
         g_hexagon_mgr[ctx->device].backend = nullptr;
-        ggmlhexagon_print_running_timestamp(ctx);
     }
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
 }
