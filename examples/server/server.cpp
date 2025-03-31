@@ -31,6 +31,12 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// llama-server-one START
+#ifdef COSMOCC
+#include <cosmo.h>
+#endif
+// llama-server-one END
+
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
@@ -1594,13 +1600,15 @@ struct server_queue {
         return 0;
     }
 
+    // llama-server-one START - defer() --> defer_task() to make Cosmo STL happy.
     // Add a new task, but defer until one slot is available
-    void defer(server_task task) {
+    void defer_task(server_task task) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         QUE_DBG("defer task, id = %d\n", task.id);
         queue_tasks_deferred.push_back(std::move(task));
         condition_tasks.notify_one();
     }
+    // llama-server-one END
 
     // Get the next id for creating a new task
     int get_new_id() {
@@ -2637,13 +2645,17 @@ struct server_context {
                     if (slot == nullptr) {
                         // if no slot is available, we defer this task for processing later
                         SRV_DBG("no slot is available, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        // llama-server-one START
+                        queue_tasks.defer_task(task);
+                        // llama-server-one END
                         break;
                     }
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        // llama-server-one START
+                        queue_tasks.defer_task(task);
+                        // llama-server-one END
                         break;
                     }
 
@@ -2726,7 +2738,9 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        // llama-server-one START
+                        queue_tasks.defer_task(task);
+                        // llama-server-one END
                         break;
                     }
 
@@ -2762,7 +2776,9 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        // llama-server-one START
+                        queue_tasks.defer_task(task);
+                        // llama-server-one END
                         break;
                     }
 
@@ -2805,7 +2821,9 @@ struct server_context {
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
-                        queue_tasks.defer(task);
+                        // llama-server-one START
+                        queue_tasks.defer_task(task);
+                        // llama-server-one END
                         break;
                     }
 
@@ -3427,6 +3445,37 @@ inline void signal_handler(int signal) {
 }
 
 int main(int argc, char ** argv) {
+    // llama-server-one START
+    // This implements an args file feature inspired by llamafile's.
+    #ifdef COSMOCC
+    // Args files if present. The names are different to remove confusion during packaging.
+    const std::string& argsFilename = "llama-server-one-args";
+    const std::string& zipArgsFilename = "/zip/default-args";
+    struct stat buffer;
+
+    // At this point, argc, argv represent:
+    //     command (User supplied args)
+    
+    if (stat (argsFilename.c_str(), &buffer) == 0) {
+        argc = cosmo_args(argsFilename.c_str(), &argv);
+    }
+    
+    // At this point, argc, argv represent:
+    //     command (argsFilename args) (User supplied args)
+
+    if (stat (zipArgsFilename.c_str(), &buffer) == 0) {
+        argc = cosmo_args(zipArgsFilename.c_str(), &argv);
+    }
+
+    // At this point, argc, argv represent:
+    //     command (zipArgsFilename args) (argsFilename args) (User supplied args)
+    
+    // Yep, this is counterintuitive, but how the cosmo_args command works.
+    // argsFilename args override zipArgsFilename file args.
+    // User supplied args override argsFilename and zipArgsFilename args.
+    #endif
+    // llama-server-one END
+
     // own arguments required by this example
     common_params params;
 
@@ -4451,6 +4500,26 @@ int main(int argc, char ** argv) {
             });
         }
     }
+
+        // llama-server-one START
+    svr->Get("/chat", [](const httplib::Request & req, httplib::Response & res) {
+        if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+            res.set_content("Error: gzip is not supported by this browser", "text/plain");
+        } else {
+            res.set_header("Content-Encoding", "gzip");
+            // COEP and COOP headers, required by pyodide (python interpreter)
+            res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
+            res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+            res.set_content(reinterpret_cast<const char*>(index_html_gz), index_html_gz_len, "text/html; charset=utf-8");
+        }
+        return false;
+    });
+
+    svr->Get("/chat/", [](const httplib::Request & req, httplib::Response & res) {
+        res.set_redirect("/chat");
+        return false;
+    });
+    // llama-server-one END
 
     // register API routes
     svr->Get ("/health",              handle_health); // public endpoint (no API key check)
