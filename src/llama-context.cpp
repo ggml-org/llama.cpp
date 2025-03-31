@@ -1583,7 +1583,15 @@ int32_t llama_context::output_reserve(int32_t n_outputs) {
     embd   = has_embd   ? output_base + logits_size : nullptr;
 
     // set all ids as invalid (negative)
-    std::fill(output_ids.begin(), output_ids.end(), -1);
+        // llama-server-one START
+        #ifndef COSMOCC
+        std::fill(output_ids.begin(), output_ids.end(), -1);
+        #else
+        for (auto iii = output_ids.begin(); iii != output_ids.end(); iii++) {
+            *iii = -1;
+        }
+        #endif
+        // llama-server-one END
 
     ggml_backend_buffer_clear(buf_output.get(), 0);
 
@@ -1623,7 +1631,17 @@ void llama_context::output_reorder() {
                 }
             }
         }
+
+        // llama-server-one START
+        #ifndef COSMOCC
         std::fill(output_ids.begin(), output_ids.end(), -1);
+        #else
+        for (auto iii = output_ids.begin(); iii != output_ids.end(); iii++) {
+            *iii = -1;
+        }
+        #endif
+        // llama-server-one END
+
         for (int32_t i = 0; i < n_outputs; ++i) {
             output_ids[out_ids[i]] = i;
         }
