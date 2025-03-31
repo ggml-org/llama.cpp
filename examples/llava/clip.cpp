@@ -1401,7 +1401,7 @@ struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_p
             const std::string name = gguf_get_val_str(ctx, idx_name);
             LOG_INF("%s: model name:   %s\n", __func__, name.c_str());
         }
-        const int idx_desc = get_key_idx(ctx, KEY_DESCRIPTION);
+        const int idx_desc = gguf_find_key(ctx, KEY_DESCRIPTION);
         if (idx_desc != -1) { // ditto
             const std::string description = gguf_get_val_str(ctx, idx_desc);
             LOG_INF("%s: description:  %s\n", __func__, description.c_str());
