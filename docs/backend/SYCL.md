@@ -280,8 +280,6 @@ For AMD GPUs we should expect at least one SYCL-HIP device [`hip:gpu`]:
 
 ### II. Build llama.cpp
 
-The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath). By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
-
 #### Intel GPU
 
 ```
@@ -306,6 +304,9 @@ cmake --build build --config Release -j -v
 
 #### Nvidia GPU
 
+The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
+By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
+
 ```sh
 # Build LLAMA with Nvidia BLAS acceleration through SYCL
 # Setting GGML_SYCL_DEVICE_ARCH is optional but can improve performance
@@ -322,6 +323,9 @@ cmake --build build --config Release -j -v
 ```
 
 #### AMD GPU
+
+The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
+By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
 
 ```sh
 # Build LLAMA with rocBLAS acceleration through SYCL
