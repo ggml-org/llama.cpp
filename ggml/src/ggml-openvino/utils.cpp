@@ -11,12 +11,9 @@ std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, con
     return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, start_index, end_index);
 }
 
-// std::map<std::string, ov::Tensor> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
 std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder, bool flag) {
-    // std::map<std::string, ov::Tensor> input_tensors;
     std::vector<std::pair<std::string, ov::Tensor>> input_tensors;
     auto input_names = ggml_decoder->get_input_names();
-    // auto node_name = ggml_decoder->get_op_name();
     size_t op_iter = 0;
     for (size_t inp = 0; inp < input_names.size(); ++inp) {
         auto name = input_names[inp];
@@ -40,48 +37,9 @@ std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std
             const size_t dim2        = static_cast<size_t>(ggml_decoder->get_input_shape(name).to_shape()[0]);
             size_t phys_stride = static_cast<size_t>(input_stride[1]) / element_size;
             ov::Shape input_shape = { dim2, num_rows, phys_stride }; // {1, 7, 9216 }
-            // if (!flag) {
-            //     std::cout << "CONT input shape: " << input_shape << std::endl;
-            // }
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
-            // if(!flag) {
-            //     std::cout << std::left  << "*[" << std::setw(2) << inp << "]*: "
-            //     << "Input Name: " << std::setw(20) << name
-            //     << "Type: " << std::setw(5) << ggml_decoder->get_input_type(name)
-            //     << "OP: " << std::setw(10) << op_node_name
-            //     << "CONT: " << check_if_contiguous
-            //     << ", shape: " << std::setw(4) << input_tensor.get_shape()[0] << " " << std::setw(4) << input_tensor.get_shape()[1] << " " << input_tensor.get_shape()[2]
-            //     << ", address: "
-            //     << std::setw(15) << input_tensor.data() << " "
-            //     << std::setw(15) << ((float*)input_tensor.data())[0]
-            //     << std::setw(15) << ((float*)input_tensor.data())[1]
-            //     << ", ne[0]: "
-            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]] << std::right
-            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] + 1] << std::right
-            //     << std::right
-            //     << std::endl;
-            // }
         } else {
             input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), ggml_decoder->get_input_shape(name).to_shape(), input_data);
-            // if(!flag) {
-            //     std::cout << std::left  << "[ " << std::setw(2) << inp << " ]: "
-            //     << "Input Name: " << std::setw(20) << name
-            //     << "Type: " << std::setw(5) << ggml_decoder->get_input_type(name)
-            //     << "OP: " << std::setw(10) << op_node_name
-            //     << "CONT: " << check_if_contiguous
-            //     << ", shape: " << std::setw(4) << input_tensor.get_shape()[0] << " " << std::setw(4) << input_tensor.get_shape()[1] << " " << input_tensor.get_shape()[2]
-            //     << ", address: "
-            //     << std::setw(15) << input_tensor.data() << " "
-            //     << std::setw(15) << ((float*)input_tensor.data())[0]
-            //     << std::setw(15) << ((float*)input_tensor.data())[1]
-            //     << ", ne[0]-1: "
-            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]-1]
-            //     << ", ne[0]: "
-            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]] << std::right
-            //     << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] + 1] << std::right
-            //     << std::right
-            //     << std::endl;
-            // }
         }
 
         // input_tensors[name] = input_tensor;
@@ -146,13 +104,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Convert InputModel -> ov::Model 
     std::shared_ptr<ov::Model> model = front_end->convert(input_model);
-    // ov::save_model(model, "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_model.xml");
-
-    // auto cloned_model = model->clone();
-    // std::string model_dir = "/home/user/zhan/merge_git_commits/llama.cpp-ov";
-    // auto path_base = model_dir + "/" + cloned_model->get_name();
-    // // ov::pass::VisualizeTree(path_base + ".svg").run_on_model(cloned_model);
-    // ov::serialize(cloned_model, path_base + ".xml", path_base + ".bin");
 
     if (!model) {
         GGML_LOG_ERROR("Model is not converted \n");
@@ -162,14 +113,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         #endif
     }
 
-    // model = core.read_model("/home/user/zhan/merge_git_commits/llama.cpp-ov/replaceWithInputLayer_000_model.xml");
-    //  Loading a model to the device
-    // std::cout << "Compile ..." << std::endl;
     ov::CompiledModel compiled_model = core.compile_model(model);
-    // ov::save_model(compiled_model.get_runtime_model(), "/home/user/zhan/merge_git_commits/llama.cpp-ov/001_compile_model.xml");
-    // std::ofstream output_file("/home/user/zhan/merge_git_commits/llama.cpp-ov/000_compile_model.xml");
-    // compiled_model.export_model(output_file);
-    // output_file.close();
 
     // Create infer request
     ov::InferRequest infer_request = compiled_model.create_infer_request();
@@ -180,19 +124,9 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     // Set input tensor
     for (size_t i = 0; i < input_names.size(); i++) {
-        // infer_request.set_input_tensor(i, input_tensors[input_names[i]]);
         infer_request.set_input_tensor(i, input_tensors.at(i).second);
-
-        // auto input_tensor = infer_request.get_input_tensor(i);
-        // auto input_shape = input_tensor.get_shape();
-        // std::cout << "Input tensor " << i << " shape: ";
-        // for (const auto& dim : input_shape) {
-        //     std::cout << dim << " ";
-        // }
-        // std::cout << std::endl;
     }
 
-    // std::cout << "Infer ..." << std::endl;
     infer_request.infer();
 
     // Set dst data for outputs
@@ -201,130 +135,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     for (size_t i = 0; i < output_names.size(); i++) {
         auto output_tensor = infer_request.get_output_tensor(i);
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
-        // if(!flag) {
-        //     auto tensor = ggml_decoder->get_output_ggml_tensor(output_names[i]);
-        //     std::cout << std::left  << "[ " << std::setw(2) << i << " ]: "
-        //                 << "output_names: " << std::setw(20) << output_names[i]
-        //                 << ", shape: " << std::setw(4) << tensor->ne[0] << " " << std::setw(4) << tensor->ne[1] << " " << tensor->ne[2]
-        //                 << ", address: "
-        //                 << std::setw(15) << tensor->data << " "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[0])
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[1])
-        //                 << ", ne[0]-1: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0] - 1])
-        //                 << ", ne[0]: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0]]) << std::right
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor.data())[tensor->ne[0] + 1]) << std::right
-        //                 << std::right
-        //                 << std::endl;
-        //     if (i == 19) {
-        //         auto output_tensor_18 = infer_request.get_output_tensor(18);
-        //         auto tensor = ggml_decoder->get_output_ggml_tensor(output_names[18]);
-        //         std::cout << std::left  << "  " << std::setw(2) << 18 << "  : "
-        //                 << "output_names: " << std::setw(20) << output_names[18]
-        //                 << ", shape: " << std::setw(4) << tensor->ne[0] << " " << std::setw(4) << tensor->ne[1] << " " << tensor->ne[2]
-        //                 << ", address: "
-        //                 << std::setw(15) << tensor->data << " "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[0])
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[1])
-        //                 << ", ne[0]-1: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0] - 1])
-        //                 << ", ne[0]: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0]]) << std::right
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_18.data())[tensor->ne[0] + 1]) << std::right
-        //                 << std::right
-        //                 << std::endl;
-        //     }
-        //     if(i == 23) {
-        //         auto output_tensor_15 = infer_request.get_output_tensor(15);
-        //         auto tensor = ggml_decoder->get_output_ggml_tensor(output_names[15]);
-        //         std::cout << std::left  << "  " << std::setw(2) << 15 << "  : "
-        //                 << "output_names: " << std::setw(20) << output_names[15]
-        //                 << ", shape: " << std::setw(4) << tensor->ne[0] << " " << std::setw(4) << tensor->ne[1] << " " << tensor->ne[2]
-        //                 << ", address: "
-        //                 << std::setw(15) << tensor->data << " "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[0])
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[1])
-        //                 << ", ne[0]-1: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0] - 1])
-        //                 << ", ne[0]: "
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0]]) << std::right
-        //                 << std::setw(15) <<  static_cast<float>(((float*)output_tensor_15.data())[tensor->ne[0] + 1]) << std::right
-        //                 << std::right
-        //                 << std::endl;
-        //         auto cache_k_l0_20 = ggml_decoder->get_input_names()[20];
-        //         // auto input_data = ggml_decoder->get_input_ggml_tensor(cache_k_l0_20)->data;
-        //         auto input_tensor = input_tensors.at(20).second;
-        //         std::cout << std::left  << "  " << std::setw(2) << 20 << "  : "
-        //         << "Input Name: " << std::setw(20) << cache_k_l0_20
-        //         << ", shape: " << std::setw(4) << input_tensor.get_shape()[0] << " " << std::setw(4) << input_tensor.get_shape()[1] << " " << input_tensor.get_shape()[2]
-        //         << ", address: "
-        //         << std::setw(15) << input_tensor.data() << " "
-        //         << std::setw(15) << ((float*)input_tensor.data())[0]
-        //         << std::setw(15) << ((float*)input_tensor.data())[1]
-        //         << ", ne[0]-1: "
-        //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] - 1]
-        //         << ", ne[0]: "
-        //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0]] << std::right
-        //         << std::setw(15) << ((float*)input_tensor.data())[input_tensor.get_shape()[0] + 1] << std::right
-        //         << std::right
-        //         << std::endl;
-
-        //         auto cache_k_l0_27 = ggml_decoder->get_input_names()[27];
-        //         // auto input_data = ggml_decoder->get_input_ggml_tensor(cache_k_l0_20)->data;
-        //         auto input_tensor_27 = input_tensors.at(27).second;
-        //         std::cout << std::left  << "  " << std::setw(2) << 27 << "  : "
-        //         << "Input Name: " << std::setw(20) << cache_k_l0_27
-        //         << ", shape: " << std::setw(4) << input_tensor_27.get_shape()[0] << " " << std::setw(4) << input_tensor_27.get_shape()[1] << " " << input_tensor_27.get_shape()[2]
-        //         << ", address: "
-        //         << std::setw(15) << input_tensor_27.data() << " "
-        //         << std::setw(15) << ((float*)input_tensor_27.data())[0]
-        //         << std::setw(15) << ((float*)input_tensor_27.data())[1]
-        //         << ", ne[0]-1: "
-        //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0] - 1]
-        //         << ", ne[0]: "
-        //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0]] << std::right
-        //         << std::setw(15) << ((float*)input_tensor_27.data())[input_tensor_27.get_shape()[0] + 1] << std::right
-        //         << std::right
-        //         << std::endl;
-
-        //         auto cache_k_l0_29 = ggml_decoder->get_input_names()[29];
-        //         // auto input_data = ggml_decoder->get_input_ggml_tensor(cache_k_l0_20)->data;
-        //         auto input_tensor_29 = input_tensors.at(29).second;
-        //         std::cout << std::left  << "  " << std::setw(2) << 29 << "  : "
-        //         << "Input Name: " << std::setw(20) << cache_k_l0_29
-        //         << ", shape: " << std::setw(4) << input_tensor_29.get_shape()[0] << " " << std::setw(4) << input_tensor_29.get_shape()[1] << " " << input_tensor_29.get_shape()[2]
-        //         << ", address: "
-        //         << std::setw(15) << input_tensor_29.data() << " "
-        //         << std::setw(15) << ((float*)input_tensor_29.data())[0]
-        //         << std::setw(15) << ((float*)input_tensor_29.data())[1]
-        //         << ", ne[0]-1: "
-        //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0] - 1]
-        //         << ", ne[0]: "
-        //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0]] << std::right
-        //         << std::setw(15) << ((float*)input_tensor_29.data())[input_tensor_29.get_shape()[0] + 1] << std::right
-        //         << std::right
-        //         << std::endl;
-
-        //         auto cache_k_l0_30 = ggml_decoder->get_input_names()[30];
-        //         // auto input_data = ggml_decoder->get_input_ggml_tensor(cache_k_l0_20)->data;
-        //         auto input_tensor_30 = input_tensors.at(30).second;
-        //         std::cout << std::left  << "  " << std::setw(2) << 30 << "  : "
-        //         << "Input Name: " << std::setw(20) << cache_k_l0_30
-        //         << ", shape: " << std::setw(4) << input_tensor_30.get_shape()[0] << " " << std::setw(4) << input_tensor_30.get_shape()[1] << " " << input_tensor_30.get_shape()[2]
-        //         << ", address: "
-        //         << std::setw(15) << input_tensor_30.data() << " "
-        //         << std::setw(15) << ((float*)input_tensor_30.data())[0]
-        //         << std::setw(15) << ((float*)input_tensor_30.data())[1]
-        //         << ", ne[0]-1: "
-        //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0] - 1]
-        //         << ", ne[0]: "
-        //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0]] << std::right
-        //         << std::setw(15) << ((float*)input_tensor_30.data())[input_tensor_30.get_shape()[0] + 1] << std::right
-        //         << std::right
-        //         << std::endl;
-        //     }
-        // }
         #ifdef GGML_OPENVINO_DEBUG
             printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
         #endif
