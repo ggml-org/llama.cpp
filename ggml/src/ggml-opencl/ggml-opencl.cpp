@@ -631,7 +631,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     }
 
     // mul_mv_q4_0_f32_1d_8x_flat
-    {
+    // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
+    // those compiler versions since it is anyway not used for Adreno.
+    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.major > 38) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_8x_flat.cl.h"
@@ -647,7 +649,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     }
 
     // mul_mv_q4_0_f32_1d_16x_flat
-    {
+    // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
+    // those compiler versions since it is anyway not used for Adreno.
+    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.major > 38) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_16x_flat.cl.h"
