@@ -151,7 +151,7 @@ static __global__ void mul_mat_vec_q(
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
     // partial sum for each thread
-    float tmp[ncols_y][rows_per_cuda_block] = {0.0f};
+    float tmp[ncols_y][rows_per_cuda_block] = {{0.0f}};
 
     const block_q8_1 * y = (const block_q8_1 *) vy;
 
@@ -197,10 +197,12 @@ static __global__ void mul_mat_vec_q(
             tmp[j][i] = warp_reduce_sum<warp_size>(tmp[j][i]);
         }
 
-        if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < nrows_dst)) {
+        if (threadIdx.x < rows_per_cuda_block && (rows_per_cuda_block == 1 || row0 + threadIdx.x < (unsigned)nrows_dst)) {
             dst[j*nrows_dst + row0 + threadIdx.x] = tmp[j][threadIdx.x];
         }
     }
+
+    GGML_UNUSED(nrows_x);
 }
 
 static std::pair<dim3, dim3> calc_launch_params(const int ncols_y, const int nrows_x, const int warp_size, const mmvq_parameter_table_id table_id) {

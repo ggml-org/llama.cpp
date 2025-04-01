@@ -921,10 +921,33 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     backend_ctx->program_CL_gemm = build_program_from_source(context, device, kernel_src_CL_gemm.c_str(), compile_opts);
     CL_CHECK((backend_ctx->CL_mul_mat_Ab_Bi_8x4 = clCreateKernel(backend_ctx->program_CL_gemm, "kernel_mul_mat_Ab_Bi_8x4", &err), err));
 
+    // TODO: fixme: these sizes are hardcoded for now.
+    //  they should be allocated based on the model's size
+    //  and the device's max alloc size
+    size_t max_alloc_size;
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &max_alloc_size, NULL));
+
     // Allocate intermediate buffers and images
-    size_t max_A_q_d_bytes = 311164928;
-    size_t max_A_s_d_bytes = 38895616;
-    size_t max_B_d_bytes = 45088768;
+    size_t required_A_q_d_bytes = 311164928;
+    size_t required_A_s_d_bytes = 38895616;
+    size_t required_B_d_bytes = 45088768;
+
+    // Ensure buffer sizes do not exceed the maximum allocation size
+    size_t max_A_q_d_bytes = MIN(required_A_q_d_bytes, max_alloc_size);
+    size_t max_A_s_d_bytes = MIN(required_A_s_d_bytes, max_alloc_size);
+    size_t max_B_d_bytes   = MIN(required_B_d_bytes, max_alloc_size);
+    if (required_A_q_d_bytes > max_alloc_size) {
+        GGML_LOG_WARN("ggml_opencl: A_q_d buffer size reduced from %zu to %zu due to device limitations.\n",
+                      required_A_q_d_bytes, max_A_q_d_bytes);
+    }
+    if (required_A_s_d_bytes > max_alloc_size) {
+        GGML_LOG_WARN("ggml_opencl: A_s_d buffer size reduced from %zu to %zu due to device limitations.\n",
+                      required_A_s_d_bytes, max_A_s_d_bytes);
+    }
+    if (required_B_d_bytes > max_alloc_size) {
+        GGML_LOG_WARN("ggml_opencl: B_d buffer size reduced from %zu to %zu due to device limitations.\n",
+                      required_B_d_bytes, max_B_d_bytes);
+    }
 
     CL_CHECK((backend_ctx->A_q_d_max = clCreateBuffer(context, 0, max_A_q_d_bytes, NULL, &err), err));
     CL_CHECK((backend_ctx->A_s_d_max = clCreateBuffer(context, 0, max_A_s_d_bytes, NULL, &err), err));
