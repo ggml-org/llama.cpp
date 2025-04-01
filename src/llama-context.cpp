@@ -1201,33 +1201,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     const int64_t n_tokens_all = batch.n_tokens;
     const int64_t n_embd       = hparams.n_embd;
 
-    // TODO: remove this stuff
-    class batch_guard {
-    public:
-        batch_guard(llama_kv_cache_unified & kv_self) : kv_slot_restorer(kv_self) {
-        }
-
-        ~batch_guard() {
-            if (!is_done) {
-                kv_slot_restorer.restore();
-            }
-        }
-
-        void done() {
-            is_done = true;
-        }
-
-        void save(const llama_kv_cache_slot_info & slot_info) {
-            kv_slot_restorer.save(slot_info);
-        }
-
-    private:
-        bool is_done = false;
-
-        llama_kv_slot_restorer kv_slot_restorer;
-    };
-
-    batch_guard bg(*kv_self);
+    llama_kv_cache_guard kvg(kv_self.get());
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
@@ -1327,13 +1301,10 @@ int llama_context::decode(llama_batch & inp_batch) {
                 kv_self->head = 0;
             }
 
-            const auto slot_info = kv_self->find_slot(ubatch);
-            if (!slot_info) {
+            if (!kv_self->find_slot(ubatch)) {
                 LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
                 return -3;
             }
-
-            bg.save(slot_info);
 
             if (!kv_self->recurrent) {
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
@@ -1467,7 +1438,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     }
 
     // finalize the batch processing
-    bg.done();
+    kvg.commit();
 
     // set output mappings
     {

@@ -11,8 +11,6 @@
 #include <map>
 #include <stdexcept>
 
-static const llama_kv_cache_slot_info llama_kv_cache_slot_info_failed{false};
-
 llama_kv_cache_unified::llama_kv_cache_unified(const llama_hparams & hparams, callbacks cbs) : hparams(hparams), cbs(std::move(cbs)) {
 }
 
@@ -446,11 +444,25 @@ void llama_kv_cache_unified::defrag() {
     }
 }
 
+void llama_kv_cache_unified::restore() {
+    if (pending.ranges.empty()) {
+        return;
+    }
+
+    for (auto & range : pending.ranges) {
+        seq_rm(-1, range.p0, range.p1);
+    }
+}
+
+void llama_kv_cache_unified::commit() {
+    pending.ranges.clear();
+}
+
 bool llama_kv_cache_unified::get_can_shift() const {
     return can_shift;
 }
 
-llama_kv_cache_slot_info llama_kv_cache_unified::find_slot(
+bool llama_kv_cache_unified::find_slot(
        const llama_ubatch & ubatch) {
     const uint32_t n_tokens = ubatch.n_tokens;
     const uint32_t n_seqs   = ubatch.n_seqs;
@@ -477,7 +489,7 @@ llama_kv_cache_slot_info llama_kv_cache_unified::find_slot(
                     // too big seq_id
                     // TODO: would it be possible to resize the cache instead?
                     LLAMA_LOG_ERROR("%s: seq_id=%d >= n_seq_max=%d Try using a bigger --parallel value\n", __func__, seq_id, size);
-                    return llama_kv_cache_slot_info_failed;
+                    return false;
                 }
                 if (j > 0) {
                     llama_kv_cell & seq = cells[seq_id];
@@ -616,14 +628,14 @@ llama_kv_cache_slot_info llama_kv_cache_unified::find_slot(
             [](const llama_kv_cell& cell){ return !cell.is_empty(); });
 
         // sanity check
-        return llama_kv_cache_slot_info(n >= n_seqs);
+        return n >= n_seqs;
     }
 
     // otherwise, one cell per token.
 
     if (n_tokens > size) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %d\n", __func__, n_tokens, size);
-        return llama_kv_cache_slot_info_failed;
+        return false;
     }
 
     uint32_t n_tested = 0;
@@ -651,7 +663,7 @@ llama_kv_cache_slot_info llama_kv_cache_unified::find_slot(
 
         if (n_tested >= size) {
             //LLAMA_LOG_ERROR("%s: failed to find a slot for %d tokens\n", __func__, n_tokens);
-            return llama_kv_cache_slot_info_failed;
+            return false;
         }
     }
 
@@ -668,7 +680,9 @@ llama_kv_cache_slot_info llama_kv_cache_unified::find_slot(
 
     used += n_tokens;
 
-    return llama_kv_cache_slot_info(head, head + n_tokens);
+    pending.ranges.push_back({head, head + n_tokens});
+
+    return true;
 }
 
 uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) const {
@@ -1033,6 +1047,7 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
             LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
             return false;
         }
+        commit();
 
         // DEBUG CHECK: kv.head should be our first cell, kv.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
         // Assume that this is one contiguous block of cells
