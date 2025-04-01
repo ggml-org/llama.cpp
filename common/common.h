@@ -411,8 +411,9 @@ struct common_params {
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
     int32_t i_chunk     =  0; // start processing from this chunk
 
-    bool process_output = false; // collect data for the output tensor
-    bool compute_ppl    = true;  // whether to compute perplexity
+    bool process_output  = false; // collect data for the output tensor
+    bool compute_ppl     = true;  // whether to compute perplexity
+    bool show_statistics = false; // show imatrix statistics per tensor
 
     // cvector-generator params
     int n_pca_batch = 100;
