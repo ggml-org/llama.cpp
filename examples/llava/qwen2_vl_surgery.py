@@ -102,7 +102,7 @@ def main(args):
         np_dtype = np.float32
         ftype = 0
     elif args.data_type == 'fp16':
-        dtype = torch.float32
+        dtype = torch.float16
         np_dtype = np.float16
         ftype = 1
     else:

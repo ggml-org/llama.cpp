@@ -594,10 +594,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
         inp = ggml_add(ctx0, inp, inp_1);
 
-        // ggml_build_forward_expand(gf, inp);
-        // ggml_free(ctx0);
-        // return gf;
-
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
         inp = ggml_reshape_4d(
             ctx0, inp,
@@ -609,10 +605,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         inp = ggml_reshape_3d(
             ctx0, inp,
             hidden_size, patches_w * patches_h, batch_size);
-
-        // ggml_build_forward_expand(gf, inp);
-        // ggml_free(ctx0);
-        // return gf;
     }
     else {
         inp = ggml_reshape_3d(ctx0, inp, num_patches, hidden_size, batch_size);
@@ -701,18 +693,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         embeddings = ggml_reshape_2d(ctx0, embeddings, hidden_size * 4, patches_w * patches_h * batch_size / 4);
         embeddings = ggml_get_rows(ctx0, embeddings, inv_window_idx);
         embeddings = ggml_reshape_3d(ctx0, embeddings, hidden_size, patches_w * patches_h, batch_size);
-
-        // positions = ggml_reshape_2d(ctx0, positions, num_position_ids / 4, 4);
-        // positions = ggml_cont(ctx0, ggml_permute(ctx0, positions, 1, 0, 2, 3));
-        // positions = ggml_reshape_2d(ctx0, positions, 16, num_position_ids / 16);
-        // positions = ggml_get_rows(ctx0, positions, inv_window_idx);
-        // positions = ggml_reshape_2d(ctx0, positions, 4, num_position_ids / 4);
-        // positions = ggml_cont(ctx0, ggml_permute(ctx0, positions, 1, 0, 2, 3));
-        // positions = ggml_reshape_1d(ctx0, positions, num_position_ids);
-
-        // ggml_build_forward_expand(gf, embeddings);
-        // ggml_free(ctx0);
-        // return gf;
     }
 
     for (int il = 0; il < ctx->max_feature_layer; il++) {
@@ -736,12 +716,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
             cur = ggml_add(ctx0, ggml_mul(ctx0, cur, model.layers[il].ln_1_w),
                            model.layers[il].ln_1_b);
         }
-        // if ( il == 0) {
-        // // build the graph
-        // ggml_build_forward_expand(gf, cur);
-        // ggml_free(ctx0);
-        // return gf;
-        // }
 
         // self-attention
         {
@@ -784,17 +758,10 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
                 KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
             } else {
                 KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f, 0.0f);
-
                 // KQ = ggml_scale_inplace(ctx0, KQ, 1.0f / sqrt((float)d_head));
                 // KQ = ggml_add(ctx0, KQ, window_mask);
                 // KQ = ggml_soft_max_inplace(ctx0, KQ);
             }
-            // if ( il == 0) {
-            //     // build the graph
-            //     ggml_build_forward_expand(gf, KQ);
-            //     ggml_free(ctx0);
-            //     return gf;
-            // }
 
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
             KQV = ggml_reshape_4d(ctx0, KQV, d_head, num_positions, n_head, batch_size);
@@ -810,12 +777,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         cur = ggml_add(ctx0, cur, embeddings);
 
         embeddings = cur; // embeddings = residual, cur = hidden_states
-        // if ( il == 0) {
-        //     // build the graph
-        //     ggml_build_forward_expand(gf, cur);
-        //     ggml_free(ctx0);
-        //     return gf;
-        // }
 
         // layernorm2
         if (ctx->use_rms_norm) {
@@ -867,18 +828,7 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
         cur = ggml_add(ctx0, embeddings, cur);
 
         embeddings = cur;
-
-        // if ( il == 0) {
-        //     // build the graph
-        //     ggml_build_forward_expand(gf, embeddings);
-        //     ggml_free(ctx0);
-        //     return gf;
-        // }
     }
-
-    // ggml_build_forward_expand(gf, embeddings);
-    // ggml_free(ctx0);
-    // return gf;
 
     // post-layernorm
     if (model.post_ln_w) {
@@ -2777,9 +2727,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             }
 
             struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
-
-            // const int pw = image_size_width / patch_size;
-            // const int ph = image_size_height / patch_size;
             const int mpow = (merge_ratio * merge_ratio);
             int* positions_data = (int*)malloc(ggml_nbytes(positions));
 
@@ -2792,6 +2739,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                         for (int dx = 0; dx < 2; dx++) {
                             auto remap = idx[ptr / mpow];
                             remap = remap * mpow + (ptr % mpow);
+                            // auto remap = ptr;
 
                             positions_data[remap]                 = y + dy;
                             positions_data[num_patches + remap]     = x + dx;
@@ -2803,7 +2751,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
             }
 
-            if (positions) ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
+            ggml_backend_tensor_set(positions, positions_data, 0, ggml_nbytes(positions));
             free(positions_data);
         }
         else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {

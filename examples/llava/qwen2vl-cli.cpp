@@ -771,10 +771,10 @@ enum model_output_type {
 };
 
 static void debug_dump_img_embed(struct llava_context * ctx_llava, model_output_type output_type) {
-    int ih = 140;
-    int iw = 196;
-    // int ih = 56;
-    // int iw = 56;
+    constexpr int ih = 140;
+    constexpr int iw = 196;
+    // constexpr int ih = 56;
+    // constexpr int iw = 56;
     // int n_embd  = llama_model_n_embd(llama_get_model(ctx_llava->ctx_llama));
     int n_embd  = 1280;
     int merge = 1;
@@ -954,7 +954,7 @@ int main(int argc, char ** argv) {
 
         // debug_test_mrope_2d();
         debug_dump_img_embed(ctx_llava, model_output_type::final_layer);
-        // debug_dump_img_embed(ctx_llava, model_output_type::conv3d);
+        // debug_dump_img_embed(ctx_llava, model_output_type::last_attn_layer);
         // debug_test_get_rows();
         // dump_win_attn_mask();
         // debug_patch_layout();
