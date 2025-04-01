@@ -21,10 +21,9 @@
 
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
-    LOG("\n    %s \\\n"
-            "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] \\\n"
-            "       [--no-ppl] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
-            "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
+    LOG("\n    %s -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output]\n"
+            "       [--chunk 123] [--output-frequency 10] [--save-frequency 0] [--show-statistics]\n"
+            "       [--no-ppl] [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -34,13 +33,19 @@ struct Stats {
     int ncall = 0;
 };
 
+struct Tally {
+    std::string tensor;
+    float value = 0;
+    int count = 0;
+};
+
 class IMatrixCollector {
 public:
     IMatrixCollector() = default;
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
-    bool load_imatrix(const char * fname);
+    bool load_imatrix(const char * fname, std::vector<Tally> * tally = nullptr);
 private:
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
@@ -289,7 +294,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
 }
 
-bool IMatrixCollector::load_imatrix(const char * fname) {
+bool IMatrixCollector::load_imatrix(const char * fname, std::vector<Tally> * tally) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
         LOG_ERR("%s: failed to open %s\n",__func__, fname);
@@ -335,13 +340,22 @@ bool IMatrixCollector::load_imatrix(const char * fname) {
             return false;
         }
 
-        // Recreate the state as expected by save_imatrix(), and corerct for weighted sum.
+        // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
+        float total = 0;
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
+            total += tmp[i];
             e.counts[i] += ncall;
         }
         e.ncall += ncall;
 
+        if (tally) {
+            tally->emplace_back();
+            auto & [tensor, value, count] = (*tally)[i];
+            tensor = name_as_vec.data();
+            value = total;
+            count = nval;
+        }
     }
     return true;
 }
@@ -351,7 +365,6 @@ static IMatrixCollector g_collector;
 static bool ik_collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     return g_collector.collect_imatrix(t, ask, user_data);
 }
-
 
 struct results_log_softmax {
     double log_softmax;
@@ -588,6 +601,42 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {
         return 1;
+    }
+
+    std::vector<Tally> tallies;
+
+    if (params.show_statistics) {
+        if (params.in_files.empty() || params.in_files.size() > 1) {
+            LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
+            return 1;
+        }
+        if (!g_collector.load_imatrix(params.in_files[0].c_str(), & tallies)) {
+            LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
+            return 1;
+        }
+        if (tallies.empty()) {
+            LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
+            return 1;
+        }
+        float total = 0;
+        for (const auto & tallie : tallies) {
+            total += tallie.value / static_cast<float>(tallie.count);
+        }
+
+        struct tally_sort {
+            bool operator()(const Tally& x, const Tally & y) const {
+                return x.value / static_cast<float>(x.count) > y.value / static_cast<float>(y.count);
+            }
+        };
+        std::sort(tallies.begin(), tallies.end(), tally_sort());
+        LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(tallies.size()));
+        LOG_INF("\n                    Tensor                       Σ(weights)   Contribution\n");
+        LOG_INF("==========================================================================\n");
+        for (const auto & [tensor, value, count] : tallies) {
+            LOG_INF("%40s\t%10.2f\t%7.4f %%\n", tensor.c_str(), value / count, 100.0f * (value / count / total));
+        }
+        LOG_INF("\n");
+        return 0;
     }
 
     common_init();
