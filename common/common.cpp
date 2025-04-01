@@ -907,7 +907,11 @@ struct common_init_result common_init_from_params(common_params & params) {
     llama_model * model = nullptr;
 
     if (!params.hf_repo.empty() && !params.hf_file.empty()) {
-        model = common_load_model_from_hf(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        if (LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            model = common_load_model_from_ms(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        } else {
+            model = common_load_model_from_hf(params.hf_repo, params.hf_file, params.model, params.hf_token, mparams);
+        }
     } else if (!params.model_url.empty()) {
         model = common_load_model_from_url(params.model_url, params.model, params.hf_token, mparams);
     } else {
@@ -1192,6 +1196,23 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
     return false;
 }
 
+static std::filesystem::path create_credential_path() {
+    const char* home_dir = nullptr;
+#ifdef _WIN32
+    home_dir = getenv("USERPROFILE");
+#else
+    home_dir = getenv("HOME");
+#endif
+    if (home_dir == nullptr) {
+        return std::string("");
+    }
+    const std::filesystem::path credentials_path = std::filesystem::path(home_dir) / ".modelscope" / "credentials";
+    if (!exists(credentials_path)) {
+        create_directories(credentials_path);
+    }
+    return credentials_path;
+}
+
 static bool common_download_file(const std::string & url, const std::string & path, const std::string & hf_token) {
     // Initialize libcurl
     curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
@@ -1201,11 +1222,15 @@ static bool common_download_file(const std::string & url, const std::string & pa
         return false;
     }
 
-    bool force_download = false;
-
     // Set the URL, allow to follow http redirection
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    std::vector<std::string> _headers = {"User-Agent: llama-cpp"};
+    for (const auto & header : _headers) {
+        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
 
     // Check if hf-token or bearer-token was specified
     if (!hf_token.empty()) {
@@ -1265,6 +1290,7 @@ static bool common_download_file(const std::string & url, const std::string & pa
     };
 
     common_load_model_from_url_headers headers;
+    bool should_download = false;
 
     {
         typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
@@ -1293,32 +1319,42 @@ static bool common_download_file(const std::string & url, const std::string & pa
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
         curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
         curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
+        if (!LLAMACPP_USE_MODELSCOPE_DEFINITION) {
+            bool force_download = false;
+            bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
+            if (!was_perform_successful) {
+                return false;
+            }
 
-        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
-        if (!was_perform_successful) {
-            return false;
-        }
-
-        long http_code = 0;
-        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code != 200) {
-            // HEAD not supported, we don't know if the file has changed
-            // force trigger downloading
-            force_download = true;
-            LOG_ERR("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+            long http_code = 0;
+            curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+            if (http_code != 200) {
+                // HEAD not supported, we don't know if the file has changed
+                // force trigger downloading
+                force_download = true;
+                LOG_ERR("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+            }
+            should_download = !file_exists || force_download;
+            if (!should_download) {
+                if (!etag.empty() && etag != headers.etag) {
+                    LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
+                    should_download = true;
+                } else if (!last_modified.empty() && last_modified != headers.last_modified) {
+                    LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
+                    should_download = true;
+                }
+            }
+        } else {
+            //ModelScope does not support check etag and last-modified.
+            should_download = !file_exists;
+            if (!hf_token.empty()) {
+                //Login was done in the previous logic.
+                const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+                curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+            }
         }
     }
 
-    bool should_download = !file_exists || force_download;
-    if (!should_download) {
-        if (!etag.empty() && etag != headers.etag) {
-            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
-            should_download = true;
-        } else if (!last_modified.empty() && last_modified != headers.last_modified) {
-            LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
-            should_download = true;
-        }
-    }
     if (should_download) {
         std::string path_temporary = path + ".downloadInProgress";
         if (file_exists) {
@@ -1507,6 +1543,87 @@ struct llama_model * common_load_model_from_hf(
     return common_load_model_from_url(model_url, local_path, hf_token, params);
 }
 
+bool ms_login(const std::string & token) {
+    if (token.empty()) {
+        return false;
+    }
+
+    auto credentials_path = create_credential_path();
+
+    const std::filesystem::path user_file = credentials_path / "user";
+    const std::filesystem::path git_token_file = credentials_path / "git_token";
+    const std::filesystem::path cookie_file = credentials_path / "cookies";
+    std::string url = MODELSCOPE_DOMAIN_DEFINITION + "/api/v1/login";
+    json request_body;
+    request_body["AccessToken"] = token;
+    std::string request_body_str = request_body.dump();
+
+    curl_ptr curl(curl_easy_init(), &curl_easy_cleanup);
+    std::string response_string;
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "User-Agent: llama-cpp");
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    auto save_to_file = [](const std::string& filename, const std::string& data) {
+        std::ofstream ofs(filename, std::ios::binary);
+        if (!ofs) {
+            throw std::runtime_error("Cannot write to: " + filename);
+        }
+        ofs << data;
+        ofs.close();
+    };
+
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, request_body_str.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDSIZE, request_body_str.size());
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response_string);
+    curl_easy_setopt(curl.get(), CURLOPT_COOKIEJAR, cookie_file.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+
+    if (CURLcode res = curl_easy_perform(curl.get()); res != CURLE_OK) {
+        curl_slist_free_all(headers);
+        return false;
+    }
+
+    long http_code = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code != 200) {
+        return false;
+    }
+
+    curl_slist_free_all(headers);
+    json response_json = json::parse(response_string);
+    json data          = response_json["Data"];
+    auto access_token = data["AccessToken"].get<std::string>();
+    save_to_file(git_token_file.generic_string(), access_token);
+    save_to_file(user_file.generic_string(), data["Username"].get<std::string>() + ":" + data["Email"].get<std::string>());
+    return true;
+}
+
+struct llama_model * common_load_model_from_ms(
+        const std::string & repo,
+        const std::string & remote_path,
+        const std::string & local_path,
+        const std::string & ms_token,
+        const struct llama_model_params & params) {
+    std::string model_url = "https://" + MODELSCOPE_DOMAIN_DEFINITION + "/models/";
+    model_url += repo;
+    model_url += "/resolve/master/";
+    model_url += remote_path;
+    if (!ms_token.empty()) {
+        ms_login(ms_token);
+    }
+    return common_load_model_from_url(model_url, local_path, ms_token, params);
+}
+
 /**
  * Allow getting the HF file from the HF repo with tag (like ollama), for example:
  * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
@@ -1581,6 +1698,92 @@ std::pair<std::string, std::string> common_get_hf_file(const std::string & hf_re
     return std::make_pair(hf_repo, gguf_file.at("rfilename"));
 }
 
+std::pair<std::string, std::string> common_get_ms_file(const std::string & ms_repo_with_tag, const std::string & ms_token) {
+    //Download from ModelScope model repository, quant is optional and case-insensitive.
+    //default to the input tag or Q4_K_M, will fall back to first GGUF file in the repo if quant is not specified and tag is not found.
+    auto parts = string_split<std::string>(ms_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "q4_k_m";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+    if (!ms_token.empty()) {
+        ms_login(ms_token);
+    }
+
+    std::transform(tag.begin(), tag.end(), std::begin(tag), ::tolower);
+    if (tag == "latest" || tag.empty()) {
+        //ModelScope does not support latest tag
+        tag = "q4_k_m";
+    }
+
+    // fetch model info from Hugging Face Hub API
+    json model_info;
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::string res_str;
+    auto endpoint = MODELSCOPE_DOMAIN_DEFINITION;
+
+    std::string url = endpoint + "/api/v1/models/" + hf_repo + "/repo/files?Revision=master&Recursive=True";
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_str);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    if (!ms_token.empty()) {
+        const std::filesystem::path cookie_file = create_credential_path() / "cookies";
+        curl_easy_setopt(curl.get(), CURLOPT_COOKIEFILE, cookie_file.c_str());
+    }
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        throw std::runtime_error("error: cannot make GET request to MS API");
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+    if (res_code == 200) {
+        model_info = nlohmann::json::parse(res_str);
+    } else if (res_code == 401) {
+        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid MS token");
+    } else {
+        throw std::runtime_error(string_format("error from MS API, response code: %ld, data: %s", res_code, res_str.c_str()));
+    }
+
+    auto all_files = model_info["Data"]["Files"];
+
+    std::vector<std::string> all_available_files;
+    std::string gguf_file;
+    for (const auto & _file : all_files) {
+        auto file = _file["Path"].get<std::string>();
+        std::transform(file.begin(), file.end(), std::begin(file), ::tolower);
+        if (!string_ends_with(file, ".gguf")) {
+            continue;
+        }
+        if (file.find(tag) != std::string::npos) {
+            gguf_file = file;
+        }
+        all_available_files.push_back(file);
+    }
+    if (gguf_file.empty()) {
+        gguf_file = all_available_files[0];
+    }
+
+    return std::make_pair(hf_repo, gguf_file);
+}
+
 #else
 
 struct llama_model * common_load_model_from_url(
@@ -1590,6 +1793,26 @@ struct llama_model * common_load_model_from_url(
         const struct llama_model_params & /*params*/) {
     LOG_WRN("%s: llama.cpp built without libcurl, downloading from an url not supported.\n", __func__);
     return nullptr;
+}
+
+struct llama_model * common_load_model_from_ms(
+        const std::string & /*repo*/,
+        const std::string & /*remote_path*/,
+        const std::string & /*local_path*/,
+        const std::string & /*ms_token*/,
+        const struct llama_model_params & /*params*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return nullptr;
+}
+
+bool ms_login(const std::string & /*token*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return false;
+}
+
+std::pair<std::string, std::string> common_get_ms_file(const std::string & /*ms_repo_with_tag*/, const std::string & /*ms_token*/) {
+    LOG_WRN("%s: llama.cpp built without libcurl, downloading from ModelScope not supported.\n", __func__);
+    return std::make_pair("", "");
 }
 
 struct llama_model * common_load_model_from_hf(
