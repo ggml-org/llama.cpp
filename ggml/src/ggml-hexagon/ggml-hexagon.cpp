@@ -1490,6 +1490,11 @@ static bool ggmlhexagon_check_valid_appcfg() {
             GGMLHEXAGON_LOG_INFO("rpc ion mempool and rpc dma mempool cannot be enabled at the same time");
             is_valid_appcfg = false;
         }
+
+        if (1 == g_hexagon_appcfg.enable_rpc_dma_mempool) {
+            GGMLHEXAGON_LOG_INFO("rpc dma mempool not supported");
+            is_valid_appcfg = false;
+        }
     }
 
     if (!is_valid_appcfg) {
