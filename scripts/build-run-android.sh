@@ -26,7 +26,9 @@ HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #v79 --- Snapdragon 8 Elite(aka Gen4)
 HTP_ARCH_VERSION=v75
 
-qnnparams=" -mg 2 -ngl 99 "
+#running_params=" -mg 2 -ngl 99 "
+#running_params=" -mg 2 -ngl 99 -t 8 -fa 1 "
+running_params=" -mg 2 -ngl 99 -t 8 "
 
 function dump_vars()
 {
@@ -209,7 +211,7 @@ function run_llamacli()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-cli ${qnnparams} -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
+               && ${REMOTE_PATH}/llama-cli ${running_params} -no-cnv -m ${GGUF_MODEL_NAME} -p \"introduce the movie Once Upon a Time in America briefly.\n\""
 
 }
 
@@ -220,7 +222,7 @@ function run_llamabench()
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
-               && ${REMOTE_PATH}/llama-bench ${qnnparams} -m ${GGUF_MODEL_NAME}"
+               && ${REMOTE_PATH}/llama-bench ${running_params} -m ${GGUF_MODEL_NAME}"
 
 }
 
