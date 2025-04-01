@@ -2479,11 +2479,10 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
         }
     }
 
-    if(use_cuda_graph)
-    {
+    if (use_cuda_graph) {
         cuda_ctx->cuda_graph->use_cpy_indirection = true;
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
-        ggml_backend_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size(), cuda_ctx->stream());
+        ggml_cuda_cpy_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size(), cuda_ctx->stream());
     }
 
     return use_cuda_graph;
@@ -2647,7 +2646,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         if (cuda_ctx->cuda_graph->instance == nullptr) { // Create executable graph from captured graph.
             CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
         }
-        if(cuda_graph_update_required) { // Update graph executable
+        if (cuda_graph_update_required) { // Update graph executable
             update_cuda_graph_executable(cuda_ctx);
         }
         // Launch graph
@@ -2717,7 +2716,9 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
 
-    if (!use_cuda_graph) cuda_ctx->cuda_graph->use_cpy_indirection = false;
+    if (!use_cuda_graph) {
+        cuda_ctx->cuda_graph->use_cpy_indirection = false;
+    }
 
 #else
     bool use_cuda_graph = false;
