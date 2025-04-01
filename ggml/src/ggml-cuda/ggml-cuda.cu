@@ -2481,6 +2481,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 
     if(use_cuda_graph)
     {
+        cuda_ctx->cuda_graph->use_cpy_indirection = true;
         // copy pointers to GPU so they can be accessed via indirection within CUDA graph
         ggml_backend_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size(), cuda_ctx->stream());
     }
@@ -2715,6 +2716,8 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph && cuda_graph_update_required) { // Start CUDA graph capture
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
+
+    if (!use_cuda_graph) cuda_ctx->cuda_graph->use_cpy_indirection = false;
 
 #else
     bool use_cuda_graph = false;

@@ -566,8 +566,10 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     char ** dest_ptrs_d = nullptr;
     int graph_cpynode_index = -1;
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
-    dest_ptrs_d = ctx.cuda_graph->dest_ptrs_d;
-    graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
+    if(ctx.cuda_graph->use_cpy_indirection) {
+        dest_ptrs_d = ctx.cuda_graph->dest_ptrs_d;
+        graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
+    }
 #endif
     if (src0->type == src1->type && ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
         GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(src1));
@@ -610,7 +612,9 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
     }
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
-     ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
+    if(ctx.cuda_graph->use_cpy_indirection) {
+        ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
+    }
 #endif
 
 }
