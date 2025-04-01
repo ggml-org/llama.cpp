@@ -3646,16 +3646,16 @@ kernel void kernel_flash_attn_ext_vec(
     constexpr short DV4 = DV/4;
     constexpr short NW  = N_SIMDWIDTH;
     constexpr short NL  = NW/NE; // note: this can be adjusted to support different head sizes and simdgroup work loads
-    constexpr short SH  = 2*C;   // shared memory per simdgroup
+    constexpr short SH  = 4*C;   // shared memory per simdgroup
 
     const short T = DK + nsg*SH; // shared memory size per query in (half)
 
-  //threadgroup q_t  * sq  = (threadgroup q_t  *) (shmem_f16 +                0*DK); // holds the query data
-    threadgroup q4_t * sq4 = (threadgroup q4_t *) (shmem_f16 +                0*DK); // same as above but in q4_t
-    threadgroup s_t  * ss  = (threadgroup s_t  *) (shmem_f16 + sgitg*SH     + Q*DK); // scratch buffer for attention
-    threadgroup s4_t * ss4 = (threadgroup s4_t *) (shmem_f16 + sgitg*SH     + Q*DK); // same as above but in s4_t
-    threadgroup half * sm  = (threadgroup half *) (shmem_f16 + sgitg*SH + C + Q*DK); // scratch buffer for mask
-    threadgroup o4_t * sr4 = (threadgroup o4_t *) (shmem_f16 + sgitg*DV     + Q*T);  // scratch buffer for the results
+  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                  0*DK); // holds the query data
+    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                  0*DK); // same as above but in q4_t
+    threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 + sgitg*SH       + Q*DK); // scratch buffer for attention
+    threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 + sgitg*SH       + Q*DK); // same as above but in s4_t
+    threadgroup float * sm  = (threadgroup float *) (shmem_f16 + sgitg*SH + 2*C + Q*DK); // scratch buffer for mask
+    threadgroup o4_t  * sr4 = (threadgroup o4_t  *) (shmem_f16 + sgitg*DV       + Q*T);  // scratch buffer for the results
 
     // store the result for all queries in local memory (the O matrix from the paper)
     o4_t lo[DV4/NL];
@@ -3836,7 +3836,7 @@ kernel void kernel_flash_attn_ext_vec(
                         v4_t mv;
                         deq_v_t4(pv4 + i/nl_v, i%nl_v, mv);
 
-                        lo[ii/NL] += dot((float4) mv, (float4) ms);
+                        lo[ii/NL] += o4_t(float4(mv)*float4(ms));
                     }
                 }
             }
@@ -3907,11 +3907,11 @@ kernel void kernel_flash_attn_ext_vec(
     // parallel reduce
     for (short r = nsg/2; r > 0; r >>= 1) {
         if (sgitg < r) {
-            const float S0 = ss[       0];
-            const float S1 = ss[r*SH + 0];
+            const float S0 = ss[           0];
+            const float S1 = ss[r*(SH/2) + 0];
 
-            const float M0 = ss[       1];
-            const float M1 = ss[r*SH + 1];
+            const float M0 = ss[           1];
+            const float M1 = ss[r*(SH/2) + 1];
 
             const float M = max(M0, M1);
 
