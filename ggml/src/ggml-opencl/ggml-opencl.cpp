@@ -73,6 +73,16 @@ struct ggml_cl_compiler_version {
     int major = -1;
     int minor = -1;
     int patch = -1;
+
+    bool same(int x, int y, int z) const {
+        return major == x && minor == y && patch == z;
+    }
+    bool newer_than(int x, int y, int z) const {
+        return major*10000 + minor*100 + patch > x*10000 + y*100 + z;
+    }
+    bool newer_than_or_same(int x, int y, int z) const {
+        return same(x, y, z) || newer_than(x, y, z);
+    }
 };
 
 // Parses a version string of form "XX.YY ". On an error returns ggml_cl_version with all zeroes.
@@ -633,7 +643,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     // mul_mv_q4_0_f32_1d_8x_flat
     // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
     // those compiler versions since it is anyway not used for Adreno.
-    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.major > 38) {
+    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_8x_flat.cl.h"
@@ -651,7 +661,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     // mul_mv_q4_0_f32_1d_16x_flat
     // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
     // those compiler versions since it is anyway not used for Adreno.
-    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.major > 38) {
+    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_16x_flat.cl.h"
@@ -1973,7 +1983,7 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
 inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     int64_t threshold_ne0 = 512;
     int64_t threshold_ne1 = 512;
-    if (backend_ctx->adreno_cl_compiler_version.major <= 38) {
+    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
