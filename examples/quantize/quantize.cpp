@@ -319,7 +319,15 @@ static bool string_parse_tensor_type(const char * data, std::vector<tensor_quant
     sep++;
     const std::string qt(sep);
 
-    if (find(ALLOWED_TENSOR_TYPE.begin(), ALLOWED_TENSOR_TYPE.end(), tn) == ALLOWED_TENSOR_TYPE.end()) {
+    bool found = false;
+    for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
+        // check if an allowed tensor exists and it's at the end of the kv string
+        if (tn.length() - allowed.length() == tn.find(allowed)) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
         printf("\n%s: invalid tensor name '%s'\n\n", __func__, tn.c_str());
         return false;
     }

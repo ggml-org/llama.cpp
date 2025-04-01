@@ -10,6 +10,7 @@
 #include <cinttypes>
 #include <fstream>
 #include <mutex>
+#include <regex>
 #include <thread>
 #include <unordered_map>
 
@@ -795,9 +796,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 // unless the user specifies a type
                 if (params->tensor_types) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
-                    for (const auto & [name, quant] : tensor_types) {
-                        if (std::string str(tensor->name); str.find(name) != std::string::npos) {
-                            new_type = quant;
+                    for (const auto & [tname, qtype] : tensor_types) {
+                        if (std::regex pattern(tname); std::regex_search(tensor->name, pattern)) {
+                            LLAMA_LOG_DEBUG("(overriding %s -> %s), ", ggml_type_name(new_type), ggml_type_name(qtype));
+                            new_type = qtype;
                             break;
                         }
                     }
