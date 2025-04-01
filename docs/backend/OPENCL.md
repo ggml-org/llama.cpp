@@ -196,10 +196,9 @@ ninja
 
 ## Known Issues
 
-- Qwen2.5 0.5B model produces gibberish output with Adreno kernels.
+- Currently OpenCL backend does not work on Adreno 6xx GPUs.
 
 ## TODO
 
-- Fix Qwen2.5 0.5B
 - Optimization for Q6_K
 - Support and optimization for Q4_K
