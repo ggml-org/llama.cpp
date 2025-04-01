@@ -3136,7 +3136,9 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                        && shader_integer_dot_product_features.shaderIntegerDotProduct;
 
     coopmat_support = coopmat_support
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
                    && coopmat_features.cooperativeMatrix
+#endif
                    && ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props, device_architecture);
 
     std::string matrix_cores = coopmat2_support ? "NV_coopmat2" : coopmat_support ? "KHR_coopmat" : "none";
