@@ -5146,10 +5146,7 @@ class BailingMoeModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if hparams.get("head_dim"):
-            rope_dim = hparams["head_dim"]
-        else:
-            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
