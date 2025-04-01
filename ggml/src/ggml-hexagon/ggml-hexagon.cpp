@@ -2250,8 +2250,8 @@ private:
     pfn_rpc_mem_deinit _pfn_rpc_mem_deinit;
     std::unordered_map<void *, void *> _rpcmem_store_map;
     std::unordered_map<void *, size_t> _rpcmem_usage_map;
-    size_t                             _rpcmem_usage    = 0;   // mempool usage in Mbytes
-    size_t                             _rpcmem_capacity = 512; // mempool size  in Mbytes
+    size_t                             _rpcmem_usage    = 0;   // mempool usage in bytes
+    size_t                             _rpcmem_capacity = 0;   // mempool size  in bytes
 
     std::string _graph_name;
     HEXAGONBackend _device_id;
@@ -2289,8 +2289,8 @@ void * qnn_instance::alloc_rpcmem_internal(size_t bytes, size_t alignment) {
 }
 
 void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
-    if (_rpcmem_usage > (_rpcmem_capacity - 8)) { // reserve 8Mbytes in rpc mempool
-        GGMLHEXAGON_LOG_WARN("rpc mempool capcaity: %d MB, usage: %d MB", _rpcmem_capacity, _rpcmem_usage);
+    if (_rpcmem_usage > (_rpcmem_capacity - (8 * SIZE_IN_MB))) { // reserve 8Mbytes in rpc mempool
+        GGMLHEXAGON_LOG_WARN("rpc mempool capacity: %d MB, usage: %d MB", _rpcmem_capacity / SIZE_IN_MB, _rpcmem_usage / SIZE_IN_MB);
         return nullptr;
     }
 
@@ -2299,9 +2299,7 @@ void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
         return nullptr;
     _rpcmem_usage_map.insert(std::pair<void *, size_t>(aligned_buf, bytes));
 
-    size_t rpcmem_usage_in_bytes = _rpcmem_usage * (1 << 20);
-    rpcmem_usage_in_bytes += bytes;
-    _rpcmem_usage = rpcmem_usage_in_bytes / ( 1 << 20);
+    _rpcmem_usage += bytes;
     return aligned_buf;
 }
 
@@ -2319,9 +2317,7 @@ void qnn_instance::free_rpcmem(void * buf) {
             void * rpcbuffer = it->first;
             if (buf == rpcbuffer) {
                 rpcbuffer_size = it->second;
-                size_t rpcmem_usage_in_bytes = _rpcmem_usage * (1 << 20);
-                rpcmem_usage_in_bytes -= rpcbuffer_size;
-                _rpcmem_usage = rpcmem_usage_in_bytes / ( 1 << 20);
+                _rpcmem_usage -= rpcbuffer_size;
             }
         }
         if (rpcbuffer_size != 0) {
@@ -3191,11 +3187,11 @@ void qnn_instance::htp_probe_rpc_meminfo() {
         }
     }
     if (candidate_size > _rpcmem_capacity)
-        _rpcmem_capacity = candidate_size;
+        _rpcmem_capacity = candidate_size * SIZE_IN_MB;
 
     free_rpcmem();
     _rpcmem_usage = 0;
-    GGMLHEXAGON_LOG_INFO("capacity of rpc ion memory %d MB\n", _rpcmem_capacity);
+    GGMLHEXAGON_LOG_INFO("capacity of rpc ion memory %d MB\n", _rpcmem_capacity / SIZE_IN_MB);
 }
 
 void qnn_instance::htp_print_info() {
@@ -5579,21 +5575,16 @@ static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_
         size_t rpc_ion_memsize = 0;
         size_t rpc_ion_usage   = 0;
         if (HWACCEL_CDSP != g_hexagon_appcfg.hwaccel_approach) {
-            //TODO: uniform rpc_ion_memsize and rpc_ion_usage between HWACCEL_CDSP and HWACCEL_QNN
             rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
             rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
-            *total = rpc_ion_memsize * SIZE_IN_MB;
-            *free = (rpc_ion_memsize - rpc_ion_usage) * SIZE_IN_MB;
-            GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize);
-            GGMLHEXAGON_LOG_DEBUG("rpc usage %d M\n\n", rpc_ion_usage);
         } else {
             rpc_ion_memsize = ctx->rpc_mempool_capacity;
-            rpc_ion_usage   = ctx->rpc_mempool_usage;
-            *total = rpc_ion_memsize;
-            *free  = (rpc_ion_memsize - rpc_ion_usage);
-            GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize / SIZE_IN_MB);
-            GGMLHEXAGON_LOG_DEBUG("rpc usage %d M\n\n", rpc_ion_usage / SIZE_IN_MB);
+            rpc_ion_usage = ctx->rpc_mempool_usage;
         }
+        *total = rpc_ion_memsize;
+        *free = (rpc_ion_memsize - rpc_ion_usage);
+        GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize / SIZE_IN_MB);
+        GGMLHEXAGON_LOG_DEBUG("rpc usage %d M\n\n", rpc_ion_usage / SIZE_IN_MB);
     }
 }
 
