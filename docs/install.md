@@ -9,6 +9,13 @@ brew install llama.cpp
 ```
 The formula is automatically updated with new `llama.cpp` releases. More info: https://github.com/ggml-org/llama.cpp/discussions/7668
 
+## MacPorts
+
+```sh
+sudo port install llama.cpp
+```
+see also: https://ports.macports.org/port/llama.cpp/details/
+
 ## Nix
 
 On Mac and Linux, the Nix package manager can be used via

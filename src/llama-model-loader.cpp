@@ -640,9 +640,9 @@ llama_model_loader::llama_model_loader(
         ftype = (llama_ftype) (ftype | LLAMA_FTYPE_GUESSED);
 
         {
-            const int kid = gguf_find_key(meta.get(), "general.file_type"); // TODO: use LLM_KV
-            if (kid >= 0) {
-                ftype = (llama_ftype) gguf_get_val_u32(meta.get(), kid);
+            uint32_t ftype_val = 0;
+            if (get_key(LLM_KV_GENERAL_FILE_TYPE, ftype_val, false)) {
+                ftype = (llama_ftype) ftype_val;
             }
         }
 

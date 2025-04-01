@@ -212,7 +212,7 @@ void main() {
 #else
     ACC_TYPE sums[WMITER * TM * WNITER * TN];
     FLOAT_TYPE cache_a[WMITER * TM];
-    FLOAT_TYPE cache_b[WNITER * TN];
+    FLOAT_TYPE cache_b[TN];
 
     [[unroll]] for (uint i = 0; i < WMITER*TM*WNITER*TN; i++) {
         sums[i] = ACC_TYPE(0.0f);
@@ -336,8 +336,8 @@ void main() {
             const uint iqs = idx & 0x07;
 
             const float d = float(data_a_packed16[ib].d);
-            const i8vec2 v0 = unpack8(data_a_packed16[ib].qs[2*iqs]);
-            const i8vec2 v1 = unpack8(data_a_packed16[ib].qs[2*iqs + 1]);
+            const i8vec2 v0 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs])).xy; // vec4 used due to #12147
+            const i8vec2 v1 = unpack8(int32_t(data_a_packed16[ib].qs[2*iqs + 1])).xy;
             const vec4 v = vec4(v0.x, v0.y, v1.x, v1.y) * d;
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
@@ -544,7 +544,7 @@ void main() {
             const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (2 * (idx % 4));
             const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(int8_t(sign << 1), int8_t(sign))));
             const uint grid = iq2xxs_grid[qs][(idx % 4) / 2] >> (16 * (idx & 1));
-            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
+            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy); // vec4 used due to #12147
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
@@ -564,7 +564,7 @@ void main() {
             const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (2 * (idx % 4));
             const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(int8_t(sign << 1), int8_t(sign))));
             const uint grid = iq2xs_grid[qs & 511][(idx % 4) / 2] >> (16 * (idx & 1));
-            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
+            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy); // vec4 used due to #12147
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
@@ -586,7 +586,7 @@ void main() {
             const float db = d * 0.25 * (0.5 + scale);
             const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(int8_t(sign << 1), int8_t(sign))));
             const uint16_t grid = unpack16(iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(idx & 2) >> 1])[idx & 1];
-            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid));
+            const vec2 v = db * vec2(sign01) * vec2(unpack8(uint32_t(grid)).xy); // vec4 used due to #12147
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
@@ -611,7 +611,7 @@ void main() {
             const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (2 * (idx % 4));
             const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(int8_t(sign << 1), int8_t(sign))));
             const uint grid = iq3xxs_grid[qs] >> (16 * (idx & 1));
-            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
+            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy); // vec4 used due to #12147
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
@@ -631,7 +631,7 @@ void main() {
             const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(sign << 1, sign)));
             const float db = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
             const uint32_t grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)] >> (16 * (idx % 2));
-            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
+            const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy); // vec4 used due to #12147
 
             buf_a[buf_idx    ] = FLOAT_TYPE(v.x);
             buf_a[buf_idx + 1] = FLOAT_TYPE(v.y);
@@ -744,16 +744,14 @@ void main() {
             }
             [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
                 [[unroll]] for (uint j = 0; j < TN; j++) {
-                    cache_b[wsic * TN + j] = buf_b[(warp_c * WN + wsic * WSUBN + tiwc * TN + j) * SHMEM_STRIDE + i];
+                    cache_b[j] = buf_b[(warp_c * WN + wsic * WSUBN + tiwc * TN + j) * SHMEM_STRIDE + i];
                 }
-            }
 
-            [[unroll]] for (uint wsic = 0; wsic < WNITER; wsic++) {
                 [[unroll]] for (uint wsir = 0; wsir < WMITER; wsir++) {
                     [[unroll]] for (uint cc = 0; cc < TN; cc++) {
                         [[unroll]] for (uint cr = 0; cr < TM; cr++) {
                             const uint sums_idx = (wsic * TN + cc) * (WMITER * TM) + wsir * TM + cr;
-                            sums[sums_idx] = fma(ACC_TYPE(cache_a[wsir * TM + cr]), ACC_TYPE(cache_b[wsic * TN + cc]), sums[sums_idx]);
+                            sums[sums_idx] = fma(ACC_TYPE(cache_a[wsir * TM + cr]), ACC_TYPE(cache_b[cc]), sums[sums_idx]);
                         }
                     }
                 }
