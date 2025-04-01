@@ -10,6 +10,8 @@
 #include <set>
 #include <functional>
 
+#define MAX_POS_PER_TOKEN 4
+
 struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
@@ -355,6 +357,7 @@ struct llm_graph_context {
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
 
+    const int64_t n_pos_per_token;
     const int64_t n_embd;
     const int64_t n_layer;
     const int64_t n_rot;
@@ -401,8 +404,6 @@ struct llm_graph_context {
     std::unique_ptr<llm_graph_result> res;
 
     llm_graph_context(const llm_graph_params & params);
-
-    int64_t n_pos_per_token() const;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 

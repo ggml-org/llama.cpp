@@ -48,15 +48,11 @@ int main(int argc, char ** argv) {
     auto tokens = common_tokenize(ctx, params.prompt, true);
 
     // prepare the batch
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, {0}, false);
-    }
-    batch.logits[batch.n_tokens - 1] = true; // generate next token
+    auto batch = llama_batch_ext_ptr::init_from_text(ctx, tokens.data(), tokens.size(), 0, 0, true);
 
     // evaluate prompt
-    llama_decode(ctx, batch);
-    n_past += batch.n_tokens;
+    llama_decode_ext(ctx, batch.get());
+    n_past += batch.n_tokens();
 
     // save state (rng, logits, embedding and kv_cache) to file
     {
@@ -83,12 +79,12 @@ int main(int argc, char ** argv) {
         printf("%s", next_token_str.c_str());
         result0 += next_token_str;
 
-        common_batch_clear(batch);
-        common_batch_add(batch, next_token, n_past, {0}, true);
+        batch.clear();
+        batch.add_text(next_token, 0, 0, true);
 
-        if (llama_decode(ctx, batch)) {
+        if (llama_decode_ext(ctx, batch.get())) {
             fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
-            llama_batch_free(batch);
+            llama_batch_ext_free(batch.get());
             return 1;
         }
         n_past += 1;
@@ -135,12 +131,12 @@ int main(int argc, char ** argv) {
         printf("%s", next_token_str.c_str());
         result1 += next_token_str;
 
-        common_batch_clear(batch);
-        common_batch_add(batch, next_token, n_past, {0}, true);
+        batch.clear();
+        batch.add_text(next_token, 0, 0, true);
 
-        if (llama_decode(ctx2, batch)) {
+        if (llama_decode_ext(ctx2, batch.get())) {
             fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
-            llama_batch_free(batch);
+            llama_batch_ext_free(batch.get());
             return 1;
         }
         n_past += 1;
@@ -216,12 +212,12 @@ int main(int argc, char ** argv) {
         printf("%s", next_token_str.c_str());
         result2 += next_token_str;
 
-        common_batch_clear(batch);
-        common_batch_add(batch, next_token, n_past, {1}, true);
+        batch.clear();
+        batch.add_text(next_token, 0, 1, true);
 
-        if (llama_decode(ctx3, batch)) {
+        if (llama_decode_ext(ctx3, batch.get())) {
             fprintf(stderr, "\n%s : failed to evaluate\n", __func__);
-            llama_batch_free(batch);
+            llama_batch_ext_free(batch.get());
             return 1;
         }
         n_past += 1;
@@ -233,7 +229,7 @@ int main(int argc, char ** argv) {
     llama_sampler_free(smpl2);
     llama_sampler_free(smpl3);
 
-    llama_batch_free(batch);
+    llama_batch_ext_free(batch.get());
 
     if (result0 != result2) {
         fprintf(stderr, "\n%s : error : the seq restore generation is different\n", __func__);

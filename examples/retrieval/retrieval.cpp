@@ -74,40 +74,32 @@ static std::vector<chunk> chunk_file(const std::string & filename, int chunk_siz
     return chunks;
 }
 
-static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
-    size_t n_tokens = tokens.size();
-    for (size_t i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, { seq_id }, true);
-    }
-}
+static void batch_decode(llama_context * ctx, llama_batch_ext * batch, float * output, int n_seq, int n_embd, int embd_norm = 2) {
+    const llama_model * model = llama_get_model(ctx);
 
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd) {
     // clear previous kv_cache values (irrelevant for embeddings)
     llama_kv_self_clear(ctx);
 
     // run model
-    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
-    if (llama_decode(ctx, batch) < 0) {
-        LOG_ERR("%s : failed to decode\n", __func__);
+    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, llama_batch_ext_get_n_tokens(batch), n_seq);
+    if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
+        // encoder-only model
+        if (llama_encode_ext(ctx, batch) < 0) {
+            LOG_ERR("%s : failed to encode\n", __func__);
+        }
+    } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
+        // decoder-only model
+        if (llama_decode_ext(ctx, batch) < 0) {
+            LOG_ERR("%s : failed to decode\n", __func__);
+        }
     }
 
-    for (int i = 0; i < batch.n_tokens; i++) {
-        if (!batch.logits[i]) {
-            continue;
-        }
+    for (int s = 0; s < n_seq; s++) {
+        const float * embd = llama_get_embeddings_seq(ctx, s);
+        GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
 
-        // try to get sequence embeddings - supported only when pooling_type is not NONE
-        const float * embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-        if (embd == NULL) {
-            embd = llama_get_embeddings_ith(ctx, i);
-            if (embd == NULL) {
-                LOG_ERR("%s: failed to get embeddings for token %d\n", __func__, i);
-                continue;
-            }
-        }
-
-        float * out = output + batch.seq_id[i][0] * n_embd;
-        common_embd_normalize(embd, out, n_embd, 2);
+        float * out = output + s * n_embd;
+        common_embd_normalize(embd, out, n_embd, embd_norm);
     }
 }
 
@@ -214,7 +206,7 @@ int main(int argc, char ** argv) {
 
     // initialize batch
     const int n_chunks = chunks.size();
-    struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    llama_batch_ext_ptr batch(ctx);
 
     // allocate output
     const int n_embd = llama_model_n_embd(model);
@@ -231,22 +223,21 @@ int main(int argc, char ** argv) {
         const uint64_t n_toks = inp.size();
 
         // encode if at capacity
-        if (batch.n_tokens + n_toks > n_batch) {
-            float * out = emb + p * n_embd;
-            batch_decode(ctx, batch, out, s, n_embd);
-            common_batch_clear(batch);
+        if (batch.n_tokens() + n_toks > n_batch) {
+            batch_decode(ctx, batch.get(), emb + p * n_embd, s, n_embd);
+            batch.clear();
+
             p += s;
             s = 0;
         }
 
         // add to batch
-        batch_add_seq(batch, inp, s);
+        batch.add_seq(inp, 0, s, true);
         s += 1;
     }
 
     // final batch
-    float * out = emb + p * n_embd;
-    batch_decode(ctx, batch, out, s, n_embd);
+    batch_decode(ctx, batch.get(), emb + p * n_embd, s, n_embd);
 
     // save embeddings to chunks
     for (int i = 0; i < n_chunks; i++) {
@@ -255,7 +246,7 @@ int main(int argc, char ** argv) {
         chunks[i].tokens.clear();
     }
 
-    struct llama_batch query_batch = llama_batch_init(n_batch, 0, 1);
+    llama_batch_ext_ptr query_batch(ctx);
 
     // start loop, receive query and return top k similar chunks based on cosine similarity
     std::string query;
@@ -264,12 +255,12 @@ int main(int argc, char ** argv) {
         std::getline(std::cin, query);
         std::vector<int32_t> query_tokens = common_tokenize(ctx, query, true);
 
-        batch_add_seq(query_batch, query_tokens, 0);
+        batch.add_seq(query_tokens, 0, 0, true);
 
         std::vector<float> query_emb(n_embd, 0);
-        batch_decode(ctx, query_batch, query_emb.data(), 1, n_embd);
+        batch_decode(ctx, query_batch.get(), query_emb.data(), 1, n_embd);
 
-        common_batch_clear(query_batch);
+        query_batch.clear();
 
         // compute cosine similarities
         {
@@ -299,6 +290,5 @@ int main(int argc, char ** argv) {
     llama_perf_context_print(ctx);
 
     // clean up
-    llama_batch_free(query_batch);
     llama_backend_free();
 }

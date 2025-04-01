@@ -2,6 +2,7 @@
 
 #include "llama-impl.h"
 #include "llama-batch.h"
+#include "llama-model.h"
 #include "llama-cparams.h"
 #include "llama-kv-cache.h"
 
@@ -531,6 +532,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     hparams          (params.hparams),
     cparams          (params.cparams),
     ubatch           (params.ubatch),
+    n_pos_per_token  (llama_n_pos_per_token(params.arch)),
     n_embd           (hparams.n_embd),
     n_layer          (hparams.n_layer),
     n_rot            (hparams.n_rot),
@@ -567,10 +569,6 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cb_func          (params.cb),
     res              (std::make_unique<llm_graph_result>()) {
     }
-
-int64_t llm_graph_context::n_pos_per_token() const {
-    return arch == LLM_ARCH_QWEN2VL ? 4 : 1;
-}
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {
@@ -969,11 +967,11 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(n_pos_per_token());
+    auto inp = std::make_unique<llm_graph_input_pos>(n_pos_per_token);
 
     auto & cur = inp->pos;
 
-    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens*n_pos_per_token());
+    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens*n_pos_per_token);
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));

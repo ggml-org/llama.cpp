@@ -26,56 +26,45 @@ static std::vector<std::string> split_lines(const std::string & s, const std::st
     return lines;
 }
 
-static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & tokens, llama_seq_id seq_id) {
-    size_t n_tokens = tokens.size();
-    for (size_t i = 0; i < n_tokens; i++) {
-        common_batch_add(batch, tokens[i], i, { seq_id }, true);
-    }
-}
-
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
+static void batch_decode(llama_context * ctx, llama_batch_ext * batch, float * output, int n_seq, int n_embd, int embd_norm) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
-    const struct llama_model * model = llama_get_model(ctx);
+    const llama_model * model = llama_get_model(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
     llama_kv_self_clear(ctx);
 
+    const int n_tokens = llama_batch_ext_get_n_tokens(batch);
+
     // run model
-    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
+    LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, n_tokens, n_seq);
     if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
         // encoder-only model
-        if (llama_encode(ctx, batch) < 0) {
+        if (llama_encode_ext(ctx, batch) < 0) {
             LOG_ERR("%s : failed to encode\n", __func__);
         }
     } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
         // decoder-only model
-        if (llama_decode(ctx, batch) < 0) {
+        if (llama_decode_ext(ctx, batch) < 0) {
             LOG_ERR("%s : failed to decode\n", __func__);
         }
     }
 
-    for (int i = 0; i < batch.n_tokens; i++) {
-        if (!batch.logits[i]) {
-            continue;
-        }
-
-        const float * embd = nullptr;
-        int embd_pos = 0;
-
-        if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
-            // try to get token embeddings
-            embd = llama_get_embeddings_ith(ctx, i);
-            embd_pos = i;
+    if (pooling_type == LLAMA_POOLING_TYPE_NONE) {
+        for (int i = 0; i < n_tokens; i++) {
+            const float * embd = llama_get_embeddings_ith(ctx, i);
             GGML_ASSERT(embd != NULL && "failed to get token embeddings");
-        } else {
-            // try to get sequence embeddings - supported only when pooling_type is not NONE
-            embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-            embd_pos = batch.seq_id[i][0];
-            GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
-        }
 
-        float * out = output + embd_pos * n_embd;
-        common_embd_normalize(embd, out, n_embd, embd_norm);
+            float * out = output + i * n_embd;
+            common_embd_normalize(embd, out, n_embd, embd_norm);
+        }
+    } else {
+        for (int s = 0; s < n_seq; s++) {
+            const float * embd = llama_get_embeddings_seq(ctx, s);
+            GGML_ASSERT(embd != NULL && "failed to get sequence embeddings");
+
+            float * out = output + s * n_embd;
+            common_embd_normalize(embd, out, n_embd, embd_norm);
+        }
     }
 }
 
@@ -171,7 +160,7 @@ int main(int argc, char ** argv) {
 
     // initialize batch
     const int n_prompts = prompts.size();
-    struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    llama_batch_ext_ptr batch(ctx);
 
     // count number of embeddings
     int n_embd_count = 0;
@@ -198,22 +187,21 @@ int main(int argc, char ** argv) {
         const uint64_t n_toks = inp.size();
 
         // encode if at capacity
-        if (batch.n_tokens + n_toks > n_batch) {
-            float * out = emb + e * n_embd;
-            batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
-            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens : s;
+        if (batch.n_tokens() + n_toks > n_batch) {
+            batch_decode(ctx, batch.get(), emb + e * n_embd, s, n_embd, params.embd_normalize);
+            batch.clear();
+
+            e += pooling_type == LLAMA_POOLING_TYPE_NONE ? batch.n_tokens() : s;
             s = 0;
-            common_batch_clear(batch);
         }
 
         // add to batch
-        batch_add_seq(batch, inp, s);
+        batch.add_seq(inp, 0, s, true);
         s += 1;
     }
 
     // final batch
-    float * out = emb + e * n_embd;
-    batch_decode(ctx, batch, out, s, n_embd, params.embd_normalize);
+    batch_decode(ctx, batch.get(), emb + e * n_embd, s, n_embd, params.embd_normalize);
 
     if (params.embd_out.empty()) {
         LOG("\n");
@@ -319,7 +307,6 @@ int main(int argc, char ** argv) {
     llama_perf_context_print(ctx);
 
     // clean up
-    llama_batch_free(batch);
     llama_backend_free();
 
     return 0;

@@ -1,4 +1,5 @@
 #include "llama.h"
+#include "llama-cpp.h"
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -108,19 +109,22 @@ int main(int argc, char ** argv) {
         }
 
         // prepare a batch for the prompt
-        llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+        llama_pos n_past = 0;
+        auto batch = llama_batch_ext_ptr::init_from_text(ctx, prompt_tokens.data(), prompt_tokens.size(), n_past, 0, true);
+        n_past += batch.n_tokens();
+
         llama_token new_token_id;
         while (true) {
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
             int n_ctx_used = llama_kv_self_used_cells(ctx);
-            if (n_ctx_used + batch.n_tokens > n_ctx) {
+            if (n_ctx_used + batch.n_tokens() > n_ctx) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");
                 exit(0);
             }
 
-            if (llama_decode(ctx, batch)) {
+            if (llama_decode_ext(ctx, batch.get())) {
                 GGML_ABORT("failed to decode\n");
             }
 
@@ -144,8 +148,12 @@ int main(int argc, char ** argv) {
             response += piece;
 
             // prepare the next batch with the sampled token
-            batch = llama_batch_get_one(&new_token_id, 1);
+            batch.clear();
+            batch.add_text(new_token_id, n_past, 0, true);
+            n_past++;
         }
+
+        llama_batch_ext_free(batch.get());
 
         return response;
     };

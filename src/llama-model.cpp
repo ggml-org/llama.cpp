@@ -6166,6 +6166,11 @@ struct llm_build_qwen2vl : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
+        // TODO @ngxson : transpose layout 0000111122223333 to 0123012301230123, we should improve this in the future
+        inp_pos = ggml_reshape_2d(ctx0, inp_pos, n_tokens, n_pos_per_token);
+        inp_pos = ggml_cont(ctx0, ggml_transpose(ctx0, inp_pos));
+        inp_pos = ggml_reshape_1d(ctx0, inp_pos, n_pos_per_token * n_tokens);
+
         auto * inp_attn = build_attn_inp_kv_unified();
 
         int sections[4];
@@ -12473,6 +12478,14 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
     }
 
     return LLAMA_ROPE_TYPE_NONE;
+}
+
+uint32_t llama_n_pos_per_token(llm_arch arch) {
+    return arch == LLM_ARCH_QWEN2VL ? 4 : 1;
+}
+
+uint32_t llama_n_pos_per_token(const struct llama_model * model) {
+    return llama_n_pos_per_token(model->arch);
 }
 
 float llama_model_rope_freq_scale_train(const llama_model * model) {

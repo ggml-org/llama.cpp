@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
+#include "llama-cpp.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -91,8 +92,10 @@ int main(int argc, char ** argv){
 
     const auto t_enc_start = ggml_time_us();
 
-    llama_decode(ctx, llama_batch_get_one( inp.data(), n_input - 1));
-    llama_decode(ctx, llama_batch_get_one(&inp.back(),           1));
+    auto batch0 = llama_batch_ext_ptr::init_from_text(ctx,  inp.data(), n_input - 1, 0,           0, true);
+    auto batch1 = llama_batch_ext_ptr::init_from_text(ctx, &inp.back(),           1, n_input - 1, 0, true);
+    llama_decode_ext(ctx, batch0.get());
+    llama_decode_ext(ctx, batch1.get());
 
     const auto t_enc_end = ggml_time_us();
 
@@ -108,7 +111,7 @@ int main(int argc, char ** argv){
 
     std::vector<llama_token> draft;
 
-    llama_batch batch_tgt = llama_batch_init(params.n_ctx, 0, 1);
+    llama_batch_ext_ptr batch_tgt(ctx);
 
     // debug
     struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, 1);
@@ -194,8 +197,8 @@ int main(int argc, char ** argv){
         // clean the cache of draft tokens that weren't accepted
         llama_kv_self_seq_rm(ctx, 0, n_past, -1);
 
-        common_batch_clear(batch_tgt);
-        common_batch_add(batch_tgt, draft[0], n_past, { 0 }, true);
+        batch_tgt.clear();
+        batch_tgt.add_text(draft[0], n_past, 0, true);
 
         // Draft already contains a single token sampled from the model:
         GGML_ASSERT(draft.size() == 1);
@@ -205,13 +208,13 @@ int main(int argc, char ** argv){
         common_ngram_cache_draft(inp, draft, n_draft, LLAMA_NGRAM_MIN, LLAMA_NGRAM_MAX, ngram_cache_context, ngram_cache_dynamic, ngram_cache_static);
 
         for (size_t i = 1; i < draft.size(); ++i) {
-            common_batch_add(batch_tgt, draft[i], n_past + i, { 0 }, true);
+            batch_tgt.add_text(draft[i], n_past + i, 0, true);
         }
 
         t_draft_us += ggml_time_us() - t_start_draft_us;
         n_drafted += draft.size() - 1;
 
-        llama_decode(ctx, batch_tgt);
+        llama_decode_ext(ctx, batch_tgt.get());
         ++n_past;
 
         draft.erase(draft.begin());
@@ -242,8 +245,6 @@ int main(int argc, char ** argv){
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
-
-    llama_batch_free(batch_tgt);
 
     llama_backend_free();
 
