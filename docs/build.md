@@ -457,7 +457,9 @@ KleidiAI's microkernels implement optimized tensor operations using Arm CPU feat
 Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
 
 ## OpenCL
+
 This provides GPU acceleration through OpenCL on recent Adreno GPU.
+More information about OpenCL backend can be found in [OPENCL.md](./backend/OPENCL.md) for more information.
 
 ### Android
 
