@@ -349,14 +349,16 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int 
 
 void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, cudaStream_t stream) {
 #if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
-    if(cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
-        cudaStreamSynchronize(stream);
-        if (cuda_graph->dest_ptrs_d != nullptr) cudaFree(cuda_graph->dest_ptrs_d);
-        cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *));
+    if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        if (cuda_graph->dest_ptrs_d != nullptr) {
+            CUDA_CHECK(cudaFree(cuda_graph->dest_ptrs_d));
+        }
+        CUDA_CHECK(cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *)));
         cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
     }
     // copy destination pointers to GPU
-    cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream);
+    CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
     cuda_graph->graph_cpynode_index = 0; // reset index
 #endif
 }
