@@ -660,7 +660,7 @@ int main(int argc, char ** argv) {
         std::sort(tallies.begin(), tallies.end(), tally_sort());
 
         LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(tallies.size()));
-        LOG_INF("\n Layer\t               Tensor\t          Σ(Importance Scores)\t   Contribution\n");
+        LOG_INF("\n Layer\t               Tensor\t          μ(Importance Scores)\t   Contribution\n");
         LOG_INF("================================================================================\n");
         for (const auto & [tensor, value, count] : tallies) {
             std::string layer, name;
