@@ -9571,21 +9571,21 @@ struct llm_build_deepseek2 : public llm_graph_context {
                         ggml_row_size(q->type, n_embd_head_qk_nope));
                 cb(q_pe, "q_pe", il);
 
-                ggml_tensor * kv_pe_cmprresseed = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
-                cb(kv_pe_cmprresseed, "kv_pe_cmprresseed", il);
+                ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, model.layers[il].wkv_a_mqa, cur);
+                cb(kv_cmpr_pe, "kv_cmpr_pe", il);
 
                 // split into {kv_lora_rank, n_tokens}
-                ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_pe_cmprresseed, kv_lora_rank, n_tokens,
-                        kv_pe_cmprresseed->nb[1],
+                ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
+                        kv_cmpr_pe->nb[1],
                         0);
                 cb(kv_cmpr, "kv_cmpr", il);
 
                 // and {n_embd_head_qk_rope, n_tokens}
-                ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_cmprresseed,
+                ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe,
                         n_embd_head_qk_rope, 1, n_tokens,
-                        kv_pe_cmprresseed->nb[1],
-                        kv_pe_cmprresseed->nb[1],
-                        ggml_row_size(kv_pe_cmprresseed->type, kv_lora_rank));
+                        kv_cmpr_pe->nb[1],
+                        kv_cmpr_pe->nb[1],
+                        ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
                 cb(k_pe, "k_pe", il);
 
                 // TODO: the CUDA backend used to not support non-cont. RoPE, investigate removing this
