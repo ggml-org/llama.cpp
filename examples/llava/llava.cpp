@@ -282,6 +282,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
 
             if (!encoded) {
                 LOG_ERR("Unable to encode image - spatial_unpad - subimage %d of %d\n", (int) i+1, (int) img_res_v.size);
+                delete[] img_res_v.data;  // 添加内存释放
                 return false;
             }
             const int64_t t_img_enc_steop_batch_us = ggml_time_us();
@@ -322,6 +323,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
         *n_img_pos = (pos * pos + 2);
         if (!encoded){
             LOG_ERR("Unable to encode image \n");
+            delete[] img_res_v.data;  // 添加内存释放
             return false;
         }
     }
@@ -346,6 +348,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
             const bool encoded = clip_image_encode(ctx_clip, n_threads, &img_res_v.data[i], image_embd_v[i]); // image data is in 3x336x336 format and will be converted to 336x336x3 inside
             if (!encoded) {
                 LOG_ERR("Unable to encode image - spatial_unpad - subimage %d of %d\n", (int) i+1, (int) img_res_v.size);
+                delete[] img_res_v.data;  // 添加内存释放
                 return false;
             }
         }
