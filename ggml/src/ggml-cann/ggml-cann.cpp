@@ -1689,7 +1689,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
                     // only support contiguous for quantized types.
-                    return ggml_is_contiguous(op->src[0]) && 
+                    return ggml_is_contiguous(op->src[0]) &&
                             ggml_is_contiguous(op->src[1]);
                 default:
                     return false;
