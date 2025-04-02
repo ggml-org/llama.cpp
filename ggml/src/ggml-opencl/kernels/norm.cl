@@ -1,18 +1,15 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
 #ifdef cl_intel_required_subgroup_size
-// Always use subgroup size of 32 on Intel.
 #pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
 #define INTEL_GPU 1
 #define REQD_SUBGROUP_SIZE_16 __attribute__((intel_reqd_sub_group_size(16)))
 #define REQD_SUBGROUP_SIZE_32 __attribute__((intel_reqd_sub_group_size(32)))
 #elif defined(cl_qcom_reqd_sub_group_size)
-// Always use subgroups size of 64 on Adreno.
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
-#else
-// TODO: do not know how to choose subgroup size on other GPUs.
-#error "Selecting subgroup size is not supported on your device."
 #endif
 
 //------------------------------------------------------------------------------

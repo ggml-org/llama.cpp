@@ -1,33 +1,21 @@
-#ifdef cl_khr_fp16
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
-#elif defined(cl_amd_fp16)
-#pragma OPENCL EXTENSION cl_amd_fp16 : enable
-#else
-#error "Half precision floating point not supportedby OpenCL implementation on your device."
-#endif
 
-#ifdef cl_khr_subgroups
-#pragma OPENCL EXTENSION cl_khr_subgroups : enable
-#elif defined(cl_intel_subgroups)
+#ifdef cl_intel_subgroups
 #pragma OPENCL EXTENSION cl_intel_subgroups : enable
 #else
-#error "Subgroups not supported on your device."
+#pragma OPENCL EXTENSION cl_khr_subgroups : enable
 #endif
 
 #ifdef cl_intel_required_subgroup_size
-// Always use subgroup size of 32 on Intel.
 #pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
 #define INTEL_GPU 1
 #define REQD_SUBGROUP_SIZE_16 __attribute__((intel_reqd_sub_group_size(16)))
 #define REQD_SUBGROUP_SIZE_32 __attribute__((intel_reqd_sub_group_size(32)))
 #elif defined(cl_qcom_reqd_sub_group_size)
-// Always use subgroups size of 64 on Adreno.
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
-#else
-#error "Selecting subgroup size is not supported on your device."
 #endif
 
 // Assumes row size (ne00) is a multiple of 4

@@ -1,3 +1,5 @@
+#pragma OPENCL EXTENSION cl_khr_fp16 : enable
+
 typedef char int8_t;
 typedef uchar uint8_t;
 typedef short int16_t;
