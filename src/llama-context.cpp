@@ -1297,7 +1297,8 @@ int llama_context::decode(llama_batch & inp_batch) {
         // find KV slot
         {
             if (!kv_self->find_slot(ubatch)) {
-                LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
+                LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
+
                 return 1;
             }
 
