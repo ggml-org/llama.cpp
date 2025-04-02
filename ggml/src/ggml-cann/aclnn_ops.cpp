@@ -358,8 +358,6 @@ void ggml_cann_sqr(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
 void ggml_cann_clamp(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
-    GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     float min;
     float max;
@@ -1089,8 +1087,6 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
-
-    GGML_ASSERT(eps > 0.0f);
 
     uint64_t workspaceSize = 0;
     aclOpExecutor* executor;
@@ -3152,7 +3148,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     // TODO: use ascendc
     // Only test with LLAMA model.
     ggml_tensor* src0 = dst->src[0];  // input
-    ggml_tensor* src2 = dst->src[2];  // freq_factors
+    // ggml_tensor* src2 = dst->src[2];  // freq_factors, not used now.
 
     // param
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
