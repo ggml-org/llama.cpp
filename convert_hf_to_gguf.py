@@ -4414,7 +4414,6 @@ class DeepseekV2Model(Model):
             else:
                 return []
 
-        return [(self.map_tensor_name(name), data_torch)]
         if name.endswith("kv_b_proj.weight"):
             name_kb = name.replace("kv_b_proj", "k_b_proj")
             name_vb = name.replace("kv_b_proj", "v_b_proj")
@@ -4436,6 +4435,8 @@ class DeepseekV2Model(Model):
                 (self.map_tensor_name(name_kb), k_b),
                 (self.map_tensor_name(name_vb), v_b)
             ]
+
+        return [(self.map_tensor_name(name), data_torch)]
 
     def prepare_tensors(self):
         super().prepare_tensors()
