@@ -12,13 +12,16 @@ FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=default
 
 RUN apt-get update && \
-    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1
+    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1 ccache
 
 WORKDIR /app
 
 COPY . .
 
-RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+RUN --mount=type=cache,target=/root/.ccache \
+    --mount=type=cache,target=/var/lib/apt/lists \
+    --mount=type=cache,target=/var/cache/apt \
+    if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
     cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \

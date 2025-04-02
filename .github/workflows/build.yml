@@ -973,21 +973,65 @@ jobs:
 
   ubuntu-latest-cmake-cuda:
     runs-on: ubuntu-latest
-    container: nvidia/cuda:12.6.2-devel-ubuntu24.04
+
+    strategy:
+      matrix:
+        cuda:
+          # Colab and lightning.ai currently use CUDA 12.2 (test w/ `nvidia-smi | grep "CUDA Version: "`)
+          # Capabilities of GPUs are listed on https://developer.nvidia.com/cuda-gpus, can test w/ `nvidia-smi --query-gpu=compute_cap --format=csv`
+          # See available containers at https://hub.docker.com/r/nvidia/cuda/tags
+          - version: 12.2
+            container: nvidia/cuda:12.2.2-devel-ubuntu22.04
+            cap: 7.5
+            arch: 75-real
+            example: 'T4'
+            package: true
+          - version: 12.2
+            container: nvidia/cuda:12.2.2-devel-ubuntu22.04
+            cap: 8.0
+            arch: 80-real
+            example: 'A100'
+            package: true
+          - version: 12.2
+            container: nvidia/cuda:12.2.2-devel-ubuntu22.04
+            cap: 8.6
+            arch: 86-real
+            example: 'A10'
+            package: true
+          - version: 12.2
+            container: nvidia/cuda:12.2.2-devel-ubuntu22.04
+            cap: 8.9
+            arch: 89-real
+            example: 'L4, L40S'
+          - version: 12.2
+            container: nvidia/cuda:12.2.2-devel-ubuntu22.04
+            cap: 9.0
+            arch: 90-real
+            example: 'H100'
+            package: true
+          # Build only, don't package.
+          - version: 12.6
+            container: nvidia/cuda:12.6.2-devel-ubuntu22.04
+            cap: 8.9
+            arch: 89-real
+            package: false
+
+    container: ${{ matrix.cuda.container }}
+
+    name: ubuntu-22-cuda (${{ matrix.cuda.version }} cap ${{ matrix.cuda.cap }}, e.g. ${{ matrix.cuda.example }})
 
     steps:
-        - name: Clone
-          id: checkout
-          uses: actions/checkout@v4
+        - uses: actions/checkout@v4
           with:
             fetch-depth: 0
 
-        - name: Install dependencies
+        - name: Dependencies
+          id: depends
           env:
             DEBIAN_FRONTEND: noninteractive
           run: |
-              apt update
-              apt install -y cmake build-essential ninja-build libgomp1 git
+              apt-get update
+              apt install -y cmake build-essential ninja-build libcurl4-openssl-dev libgomp1 git zip
 
         - name: ccache
           uses: hendrikmuhs/ccache-action@v1.2.16
@@ -999,12 +1043,41 @@ jobs:
           run: |
             cmake -S . -B build -G Ninja \
               -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_CUDA_ARCHITECTURES=89-real \
+              -DCMAKE_CUDA_ARCHITECTURES=${{ matrix.cuda.arch }} \
               -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
               -DLLAMA_FATAL_WARNINGS=ON \
               -DGGML_NATIVE=OFF \
               -DGGML_CUDA=ON
             cmake --build build
+
+        - name: Determine tag name
+          if: ${{ matrix.cuda.package }}
+          id: tag
+          shell: bash
+          run: |
+            BUILD_NUMBER="$(git rev-list --count HEAD)"
+            SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+            if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+              echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+            else
+              SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+              echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+            fi
+            echo "cuda_name=cu${{ matrix.cuda.short_version }}-cap${{ matrix.cuda.cap }}" >> $GITHUB_OUTPUT
+
+        - name: Pack artifacts
+          id: pack_artifacts
+          # if: ${{ matrix.cuda.package && (( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true') }}
+          run: |
+            cp LICENSE ./build/bin/
+            zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ steps.tag.outputs.cuda_name }}-x64.zip ./build/bin/*
+
+        - name: Upload artifacts
+          # if: ${{ matrix.cuda.package && (( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true') }}
+          uses: actions/upload-artifact@v4
+          with:
+            path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ steps.tag.outputs.cuda_name }}-x64.zip
+            name: llama-bin-ubuntu-cuda-${{ steps.tag.outputs.cuda_name }}-x64.zip
 
   windows-2019-cmake-cuda:
     runs-on: windows-2019
@@ -1454,6 +1527,7 @@ jobs:
 
     needs:
       - ubuntu-cpu-cmake
+      - ubuntu-latest-cmake-cuda
       - ubuntu-22-cmake-vulkan
       - windows-latest-cmake
       - windows-2019-cmake-cuda
