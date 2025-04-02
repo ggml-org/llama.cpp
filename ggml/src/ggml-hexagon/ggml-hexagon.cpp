@@ -11,7 +11,7 @@
  * section-2  internal troubleshooting function/class
  * section-3  helper function for WoA(Windows on ARM)
  * section-4  general helper function
- * section-5  QNN helper function
+ * section-5  QNN helper function/class
  * section-6  implementation of hwaccel approach through QNN: offload ggmlop to QNN
  * section-7  cDSP helper function
  * section-8  implementation of ggml-hexagon backend according to specification in ggml backend subsystem
@@ -1504,7 +1504,7 @@ static bool ggmlhexagon_check_valid_appcfg() {
 }
 
 // =================================================================================================
-//  section-5: QNN helper function
+//  section-5: QNN helper function/class
 // =================================================================================================
 //ensure every QNN tensor/opcfg name is unique, threadsafe is not required at the moment
 static void ggmlqnn_reset_idx() {
@@ -5982,7 +5982,7 @@ const char * ggml_backend_hexagon_get_devname(size_t dev_num) {
             return "HEXAGON_BACKEND_CDSP";
     }
 
-    //here is the trick: fall through for various scenarios
+    //here is the trick: fall back for various scenarios
     switch (dev_num) {
         case HEXAGON_BACKEND_QNNCPU:
             return "HEXAGON_BACKEND_QNN_CPU";
