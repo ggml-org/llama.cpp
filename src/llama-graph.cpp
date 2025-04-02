@@ -1415,6 +1415,144 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_attn_mla(
+        llm_graph_input_attn_kv_unified * inp,
+        ggml_cgraph * gf,
+        ggml_tensor * wv_b,
+        ggml_tensor * wo,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+            float     kq_scale,
+            int       il) const {
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const auto & n_ctx = cparams.n_ctx;
+
+    const auto kv_lora_rank = hparams.n_lora_kv;
+
+    // note: deepseek with MLA option converts into MQA with larger n_ebed (ie: GQA with 1 group)
+    const int64_t n_embd_k_compressed = kv_lora_rank + hparams.n_rot;
+    const int64_t n_embd_v_compressed = kv_lora_rank;
+
+    // note: this is the smaller n_ebed what we get after decompression
+    const int64_t n_embd_head_v = hparams.n_embd_head_v;
+
+    // note: llm_build_deepseek2 passes as: {n_embd, n_tokens, n_head}
+    const auto n_tokens = q_cur->ne[1];
+    const auto n_head = q_cur->ne[2];
+
+    // store to KV cache
+    {
+        const auto kv_head = kv_self->head;
+
+        GGML_ASSERT(kv_self->size == n_ctx);
+
+        ggml_tensor * k_cache_view = ggml_view_1d(ctx0, kv_self->k_l[il],
+                n_tokens*n_embd_k_compressed,
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_compressed)*kv_head);
+        //cb(k_cache_view, "k_cache_view", il);
+
+        // note: storing RoPE-ed version of K in the KV cache
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_cur, k_cache_view));
+
+        v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_compressed, n_tokens);
+
+        // note: for deepseek MLA the V cache just holds a transposed copy of the K cache
+        ggml_tensor * v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il],
+                n_tokens, n_embd_v_compressed,
+                (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
+                (kv_head)*ggml_element_size(kv_self->v_l[il]));
+
+        v_cur = ggml_transpose(ctx0, v_cur);
+        //cb(v_cache_view, "v_cache_view", il);
+
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
+    }
+
+    // NOTE: We can't pass this to `build_attn_mha()` due to:
+    // - There's no way to decompress as `build_attn_mha()` applies the kqv_merged and cont inside.
+    // - We lose the performance gain from using 2D views when applying MQA (ie: GQA with 1 group).
+    // - TODO: Consider refactoring `build_attn_mha()` and/or adding optimised `build_attn_mqa()` version.
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    const auto n_kv = kv_self->n;
+
+    ggml_tensor * k_cache = ggml_view_2d(ctx0, kv_self->k_l[il],
+            n_embd_k_compressed, n_kv,
+            ggml_row_size(kv_self->k_l[il]->type, n_embd_k_compressed),
+            0);
+    cb(k_cache, "k_cache", il);
+
+    struct ggml_tensor * v_cache_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
+            n_kv, n_embd_v_compressed,
+            ggml_element_size(kv_self->v_l[il])*n_ctx,
+            0);
+    cb(v_cache_trans, "v_cache_trans", il);
+
+    ggml_tensor * q_states = ggml_view_2d(ctx0, q_cur,
+            n_embd_k_compressed, n_tokens*n_head,
+            ggml_row_size(q_cur->type, n_embd_k_compressed),
+            0);
+    cb(q_states, "q_states_view", il);
+
+    ggml_tensor * kq = ggml_mul_mat(ctx0, k_cache, q_states);
+    cb(kq, "kq", il);
+
+    kq = ggml_view_3d(ctx0, kq, n_kv, n_tokens, n_head,
+            ggml_row_size(kq->type, n_kv),
+            ggml_row_size(kq->type, n_kv)*n_tokens,
+            0);
+    cb(kq, "kq_view", il);
+
+    ggml_tensor * kq_soft_max = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+    cb(kq_soft_max, "kq_soft_max", il);
+
+    kq_soft_max = ggml_view_2d(ctx0, kq_soft_max,
+            n_kv, n_tokens*n_head,
+            ggml_row_size(kq_soft_max->type, n_kv),
+            0);
+    cb(kq_soft_max, "kq_soft_max_view", il);
+
+    ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, v_cache_trans, kq_soft_max);
+    cb(kqv_compressed, "kqv_compressed,", il);
+
+    kqv_compressed = ggml_view_3d(ctx0, kqv_compressed,
+            n_embd_v_compressed, n_tokens, n_head,
+            ggml_row_size(kqv_compressed->type, n_embd_v_compressed),
+            ggml_row_size(kqv_compressed->type, n_embd_v_compressed)*n_tokens,
+            0);
+    cb(kqv_compressed, "kqv_compressed_view", il);
+
+    ggml_tensor * wv_b_view = ggml_view_3d(wv_b,
+            n_embd_v_compressed, n_embd_head_v, n_head,
+            ggml_row_size(wv_b, n_embd_v_compressed),
+            ggml_row_size(wv_b, n_embd_v_compressed)*n_embd_head_v,
+            0);
+    cb(wv_b_view, "wv_b_view", il);
+
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_view, kqv_compressed);
+    cb(kqv, "kqv", il);
+
+    kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+    cb(kqv, "kqv_merged", il);
+
+    ggml_tensor * cur = ggml_cont_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens);
+    cb(cur, "kqv_cont", il);
+
+    ggml_build_forward_expand(gf, cur);
+
+    cur = build_lora_mm(wo, cur);
+
+    return cur;
+}
+
 llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
     auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
 

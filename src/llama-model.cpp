@@ -9524,7 +9524,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv_unified();
+        auto * inp_attn = build_attn_inp_kv_mla();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -9607,13 +9607,44 @@ struct llm_build_deepseek2 : public llm_graph_context {
                         LLM_NORM_RMS, il);
                 cb(kv_compressed, "kv_compressed", il);
 
-
                 if (cparams.mla_attn) {
                     // note: deepseek with MLA option converts into MQA (ie: GQA with 1 group)
-                    // TODO: later
 
+                    q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+                    cb(q_nope, "q_nope_perm", il);
+
+                    q_pe = ggml_permute(ctx0, q_pe, 0, 2, 1, 3);
+                    cb(q_pe, "q_pe_perm", il);
+
+                    k_pe = ggml_view_2d(ctx0, k_pe, n_embd_head_qk_rope, n_tokens,
+                            ggml_row_size(k_pe->type, n_embd_head_qk_rope),
+                            0);
+                    cb(k_pe, "k_pe_view", il);
+
+                    ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
+                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
+                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank * n_embd_head_qk_nope),
+                            0);
+                    cb(wk_b, "wk_b", il);
+
+                    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, wk_b, q_nope);
+                    cb(q_nope_absorbed, "q_nope_absorbed", il);
+
+                    ggml_tensor * q_states = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
+                    cb(q_states, "q_states", il);
+
+                    ggml_tensor * k_states = ggml_concat(ctx0, kv_compressed, k_pe, 0);
+                    cb(k_states, "k_states", il);
+
+                    ggml_tensor * v_states = kv_compressed;
+                    cb(v_states, "v_states", il);
+
+                    cur = build_attn_mla(inp_attn, gf,
+                            model.layers[il].wv_b, model.layers[il].wo,
+                            q_states, k_states, v_states, kq_scale, il);
                 } else {
                     // note: deepseek without MLA option converts into MHA
+
                     ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_compressed);
                     cb(kv, "kv", il);
 

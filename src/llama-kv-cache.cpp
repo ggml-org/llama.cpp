@@ -71,8 +71,8 @@ bool llama_kv_cache_unified::init(
     v_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
-        uint32_t n_embd_k;
-        uint32_t n_embd_v;
+        int64_t n_embd_k;
+        int64_t n_embd_v;
 
         // note: deepseek with MLA option converts into MQA (ie: GQA with 1 group)
         if (cparams.mla_attn) {
@@ -95,7 +95,7 @@ bool llama_kv_cache_unified::init(
             buft = ggml_backend_cpu_buffer_type();
         }
 
-        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k = %d, n_embd_v = %d, dev = %s\n", __func__,
+        LLAMA_LOG_DEBUG("%s: layer %3ld: n_embd_k = %ld, n_embd_v = %d, dev = %s\n", __func__,
                 i, n_embd_k, n_embd_v, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
