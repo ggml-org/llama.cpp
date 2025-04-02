@@ -95,7 +95,7 @@ bool llama_kv_cache_unified::init(
             buft = ggml_backend_cpu_buffer_type();
         }
 
-        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k = %d, n_embd_v = %d, dev = %s\n", __func__,
+        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k = %lld, n_embd_v = %lld, dev = %s\n", __func__,
                 i, n_embd_k, n_embd_v, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
