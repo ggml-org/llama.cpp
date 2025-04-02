@@ -1418,7 +1418,7 @@ ggml_tensor * llm_graph_context::build_attn(
 ggml_tensor * llm_graph_context::build_attn_mla(
         llm_graph_input_attn_kv_unified * inp,
         ggml_cgraph * gf,
-        ggml_tensor * wv_b,
+        ggml_tensor * wv_decompress,
         ggml_tensor * wo,
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
@@ -1530,14 +1530,14 @@ ggml_tensor * llm_graph_context::build_attn_mla(
             0);
     cb(kqv_compressed, "kqv_compressed_view", il);
 
-    ggml_tensor * wv_b_view = ggml_view_3d(wv_b,
+    ggml_tensor * wv_decompress_view = ggml_view_3d(ctx0, wv_decompress,
             n_embd_v_compressed, n_embd_head_v, n_head,
-            ggml_row_size(wv_b->type, n_embd_v_compressed),
-            ggml_row_size(wv_b->type, n_embd_v_compressed)*n_embd_head_v,
+            ggml_row_size(wv_decompress->type, n_embd_v_compressed),
+            ggml_row_size(wv_decompress->type, n_embd_v_compressed)*n_embd_head_v,
             0);
-    cb(wv_b_view, "wv_b_view", il);
+    cb(wv_decompress_view, "wv_decompress_view", il);
 
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_view, kqv_compressed);
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_decompress_view, kqv_compressed);
     cb(kqv, "kqv", il);
 
     kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
