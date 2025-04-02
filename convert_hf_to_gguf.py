@@ -330,7 +330,6 @@ class Model:
                             gguf.MODEL_TENSOR.TIME_MIX_LERP_FUSED,
                             gguf.MODEL_TENSOR.POSNET_NORM1,
                             gguf.MODEL_TENSOR.POSNET_NORM2,
-                            gguf.MODEL_TENSOR.ATTN_K_B,
                         )
                     )
                     or not new_name.endswith(".weight")
