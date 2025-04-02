@@ -658,11 +658,14 @@ int main(int argc, char ** argv) {
             }
         };
         std::sort(tallies.begin(), tallies.end(), tally_sort());
+
         LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(tallies.size()));
-        LOG_INF("\n                    Tensor                       Σ(weights)   Contribution\n");
-        LOG_INF("==========================================================================\n");
+        LOG_INF("\n Layer\t               Tensor\t          Σ(Importance Scores)\t   Contribution\n");
+        LOG_INF("================================================================================\n");
         for (const auto & [tensor, value, count] : tallies) {
-            LOG_INF("%40s\t%10.2f\t%7.4f %%\n", tensor.c_str(), value / count, 100.0f * (value / count / total));
+            std::string layer, name;
+            process_tensor_name(tensor, layer, name);
+            LOG_INF("%5s\t%30s\t%15.2f\t%20.4f %%\n", layer.c_str(), name.c_str(), value / count, 100.0f * (value / count / total));
         }
         LOG_INF("\n");
         return 0;
