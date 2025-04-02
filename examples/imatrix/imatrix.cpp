@@ -74,6 +74,35 @@ static std::string filter_tensor_name(const char * name) {
     return wname;
 }
 
+static void process_tensor_name(const std::string & input, std::string & layer, std::string & tensor) {
+    std::vector<std::string> name;
+    std::istringstream stream(input);
+    std::string item;
+
+    while (std::getline(stream, item, '.')) {
+        name.push_back(item);
+    }
+    for (size_t i = 0; i < name.size(); ++i) {
+        if (name[i] == "blk" && i + 1 < name.size()) {
+            layer = name[i + 1];
+            break;
+        }
+    }
+    for (size_t i = 0; i < name.size(); ++i) {
+        if (name[i] == "weight" && i > 0) {
+            tensor = name[i - 1];
+            break;
+        }
+    }
+
+    if (tensor.empty()) {
+        tensor = input;
+    }
+    if (layer.empty()) {
+        layer = "-";
+    }
+}
+
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
