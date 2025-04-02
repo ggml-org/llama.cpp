@@ -5867,8 +5867,11 @@ static ggml_backend_dev_t ggml_backend_hexagon_reg_get_device(ggml_backend_reg_t
 
     GGMLHEXAGON_LOG_DEBUG("index %d", index);
     ggml_backend_hexagon_reg_context * ctx = (ggml_backend_hexagon_reg_context *)reg->context;
-    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        //here is the trick:
+        //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
+        //so return ctx->devices[0]
         return ctx->devices[0];
     } else {
         GGML_ASSERT(index < ctx->devices.size());
