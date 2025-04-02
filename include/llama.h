@@ -355,6 +355,7 @@ extern "C" {
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
+        bool mla_attn;    // MLA attention for deepseek2
         bool no_perf;     // whether to measure performance timings
 
         // Abort callback

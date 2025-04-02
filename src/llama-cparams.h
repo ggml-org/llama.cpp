@@ -28,6 +28,7 @@ struct llama_cparams {
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
+    bool mla_attn;
     bool no_perf;
     bool warmup;
 

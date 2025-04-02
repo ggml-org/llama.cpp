@@ -27,7 +27,7 @@ bool llama_kv_cache_unified::init(
 
     recurrent = llama_model_is_recurrent(&model);
     v_trans   = !recurrent && !cparams.flash_attn;
-    can_shift = !recurrent && model.arch != LLM_ARCH_DEEPSEEK2; // not supported due to MLA
+    can_shift = !recurrent && model.arch != LLM_ARCH_DEEPSEEK2; // TODO: support DEEPSEEK2 context shifting
 
     LLAMA_LOG_INFO("%s: kv_size = %d, offload = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d\n",
             __func__, kv_size, offload, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift);
@@ -71,8 +71,17 @@ bool llama_kv_cache_unified::init(
     v_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
-        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
+        int64_t n_embd_k;
+        int64_t n_embd_v;
+
+        // note: deepseek with MLA option converts into MQA (ie: GQA with 1 group)
+        if (cparams.mla_attn) {
+            n_embd_k = hparams.n_lora_kv + hparams.n_rot;
+            n_embd_v = hparams.n_lora_kv;
+        } else {
+            n_embd_k = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
+            n_embd_v = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
+        }
 
         const char * dev_name = "CPU";
 
@@ -86,8 +95,8 @@ bool llama_kv_cache_unified::init(
             buft = ggml_backend_cpu_buffer_type();
         }
 
-        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k_gqa = %d, n_embd_v_gqa = %d, dev = %s\n", __func__,
-                i, n_embd_k_gqa, n_embd_v_gqa, dev_name);
+        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k = %d, n_embd_v = %d, dev = %s\n", __func__,
+                i, n_embd_k, n_embd_v, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -95,8 +104,8 @@ bool llama_kv_cache_unified::init(
             return false;
         }
 
-        ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
-        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
+        ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k*kv_size);
+        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v*kv_size);
         ggml_format_name(k, "cache_k_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
         k_l.push_back(k);

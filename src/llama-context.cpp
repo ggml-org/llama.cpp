@@ -37,6 +37,7 @@ llama_context::llama_context(
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
+    cparams.mla_attn         = params.mla_attn;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
@@ -104,6 +105,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: n_ubatch      = %u\n",   __func__, cparams.n_ubatch);
     LLAMA_LOG_INFO("%s: causal_attn   = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn    = %d\n",   __func__, cparams.flash_attn);
+    LLAMA_LOG_INFO("%s: mla_attn      = %d\n",   __func__, cparams.mla_attn);
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
 
@@ -2243,6 +2245,7 @@ llama_context_params llama_context_default_params() {
         /*.embeddings                  =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.flash_attn                  =*/ false,
+        /*.mla_attn                    =*/ false,
         /*.no_perf                     =*/ true,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
@@ -2272,6 +2275,11 @@ llama_context * llama_init_from_model(
     if (params.flash_attn && model->arch == LLM_ARCH_GROK) {
         LLAMA_LOG_WARN("%s: flash_attn is not compatible with Grok - forcing off\n", __func__);
         params.flash_attn = false;
+    }
+
+    if (params.mla_attn && model->arch != LLM_ARCH_DEEPSEEK2) {
+        LLAMA_LOG_WARN("%s: mla_attn is only compatible with Deepseek2 - forcing off\n", __func__);
+        params.mla_attn = false;
     }
 
     if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
