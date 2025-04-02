@@ -69,7 +69,7 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
     }
 
     int64_t final_dims = (dims == 0 ? GGML_MAX_DIMS : dims);
-    int64_t acl_storage_len = ggml_element_size(tensor);
+    int64_t acl_storage_len = 1;
     for (int i = 0; i < final_dims; i++) {
         acl_storage_len += (acl_ne[i] - 1) * acl_stride[i];
     }

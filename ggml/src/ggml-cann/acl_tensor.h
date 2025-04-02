@@ -103,7 +103,7 @@ aclTensor* ggml_cann_create_tensor(void* data_ptr, aclDataType dtype,
 
     int64_t acl_storage_len = 1;
     for (int i = 0; i < dims; i++) {
-        acl_storage_len += (tmp_ne[i] - 1) * tmp_stride[i] * type_size;
+        acl_storage_len += (tmp_ne[i] - 1) * tmp_stride[i];
     }
 
     std::reverse(tmp_ne, tmp_ne + dims);
