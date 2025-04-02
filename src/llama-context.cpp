@@ -1201,7 +1201,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     const int64_t n_tokens_all = batch.n_tokens;
     const int64_t n_embd       = hparams.n_embd;
 
-    llama_kv_cache_guard kvg(kv_self.get());
+    llama_kv_cache_guard kv_guard(kv_self.get());
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
@@ -1423,7 +1423,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     }
 
     // finalize the batch processing
-    kvg.commit();
+    kv_guard.commit();
 
     // set output mappings
     {
