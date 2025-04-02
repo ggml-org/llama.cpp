@@ -9511,10 +9511,11 @@ struct llm_build_deepseek2 : public llm_graph_context {
         const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(hparams.n_embd_head_k));
         const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
 
+        const uint32_t n_embd_head_k = hparams.n_embd_head_k;
+        const uint32_t n_embd_head_v = hparams.n_embd_head_v;
         const uint32_t n_embd_head_qk_rope = hparams.n_rot;
         const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
         const uint32_t kv_lora_rank = hparams.n_lora_kv;
-        const uint32_t n_embd_head_v = hparams.n_embd_head_v;
 
         ggml_tensor * cur;
         ggml_tensor * inpL;
@@ -9558,16 +9559,16 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 // split into {n_head * n_embd_head_qk_nope, n_tokens}
                 ggml_tensor * q_nope = ggml_view_3d(ctx0, q,
                         n_embd_head_qk_nope, n_head, n_tokens,
-                        ggml_row_size(q->type, hparams.n_embd_head_k),
-                        ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
+                        ggml_row_size(q->type, n_embd_head_k),
+                        ggml_row_size(q->type, n_embd_head_k * n_head),
                         0);
                 cb(q_nope, "q_nope", il);
 
                 // and {n_head * n_embd_head_qk_rope, n_tokens}
                 ggml_tensor * q_pe = ggml_view_3d(ctx0, q,
                         n_embd_head_qk_rope, n_head, n_tokens,
-                        ggml_row_size(q->type, hparams.n_embd_head_k),
-                        ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
+                        ggml_row_size(q->type, n_embd_head_k),
+                        ggml_row_size(q->type, n_embd_head_k * n_head),
                         ggml_row_size(q->type, n_embd_head_qk_nope));
                 cb(q_pe, "q_pe", il);
 
