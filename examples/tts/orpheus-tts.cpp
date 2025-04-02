@@ -298,7 +298,7 @@ int main(int argc, char **argv) {
     params.model = params.vocoder.model;
     params.n_batch = 2;
 
-    params.embedding = true
+    params.embedding = true;
     // disable warmup, SNAC doesn't care about BOS or EOS tokens;
     params.warmup = false; 
 
