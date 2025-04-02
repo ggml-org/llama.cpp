@@ -1766,15 +1766,15 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return true;
         }
         case GGML_OP_POOL_2D: {
-                const int32_t * opts = (const int32_t *) op->op_params;
-                const int       k0   = opts[1];
-                const int       k1   = opts[2];
-                const int       p0   = opts[5];
-                const int       p1   = opts[6];
-                // value of paddingH should be at most half of kernelH
-                // value of paddingW should be at most half of kernelW
-                return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
-            }
+            const int32_t * opts = (const int32_t *) op->op_params;
+            const int       k0   = opts[1];
+            const int       k1   = opts[2];
+            const int       p0   = opts[5];
+            const int       p1   = opts[6];
+            // value of paddingH should be at most half of kernelH
+            // value of paddingW should be at most half of kernelW
+            return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
+        }
         case GGML_OP_DUP:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
