@@ -837,16 +837,16 @@ static const char * ggmlhexagon_get_hwaccel_approach_name(int hwaccle_approach) 
 static void ggmlhexagon_get_timestring(char * p_currenttime) {
 #if defined(__ANDROID__) || defined(__linux__)
     time_t n_seconds    = 0;
-    struct tm * p_tm    = nullptr;
+    struct tm now_time;
 
     if (nullptr == p_currenttime)
         return;
 
     time(&n_seconds);
-    p_tm = localtime(&n_seconds);
+    localtime_r(&n_seconds, &now_time);
     snprintf(p_currenttime, GGMLHEXAGON_TMPBUF_LEN, "%04d-%02d-%02d,%02d:%02d:%02d",
-             p_tm->tm_year + 1900, p_tm->tm_mon + 1, p_tm->tm_mday,
-             p_tm->tm_hour, p_tm->tm_min, p_tm->tm_sec);
+             now_time.tm_year + 1900, now_time.tm_mon + 1, now_time.tm_mday,
+             now_time.tm_hour, now_time.tm_min, now_time.tm_sec);
 #else
     //TODO: WoA
 #endif
