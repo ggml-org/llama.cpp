@@ -4473,7 +4473,7 @@ bail:
     return false;
 }
 
-static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
+static void ggmlhexagon_set_rpc_latency(remote_handle64 handle, int qos, int latency) {
     int hexagon_error = AEE_SUCCESS;
 
     if (remote_handle_control) {
@@ -4486,9 +4486,8 @@ static void ggmlhexagon_set_rpc_latency(int domain, int qos, int latency) {
 */
         data.enable   = qos;
         data.latency  = latency;
-        hexagon_error = remote_handle64_control(DSPRPC_GET_DSP_INFO, DSPRPC_CONTROL_LATENCY, (void*)&data, sizeof(data));
+        hexagon_error = remote_handle64_control(handle, DSPRPC_CONTROL_LATENCY, (void*)&data, sizeof(data));
         if (hexagon_error != AEE_SUCCESS) {
-            //FIXME: why set rpc latency failure
             GGMLHEXAGON_LOG_WARN("failed with error 0x%x", hexagon_error);
             goto bail;
         } else {
@@ -4940,7 +4939,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         GGMLHEXAGON_LOG_INFO("only support offload GGML_OP_ADD and GGML_OP_MUL_MAT to cDSP currently");
         ggmlhexagon_probe_dspinfo(ctx);
         ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1);
-        ggmlhexagon_set_rpc_latency(domain_id, RPC_PM_QOS, 100);
+        ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 1000);
         ggmlhexagon_init_rpcmempool(ctx);
     } else {
         GGMLHEXAGON_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
