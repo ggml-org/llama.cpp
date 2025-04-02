@@ -1149,6 +1149,25 @@ static void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, co
 
 }
 
+static inline uint64 hexagon_perf_get_time_us(void)
+{
+    unsigned long long count;
+    asm volatile (" %0 = c31:30 " : "=r"(count));
+    return (uint64)(count) * 10ull / 192ull;
+}
+
+static void ggml_time_init(void) {
+
+}
+
+static int64_t ggml_time_ms(void) {
+    return hexagon_perf_get_time_us() * 1000;
+}
+
+int64_t ggml_time_us(void) {
+    return hexagon_perf_get_time_us();
+}
+
 // =================================================================================================
 //  section-4: ggml-hexagon kernel helper function
 // =================================================================================================
@@ -1266,6 +1285,8 @@ static void ggml_compute_forward_add_f32(
         const struct ggml_tensor * src1,
         struct ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    uint64_t start_time = ggml_time_us();
+
     memcpy(dst->ne, src1->ne, 16);
     memcpy(dst->nb, src1->nb, 16);
     ggmlhexagon_dump_tensor(src0, 1);
@@ -1328,6 +1349,11 @@ static void ggml_compute_forward_add_f32(
             }
         }
     }
+
+    uint64_t end_time = ggml_time_us();
+    uint64_t duration = (end_time - start_time);
+    GGMLHEXAGON_LOG_DEBUG("duration %llu us", duration);
+
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
 }
 
