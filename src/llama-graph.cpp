@@ -1443,7 +1443,7 @@ ggml_tensor * llm_graph_context::build_attn_mla(
     // note: this is the smaller n_ebed what we get after decompression
     const int64_t n_embd_head_v = hparams.n_embd_head_v;
 
-    // note: call from llm_build_deepseek2 passes as: {n_embd, n_tokens, n_head}
+    // note: call from llm_build_deepseek2() passes as: {n_embd, n_tokens, n_head}
     const auto n_tokens = q_cur->ne[1];
     const auto n_head = q_cur->ne[2];
 

@@ -531,8 +531,8 @@ struct llm_graph_context {
             ggml_tensor * q_cur, // [n_embd_k, n_tokens, n_head]
             ggml_tensor * k_cur, // [n_embd_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_v, n_tokens]
-                   float  kq_scale,
-                   int    il) const;
+                  float   kq_scale,
+                    int   il) const;
 
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
