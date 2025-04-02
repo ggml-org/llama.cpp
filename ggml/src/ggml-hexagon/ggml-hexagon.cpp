@@ -2290,7 +2290,7 @@ void * qnn_instance::alloc_rpcmem_internal(size_t bytes, size_t alignment) {
 
 void * qnn_instance::alloc_rpcmem(size_t bytes, size_t alignment) {
     if (_rpcmem_usage > (_rpcmem_capacity - (8 * SIZE_IN_MB))) { // reserve 8Mbytes in rpc mempool
-        GGMLHEXAGON_LOG_WARN("rpc mempool capacity: %d MB, usage: %d MB", _rpcmem_capacity / SIZE_IN_MB, _rpcmem_usage / SIZE_IN_MB);
+        GGMLHEXAGON_LOG_WARN("rpc mempool capacity: %d MiB, usage: %d MiB", _rpcmem_capacity / SIZE_IN_MB, _rpcmem_usage / SIZE_IN_MB);
         return nullptr;
     }
 
@@ -3178,7 +3178,7 @@ void qnn_instance::htp_probe_rpc_meminfo() {
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(alloc_rpcmem_internal(probe_slots[idx] * SIZE_IN_MB, 4));
         if (nullptr == rpc_buffer) {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
+            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MiB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
             break;
         } else {
             candidate_size = probe_slots[idx];
@@ -3191,7 +3191,7 @@ void qnn_instance::htp_probe_rpc_meminfo() {
 
     free_rpcmem();
     _rpcmem_usage = 0;
-    GGMLHEXAGON_LOG_INFO("capacity of rpc ion memory %d MB\n", _rpcmem_capacity / SIZE_IN_MB);
+    GGMLHEXAGON_LOG_INFO("capacity of rpc ion memory %d MiB\n", _rpcmem_capacity / SIZE_IN_MB);
 }
 
 void qnn_instance::htp_print_info() {
@@ -3207,7 +3207,7 @@ void qnn_instance::htp_print_info() {
         QnnHtpDevice_Arch_t htp_arch = chipinfo.arch;
         GGMLHEXAGON_LOG_DEBUG("HTP_TYPE:%d(%s)", devinfo->devType,
                          (devinfo->devType == QNN_HTP_DEVICE_TYPE_ON_CHIP) ? "QNN_HTP_DEVICE_TYPE_ON_CHIP" : "QNN_HTP_DEVICE_TYPE_UNKNOWN");
-        GGMLHEXAGON_LOG_DEBUG("qualcomm soc_model:%d(%s), htp_arch:%d(%s), vtcm_size:%d MB，" \
+        GGMLHEXAGON_LOG_DEBUG("qualcomm soc_model:%d(%s), htp_arch:%d(%s), vtcm_size:%d MiB，" \
                              "dlbc_support:%d, signedpd_support:%d", \
                              chipinfo.socModel, ggmlhexagon_get_socmodel_desc(chipinfo.socModel), \
                              htp_arch, ggmlhexagon_get_htparch_desc(htp_arch), chipinfo.vtcmSize, \
@@ -4694,7 +4694,7 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
         if (nullptr == rpc_buffer) {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
+            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MiB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
             break;
         } else {
             candidate_size = probe_slots[idx];
@@ -4703,9 +4703,9 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         }
     }
     ctx->rpc_mempool_capacity = candidate_size * SIZE_IN_MB;
-    GGMLHEXAGON_LOG_DEBUG("rpc memory capacity %ld(%d M) for device %d",
+    GGMLHEXAGON_LOG_DEBUG("rpc memory capacity %ld(%d MiB) for device %d",
                           ctx->rpc_mempool_capacity, ctx->rpc_mempool_capacity / SIZE_IN_MB, ctx->device);
-    GGMLHEXAGON_LOG_INFO("capacity of rpc memory %d MB", ctx->rpc_mempool_capacity / SIZE_IN_MB);
+    GGMLHEXAGON_LOG_INFO("capacity of rpc memory %d MiB", ctx->rpc_mempool_capacity / SIZE_IN_MB);
 
     if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
         //FIXME: reasonable rpc memory pool size through a better approach rather than hardcoded size
@@ -4721,7 +4721,7 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
             GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %d failed", ctx->rpc_mempool_len);
             return;
         } else {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d M)",
+            GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d MiB)",
                                   ctx->rpc_mempool, ctx->rpc_mempool_len,
                                   ctx->rpc_mempool_len / SIZE_IN_MB);
         }
@@ -4830,9 +4830,9 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
 
     if (nullptr == ctx)
         return 1;
-    GGMLHEXAGON_LOG_INFO("init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
+    GGMLHEXAGON_LOG_INFO("init Hexagon cDSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
     if (0 != ctx->ggmlop_handle) {
-        GGMLHEXAGON_LOG_DEBUG("already init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
+        GGMLHEXAGON_LOG_DEBUG("already init Hexagon cDSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
         return 0;
     }
     ctx->ggmlop_handle = 0;
@@ -4848,7 +4848,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
                     GGMLHEXAGON_LOG_DEBUG("API is not supported on this target so cannot get domains info from the device. falling back to legacy approach of using default domain id");
                     hexagon_error = ggmlhexagon_get_dsp_support(&domain_id);
                     if (hexagon_error != AEE_SUCCESS) {
-                        GGMLHEXAGON_LOG_DEBUG("error: 0x%x, defaulting to CDSP domain", hexagon_error);
+                        GGMLHEXAGON_LOG_DEBUG("error: 0x%x, defaulting to cDSP domain", hexagon_error);
                     }
                 } else if (hexagon_error != AEE_SUCCESS) {
                     GGMLHEXAGON_LOG_DEBUG("error in getting domains information");
@@ -4871,7 +4871,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
             GGMLHEXAGON_LOG_DEBUG("DSP domain is not provided, retrieving DSP information using Remote APIs");
             hexagon_error = ggmlhexagon_get_dsp_support(&domain_id);
             if (hexagon_error != AEE_SUCCESS) {
-                GGMLHEXAGON_LOG_DEBUG("error: 0x%x, defaulting to CDSP domain", hexagon_error);
+                GGMLHEXAGON_LOG_DEBUG("error: 0x%x, defaulting to cDSP domain", hexagon_error);
             }
         }
     }
@@ -5438,7 +5438,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
         GGML_ASSERT(size + ctx->rpc_mempool_usage <= ctx->rpc_mempool_len);
         buffer_ctx->buffer = (static_cast<char*>(ctx->rpc_mempool)) + ctx->rpc_mempool_usage;
-        GGMLHEXAGON_LOG_DEBUG("size %d(%d M), buffer_ctx->buffer %p", size, size / SIZE_IN_MB, buffer_ctx->buffer);
+        GGMLHEXAGON_LOG_DEBUG("size %d(%d MiB), buffer_ctx->buffer %p", size, size / SIZE_IN_MB, buffer_ctx->buffer);
         GGML_ASSERT(nullptr != buffer_ctx->buffer);
         ctx->rpc_mempool_usage += size_aligned;
     } else {
@@ -5610,8 +5610,8 @@ static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_
         }
         *total = rpc_ion_memsize;
         *free = (rpc_ion_memsize - rpc_ion_usage);
-        GGMLHEXAGON_LOG_DEBUG("rpc memsize %d M", rpc_ion_memsize / SIZE_IN_MB);
-        GGMLHEXAGON_LOG_DEBUG("rpc usage %d M\n\n", rpc_ion_usage / SIZE_IN_MB);
+        GGMLHEXAGON_LOG_DEBUG("rpc memsize %d MiB", rpc_ion_memsize / SIZE_IN_MB);
+        GGMLHEXAGON_LOG_DEBUG("rpc usage %d MiB\n\n", rpc_ion_usage / SIZE_IN_MB);
     }
 }
 
