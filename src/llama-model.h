@@ -137,6 +137,28 @@ struct llama_layer_convnext {
     struct ggml_tensor * gamma = nullptr;
 };
 
+struct llama_layer_snac_dec_block {
+    struct ggml_tensor * alpha           = nullptr;
+
+    struct ggml_tensor * up_weight       = nullptr;
+    struct ggml_tensor * up_scale        = nullptr;
+    struct ggml_tensor * up_bias         = nullptr;
+
+    struct ggml_tensor * noise_w         = nullptr;
+    struct ggml_tensor * noise_s         = nullptr;
+
+    struct {
+        struct ggml_tensor * alpha1      = nullptr;
+        struct ggml_tensor * conv1_w     = nullptr;
+        struct ggml_tensor * conv1_s = nullptr;
+        struct ggml_tensor * conv1_b     = nullptr;
+        struct ggml_tensor * alpha2      = nullptr;
+        struct ggml_tensor * conv2_w     = nullptr;
+        struct ggml_tensor * conv2_s = nullptr;
+        struct ggml_tensor * conv2_b     = nullptr;
+    } res_units[3];
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -304,6 +326,13 @@ struct llama_layer {
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
+
+    struct ggml_tensor * conv_w         = nullptr;
+    struct ggml_tensor * conv_s     = nullptr;
+    struct ggml_tensor * conv_b         = nullptr;
+    struct ggml_tensor * alpha          = nullptr;
+
+    std::vector<llama_layer_snac_dec_block> decoder_blocks;
 };
 
 struct llama_model {
@@ -335,6 +364,13 @@ struct llama_model {
 
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
+
+
+    // TODO: structify
+    ggml_tensor * codebook[3];
+    ggml_tensor * codebook_proj_b[3];  // Array for quantizer 0, 1, 2 bias
+    ggml_tensor * codebook_proj_s[3];  // Array for quantizer 0, 1, 2 scale
+    ggml_tensor * codebook_proj_w[3];
 
     std::vector<llama_layer> layers;
 

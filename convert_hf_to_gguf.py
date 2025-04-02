@@ -2331,32 +2331,177 @@ class WavTokenizerDecModel(Model):
 class SNACDecModel(Model):
     model_arch = gguf.MODEL_ARCH.SNAC_DEC
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, Tensor]]:
-        del bid  # unused
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._dummy_added = False
 
-        logger.debug(f"Processing tensor: {name}")
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, torch.Tensor]]:
+        """Convert nested PyTorch tensor names to a flat GGUF naming scheme for decoder tensors."""
+        del bid  # Unused
 
-        if (name.startswith("decoder.") or
-            re.match(r"quantizer\.quantizers\.\d+\.codebook\.weight", name) or
-            re.match(r"quantizer\.quantizers\.\d+\.out_proj\..*", name)):
-            logger.info(f"{name} -> {data_torch.shape}")
-            return [(name, data_torch)]
-        else:
-            logger.debug(f"Skipping {name!r}")
-            return []
+        # Add dummy token_embd.weight only once
+        if not self._dummy_added:
+            import torch
+            dummy_tok_embd = torch.zeros((4096, 8), dtype=torch.float16)
+            dummy_tok_embd = dummy_tok_embd.view(4096, 8)
+            logger.info(f"Adding dummy tensor: token_embd.weight, shape: {list(dummy_tok_embd.shape)}")
+            yield ("token_embd.weight", dummy_tok_embd)
+            self._dummy_added = True  # Mark as added
+
+        original_name = name
+
+        if name.startswith("quantizer.quantizers."):
+            match = re.match(r"quantizer\.quantizers\.(\d+)\.(codebook\.weight|out_proj\.bias|out_proj\.parametrizations\.weight\.original[0-1])", name)
+            if match:
+                q_idx = int(match.group(1))
+                tensor_type = match.group(2)
+                if tensor_type == "codebook.weight":
+                    new_name = f"quantizer.{q_idx}.codebook"
+                elif tensor_type == "out_proj.parametrizations.weight.original0":
+                    new_name = f"quantizer.{q_idx}.out_proj.scale"
+                elif tensor_type == "out_proj.parametrizations.weight.original1":
+                    new_name = f"quantizer.{q_idx}.out_proj.weight"
+                elif tensor_type == "out_proj.bias":
+                    new_name = f"quantizer.{q_idx}.out_proj.bias"
+
+                logger.info(f"Mapping {original_name} -> {new_name}, shape: {list(data_torch.shape)}")
+                yield (new_name, data_torch)
+            else:
+                logger.warning(f"Could not parse quantizer tensor from: {original_name}")
+                return
+
+        # Skip non-decoder tensors (except quantizers, which were handled above)
+        if not name.startswith("decoder."):
+            logger.debug(f"Skipping non-decoder tensor: {original_name}")
+            return
+
+        base = name[8:]  # Remove 'decoder.'
+        parts = base.split(".")
+
+        if base.startswith("model.0."):
+            logger.info(f"Skipping incompatible decoder layer 0 tensor: {original_name}")
+            return # Explicitly skip this layer
+
+        # Layer 1: Second Conv
+        if base.startswith("model.1."):
+            if "bias" in name and "parametrizations" not in name:
+                new_name = "decoder.1.conv2.bias"
+            elif "parametrizations.weight.original0" in name:
+                new_name = "decoder.1.conv2.scale"
+            elif "parametrizations.weight.original1" in name:
+                new_name = "decoder.1.conv2.weight"
+            else:
+                logger.warning(f"Unhandled layer 1 tensor: {original_name}")
+                return
+            logger.info(f"Mapping {original_name} -> {new_name}, shape: {list(data_torch.shape)}")
+            yield (new_name, data_torch)
+            return
+
+        # Layers 2–5: DecoderBlocks
+        if "model." in base and "block" in base:
+            try:
+                layer_idx = int(parts[1])  # e.g., '2' from 'model.2'
+                if layer_idx not in {2, 3, 4, 5}:
+                    logger.debug(f"Skipping non-DecoderBlock layer {layer_idx}: {original_name}")
+                    return
+                block_idx = int(parts[3])  # e.g., '1' from 'block.1'
+                new_base = f"decoder.{layer_idx}.block.{block_idx}"
+
+                if block_idx == 0:  # Snake1d
+                    if "alpha" in name:
+                        new_name = f"{new_base}.alpha"
+                    else:
+                        logger.error(f"Expected 'alpha' in {original_name}")
+                        return
+                elif block_idx == 1:  # Transpose Conv
+                    if "bias" in name and "parametrizations" not in name:
+                        new_name = f"{new_base}.trans.bias"
+                    elif "parametrizations.weight.original0" in name:
+                        new_name = f"{new_base}.trans.scale"
+                    elif "parametrizations.weight.original1" in name:
+                        new_name = f"{new_base}.trans.weight"
+                    else:
+                        logger.error(f"Unhandled tensor in block 1: {original_name}")
+                        return
+                elif block_idx == 2:  # Noise Block
+                    if "linear.parametrizations.weight.original0" in name:
+                        new_name = f"{new_base}.noise.scale"
+                    elif "linear.parametrizations.weight.original1" in name:
+                        new_name = f"{new_base}.noise.weight"
+                    else:
+                        logger.error(f"Unhandled tensor in block 2: {original_name}")
+                        return
+                elif block_idx in {3, 4, 5}:  # Residual Units
+                    res_base = f"{new_base}.res"
+                    if "block.0.alpha" in name:
+                        new_name = f"{res_base}.snake1.alpha"
+                    elif "block.1.bias" in name:
+                        new_name = f"{res_base}.conv1.bias"
+                    elif "block.1.parametrizations.weight.original0" in name:
+                        new_name = f"{res_base}.conv1.scale"
+                    elif "block.1.parametrizations.weight.original1" in name:
+                        new_name = f"{res_base}.conv1.weight"
+                    elif "block.2.alpha" in name:
+                        new_name = f"{res_base}.snake2.alpha"
+                    elif "block.3.bias" in name:
+                        new_name = f"{res_base}.conv2.bias"
+                    elif "block.3.parametrizations.weight.original0" in name:
+                        new_name = f"{res_base}.conv2.scale"
+                    elif "block.3.parametrizations.weight.original1" in name:
+                        new_name = f"{res_base}.conv2.weight"
+                    else:
+                        logger.error(f"Unhandled tensor in residual unit: {original_name}")
+                        return
+                else:
+                    logger.error(f"Unhandled block index {block_idx} in layer {layer_idx}: {original_name}")
+                    return
+    
+                logger.info(f"Mapping {original_name} -> {new_name}, shape: {list(data_torch.shape)}")
+                yield (new_name, data_torch)
+                return
+
+            except (IndexError, ValueError) as e:
+                logger.error(f"Failed to parse tensor {original_name}: {e}")
+                return
+
+        # Layer 6: Snake1d
+        if base == "model.6.alpha":
+            new_name = "decoder.6.alpha"
+            logger.info(f"Mapping {original_name} -> {new_name}, shape: {list(data_torch.shape)}")
+            yield (new_name, data_torch)
+            return
+
+        # Layer 7: Final Conv
+        if base.startswith("model.7."):
+            if "bias" in name and "parametrizations" not in name:
+                new_name = "decoder.7.conv.bias"
+            elif "parametrizations.weight.original0" in name:
+                new_name = "decoder.7.conv.scale"
+            elif "parametrizations.weight.original1" in name:
+                new_name = "decoder.7.conv.weight"
+            else:
+                logger.warning(f"Unhandled layer 7 tensor: {original_name}")
+                return
+            logger.info(f"Mapping {original_name} -> {new_name}, shape: {list(data_torch.shape)}")
+            yield (new_name, data_torch)
+            return
+
+        logger.warning(f"Tensor {original_name} not mapped to any layer")
+        return
 
     def set_vocab(self):
         self._set_vocab_none()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_vocab_size(self.hparams["codebook_size"])
-        self.gguf_writer.add_quantizer_count(len(self.hparams["vq_strides"]))
-        self.gguf_writer.add_features_length(self.hparams["codebook_dim"])
-        self.gguf_writer.add_quantizer_strides(self.hparams["vq_strides"])
-        self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])
-        self.gguf_writer.add_decoder_upsample_rates(self.hparams["decoder_rates"])
-        self.gguf_writer.add_decoder_channel_dims(self.hparams["decoder_channel_dims"])
+        self.gguf_writer.add_vocab_size         (4096) # TODO: Fix
+        self.gguf_writer.add_uint32("snac.quantizer.codebook_size", self.hparams["codebook_size"])
+        self.gguf_writer.add_uint32("snac.quantizer.codebook_dim", self.hparams["codebook_dim"])
+        self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])  # 1024
+        self.gguf_writer.add_decoder_upsample_rates(self.hparams["decoder_rates"])  # [8, 8, 4, 2]
+        self.gguf_writer.add_uint32("n_layers", 8)
+        self.gguf_writer.add_array("decoder_channel_dims", [768, 1024, 512, 256, 128, 64, 1])
+        self.gguf_writer.add_array("vq_strides", self.hparams["vq_strides"])
 
 @Model.register("Qwen2MoeForCausalLM")
 class Qwen2MoeModel(Model):
