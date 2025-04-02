@@ -523,6 +523,17 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    ggml_tensor * build_attn_mla(
+            llm_graph_input_attn_kv_unified * inp,
+            ggml_cgraph * gf,
+            ggml_tensor * wv_b,
+            ggml_tensor * wo,
+            ggml_tensor * q_cur, // [n_embd_k, n_tokens, n_head]
+            ggml_tensor * k_cur, // [n_embd_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_v, n_tokens]
+                   float  kq_scale,
+                   int    il) const;
+
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
     ggml_tensor * build_attn(
