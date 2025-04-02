@@ -51,6 +51,7 @@
 #include <aclnnop/aclnn_triu.h>
 #include <aclnnop/aclnn_upsample_nearest_2d.h>
 #include <aclnnop/aclnn_weight_quant_batch_matmul_v2.h>
+#include <aclnnop/aclnn_argmax.h>
 #include <float.h>
 
 #include <cmath>
@@ -178,6 +179,55 @@ static void aclnn_add(ggml_backend_cann_context& ctx, aclTensor* acl_src0,
     ACL_CHECK(aclnnAdd(workspaceAddr, workspaceSize, executor, ctx.stream()));
 
     ACL_CHECK(aclDestroyScalar(alpha));
+}
+
+/**
+ * @brief Computes the argmax of a tensor along the specified dimension using the CANN backend.
+ *
+ * This function performs the argmax operation on the input tensor (`acl_src`)
+ * and stores the result in the destination tensor (`acl_dst`). The argmax is
+ * computed along a specified axis, and the result is the index of the maximum value
+ * along that axis. The operation is performed using the CANN backend, and
+ * necessary memory allocation is handled automatically.
+ *
+ * @param ctx The context for CANN backend operations.
+ * @param acl_src The source tensor on which the argmax operation will be performed.
+ * @param acl_dst The destination tensor that will hold the resulting indices.
+ * @param dst The destination tensor object that stores the result after the argmax operation.
+ */
+static void aclnn_argmax(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    aclTensor* acl_dst, ggml_tensor* dst) {
+    ggml_cann_pool_alloc dst_buffer_allocator(
+        ctx.pool(), ggml_nelements(dst) * ggml_type_size(dst->type));
+    void* buffer = dst_buffer_allocator.get();
+    int64_t dst_buffer_ne[4] = {1, dst->ne[0], dst->ne[1], dst->ne[2]};
+    size_t dst_buffer_nb[GGML_MAX_DIMS];
+    dst_buffer_nb[0] = ggml_type_size(dst->type);
+    for (int i = 1; i < GGML_MAX_DIMS; i++) {
+        dst_buffer_nb[i] = dst_buffer_nb[i - 1] * dst_buffer_ne[i - 1];
+    }
+
+    aclTensor* dst_buffer_tensor =
+        ggml_cann_create_tensor(buffer,  ggml_cann_type_mapping(dst->type), ggml_type_size(dst->type),
+        dst_buffer_ne, dst_buffer_nb, 4);
+
+    uint64_t workspaceSize = 0;
+    aclOpExecutor* executor;
+    void* workspaceAddr = nullptr;
+
+
+    ACL_CHECK(aclnnArgMaxGetWorkspaceSize(acl_src, 3, true, dst_buffer_tensor,
+                     &workspaceSize, &executor));
+    if (workspaceSize > 0) {
+        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
+        workspaceAddr = workspace_allocator.get();
+    }
+
+    ACL_CHECK(aclnnArgMax(workspaceAddr, workspaceSize, executor, ctx.stream()));
+
+    size_t cpy_size = ggml_nbytes(dst);
+    ACL_CHECK(aclrtMemcpyAsync(dst->data, cpy_size, buffer, cpy_size,
+        ACL_MEMCPY_DEVICE_TO_DEVICE, ctx.stream()));
 }
 
 void ggml_cann_add(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -3442,5 +3492,36 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_cos_reshape_tensor));
     ACL_CHECK(aclDestroyTensor(acl_sin_reshape_tensor));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+
+ void ggml_cann_argmax(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclnn_argmax(ctx, acl_src, acl_dst, dst);
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_cos(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclnn_cos(ctx, acl_src, acl_dst);
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_sin(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclnn_sin(ctx, acl_src, acl_dst);
+    ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
