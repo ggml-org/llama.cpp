@@ -128,7 +128,6 @@
 // =================================================================================================
 class  qnn_instance;
 struct ggml_backend_hexagon_context;
-static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx);
 
 #if 0//def NDEBUG
 #define GGMLHEXAGON_DEBUG                               0
@@ -852,6 +851,7 @@ static void ggmlhexagon_get_timestring(char * p_currenttime) {
 #endif
 }
 
+static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx);
 static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * ctx) {
     char timestamp[GGMLHEXAGON_TMPBUF_LEN];
     memset(timestamp, 0, GGMLHEXAGON_TMPBUF_LEN);
@@ -1205,7 +1205,7 @@ static size_t ggmlhexagon_get_system_total_memory_in_bytes() {
 
     return pages * page_size;
 #else
-    //FIXME: Snapdragon based WoA(Windows on ARM)
+    //TODO: Snapdragon based WoA(Windows on ARM)
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof(statex);
     if (GlobalMemoryStatusEx(&statex)) {
@@ -1228,7 +1228,7 @@ static size_t ggmlhexagon_get_system_free_memory_in_bytes() {
 
     return avail_pages * page_size;
 #else
-    //FIXME: Snapdragon based WoA(Windows on ARM)
+    //TODO: Snapdragon based WoA(Windows on ARM)
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof(statex);
     if (GlobalMemoryStatusEx(&statex)) {
@@ -1561,7 +1561,7 @@ static char * ggmlqnn_strndup(const char * source, size_t maxlen) {
 #if defined(__ANDROID__) || defined(__linux__)
     return strndup(source, maxlen);
 #else
-    //FIXME:behaviour is not exactly same to Android&Linux
+    //TODO:behaviour is not exactly same to Android&Linux
     GGML_UNUSED(maxlen);
     return strdup(source);
 #endif
@@ -3163,7 +3163,7 @@ int qnn_instance::htp_init_perfinfra() {
     htp_perfinfra->createPowerConfigId(device_id, core_id, &power_configid);
     _qnn_htp_perfinfra      = htp_perfinfra;
     _qnn_htp_powerconfig_id = power_configid;
-    //FIXME:hardcode to 0 and 0 although it's correct
+    //TODO:hardcode to 0 and 0 although it's correct
     _qnn_htp_device_id      = device_id;
     _qnn_htp_core_id        = core_id;
 
@@ -3178,7 +3178,7 @@ void qnn_instance::htp_probe_rpc_meminfo() {
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(alloc_rpcmem_internal(probe_slots[idx] * SIZE_IN_MB, 4));
         if (nullptr == rpc_buffer) {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx], strerror(errno));
+            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
             break;
         } else {
             candidate_size = probe_slots[idx];
@@ -4694,7 +4694,7 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
         if (nullptr == rpc_buffer) {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure, %s\n", probe_slots[idx], strerror(errno));
+            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
             break;
         } else {
             candidate_size = probe_slots[idx];
@@ -4708,13 +4708,13 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     GGMLHEXAGON_LOG_INFO("capacity of rpc memory %d MB", ctx->rpc_mempool_capacity / SIZE_IN_MB);
 
     if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
-        //FIXME: reasonable rpc memory pool size
+        //FIXME: reasonable rpc memory pool size through a better approach rather than hardcoded size
         ctx->rpc_mempool_len = 1024 * SIZE_IN_MB;
         if (ctx->rpc_mempool_len > ctx->rpc_mempool_capacity) {
             GGMLHEXAGON_LOG_WARN("rpc mempool is too big");
             return;
         }
-        //FIXME: use ion memory pool currently, it seems there is unknown bug with DMA memory pool
+        //FIXME: it seems there is unknown issue with DMA memory pool
         ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
                                         ctx->rpc_mempool_len);
         if (nullptr == ctx->rpc_mempool) {
@@ -4831,11 +4831,11 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     if (nullptr == ctx)
         return 1;
     GGMLHEXAGON_LOG_INFO("init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
-    if (nullptr != ctx->rpc_mempool) {
+    if (0 != ctx->ggmlop_handle) {
         GGMLHEXAGON_LOG_DEBUG("already init Hexagon DSP with backend %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
         return 0;
     }
-    ctx->ggmlop_handle = -1;
+    ctx->ggmlop_handle = 0;
 
     if (-1 == domain_id) {
         if (nullptr != domain_type) {
@@ -4936,10 +4936,11 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
     hexagon_error = ggmlop_dsp_open(ggmlop_domain_uri, &ctx->ggmlop_handle);
     if (AEE_SUCCESS == hexagon_error) {
         GGMLHEXAGON_LOG_INFO("succeed to open domain %d(%s)", domain_id, ggmlhexagon_get_dsp_name(domain_id));
-        GGMLHEXAGON_LOG_INFO("only support offload GGML_OP_ADD and GGML_OP_MUL_MAT to cDSP currently");
+        //FIXME: only support offload fp32 GGML_OP_MUL_MAT to cDSP
+        GGMLHEXAGON_LOG_INFO("only support offload fp32 GGML_OP_ADD and fp32 GGML_OP_MUL_MAT to cDSP currently");
         ggmlhexagon_probe_dspinfo(ctx);
         ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1);
-        ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 1000);
+        ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 100);
         ggmlhexagon_init_rpcmempool(ctx);
     } else {
         GGMLHEXAGON_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
@@ -4988,6 +4989,11 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
         return;
     }
 
+    //FIXME:try to fully understand the tech detail in qidl:
+    // qidl is a binary tool to generate some very complicated and hard-to customized bridge-layer codes
+    // between ARM-AP and cDSP. the mechanism in qidl/FastRPC is exactly similar to mechanism in TEE.
+    // try to find a better/efficient approach to exchange necessary data between ARM-AP side and cDSP side.
+    // manually modifying the important data structure ggml_tensor in ggml.h is not make-sense and not acceptable.
     dsptensor_0.data        = src0->data;
     dsptensor_0.data_len    = ggml_nbytes(src0);
     dsptensor_0.type        = src0->type;
@@ -5455,9 +5461,15 @@ static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-
-    return (2 * (1 << 29));
+    struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(buft->context);
+    GGML_ASSERT(nullptr != ctx);
+    if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        GGML_ASSERT(ctx->rpc_mempool_len > (8 * SIZE_IN_MB));
+        return ctx->rpc_mempool_len - (8 * SIZE_IN_MB);
+    } else {
+        //TODO:this is an experimental value for LLM models
+        return (1024 * SIZE_IN_MB);
+    }
 }
 
 static bool ggml_backend_buft_is_hexagon(ggml_backend_buffer_type_t buft) {
@@ -5465,7 +5477,13 @@ static bool ggml_backend_buft_is_hexagon(ggml_backend_buffer_type_t buft) {
 }
 
 static bool ggml_backend_hexagon_buffer_is_host(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
+    struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(buft->context);
+    GGML_ASSERT(nullptr != ctx);
+    if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        //FIXME: return false here is make sense in this scenario although this is not key-point at the moment
+        //       fix it after solving other urgent tasks
+        //return false;
+    }
     return true;
 }
 
