@@ -450,7 +450,7 @@ static void gguf_merge(const split_params & split_params) {
                         LLM_KV_SPLIT_COUNT);
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
-                gguf_free(ctx_out);                
+                gguf_free(ctx_out);
                 exit(EXIT_FAILURE);
             }
 
@@ -462,7 +462,7 @@ static void gguf_merge(const split_params & split_params) {
                         n_split);
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
-                gguf_free(ctx_out);                
+                gguf_free(ctx_out);
                 exit(EXIT_FAILURE);
             }
 
@@ -474,7 +474,7 @@ static void gguf_merge(const split_params & split_params) {
                         split_path, i_split, n_split);
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
-                gguf_free(ctx_out);                
+                gguf_free(ctx_out);
                 exit(EXIT_FAILURE);
             }
 
@@ -517,7 +517,7 @@ static void gguf_merge(const split_params & split_params) {
             gguf_free(ctx_out);
             if (!split_params.dry_run) {
                 fout.close();
-            }            
+            }
             exit(EXIT_FAILURE);
         }
         fprintf(stderr, "%s: writing tensors %s ...", __func__, split_path);
@@ -558,7 +558,7 @@ static void gguf_merge(const split_params & split_params) {
         std::vector<uint8_t> data(gguf_get_meta_size(ctx_out));
         gguf_get_meta_data(ctx_out, data.data());
         fout.write((const char *)data.data(), data.size());
-        fout.close();        
+        fout.close();
     }
     gguf_free(ctx_out);
 
