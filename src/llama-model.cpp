@@ -379,9 +379,12 @@ struct llama_model::impl {
     layer_dev dev_input = {};
     layer_dev dev_output = {};
     std::vector<layer_dev> dev_layer;
+
+    bool has_tensor_overrides;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
+    pimpl->has_tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
 }
 
 llama_model::~llama_model() {}
@@ -4167,6 +4170,10 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
                 ggml_tensor * layer_dir = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, hparams.n_embd);
                 return ggml_add(ctx, cur, layer_dir);
             });
+}
+
+bool llama_model::has_tensor_overrides() const {
+    return pimpl->has_tensor_overrides;
 }
 
 const ggml_tensor * llama_model::get_tensor(const char * name) const {
