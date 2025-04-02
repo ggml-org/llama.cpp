@@ -449,8 +449,32 @@ void llama_kv_cache_unified::restore() {
         return;
     }
 
+    // TODO: tmp - move to llama_kv_cache_recurrent
+    if (recurrent) {
+        seq_rm(-1, -1, -1);
+        return;
+    }
+
+    uint32_t new_head = size;
+
     for (auto & range : pending.ranges) {
-        seq_rm(-1, range.p0, range.p1);
+        for (uint32_t i = range.c0; i < range.c1; ++i) {
+            cells[i].seq_id.clear();
+
+            // keep count of the number of used cells
+            if (cells[i].pos >= 0) {
+                used--;
+            }
+
+            cells[i].pos = -1;
+            cells[i].src = -1;
+        }
+
+        new_head = std::min(new_head, range.c0);
+    }
+
+    if (new_head != size && new_head < head) {
+        head = new_head;
     }
 }
 

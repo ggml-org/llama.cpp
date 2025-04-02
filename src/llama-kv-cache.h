@@ -140,8 +140,8 @@ public:
     // commit/restore cache
 
     struct slot_range {
-        uint32_t p0 = 0;
-        uint32_t p1 = 0;
+        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
+        uint32_t c1 = 0;
     };
 
     struct {
