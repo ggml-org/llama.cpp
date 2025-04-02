@@ -1495,8 +1495,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 if (flags & TENSOR_NOT_REQUIRED) {
                     return nullptr;
                 }
-                return nullptr;
-                //throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+                throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
             }
 
             // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
@@ -1591,8 +1590,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     return t;
                 }
             }
-            fprintf(stderr, "create_tensor: Creating '%s' with ne=[%ld, %ld, %ld]\n",
-        tn_str.c_str(), ne.begin()[0], ne.begin()[1], ne.begin()[2]);
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 

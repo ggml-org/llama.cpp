@@ -312,9 +312,7 @@ llama_context::llama_context(
 
         // reserve pp graph first so that buffers are only allocated once
         {
-            LLAMA_LOG_DEBUG("here 3\n");
             llama_ubatch ubatch_pp = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
-
             auto * gf = graph_init();
             graph_build(ctx_compute.get(), gf, ubatch_pp, LLM_GRAPH_TYPE_DEFAULT);
             if (!ggml_backend_sched_reserve(sched.get(), gf)) {
