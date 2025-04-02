@@ -8,8 +8,8 @@ __global__ void __launch_bounds__(splitD, 2)
                  const int src1_nb3, const int src2_nb0, const int src2_nb1, const int src2_nb2, const int src3_nb1,
                  const int src4_nb1, const int src4_nb2, const int src5_nb1, const int src5_nb2,
                  float * __restrict__ dst, const int64_t L) {
-    (void) src1_nb0;
-    (void) src2_nb0;
+    GGML_UNUSED(src1_nb0);
+    GGML_UNUSED(src2_nb0);
     const int bidx = blockIdx.x;  // split along B
     const int bidy = blockIdx.y;  // split along D
     const int tid  = threadIdx.x;
