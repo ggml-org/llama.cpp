@@ -1319,12 +1319,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_SNAC_DEC:
             {
-                // ml.get_key(LLM_KV_VOCAB_SIZE,             hparams.n_vocab);
-                // ml.get_key(LLM_KV_QUANTIZER_COUNT,        hparams.n_quantizers);
-                // ml.get_key(LLM_KV_FEATURES_LENGTH,        hparams.n_codebook_dim);
-                // ml.get_key(LLM_KV_QUANTIZER_STRIDES,      hparams.vq_strides);
-                // ml.get_key(LLM_KV_DECODER_UPSAMPLE_RATES, hparams.rates);
-                // ml.get_key(LLM_KV_DECODER_CHANNEL_DIMS,   hparams.n_channels);
+                hparams.n_channels = {768, 1024, 512, 256, 128, 64, 1};  // From decoder_channel_dims
+                hparams.upsample_rates = {8, 8, 4, 2};
+                hparams.n_embd = 768;
+                hparams.n_layer = 8;
+
+                // Dummy KV cache params to satisfy llama.cpp
+                for (uint32_t i = 0; i < 7; ++i) {  // n_total_layers = 8
+                    hparams.n_head_arr[i] = 1;
+                    hparams.n_head_kv_arr[i] = 1;
+                }
+                hparams.n_embd_head_k = 1;
+                hparams.n_embd_head_v = 1;
             } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
@@ -1482,13 +1488,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
-            ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
+            std::string tn_str = tn.str();
+            ggml_tensor * t_meta = ml.get_tensor_meta(tn_str.c_str());
 
             if (!t_meta) {
                 if (flags & TENSOR_NOT_REQUIRED) {
                     return nullptr;
                 }
-                throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
+                return nullptr;
+                //throw std::runtime_error(format("missing tensor '%s'", tn.str().c_str()));
             }
 
             // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
@@ -1583,6 +1591,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     return t;
                 }
             }
+            fprintf(stderr, "create_tensor: Creating '%s' with ne=[%ld, %ld, %ld]\n",
+        tn_str.c_str(), ne.begin()[0], ne.begin()[1], ne.begin()[2]);
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 
@@ -3695,7 +3705,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.gamma  = create_tensor(tn(LLM_TENSOR_CONVNEXT_GAMMA, "weight", i), {n_embd}, 0);
                         }
 
-                        // output
                         output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
                         output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"),   {n_embd}, 0);
                     }
@@ -3705,82 +3714,134 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
         case LLM_ARCH_SNAC_DEC:
             {
-                const int64_t n_layers = hparams.n_channels.size();
-                const int64_t n_blocks = hparams.upsample_rates.size();
-                GGML_ASSERT(n_layers == n_blocks + 2);
+                // TODO: Magic numbers everwhere
+                const int64_t n_total_layers = hparams.n_layer;
 
-                layers.resize(n_layers);
+                tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {8, 4096, 1}, 0);
 
-                for (int i = 0; i < n_layers; ++i) {
+                hparams.n_channels = {768, 1024, 512, 256, 128, 64, 1};
+
+                // Quantizer projection tensors (0, 1, 2)
+                for (int qid = 0; qid < 3; ++qid) {
+                    fprintf(stderr, "%s: Loading quantizer %d tensors\n", __func__, qid);
+                    // Bias: [768, 1, 1, 1] -> {768}
+                    codebook_proj_b[qid] = create_tensor(tn(LLM_TENSOR_CODEBOOK_PROJ_B, qid, -1), {768, 1, 1}, 0);
+                    // Scale: [1, 1, 768, 1] -> {768}
+                    codebook_proj_s[qid] = create_tensor(tn(LLM_TENSOR_CODEBOOK_PROJ_S, qid, -1), {1, 1, 768}, 0);
+                    // Weight: [1, 8, 768, 1] -> {8, 768}
+                    codebook_proj_w[qid] = create_tensor(tn(LLM_TENSOR_CODEBOOK_PROJ_W, qid, -1), {1, 8, 768}, 0);
+
+                    codebook[qid] = create_tensor(tn(LLM_TENSOR_CODEBOOK, qid, -1), {8, 4096, 1, 1}, 0);
+                }
+
+                // Decoder tensors
+                for (int i = 1; i < n_total_layers; ++i) { // Loop from i = 0 to 7
                     auto & layer = layers[i];
-                    const int64_t n_in  = (i == 0) ? hparams.n_channels[0] : hparams.n_channels[i-1];
-                    const int64_t n_out = hparams.n_channels[i];
 
-                    if (i == 0) {
-                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
-                                                     {7, 1, n_out}, 0); // [7, 1, 768] (original1)
-                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
-                                                         {n_out, 1, 1}, 0); // [768, 1, 1] (original0)
-                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
-                                                     {n_out}, 0);
-                    } else if (i == 1) {
-                        // Pointwise expansion
-                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
-                                                     {1, n_in, n_out}, 0); // [1, 768, 1024]
-                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
-                                                         {n_out, 1, 1}, 0); // [1024, 1, 1]
-                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
-                                                     {n_out}, 0);
-                    } else if (i == n_layers - 1) {
-                        // Final convolution
-                        layer.alpha = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha", i),
-                                                    {1, n_in, 1}, 0); // [1, 64, 1]
-                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i),
-                                                     {7, n_in, n_out}, 0); // [7, 64, 1]
-                        layer.conv_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i),
-                                                         {n_out, 1, 1}, 0); // [1, 1, 1]
-                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i),
-                                                     {n_out}, 0);
-                    } else {
-                        // Decoder blocks
-                        const int64_t stride = hparams.upsample_rates[i-2];
-                        layer.decoder_blocks.resize(1);
-                        auto & block = layer.decoder_blocks[0];
+                    // Calculate n_in and n_out for the current layer i
+                    const int64_t n_in = (i == 0) ? 1 : ((i == 7) ? hparams.n_channels[i-2] /* 64 */ : hparams.n_channels[i-1]);
+                    const int64_t n_out = (i == 7) ? hparams.n_channels[i-1] /* 1 */ : hparams.n_channels[i];
 
-                        // Upsampling
-                        block.alpha = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha", i),
-                                                    {1, n_in, 1}, 0); // something like [1, 1024, 1]
-                        block.up_weight = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_WEIGHT, "weight", i),
-                                                        {stride * 2, n_out, n_in}, 0);
-                        block.up_scale = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_SCALE, "scale", i),
-                                                       {n_out, 1, 1}, 0);
-                        block.up_bias = create_tensor(tn(LLM_TENSOR_TRANSPOSED_CONV_BIAS, "bias", i),
-                                                      {n_out}, 0);
+                    fprintf(stderr, "%s: Layer %d: Starting (n_in=%lld, n_out=%lld)\n", __func__, i, n_in, n_out);
 
-                        // Residual units
-                        for (int j = 0; j < 3; ++j) {
-                            auto & ru = block.res_units[j];
-                            const int dilation = (j == 0) ? 1 : (j == 1) ? 3 : 9;
-
-                            ru.alpha1 = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha1", i, j),
-                                                      {1, n_out, 1}, 0);
-                            ru.conv1_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight", i, j),
-                                                       {7, 1, n_out}, 0);
-                            ru.conv1_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale", i, j),
-                                                           {n_out, 1, 1}, 0);
-                            ru.conv1_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias", i, j),
-                                                       {n_out}, 0);
-
-                            ru.alpha2 = create_tensor(tn(LLM_TENSOR_SNAKE_ALPHA, "alpha2", i, j),
-                                                      {1, n_out, 1}, 0);
-                            ru.conv2_w = create_tensor(tn(LLM_TENSOR_CONV1D_WEIGHT, "weight2", i, j),
-                                                       {1, n_out, n_out}, 0);
-                            ru.conv2_scale = create_tensor(tn(LLM_TENSOR_CONV1D_SCALE, "scale2", i, j),
-                                                           {n_out, 1, 1}, 0);
-                            ru.conv2_b = create_tensor(tn(LLM_TENSOR_CONV1D_BIAS, "bias2", i, j),
-                                                       {n_out}, 0);
-                        }
+                    if (i == 1) { // --- Layer 1: Conv2 ---
+                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV_W2, i, -1), {1, n_in, n_out}, 0);
+                        layer.conv_s = create_tensor(tn(LLM_TENSOR_CONV_S2, i, -1), {1, 1, n_out}, 0);
+                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV_B2, i, -1), {n_out}, 0);
                     }
+                    else if (i >= 2 && i <= 5) { // --- Layers 2-5: Blocks ---
+                        const int n_blocks = 6;
+                        layer.decoder_blocks.resize(n_blocks);
+
+                        for (int bid = 0; bid < n_blocks; ++bid) {
+                                LLAMA_LOG_DEBUG("%s: Layer %d, Block %d: Starting\n", __func__, i, bid);
+
+                                switch (bid) {
+                                case 0: // Block 0: Alpha
+                                    layer.decoder_blocks[bid].alpha = create_tensor(tn(LLM_TENSOR_BLOCK_ALPHA, i, bid), {1, n_in, 1}, 0);
+                                    break;
+                                case 1: // Block 1: Transition
+                                    {
+                                        int64_t trans_dim;
+                                        if (i == 2)        trans_dim = 16;
+                                        else if (i == 3)   trans_dim = 16;
+                                        else if (i == 4)   trans_dim = 8;
+                                        else               trans_dim = 4;  // Assumed for i == 5
+                                        LLAMA_LOG_DEBUG("%s: Layer %d, Block %d: Using trans_dim = %lld\n", __func__, i, bid, trans_dim);
+                                        layer.decoder_blocks[bid].up_weight = create_tensor(tn(LLM_TENSOR_TRANS_W, i, bid), {trans_dim, n_out, n_in}, 0);
+                                        layer.decoder_blocks[bid].up_scale  = create_tensor(tn(LLM_TENSOR_TRANS_S, i, bid), {1, 1, n_in}, 0);
+                                        layer.decoder_blocks[bid].up_bias   = create_tensor(tn(LLM_TENSOR_TRANS_B, i, bid), {n_out}, 0);
+                                        if (!layer.decoder_blocks[bid].up_bias) {
+                                            LLAMA_LOG_DEBUG("Failed to create decoder.%d.block.%d.trans.bias\n", i, bid);
+                                        }
+                                    }
+                                    break;
+                                case 2:
+                                    {
+                                        LLAMA_LOG_DEBUG("%s: Layer %d, Block %d: Loading noise tensors\n", __func__, i, bid);
+                                        layer.decoder_blocks[bid].noise_w = create_tensor(tn(LLM_TENSOR_NOISE_W, i, bid), {1, n_out, n_out}, 0);
+                                        layer.decoder_blocks[bid].noise_s = create_tensor(tn(LLM_TENSOR_NOISE_S, i, bid), {1, 1, n_out}, 0);
+                                    }
+                                    break;
+                                case 3: // Block 3: Residual Unit 1
+                                    {
+                                        int res_unit_idx = 0; auto & res_unit = layer.decoder_blocks[bid].res_units[res_unit_idx];
+                                        res_unit.alpha1      = create_tensor(tn(LLM_TENSOR_RES_SNAKE1_A, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv1_w     = create_tensor(tn(LLM_TENSOR_RES_CONV1_W, i, bid), {7, 1, n_out}, 0);
+                                        res_unit.conv1_s = create_tensor(tn(LLM_TENSOR_RES_CONV1_S, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv1_b     = create_tensor(tn(LLM_TENSOR_RES_CONV1_B, i, bid), {n_out}, 0);
+                                        res_unit.alpha2      = create_tensor(tn(LLM_TENSOR_RES_SNAKE2_A, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv2_w     = create_tensor(tn(LLM_TENSOR_RES_CONV2_W, i, bid), {1, n_out, n_out}, 0);
+                                        res_unit.conv2_s = create_tensor(tn(LLM_TENSOR_RES_CONV2_S, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv2_b     = create_tensor(tn(LLM_TENSOR_RES_CONV2_B, i, bid), {n_out}, 0);
+                                    }
+                                    break;
+                                case 4: // Block 4: Residual Unit 2
+                                    {
+                                        int res_unit_idx = 1; auto & res_unit = layer.decoder_blocks[bid].res_units[res_unit_idx];
+                                        res_unit.alpha1      = create_tensor(tn(LLM_TENSOR_RES_SNAKE1_A_B4, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv1_w     = create_tensor(tn(LLM_TENSOR_RES_CONV1_W_B4, i, bid), {7, 1, n_out}, 0);
+                                        res_unit.conv1_s = create_tensor(tn(LLM_TENSOR_RES_CONV1_S_B4, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv1_b     = create_tensor(tn(LLM_TENSOR_RES_CONV1_B_B4, i, bid), {n_out}, 0);
+                                        res_unit.alpha2      = create_tensor(tn(LLM_TENSOR_RES_SNAKE2_A_B4, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv2_w     = create_tensor(tn(LLM_TENSOR_RES_CONV2_W_B4, i, bid), {1, n_out, n_out}, 0);
+                                        res_unit.conv2_s = create_tensor(tn(LLM_TENSOR_RES_CONV2_S_B4, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv2_b     = create_tensor(tn(LLM_TENSOR_RES_CONV2_B_B4, i, bid), {n_out}, 0);
+                                    }
+                                    break;
+                                case 5: // Block 5: Residual Unit 3
+                                    {
+                                        int res_unit_idx = 2; auto & res_unit = layer.decoder_blocks[bid].res_units[res_unit_idx];
+                                        res_unit.alpha1      = create_tensor(tn(LLM_TENSOR_RES_SNAKE1_A_B5, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv1_w     = create_tensor(tn(LLM_TENSOR_RES_CONV1_W_B5, i, bid), {7, 1, n_out}, 0);
+                                        res_unit.conv1_s = create_tensor(tn(LLM_TENSOR_RES_CONV1_S_B5, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv1_b     = create_tensor(tn(LLM_TENSOR_RES_CONV1_B_B5, i, bid), {n_out}, 0);
+                                        res_unit.alpha2      = create_tensor(tn(LLM_TENSOR_RES_SNAKE2_A_B5, i, bid), {1, n_out, 1}, 0);
+                                        res_unit.conv2_w     = create_tensor(tn(LLM_TENSOR_RES_CONV2_W_B5, i, bid), {1, n_out, n_out}, 0);
+                                        res_unit.conv2_s = create_tensor(tn(LLM_TENSOR_RES_CONV2_S_B5, i, bid), {1, 1, n_out}, 0);
+                                        res_unit.conv2_b     = create_tensor(tn(LLM_TENSOR_RES_CONV2_B_B5, i, bid), {n_out}, 0);
+                                    }
+                                    break;
+                                default:
+                                    fprintf(stderr, "%s: ERROR: Unexpected block id %d in layer %d\n", __func__, bid, i);
+                                    return false; // Or handle error appropriately
+                                }
+                                fprintf(stderr, "%s: Layer %d, Block %d: Finished\n", __func__, i, bid);
+                            } // End block loop
+                    }
+                    else if (i == 6) { // --- Layer 6: Alpha ---
+                        layer.alpha = create_tensor(tn(LLM_TENSOR_ALPHA, i, -1), {1, n_in, 1}, 0);
+                    }
+                    else if (i == 7) { // --- Layer 7: Final Conv ---
+                        layer.conv_w = create_tensor(tn(LLM_TENSOR_CONV_W7, i, -1), {7, n_in, n_out}, 0);
+                        layer.conv_s = create_tensor(tn(LLM_TENSOR_CONV_S7, i, -1), {1, 1, n_out}, 0);
+                        layer.conv_b = create_tensor(tn(LLM_TENSOR_CONV_B7, i, -1), {n_out}, 0);
+                    }
+                    else { // Should not happen
+                        fprintf(stderr, "%s: ERROR: Unexpected layer index %d\n", __func__, i);
+                        return false; // Or handle error appropriately
+                    }
+                    fprintf(stderr, "%s: Layer %d: Finished\n", __func__, i);
                 }
             } break;
             default:
@@ -11686,93 +11747,285 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
     }
 };
 
+// struct llm_build_snac_dec : public llm_graph_context {
+
+//     llm_build_snac_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+//         LLAMA_LOG_INFO("Raw ubatch.n_tokens = %d\n", ubatch.n_tokens);
+//         for (int i = 0; i < std::min(20, (int)ubatch.n_tokens); ++i) {
+//             LLAMA_LOG_INFO("%d ", ubatch.token[i]);
+//         }
+//         LLAMA_LOG("\n");
+//         LLAMA_LOG_DEBUG("%s: Entering constructor, model.layers.size() = %zu\n", __func__, model.layers.size());
+//         ggml_tensor * cur;
+//         ggml_tensor * inpL;
+
+//         // TODO: probalby just get raw codes
+//         //cur = build_inp_embd(model.tok_embd);
+//         //LLAMA_LOG_INFO("After build_inp_embd: shape = [%ld, %ld, %ld, %ld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+//         // hack, hardcode expected SNAC input at first conv layer
+//         cur = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 768, 64, 1, 1); // [channels, seq_len, 1, 1]
+//         ggml_set_input(cur);
+//         LLAMA_LOG_INFO("hardcoded shape = [%ld, %ld, %ld, %ld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+//         // end hack
+
+//         // Log input tokens before processing
+//         LLAMA_LOG_INFO("%s: ubatch.n_tokens = %u\n", __func__, ubatch.n_tokens);
+//         LLAMA_LOG_WARN("%s: Input tokens from ubatch = ", __func__);
+//         for (uint32_t i = 0; i < ubatch.n_tokens && i < 20; ++i) {
+//             LLAMA_LOG_INFO("%d ", ubatch.token[i]);
+//         }
+//         if (ubatch.n_tokens > 20) LLAMA_LOG_INFO("...");
+//         LLAMA_LOG("\n");
+
+//         // ggml_tensor * layer_1;
+//         // ggml_tensor * layer_2;
+//         // ggml_tensor * layer_3;
+//         //redistribute_codes(cur, &layer_1, &layer_2, &layer_3);
+
+//         // Log the redistributed layers
+//         //log_tensor("Layer 1", layer_1);
+//         //log_tensor("Layer 2", layer_2);
+//         //log_tensor("Layer 3", layer_3);
+
+//         for (uint32_t il = 1; il < model.layers.size(); ++il) {
+//             const auto & layer = model.layers[il];
+
+//             LLAMA_LOG_DEBUG("%s: Layer %u: Starting, cur = %p\n", __func__, il, cur);
+
+//             if (il == 1) { // pointwise
+//                 LLAMA_LOG_INFO("%s: Layer %u: Pointwise conv, conv_w = %p, conv_s = %p, conv_b = %p\n",
+//                         __func__, il, layer.conv_w, layer.conv_s, layer.conv_b);
+//                 LLAMA_LOG_INFO("Before transpose, cur shape = [%ld, %ld, %ld, %ld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+//                 cur = ggml_transpose(ctx0, cur); // [768, 512] -> [512, 768]
+//                 LLAMA_LOG_INFO("After transpose, cur shape = [%ld, %ld, %ld, %ld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+//                 cur = apply_conv1d(cur, layer.conv_w, layer.conv_s, layer.conv_b, 1, 0);
+//                 LLAMA_LOG_INFO("%s: Layer %u: After pointwise conv, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                         __func__, il, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//             } else if (il == model.layers.size() - 1) {
+//                 LLAMA_LOG_INFO("%s: Layer %u: Final layer, alpha = %p, conv_w = %p, conv_s = %p, conv_b = %p\n",
+//                         __func__, il, layer.alpha, layer.conv_w, layer.conv_s, layer.conv_b);
+//                 cur = ggml_snake(ctx0, cur, layer.alpha);
+//                 LLAMA_LOG_INFO("%s: Layer %u: After ggml_snake, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                         __func__, il, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//                 cur = apply_conv1d(cur, layer.conv_w, layer.conv_s, layer.conv_b, 1, 3);
+//                 LLAMA_LOG_INFO("%s: Layer %u: After final conv, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                         __func__, il, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//                 cur = ggml_tanh(ctx0, cur);
+//                 LLAMA_LOG_INFO("%s: Layer %u: After ggml_tanh, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                         __func__, il, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//             } else {
+//                 // Layers 2-5: Decoder Blocks (1024 -> 512 -> 256 -> 128 -> 64)
+//                 const int stride = hparams.upsample_rates[il - 2]; // 8 for il = 2
+//                 const int padding = stride;
+
+//                 // Block 0: Snake activation
+//                 const auto & block0 = layer.decoder_blocks[0];
+//                 LLAMA_LOG_DEBUG("%s: Layer %u: Block 0, alpha = %p\n", __func__, il, block0.alpha);
+//                 cur = ggml_snake(ctx0, cur, block0.alpha);
+//                 LLAMA_LOG_DEBUG("%s: Layer %u: After ggml_snake, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                                 __func__, il, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+//                 // Block 1: Transposed convolution
+//                 const auto & block1 = layer.decoder_blocks[1];
+//                 LLAMA_LOG_DEBUG("%s: Layer %u: Block 1, stride = %d, up_weight = %p, up_scale = %p, up_bias = %p\n",
+//                                 __func__, il, stride, block1.up_weight, block1.up_scale, block1.up_bias);
+
+//                 cur = apply_conv1d_transpose(cur, block1.up_weight, block1.up_scale, block1.up_bias, stride, padding);
+//                 LLAMA_LOG_DEBUG("%s: Layer %u: After conv1d_transpose, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                                 __func__, il, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+//                 // Residual Units (3 per block)
+//                 for (int j = 0; j < 3; ++j) {
+//                     const auto & ru = block1.res_units[j];
+//                     ggml_tensor * inpL = cur;
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: Starting, inpL = %p, alpha1 = %p, conv1_w = %p, conv1_s = %p, conv1_b = %p\n",
+//                             __func__, il, j, inpL, ru.alpha1, ru.conv1_w, ru.conv1_s, ru.conv1_b);
+
+//                     cur = ggml_snake(ctx0, cur, ru.alpha1);
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: After ggml_snake (alpha1), cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                             __func__, il, j, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//                     int dilation = (j == 0) ? 1 : (j == 1) ? 3 : 9;
+//                     int padding = 3 * dilation; // Kernel 7, dilated padding = (7-1)/2 * dilation
+//                     cur = apply_conv1d(cur, ru.conv1_w, ru.conv1_s, ru.conv1_b, 1, padding);
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: After conv1d (conv1), cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                             __func__, il, j, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+
+//                     // pw
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: Pointwise, alpha2 = %p, conv2_w = %p, conv2_s = %p, conv2_b = %p\n",
+//                             __func__, il, j, ru.alpha2, ru.conv2_w, ru.conv2_s, ru.conv2_b);
+//                     cur = ggml_snake(ctx0, cur, ru.alpha2);
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: After ggml_snake (alpha2), cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                             __func__, il, j, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//                     cur = apply_conv1d(cur, ru.conv2_w, ru.conv2_s, ru.conv2_b, 1, 0);
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: After conv1d (conv2), cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                             __func__, il, j, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+
+//                     // residual
+//                     cur = ggml_add(ctx0, cur, inpL);
+//                     LLAMA_LOG_DEBUG("%s: Layer %u, ResUnit %d: After ggml_add, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                             __func__, il, j, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//                 }
+//             }
+//             LLAMA_LOG_DEBUG("%s: Layer %u: Finished, cur = %p\n", __func__, il, cur);
+//         }
+
+//         int64_t target_samples = 24000; // TODO: magic number
+//         LLAMA_LOG_DEBUG("%s: Trimming output, cur = %p, target_samples = %ld, cur->ne[0] = %ld\n",
+//                 __func__, cur, target_samples, cur ? cur->ne[0] : -1);
+//         if (cur->ne[0] > target_samples) {
+//             cur = ggml_get_rows(ctx0, cur, ggml_new_i32(ctx0, target_samples));
+//             LLAMA_LOG_DEBUG("%s: After ggml_get_rows, cur = %p, shape = [%ld, %ld, %ld, %ld]\n",
+//                     __func__, cur, cur ? cur->ne[0] : -1, cur ? cur->ne[1] : -1, cur ? cur->ne[2] : -1, cur ? cur->ne[3] : -1);
+//         }
+
+//         LLAMA_LOG_DEBUG("%s: Setting result_embd, cur = %p\n", __func__, cur);
+//         cb(cur, "result_embd", -1);
+//         res->t_embd = cur;
+
+//         LLAMA_LOG_DEBUG("%s: Building forward graph, cur = %p\n", __func__, cur);
+//         ggml_build_forward_expand(gf, cur);
+//         LLAMA_LOG_DEBUG("%s: Graph build completed\n", __func__);
+//     }
+
+//     // TODO: move these somewhere else
+// private:
+//     // Helper to log tensor contents
+//     void log_tensor(const char * name, ggml_tensor * tensor) {
+//         if (!tensor) {
+//             LLAMA_LOG_INFO("%s: %s is null\n", __func__, name);
+//             return;
+//         }
+//         LLAMA_LOG_DEBUG("%s: %s shape = [%ld, %ld, %ld, %ld], first 20 elements = ",
+//                        __func__, name, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+//         int n_elements = ggml_nelements(tensor);
+//         float * data = (float *)tensor->data;
+//         for (int i = 0; i < std::min(20, n_elements); ++i) {
+//             LLAMA_LOG_DEBUG("%.2f ", data[i]);
+//         }
+//         if (n_elements > 20) LLAMA_LOG_DEBUG("...");
+//         LLAMA_LOG_DEBUG("\n");
+//     }
+
+//     void redistribute_codes(ggml_tensor * input, ggml_tensor ** layer_1, ggml_tensor ** layer_2, ggml_tensor ** layer_3) {
+//         int64_t n_codes = input->ne[1]; // Assuming input is [n_embd, n_tokens, 1, 1]
+//         int64_t n_frames = n_codes / 7;
+//         if (n_codes % 7 != 0) {
+//             LLAMA_LOG_ERROR("%s: Input codes length %ld is not a multiple of 7\n", __func__, n_codes);
+//             *layer_1 = *layer_2 = *layer_3 = nullptr;
+//             return;
+//         }
+
+//         int64_t n_layer_1 = n_frames;      // 1 code per frame
+//         int64_t n_layer_2 = n_frames * 2;  // 2 codes per frame
+//         int64_t n_layer_3 = n_frames * 4;  // 4 codes per frame
+
+//         // Indices for each layer
+//         std::vector<int32_t> idx_layer_1(n_layer_1);
+//         std::vector<int32_t> idx_layer_2(n_layer_2);
+//         std::vector<int32_t> idx_layer_3(n_layer_3);
+
+//         for (int64_t i = 0; i < n_frames; ++i) {
+//             int64_t base_idx = i * 7;
+//             idx_layer_1[i] = base_idx + 0;                // No offset
+//             idx_layer_2[i * 2] = base_idx + 1;            // Offset -4096
+//             idx_layer_2[i * 2 + 1] = base_idx + 4;        // Offset -16384
+//             idx_layer_3[i * 4] = base_idx + 2;            // Offset -8192
+//             idx_layer_3[i * 4 + 1] = base_idx + 3;        // Offset -12288
+//             idx_layer_3[i * 4 + 2] = base_idx + 5;        // Offset -20480
+//             idx_layer_3[i * 4 + 3] = base_idx + 6;        // Offset -24576
+//         }
+
+//         // Create index tensors
+//         ggml_tensor * idx_1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_1);
+//         ggml_tensor * idx_2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_2);
+//         ggml_tensor * idx_3 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_3);
+
+//         memcpy(idx_1->data, idx_layer_1.data(), n_layer_1 * sizeof(int32_t));
+//         memcpy(idx_2->data, idx_layer_2.data(), n_layer_2 * sizeof(int32_t));
+//         memcpy(idx_3->data, idx_layer_3.data(), n_layer_3 * sizeof(int32_t));
+
+//         // Extract layers using ggml_get_rows
+//         *layer_1 = ggml_get_rows(ctx0, input, idx_1);
+//         *layer_2 = ggml_get_rows(ctx0, input, idx_2);
+//         *layer_3 = ggml_get_rows(ctx0, input, idx_3);
+
+//         // Apply offsets
+//         *layer_2 = ggml_add(ctx0, *layer_2, ggml_new_f32(ctx0, -4096.0f)); // Simplified; we'll refine offsets later
+//         *layer_3 = ggml_add(ctx0, *layer_3, ggml_new_f32(ctx0, -8192.0f)); // Simplified for now
+//     }
+
+//     ggml_tensor * apply_conv1d(ggml_tensor * input, ggml_tensor * conv_w, ggml_tensor * conv_scale, ggml_tensor * conv_b,
+//                               int stride, int padding) {
+//         ggml_tensor * w_final = normalize_weight(conv_w, conv_scale);
+//         ggml_tensor * cur = ggml_conv_1d_ph(ctx0, w_final, input, stride, padding);
+//         if (conv_b) {
+//             ggml_tensor* bias_reshaped = ggml_reshape_3d(ctx0, conv_b, 1, 1024, 1);
+//             cur = ggml_add(ctx0, cur, bias_reshaped);
+//         }
+//         return cur;
+//     }
+
+//     ggml_tensor * apply_conv1d_transpose(ggml_tensor * input, ggml_tensor * up_weight, ggml_tensor * up_scale, ggml_tensor * up_bias, int stride, int padding) {
+//         // Normalize weights (temporary fix for up_scale shape mismatch)
+//         if (up_scale->ne[2] != up_weight->ne[1]) { // 1024 != 512
+//             LLAMA_LOG_WARN("up_scale channels (%ld) don’t match output channels (%ld), expected behavior may vary\n", up_scale->ne[2], up_weight->ne[1]);
+//             // Ideally reshape up_scale to [1, 1, 512, 1], but no reshape; proceed with warning
+//         }
+//         ggml_tensor * w_final = normalize_weight(up_weight, up_scale);
+//         LLAMA_LOG_INFO("After normalize weight: w_final shape = [%ld, %ld, %ld, %ld]\n",
+//                         w_final->ne[0], w_final->ne[1], w_final->ne[2], w_final->ne[3]);
+
+//         ggml_tensor * cur = ggml_conv_transpose_1d(ctx0, w_final, input, stride, 0, 1);
+//         LLAMA_LOG_INFO("After ggml_conv_transpose_1d = [%ld, %ld, %ld, %ld]\n",
+//                         cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+//         if (up_bias) {
+//             // up_bias is [512, 1, 1, 1]; need [4104, 512, 1, 1] for ggml_add
+//             LLAMA_LOG_INFO("entering up_bias block. Before ggml_repeat, cur shape = [%ld, %ld, %ld, %ld]\n", cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+//             LLAMA_LOG_INFO("Before ggml_repeat, up_bias shape = [%ld, %ld, %ld, %ld]\n", up_bias->ne[0], up_bias->ne[1], up_bias->ne[2], up_bias->ne[3]);
+//             ggml_tensor * bias_repeated = ggml_repeat(ctx0, up_bias, cur);
+//             LLAMA_LOG_DEBUG("Repeated up_bias to shape = [%ld, %ld, %ld, %ld]\n",
+//                             bias_repeated->ne[0], bias_repeated->ne[1], bias_repeated->ne[2], bias_repeated->ne[3]);
+//             cur = ggml_add(ctx0, cur, bias_repeated);
+//             LLAMA_LOG_DEBUG("After bias add: cur shape = [%ld, %ld, %ld, %ld]\n",
+//                             cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+//         }
+//         return cur;
+//     }
+
+//     // w_final = scale * (w / || w ||)
+//     ggml_tensor * normalize_weight(ggml_tensor * w, ggml_tensor * scale) {
+//         ggml_tensor * norm = ggml_norm(ctx0, w, 1e-5f); // 1e-8f ?
+//         ggml_tensor * w_normalized = ggml_div(ctx0, w, norm);
+//         ggml_tensor * w_final = ggml_mul(ctx0, w_normalized, scale);
+//         return w_final;
+//     }
+// };
+
+// TODO: Placeholder
 struct llm_build_snac_dec : public llm_graph_context {
+
     llm_build_snac_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+
+        // TODO: Remove
+        LLAMA_LOG_INFO("Raw ubatch.n_tokens = %d\n", ubatch.n_tokens);
+        for (int i = 0; i < std::min(20, (int)ubatch.n_tokens); ++i) {
+            LLAMA_LOG_INFO("%d ", ubatch.token[i]);
+        }
+        LLAMA_LOG("\n");
         ggml_tensor * cur;
 
-        cur = build_inp_embd(model.tok_embd);
+        // TODO: Hack. Implement codebook lookups and out_proj
+        cur = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 768, 64, 1, 1);
+        ggml_set_input(cur);
+        // end hack
 
-        for (uint32_t il = 0; il < model.layers.size(); ++il) {
-            const auto & layer = model.layers[il];
-
-            if (il == 0) {        // depthwise
-                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 3);
-            } else if (il == 1) { // pointwise
-                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 0);
-            } else if (il == model.layers.size() - 1) {
-                cur = ggml_snake(ctx0, cur, layer.alpha);
-                cur = apply_conv1d(cur, layer.conv_w, layer.conv_scale, layer.conv_b, 1, 3);
-                cur = ggml_tanh(ctx0, cur);
-            } else {
-                // Layers 2-5: Decoder Blocks (1024 -> 512 -> 256 -> 128 -> 64)
-                const auto & block = layer.decoder_blocks[0];
-                const int stride = hparams.upsample_rates[il - 2];
-
-                cur = ggml_snake(ctx0, cur, block.alpha);
-                cur = apply_conv1d_transpose(cur, block.up_weight, block.up_scale, block.up_bias, stride, stride);
-
-                // Residual Units (3 per block)
-                for (int j = 0; j < 3; ++j) {
-                    const auto & ru = block.res_units[j];
-                    ggml_tensor * inpL = cur;
-
-                    cur = ggml_snake(ctx0, cur, ru.alpha1);
-                    int dilation = (j == 0) ? 1 : (j == 1) ? 3 : 9;
-                    int padding = 3 * dilation; // Kernel 7, dilated padding = (7-1)/2 * dilation
-                    cur = apply_conv1d(cur, ru.conv1_w, ru.conv1_scale, ru.conv1_b, 1, padding);
-
-                    // pw
-                    cur = ggml_snake(ctx0, cur, ru.alpha2);
-                    cur = apply_conv1d(cur, ru.conv2_w, ru.conv2_scale, ru.conv2_b, 1, 0);
-
-                    // residual
-                    cur = ggml_add(ctx0, cur, inpL);
-                }
-            }
-        }
-
-
-        int64_t target_samples = 24000; // TODO: magic number
-        if (cur->ne[0] > target_samples) {
-            cur = ggml_get_rows(ctx0, cur, ggml_new_i32(ctx0, target_samples));
-        }
-
+        LLAMA_LOG_DEBUG("%s: Setting result_embd, cur = %p\n", __func__, cur);
         cb(cur, "result_embd", -1);
         res->t_embd = cur;
-
         ggml_build_forward_expand(gf, cur);
-    }
-
-    // TODO: move these somewhere else
-private:
-    ggml_tensor * apply_conv1d(ggml_tensor * input, ggml_tensor * conv_w, ggml_tensor * conv_scale, ggml_tensor * conv_b,
-                              int stride, int padding) {
-        ggml_tensor * w_final = normalize_weight(conv_w, conv_scale);
-        ggml_tensor * cur = ggml_conv_1d_ph(ctx0, w_final, input, stride, padding);
-        if (conv_b) {
-            cur = ggml_add(ctx0, cur, conv_b);
-        }
-        return cur;
-    }
-
-    ggml_tensor * apply_conv1d_transpose(ggml_tensor * input, ggml_tensor * up_weight, ggml_tensor * up_scale,
-                                        ggml_tensor * up_bias, int stride, int padding) {
-        ggml_tensor * w_final = normalize_weight(up_weight, up_scale);
-        int kernel_size = up_weight->ne[0];
-        int output_padding = stride % 2; // 0 for even strides (8, 4, 2)
-        ggml_tensor * cur = ggml_conv_transpose_1d(ctx0, w_final, input, stride, padding / 2, output_padding);
-        if (up_bias) {
-            cur = ggml_add(ctx0, cur, up_bias);
-        }
-        return cur;
-    }
-
-    // w_final = scale * (w / || w ||)
-    ggml_tensor * normalize_weight(ggml_tensor * w, ggml_tensor * scale) {
-        ggml_tensor * norm = ggml_norm(ctx0, w, 1e-5f); // 1e-8f ?
-        ggml_tensor * w_normalized = ggml_div(ctx0, w, norm);
-        ggml_tensor * w_final = ggml_mul(ctx0, w_normalized, scale);
-        return w_final;
     }
 };
 

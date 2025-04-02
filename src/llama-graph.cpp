@@ -985,6 +985,8 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
         }
     } else {
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+        LLAMA_LOG_DEBUG("build_inp_embd: inp->embd shape = [%ld, %ld, %ld, %ld]\n",
+                    inp->embd->ne[0], inp->embd->ne[1], inp->embd->ne[2], inp->embd->ne[3]);
         ggml_set_input(inp->embd);
 
         cur = inp->embd;

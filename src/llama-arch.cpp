@@ -65,6 +65,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE_MOE,      "granitemoe"       },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
+    { LLM_ARCH_SNAC_DEC,         "snac-dec"         },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -1394,27 +1395,58 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
     {
         LLM_ARCH_SNAC_DEC,
         {
-            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.parametrizations.weight.original0" },
-            { LLM_TENSOR_WEIGHT_NORMALIZATION_KERNEL, "decoder.model.%d.parametrizations.weight.original1" },
-            { LLM_TENSOR_TRANSPOSED_CONV_WEIGHT,      "decoder.model.%d.parametrizations.weight.original1" },
-            { LLM_TENSOR_CONV1D_BIAS,                 "decoder.model.%d.bias" },
-            { LLM_TENSOR_TRANSPOSED_CONV_BIAS,        "decoder.model.%d.bias" },
-            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.alpha" },
-            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.block.%d.alpha" },
-            { LLM_TENSOR_SNAKE_ALPHA,                 "decoder.model.%d.block.%d.block.%d.alpha" },
-            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.block.%d.parametrizations.weight.original0" },
-            { LLM_TENSOR_WEIGHT_NORMALIZATION_KERNEL, "decoder.model.%d.block.%d.parametrizations.weight.original1" },
-            { LLM_TENSOR_CONV1D_BIAS,                 "decoder.model.%d.block.%d.bias" },
-            { LLM_TENSOR_WEIGHT_NORMALIZATION_SCALE,  "decoder.model.%d.block.%d.linear.parametrizations.weight.original0" },
-            { LLM_TENSOR_LINEAR_WEIGHT,               "decoder.model.%d.block.%d.linear.parametrizations.weight.original1" },
+            { LLM_TENSOR_TOKEN_EMBD,          "token_embd" },
+            { LLM_TENSOR_CODEBOOK,          "quantizer.%d.codebook" },
+            { LLM_TENSOR_CODEBOOK_PROJ_B,       "quantizer.%d.out_proj.bias" },
+            { LLM_TENSOR_CODEBOOK_PROJ_S,       "quantizer.%d.out_proj.scale" },
+            { LLM_TENSOR_CODEBOOK_PROJ_W,       "quantizer.%d.out_proj.weight" },
+
+            { LLM_TENSOR_CONV_W2,             "decoder.1.conv2.weight" },
+            { LLM_TENSOR_CONV_S2,             "decoder.1.conv2.scale" },
+            { LLM_TENSOR_CONV_B2,             "decoder.1.conv2.bias" },
+            { LLM_TENSOR_BLOCK_ALPHA,         "decoder.%d.block.0.alpha" },
+            { LLM_TENSOR_TRANS_W,             "decoder.%d.block.1.trans.weight" },
+            { LLM_TENSOR_TRANS_S,             "decoder.%d.block.1.trans.scale" },
+            { LLM_TENSOR_TRANS_B,             "decoder.%d.block.1.trans.bias" },
+            { LLM_TENSOR_NOISE_W,             "decoder.%d.block.2.noise.weight" },
+            { LLM_TENSOR_NOISE_S,             "decoder.%d.block.2.noise.scale" },
+            // Residual Units
+            { LLM_TENSOR_RES_SNAKE1_A,        "decoder.%d.block.3.res.snake1.alpha" },
+            { LLM_TENSOR_RES_CONV1_W,         "decoder.%d.block.3.res.conv1.weight" },
+            { LLM_TENSOR_RES_CONV1_S,         "decoder.%d.block.3.res.conv1.scale" },
+            { LLM_TENSOR_RES_CONV1_B,         "decoder.%d.block.3.res.conv1.bias" },
+            { LLM_TENSOR_RES_SNAKE2_A,        "decoder.%d.block.3.res.snake2.alpha" },
+            { LLM_TENSOR_RES_CONV2_W,         "decoder.%d.block.3.res.conv2.weight" },
+            { LLM_TENSOR_RES_CONV2_S,         "decoder.%d.block.3.res.conv2.scale" },
+            { LLM_TENSOR_RES_CONV2_B,         "decoder.%d.block.3.res.conv2.bias" },
+            { LLM_TENSOR_RES_SNAKE1_A_B4,     "decoder.%d.block.4.res.snake1.alpha" },
+            { LLM_TENSOR_RES_CONV1_W_B4,      "decoder.%d.block.4.res.conv1.weight" },
+            { LLM_TENSOR_RES_CONV1_S_B4,      "decoder.%d.block.4.res.conv1.scale" },
+            { LLM_TENSOR_RES_CONV1_B_B4,      "decoder.%d.block.4.res.conv1.bias" },
+            { LLM_TENSOR_RES_SNAKE2_A_B4,     "decoder.%d.block.4.res.snake2.alpha" },
+            { LLM_TENSOR_RES_CONV2_W_B4,      "decoder.%d.block.4.res.conv2.weight" },
+            { LLM_TENSOR_RES_CONV2_S_B4,      "decoder.%d.block.4.res.conv2.scale" },
+            { LLM_TENSOR_RES_CONV2_B_B4,      "decoder.%d.block.4.res.conv2.bias" },
+            { LLM_TENSOR_RES_SNAKE1_A_B5,     "decoder.%d.block.5.res.snake1.alpha" },
+            { LLM_TENSOR_RES_CONV1_W_B5,      "decoder.%d.block.5.res.conv1.weight" },
+            { LLM_TENSOR_RES_CONV1_S_B5,      "decoder.%d.block.5.res.conv1.scale" },
+            { LLM_TENSOR_RES_CONV1_B_B5,      "decoder.%d.block.5.res.conv1.bias" },
+            { LLM_TENSOR_RES_SNAKE2_A_B5,     "decoder.%d.block.5.res.snake2.alpha" },
+            { LLM_TENSOR_RES_CONV2_W_B5,      "decoder.%d.block.5.res.conv2.weight" },
+            { LLM_TENSOR_RES_CONV2_S_B5,      "decoder.%d.block.5.res.conv2.scale" },
+            { LLM_TENSOR_RES_CONV2_B_B5,      "decoder.%d.block.5.res.conv2.bias" },
+            { LLM_TENSOR_ALPHA,               "decoder.6.alpha" },
+            { LLM_TENSOR_CONV_W7,             "decoder.7.conv.weight" },
+            { LLM_TENSOR_CONV_S7,             "decoder.7.conv.scale" },
+            { LLM_TENSOR_CONV_B7,             "decoder.7.conv.bias" },
         },
     },
+    {
+        LLM_ARCH_UNKNOWN,
         {
-            LLM_ARCH_UNKNOWN,
-            {
-                { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-            },
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
         },
+    },
 };
 
 static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
@@ -1570,7 +1602,52 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CONVNEXT_PW1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_PW2,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_GAMMA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+
+    { LLM_TENSOR_CONV_B2,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_CONV_S2,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_CONV_W2,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_BLOCK_ALPHA, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_TRANS_B,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_TRANS_S,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_TRANS_W,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_NOISE_S,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_NOISE_W,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT } },
+    { LLM_TENSOR_RES_SNAKE1_A, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_B, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV1_S, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_W, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_RES_SNAKE2_A, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_B, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV2_S, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_W, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_RES_SNAKE1_A_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_B_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV1_S_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_W_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_RES_SNAKE2_A_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_B_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV2_S_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_W_B4, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_RES_SNAKE1_A_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_B_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV1_S_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV1_W_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_RES_SNAKE2_A_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_B_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_RES_CONV2_S_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_RES_CONV2_W_B5, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+    { LLM_TENSOR_ALPHA,       { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_CONV_B7,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_CONV_S7,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_CONV_W7,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
+
+    { LLM_TENSOR_CODEBOOK,     { LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS } },
+    { LLM_TENSOR_CODEBOOK_PROJ_B, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD } },
+    { LLM_TENSOR_CODEBOOK_PROJ_S, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL } },
+    { LLM_TENSOR_CODEBOOK_PROJ_W, { LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL } },
 };
+
+
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
 
@@ -1581,6 +1658,7 @@ std::string LLM_KV::operator()(llm_kv kv) const {
 
 std::string LLM_TN_IMPL::str() const {
     if (LLM_TENSOR_NAMES.at(arch).find(tensor) == LLM_TENSOR_NAMES.at(arch).end()) {
+        fprintf(stderr, "LLM_TN_IMPL::str: tensor enum %d not found in map for arch %d\n", (int)tensor, (int)arch);
         return "__missing__";
     }
 

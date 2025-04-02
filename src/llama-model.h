@@ -138,20 +138,23 @@ struct llama_layer_convnext {
 };
 
 struct llama_layer_snac_dec_block {
-    struct ggml_tensor * alpha = nullptr; // for snake activation
+    struct ggml_tensor * alpha           = nullptr;
 
     struct ggml_tensor * up_weight       = nullptr;
     struct ggml_tensor * up_scale        = nullptr;
     struct ggml_tensor * up_bias         = nullptr;
 
+    struct ggml_tensor * noise_w         = nullptr;
+    struct ggml_tensor * noise_s         = nullptr;
+
     struct {
         struct ggml_tensor * alpha1      = nullptr;
         struct ggml_tensor * conv1_w     = nullptr;
-        struct ggml_tensor * conv1_scale = nullptr;
+        struct ggml_tensor * conv1_s = nullptr;
         struct ggml_tensor * conv1_b     = nullptr;
         struct ggml_tensor * alpha2      = nullptr;
         struct ggml_tensor * conv2_w     = nullptr;
-        struct ggml_tensor * conv2_scale = nullptr;
+        struct ggml_tensor * conv2_s = nullptr;
         struct ggml_tensor * conv2_b     = nullptr;
     } res_units[3];
 };
@@ -325,7 +328,7 @@ struct llama_layer {
     struct llama_layer_convnext convnext;
 
     struct ggml_tensor * conv_w         = nullptr;
-    struct ggml_tensor * conv_scale     = nullptr;
+    struct ggml_tensor * conv_s     = nullptr;
     struct ggml_tensor * conv_b         = nullptr;
     struct ggml_tensor * alpha          = nullptr;
 
@@ -361,6 +364,13 @@ struct llama_model {
 
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
+
+
+    // TODO: structify
+    ggml_tensor * codebook[3];
+    ggml_tensor * codebook_proj_b[3];  // Array for quantizer 0, 1, 2 bias
+    ggml_tensor * codebook_proj_s[3];  // Array for quantizer 0, 1, 2 scale
+    ggml_tensor * codebook_proj_w[3];
 
     std::vector<llama_layer> layers;
 
