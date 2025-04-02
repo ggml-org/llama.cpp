@@ -5693,6 +5693,21 @@ class GraniteMoeModel(GraniteModel):
         return super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("GraniteMoeSharedForCausalLM")
+class GraniteMoeSharedModel(GraniteMoeModel):
+    """Conversion for IBM's GraniteMoeSharedForCausalLM"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_MOE_SHARED
+
+    def set_gguf_parameters(self):
+        """GraniteMoeShared uses GraniteMoe parameters plus the following:
+        - shared_intermediate_size
+        """
+        super().set_gguf_parameters()
+        if shared_feed_forward_length := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_feed_forward_length)
+            logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
+
+
 @ModelBase.register("BailingMoeForCausalLM")
 class BailingMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE
