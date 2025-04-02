@@ -1,9 +1,11 @@
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
 #pragma OPENCL EXTENSION cl_khr_subgroups : enable
-#pragma OPENCL EXTENSION cl_qcom_subgroup_uniform_load: enable
-#pragma OPENCL EXTENSION cl_qcom_subgroup_constant_load: enable
-#pragma OPENCL EXTENSION cl_qcom_extra_vector_types : enable
+
+#ifdef cl_qcom_reqd_sub_group_size
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
+#define ADRENO_GPU 1
+#define REQD_SUBGROUP_SIZE_64 __attribute__((qcom_reqd_sub_group_size("half")))
+#endif
 
 // assume
 #define QK4_0 32
@@ -186,8 +188,9 @@
     total_sums.s1 += (((bits4.s7 & 0x0F00) >> 8) - 8) * scale.s1 * shared_y.s6; \
     total_sums.s1 += (((bits4.s7 & 0xF000) >> 12) - 8) * scale.s1 * shared_y.s7; \
 
-
-__attribute__((qcom_reqd_sub_group_size("full")))
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
 __kernel void kernel_gemv_noshuffle(
         __read_only  image1d_buffer_t src0_q,  // quantized A
         global half2  * src0_d,  // A scales

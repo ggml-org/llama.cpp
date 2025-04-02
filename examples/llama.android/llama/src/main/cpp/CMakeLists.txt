@@ -14,7 +14,7 @@ project("llama-android")
 #include(FetchContent)
 #FetchContent_Declare(
 #        llama
-#        GIT_REPOSITORY https://github.com/ggerganov/llama.cpp
+#        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp
 #        GIT_TAG        master
 #)
 

@@ -24,7 +24,7 @@
 #include <string>
 #include <vector>
 
-#include "chat-template.hpp"
+#include "chat.h"
 #include "common.h"
 #include "json.hpp"
 #include "linenoise.cpp/linenoise.h"
@@ -37,24 +37,6 @@
     exit(0);  // not ideal, but it's the only way to guarantee exit in all cases
 }
 #endif
-
-GGML_ATTRIBUTE_FORMAT(1, 2)
-static std::string fmt(const char * fmt, ...) {
-    va_list ap;
-    va_list ap2;
-    va_start(ap, fmt);
-    va_copy(ap2, ap);
-    const int size = vsnprintf(NULL, 0, fmt, ap);
-    GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
-    std::string buf;
-    buf.resize(size);
-    const int size2 = vsnprintf(const_cast<char *>(buf.data()), buf.size() + 1, fmt, ap2);
-    GGML_ASSERT(size2 == size);
-    va_end(ap2);
-    va_end(ap);
-
-    return buf;
-}
 
 GGML_ATTRIBUTE_FORMAT(1, 2)
 static int printe(const char * fmt, ...) {
@@ -79,6 +61,7 @@ class Opt {
         ctx_params           = llama_context_default_params();
         model_params         = llama_model_default_params();
         context_size_default = ctx_params.n_batch;
+        n_threads_default    = ctx_params.n_threads;
         ngl_default          = model_params.n_gpu_layers;
         common_params_sampling sampling;
         temperature_default = sampling.temp;
@@ -104,6 +87,7 @@ class Opt {
 
         ctx_params.n_batch        = context_size >= 0 ? context_size : context_size_default;
         ctx_params.n_ctx          = ctx_params.n_batch;
+        ctx_params.n_threads = ctx_params.n_threads_batch = n_threads >= 0 ? n_threads : n_threads_default;
         model_params.n_gpu_layers = ngl >= 0 ? ngl : ngl_default;
         temperature               = temperature >= 0 ? temperature : temperature_default;
 
@@ -113,14 +97,15 @@ class Opt {
     llama_context_params ctx_params;
     llama_model_params   model_params;
     std::string model_;
+    std::string chat_template_file;
     std::string          user;
     bool                 use_jinja   = false;
-    int                  context_size = -1, ngl = -1;
+    int                  context_size = -1, ngl = -1, n_threads = -1;
     float                temperature = -1;
     bool                 verbose     = false;
 
   private:
-    int   context_size_default = -1, ngl_default = -1;
+    int   context_size_default = -1, ngl_default = -1, n_threads_default = -1;
     float temperature_default = -1;
     bool  help                = false;
 
@@ -148,48 +133,104 @@ class Opt {
         return 0;
     }
 
+    int handle_option_with_value(int argc, const char ** argv, int & i, std::string & option_value) {
+        if (i + 1 >= argc) {
+            return 1;
+        }
+
+        option_value = argv[++i];
+
+        return 0;
+    }
+
+    int parse_options_with_value(int argc, const char ** argv, int & i, bool & options_parsing) {
+        if (options_parsing && (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--context-size") == 0)) {
+            if (handle_option_with_value(argc, argv, i, context_size) == 1) {
+                return 1;
+            }
+        } else if (options_parsing &&
+                   (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "-ngl") == 0 || strcmp(argv[i], "--ngl") == 0)) {
+            if (handle_option_with_value(argc, argv, i, ngl) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--threads") == 0)) {
+            if (handle_option_with_value(argc, argv, i, n_threads) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && strcmp(argv[i], "--temp") == 0) {
+            if (handle_option_with_value(argc, argv, i, temperature) == 1) {
+                return 1;
+            }
+        } else if (options_parsing && strcmp(argv[i], "--chat-template-file") == 0) {
+            if (handle_option_with_value(argc, argv, i, chat_template_file) == 1) {
+                return 1;
+            }
+            use_jinja = true;
+        } else {
+            return 2;
+        }
+
+        return 0;
+    }
+
+    int parse_options(const char ** argv, int & i, bool & options_parsing) {
+        if (options_parsing && (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
+            verbose = true;
+        } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
+            use_jinja = true;
+        } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
+            help = true;
+            return 0;
+        } else if (options_parsing && strcmp(argv[i], "--") == 0) {
+            options_parsing = false;
+        } else {
+            return 2;
+        }
+
+        return 0;
+    }
+
+    int parse_positional_args(const char ** argv, int & i, int & positional_args_i) {
+        if (positional_args_i == 0) {
+            if (!argv[i][0] || argv[i][0] == '-') {
+                return 1;
+            }
+
+            ++positional_args_i;
+            model_ = argv[i];
+        } else if (positional_args_i == 1) {
+            ++positional_args_i;
+            user = argv[i];
+        } else {
+            user += " " + std::string(argv[i]);
+        }
+
+        return 0;
+    }
+
     int parse(int argc, const char ** argv) {
         bool options_parsing   = true;
         for (int i = 1, positional_args_i = 0; i < argc; ++i) {
-            if (options_parsing && (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "--context-size") == 0)) {
-                if (handle_option_with_value(argc, argv, i, context_size) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing &&
-                       (strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "-ngl") == 0 || strcmp(argv[i], "--ngl") == 0)) {
-                if (handle_option_with_value(argc, argv, i, ngl) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing && strcmp(argv[i], "--temp") == 0) {
-                if (handle_option_with_value(argc, argv, i, temperature) == 1) {
-                    return 1;
-                }
-            } else if (options_parsing &&
-                       (parse_flag(argv, i, "-v", "--verbose") || parse_flag(argv, i, "-v", "--log-verbose"))) {
-                verbose = true;
-            } else if (options_parsing && strcmp(argv[i], "--jinja") == 0) {
-                use_jinja = true;
-            } else if (options_parsing && parse_flag(argv, i, "-h", "--help")) {
-                help = true;
-                return 0;
-            } else if (options_parsing && strcmp(argv[i], "--") == 0) {
-                options_parsing = false;
-            } else if (positional_args_i == 0) {
-                if (!argv[i][0] || argv[i][0] == '-') {
-                    return 1;
-                }
+            int ret = parse_options_with_value(argc, argv, i, options_parsing);
+            if (ret == 0) {
+                continue;
+            } else if (ret == 1) {
+                return ret;
+            }
 
-                ++positional_args_i;
-                model_ = argv[i];
-            } else if (positional_args_i == 1) {
-                ++positional_args_i;
-                user = argv[i];
-            } else {
-                user += " " + std::string(argv[i]);
+            ret = parse_options(argv, i, options_parsing);
+            if (ret == 0) {
+                continue;
+            } else if (ret == 1) {
+                return ret;
+            }
+
+            if (parse_positional_args(argv, i, positional_args_i)) {
+                return 1;
             }
         }
 
-        if (model_.empty()){
+        if (model_.empty()) {
             return 1;
         }
 
@@ -207,10 +248,17 @@ class Opt {
             "Options:\n"
             "  -c, --context-size <value>\n"
             "      Context size (default: %d)\n"
+            "  --chat-template-file <path>\n"
+            "      Path to the file containing the chat template to use with the model.\n"
+            "      Only supports jinja templates and implicitly sets the --jinja flag.\n"
+            "  --jinja\n"
+            "      Use jinja templating for the chat template of the model\n"
             "  -n, -ngl, --ngl <value>\n"
             "      Number of GPU layers (default: %d)\n"
             "  --temp <value>\n"
             "      Temperature (default: %.1f)\n"
+            "  -t, --threads <value>\n"
+            "      Number of threads to use during generation (default: %d)\n"
             "  -v, --verbose, --log-verbose\n"
             "      Set verbosity level to infinity (i.e. log all messages, useful for debugging)\n"
             "  -h, --help\n"
@@ -239,7 +287,7 @@ class Opt {
             "  llama-run file://some-file3.gguf\n"
             "  llama-run --ngl 999 some-file4.gguf\n"
             "  llama-run --ngl 999 some-file5.gguf Hello World\n",
-            context_size_default, ngl_default, temperature_default);
+            context_size_default, ngl_default, temperature_default, n_threads_default);
     }
 };
 
@@ -261,13 +309,12 @@ static int get_terminal_width() {
 #endif
 }
 
-#ifdef LLAMA_USE_CURL
 class File {
   public:
     FILE * file = nullptr;
 
     FILE * open(const std::string & filename, const char * mode) {
-        file = fopen(filename.c_str(), mode);
+        file = ggml_fopen(filename.c_str(), mode);
 
         return file;
     }
@@ -303,6 +350,20 @@ class File {
         return 0;
     }
 
+    std::string to_string() {
+        fseek(file, 0, SEEK_END);
+        const size_t size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        std::string out;
+        out.resize(size);
+        const size_t read_size = fread(&out[0], 1, size, file);
+        if (read_size != size) {
+            printe("Error reading file: %s", strerror(errno));
+        }
+
+        return out;
+    }
+
     ~File() {
         if (fd >= 0) {
 #    ifdef _WIN32
@@ -327,6 +388,7 @@ class File {
 #    endif
 };
 
+#ifdef LLAMA_USE_CURL
 class HttpClient {
   public:
     int init(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
@@ -445,11 +507,11 @@ class HttpClient {
         int secs = static_cast<int>(seconds) % 60;
 
         if (hrs > 0) {
-            return fmt("%dh %02dm %02ds", hrs, mins, secs);
+            return string_format("%dh %02dm %02ds", hrs, mins, secs);
         } else if (mins > 0) {
-            return fmt("%dm %02ds", mins, secs);
+            return string_format("%dm %02ds", mins, secs);
         } else {
-            return fmt("%ds", secs);
+            return string_format("%ds", secs);
         }
     }
 
@@ -464,7 +526,7 @@ class HttpClient {
             }
         }
 
-        return fmt("%.2f %s", dbl_size, suffix[i]);
+        return string_format("%.2f %s", dbl_size, suffix[i]);
     }
 
     static int update_progress(void * ptr, curl_off_t total_to_download, curl_off_t now_downloaded, curl_off_t,
@@ -498,7 +560,9 @@ class HttpClient {
         return (now_downloaded_plus_file_size * 100) / total_to_download;
     }
 
-    static std::string generate_progress_prefix(curl_off_t percentage) { return fmt("%3ld%% |", static_cast<long int>(percentage)); }
+    static std::string generate_progress_prefix(curl_off_t percentage) {
+        return string_format("%3ld%% |", static_cast<long int>(percentage));
+    }
 
     static double calculate_speed(curl_off_t now_downloaded, const std::chrono::steady_clock::time_point & start_time) {
         const auto                          now             = std::chrono::steady_clock::now();
@@ -509,9 +573,9 @@ class HttpClient {
     static std::string generate_progress_suffix(curl_off_t now_downloaded_plus_file_size, curl_off_t total_to_download,
                                                 double speed, double estimated_time) {
         const int width = 10;
-        return fmt("%*s/%*s%*s/s%*s", width, human_readable_size(now_downloaded_plus_file_size).c_str(), width,
-                   human_readable_size(total_to_download).c_str(), width, human_readable_size(speed).c_str(), width,
-                   human_readable_time(estimated_time).c_str());
+        return string_format("%*s/%*s%*s/s%*s", width, human_readable_size(now_downloaded_plus_file_size).c_str(),
+                             width, human_readable_size(total_to_download).c_str(), width,
+                             human_readable_size(speed).c_str(), width, human_readable_time(estimated_time).c_str());
     }
 
     static int calculate_progress_bar_width(const std::string & progress_prefix, const std::string & progress_suffix) {
@@ -535,8 +599,7 @@ class HttpClient {
 
     static void print_progress(const std::string & progress_prefix, const std::string & progress_bar,
                                const std::string & progress_suffix) {
-        printe("\r%*s\r%s%s| %s", get_terminal_width(), " ", progress_prefix.c_str(), progress_bar.c_str(),
-               progress_suffix.c_str());
+        printe("\r" LOG_CLR_TO_EOL "%s%s| %s", progress_prefix.c_str(), progress_bar.c_str(), progress_suffix.c_str());
     }
     // Function to write data to a file
     static size_t write_data(void * ptr, size_t size, size_t nmemb, void * stream) {
@@ -558,7 +621,7 @@ class LlamaData {
     llama_model_ptr                 model;
     llama_sampler_ptr               sampler;
     llama_context_ptr               context;
-    std::vector<llama_chat_message> messages;
+    std::vector<llama_chat_message> messages; // TODO: switch to common_chat_msg
     std::list<std::string>          msg_strs;
     std::vector<char>               fmtted;
 
@@ -797,16 +860,13 @@ class LlamaData {
     llama_model_ptr initialize_model(Opt & opt) {
         ggml_backend_load_all();
         resolve_model(opt.model_);
-        printe(
-            "\r%*s"
-            "\rLoading model",
-            get_terminal_width(), " ");
+        printe("\r" LOG_CLR_TO_EOL "Loading model");
         llama_model_ptr model(llama_model_load_from_file(opt.model_.c_str(), opt.model_params));
         if (!model) {
             printe("%s: error: unable to load model from file: %s\n", __func__, opt.model_.c_str());
         }
 
-        printe("\r%*s\r", static_cast<int>(sizeof("Loading model")), " ");
+        printe("\r" LOG_CLR_TO_EOL);
         return model;
     }
 
@@ -838,50 +898,29 @@ static void add_message(const char * role, const std::string & text, LlamaData &
 }
 
 // Function to apply the chat template and resize `formatted` if needed
-static int apply_chat_template(const common_chat_template & tmpl, LlamaData & llama_data, const bool append, bool use_jinja) {
-    if (use_jinja) {
-        json messages = json::array();
-        for (const auto & msg : llama_data.messages) {
-            messages.push_back({
-                {"role", msg.role},
-                {"content", msg.content},
-            });
-        }
-        try {
-            minja::chat_template_inputs tmpl_inputs;
-            tmpl_inputs.messages = messages;
-            tmpl_inputs.add_generation_prompt = append;
-
-            minja::chat_template_options tmpl_opts;
-            tmpl_opts.use_bos_token = false;
-            tmpl_opts.use_eos_token = false;
-
-            auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
-            llama_data.fmtted.resize(result.size() + 1);
-            memcpy(llama_data.fmtted.data(), result.c_str(), result.size() + 1);
-            return result.size();
-        } catch (const std::exception & e) {
-            printe("failed to render the chat template: %s\n", e.what());
-            return -1;
-        }
+static int apply_chat_template(const struct common_chat_templates * tmpls, LlamaData & llama_data, const bool append, bool use_jinja) {
+    common_chat_templates_inputs inputs;
+    for (const auto & msg : llama_data.messages) {
+        common_chat_msg cmsg;
+        cmsg.role    = msg.role;
+        cmsg.content = msg.content;
+        inputs.messages.push_back(cmsg);
     }
-    int result = llama_chat_apply_template(
-        tmpl.source().c_str(), llama_data.messages.data(), llama_data.messages.size(), append,
-        append ? llama_data.fmtted.data() : nullptr, append ? llama_data.fmtted.size() : 0);
-    if (append && result > static_cast<int>(llama_data.fmtted.size())) {
-        llama_data.fmtted.resize(result);
-        result = llama_chat_apply_template(tmpl.source().c_str(), llama_data.messages.data(),
-                                           llama_data.messages.size(), append, llama_data.fmtted.data(),
-                                           llama_data.fmtted.size());
-    }
+    inputs.add_generation_prompt = append;
+    inputs.use_jinja = use_jinja;
 
-    return result;
+    auto chat_params = common_chat_templates_apply(tmpls, inputs);
+    // TODO: use other params for tool calls.
+    auto result = chat_params.prompt;
+    llama_data.fmtted.resize(result.size() + 1);
+    memcpy(llama_data.fmtted.data(), result.c_str(), result.size() + 1);
+    return result.size();
 }
 
 // Function to tokenize the prompt
 static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt,
                            std::vector<llama_token> & prompt_tokens, const LlamaData & llama_data) {
-    const bool is_first = llama_get_kv_cache_used_cells(llama_data.context.get()) == 0;
+    const bool is_first = llama_kv_self_used_cells(llama_data.context.get()) == 0;
 
     const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
     prompt_tokens.resize(n_prompt_tokens);
@@ -897,7 +936,7 @@ static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt
 // Check if we have enough space in the context to evaluate this batch
 static int check_context_size(const llama_context_ptr & ctx, const llama_batch & batch) {
     const int n_ctx      = llama_n_ctx(ctx.get());
-    const int n_ctx_used = llama_get_kv_cache_used_cells(ctx.get());
+    const int n_ctx_used = llama_kv_self_used_cells(ctx.get());
     if (n_ctx_used + batch.n_tokens > n_ctx) {
         printf(LOG_COL_DEFAULT "\n");
         printe("context size exceeded\n");
@@ -967,12 +1006,10 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
 }
 
 static int read_user_input(std::string & user_input) {
-    static const char * prompt_prefix = "> ";
+    static const char * prompt_prefix_env = std::getenv("LLAMA_PROMPT_PREFIX");
+    static const char * prompt_prefix     = prompt_prefix_env ? prompt_prefix_env : "> ";
 #ifdef WIN32
-    printf(
-        "\r%*s"
-        "\r" LOG_COL_DEFAULT "%s",
-        get_terminal_width(), " ", prompt_prefix);
+    printf("\r" LOG_CLR_TO_EOL LOG_COL_DEFAULT "%s", prompt_prefix);
 
     std::getline(std::cin, user_input);
     if (std::cin.eof()) {
@@ -1022,8 +1059,8 @@ static int generate_response(LlamaData & llama_data, const std::string & prompt,
 }
 
 // Helper function to apply the chat template and handle errors
-static int apply_chat_template_with_error_handling(const common_chat_template & tmpl, LlamaData & llama_data, const bool append, int & output_length, bool use_jinja) {
-    const int new_len = apply_chat_template(tmpl, llama_data, append, use_jinja);
+static int apply_chat_template_with_error_handling(const common_chat_templates * tmpls, LlamaData & llama_data, const bool append, int & output_length, bool use_jinja) {
+    const int new_len = apply_chat_template(tmpls, llama_data, append, use_jinja);
     if (new_len < 0) {
         printe("failed to apply the chat template\n");
         return -1;
@@ -1081,39 +1118,67 @@ static int get_user_input(std::string & user_input, const std::string & user) {
     return 0;
 }
 
+// Reads a chat template file to be used
+static std::string read_chat_template_file(const std::string & chat_template_file) {
+    File file;
+    if (!file.open(chat_template_file, "r")) {
+        printe("Error opening chat template file '%s': %s", chat_template_file.c_str(), strerror(errno));
+        return "";
+    }
+
+    return file.to_string();
+}
+
+static int process_user_message(const Opt & opt, const std::string & user_input, LlamaData & llama_data,
+                                const common_chat_templates_ptr & chat_templates, int & prev_len,
+                                const bool stdout_a_terminal) {
+    add_message("user", opt.user.empty() ? user_input : opt.user, llama_data);
+    int new_len;
+    if (apply_chat_template_with_error_handling(chat_templates.get(), llama_data, true, new_len, opt.use_jinja) < 0) {
+        return 1;
+    }
+
+    std::string prompt(llama_data.fmtted.begin() + prev_len, llama_data.fmtted.begin() + new_len);
+    std::string response;
+    if (generate_response(llama_data, prompt, response, stdout_a_terminal)) {
+        return 1;
+    }
+
+    if (!opt.user.empty()) {
+        return 2;
+    }
+
+    add_message("assistant", response, llama_data);
+    if (apply_chat_template_with_error_handling(chat_templates.get(), llama_data, false, prev_len, opt.use_jinja) < 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 // Main chat loop function
-static int chat_loop(LlamaData & llama_data, const std::string & user, bool use_jinja) {
+static int chat_loop(LlamaData & llama_data, const Opt & opt) {
     int prev_len = 0;
     llama_data.fmtted.resize(llama_n_ctx(llama_data.context.get()));
-    auto chat_templates = common_chat_templates_from_model(llama_data.model.get(), "");
-    GGML_ASSERT(chat_templates.template_default);
+    std::string chat_template;
+    if (!opt.chat_template_file.empty()) {
+        chat_template = read_chat_template_file(opt.chat_template_file);
+    }
+
+    common_chat_templates_ptr chat_templates    = common_chat_templates_init(llama_data.model.get(), chat_template);
     static const bool stdout_a_terminal = is_stdout_a_terminal();
     while (true) {
         // Get user input
         std::string user_input;
-        if (get_user_input(user_input, user) == 1) {
+        if (get_user_input(user_input, opt.user) == 1) {
             return 0;
         }
 
-        add_message("user", user.empty() ? user_input : user, llama_data);
-        int new_len;
-        if (apply_chat_template_with_error_handling(*chat_templates.template_default, llama_data, true, new_len, use_jinja) < 0) {
+        const int ret = process_user_message(opt, user_input, llama_data, chat_templates, prev_len, stdout_a_terminal);
+        if (ret == 1) {
             return 1;
-        }
-
-        std::string prompt(llama_data.fmtted.begin() + prev_len, llama_data.fmtted.begin() + new_len);
-        std::string response;
-        if (generate_response(llama_data, prompt, response, stdout_a_terminal)) {
-            return 1;
-        }
-
-        if (!user.empty()) {
+        } else if (ret == 2) {
             break;
-        }
-
-        add_message("assistant", response, llama_data);
-        if (apply_chat_template_with_error_handling(*chat_templates.template_default, llama_data, false, prev_len, use_jinja) < 0) {
-            return 1;
         }
     }
 
@@ -1172,7 +1237,7 @@ int main(int argc, const char ** argv) {
         return 1;
     }
 
-    if (chat_loop(llama_data, opt.user, opt.use_jinja)) {
+    if (chat_loop(llama_data, opt)) {
         return 1;
     }
 

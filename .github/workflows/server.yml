@@ -161,6 +161,8 @@ jobs:
       - name: Tests
         id: server_integration_tests
         if: ${{ matrix.sanitizer == '' }}
+        env:
+          GITHUB_ACTIONS: "true"
         run: |
           cd examples/server/tests
           ./tests.sh

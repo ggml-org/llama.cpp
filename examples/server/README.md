@@ -7,14 +7,15 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
- * Reranking endoint (WIP: https://github.com/ggerganov/llama.cpp/pull/9510)
+ * Reranking endoint (WIP: https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
  * Multimodal (wip)
  * Monitoring endpoints
  * Schema-constrained JSON response format
+ * [Function calling](../../docs/function-calling.md) / tool use for ~any model
 
-The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
+The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggml-org/llama.cpp/issues/4216).
 
 ## Usage
 
@@ -65,7 +66,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--no-mmap` | do not memory-map model (slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_NO_MMAP) |
-| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggerganov/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
+| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | number of layers to store in VRAM<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
@@ -127,6 +128,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--grammar-file FNAME` | file to read grammar from |
 | `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
 | `--jinja` | Enable experimental Jinja templating engine (required for tool use) |
+| `--reasoning-format FORMAT` | Controls extraction of model thinking traces and the format / field in which they are returned (default: `deepseek`; allowed values: `deepseek`, `none`; requires `--jinja`). `none` will leave thinking traces inline in `message.content` in a model-specific format, while `deepseek` will return them separately under `message.reasoning_content` |
 
 **Example-specific params**
 
@@ -177,7 +179,7 @@ Example usage of docker compose with environment variables:
 ```yml
 services:
   llamacpp-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     ports:
       - 8080:8080
     volumes:
@@ -272,10 +274,10 @@ You can consume the endpoints with Postman or NodeJS with axios library. You can
 ### Docker
 
 ```bash
-docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
+docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
 
 # or, with CUDA:
-docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggerganov/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
+docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
 
 ## Testing with CURL
@@ -1065,7 +1067,7 @@ print(completion.choices[0].text)
 
 ### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
 
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
 *Options:*
 
@@ -1119,181 +1121,9 @@ curl http://localhost:8080/v1/chat/completions \
 
 *Tool call support*
 
-[Function calling](https://platform.openai.com/docs/guides/function-calling) is supported for all models (see https://github.com/ggerganov/llama.cpp/pull/9639):
+[OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
-- Requires `--jinja` flag
-- Native tool call formats supported:
-  - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
-  - Functionary v3.1 / v3.2
-  - Hermes 2/3, Qwen 2.5
-  - Mistral Nemo
-  - Firefunction v2
-  - Command R7B
-  - DeepSeek R1 (WIP / seems reluctant to call any tools?)
-
-  <details>
-  <summary>Show some common templates and which format handler they use</summary>
-
-  | Template | Format |
-  |----------|--------|
-  | CohereForAI-c4ai-command-r-plus-default.jinja | generic tool calls |
-  | CohereForAI-c4ai-command-r-plus-rag.jinja | generic tool calls |
-  | CohereForAI-c4ai-command-r-plus-tool_use.jinja | generic tool calls |
-  | MiniMaxAI-MiniMax-Text-01.jinja | generic tool calls |
-  | NexaAIDev-Octopus-v2.jinja | generic tool calls |
-  | NousResearch-Hermes-2-Pro-Llama-3-8B-default.jinja | generic tool calls |
-  | NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja | hermes 2 pro tool calls |
-  | NousResearch-Hermes-2-Pro-Mistral-7B-default.jinja | generic tool calls |
-  | NousResearch-Hermes-2-Pro-Mistral-7B-tool_use.jinja | hermes 2 pro tool calls |
-  | NousResearch-Hermes-3-Llama-3.1-70B-default.jinja | generic tool calls |
-  | NousResearch-Hermes-3-Llama-3.1-70B-tool_use.jinja | hermes 2 pro tool calls |
-  | OrionStarAI-Orion-14B-Chat.jinja | generic tool calls |
-  | Qwen-QwQ-32B-Preview.jinja | hermes 2 pro tool calls |
-  | Qwen-Qwen2-7B-Instruct.jinja | generic tool calls |
-  | Qwen-Qwen2-VL-7B-Instruct.jinja | generic tool calls |
-  | Qwen-Qwen2.5-7B-Instruct.jinja | hermes 2 pro tool calls |
-  | Qwen-Qwen2.5-Math-7B-Instruct.jinja | hermes 2 pro tool calls |
-  | TheBloke-FusionNet_34Bx2_MoE-AWQ.jinja | generic tool calls |
-  | abacusai-Fewshot-Metamath-OrcaVicuna-Mistral.jinja | generic tool calls |
-  | bofenghuang-vigogne-2-70b-chat.jinja | generic tool calls |
-  | databricks-dbrx-instruct.jinja | generic tool calls |
-  | deepseek-ai-DeepSeek-Coder-V2-Instruct.jinja | generic tool calls |
-  | deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja | deepseek r1 tool calls |
-  | deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja | deepseek r1 tool calls |
-  | deepseek-ai-DeepSeek-R1-Distill-Qwen-7B.jinja | deepseek r1 tool calls |
-  | deepseek-ai-DeepSeek-V2.5.jinja | deepseek r1 tool calls |
-  | deepseek-ai-deepseek-coder-33b-instruct.jinja | generic tool calls |
-  | google-gemma-2-2b-it.jinja | generic tool calls |
-  | google-gemma-7b-it.jinja | generic tool calls |
-  | indischepartij-MiniCPM-3B-OpenHermes-2.5-v2.jinja | generic tool calls |
-  | mattshumer-Reflection-Llama-3.1-70B.jinja | generic tool calls |
-  | meetkai-functionary-medium-v3.2.jinja | functionary v3.2 tool calls |
-  | meta-llama-Llama-3.1-8B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
-  | meta-llama-Llama-3.2-3B-Instruct.jinja | llama 3.x tool calls |
-  | meta-llama-Llama-3.3-70B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
-  | meta-llama-Meta-Llama-3.1-8B-Instruct.jinja | llama 3.x tool calls (w/ builtin tools) |
-  | microsoft-Phi-3-medium-4k-instruct.jinja | generic tool calls |
-  | microsoft-Phi-3-mini-4k-instruct.jinja | generic tool calls |
-  | microsoft-Phi-3-small-8k-instruct.jinja | generic tool calls |
-  | microsoft-Phi-3.5-mini-instruct.jinja | generic tool calls |
-  | microsoft-Phi-3.5-vision-instruct.jinja | generic tool calls |
-  | mistralai-Mistral-7B-Instruct-v0.2.jinja | generic tool calls |
-  | mistralai-Mistral-Large-Instruct-2407.jinja | mistral nemo tool calls |
-  | mistralai-Mistral-Large-Instruct-2411.jinja | generic tool calls |
-  | mistralai-Mistral-Nemo-Instruct-2407.jinja | mistral nemo tool calls |
-  | mistralai-Mixtral-8x7B-Instruct-v0.1.jinja | generic tool calls |
-  | mlabonne-AlphaMonarch-7B.jinja | generic tool calls |
-  | nvidia-Llama-3.1-Nemotron-70B-Instruct-HF.jinja | llama 3.x tool calls (w/ builtin tools) |
-  | openchat-openchat-3.5-0106.jinja | generic tool calls |
-  | teknium-OpenHermes-2.5-Mistral-7B.jinja | generic tool calls |
-
-  This table can be generated with:
-
-  ```bash
-  ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
-
-  </details>
-
-- Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
-  - Use `--chat-template-file` to override the template when appropriate (see examples below)
-  - Generic support may consume more tokens and be less efficient than a model's native format.
-
-- Run with:
-
-  ```shell
-  # Native support:
-  llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
-  llama-server --jinja -fa -hf bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q6_K_L
-  llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M
-  llama-server --jinja -fa -hf bartowski/Llama-3.3-70B-Instruct-GGUF:Q4_K_M
-
-  # Native support requires the right template for these GGUFs:
-
-  llama-server --jinja -fa -hf bartowski/Hermes-2-Pro-Llama-3-8B-GGUF:Q4_K_M \
-    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-2-Pro-Llama-3-8B tool_use )
-
-  llama-server --jinja -fa -hf bartowski/Hermes-3-Llama-3.1-8B-GGUF:Q4_K_M \
-    --chat-template-file <( python scripts/get_chat_template.py NousResearch/Hermes-3-Llama-3.1-8B tool_use )
-
-  llama-server --jinja -fa -hf bartowski/firefunction-v2-GGUF -hff firefunction-v2-IQ1_M.gguf \
-    --chat-template-file <( python scripts/get_chat_template.py fireworks-ai/llama-3-firefunction-v2 tool_use )
-
-  llama-server --jinja -fa -hf bartowski/c4ai-command-r7b-12-2024-GGUF:Q6_K_L \
-    --chat-template-file <( python scripts/get_chat_template.py CohereForAI/c4ai-command-r7b-12-2024 tool_use )
-
-  # Generic format support
-  llama-server --jinja -fa -hf bartowski/phi-4-GGUF:Q4_0
-  llama-server --jinja -fa -hf bartowski/gemma-2-2b-it-GGUF:Q8_0
-  llama-server --jinja -fa -hf bartowski/c4ai-command-r-v01-GGUF:Q2_K
-  ```
-
-- Test in CLI:
-
-  ```bash
-  curl http://localhost:8080/v1/chat/completions -d '{
-    "model": "gpt-3.5-turbo",
-    "tools": [
-      {
-        "type":"function",
-        "function":{
-          "name":"get_current_weather",
-          "description":"Get the current weather in a given location",
-          "parameters":{
-            "type":"object",
-            "properties":{
-              "location":{
-                "type":"string",
-                "description":"The city and state, e.g. San Francisco, CA"
-              }
-            },
-            "required":["location"]
-          }
-        }
-      }
-    ],
-    "messages": [
-      {
-        "role": "user",
-        "content": "What is the weather like in Istanbul?."
-      }
-    ]
-  }'
-  ```
-
-  <details>
-  <summary>Show output</summary>
-
-  ```json
-  {
-    "choices": [
-      {
-        "finish_reason": "tool",
-        "index": 0,
-        "message": {
-          "content": null,
-          "tool_calls": [
-            {
-              "name": "python",
-              "arguments": "{\"code\":\" \\nprint(\\\"Hello, World!\\\")\"}"
-            }
-          ],
-          "role": "assistant"
-        }
-      }
-    ],
-    "created": 1727287211,
-    "model": "gpt-3.5-turbo",
-    "object": "chat.completion",
-    "usage": {
-      "completion_tokens": 16,
-      "prompt_tokens": 44,
-      "total_tokens": 60
-    },
-    "id": "chatcmpl-Htbgh9feMmGM0LEH2hmQvwsCxq3c6Ni8"
-  }
-  ```
-
-  </details>
+**See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
@@ -1398,7 +1228,7 @@ Apart from error types supported by OAI, we also have custom types that are spec
 
 ### Legacy completion web UI
 
-A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggerganov/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
+A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
 
 For example:
 

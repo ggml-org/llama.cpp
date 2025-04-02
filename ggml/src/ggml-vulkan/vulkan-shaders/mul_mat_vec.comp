@@ -105,6 +105,16 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     int unroll_count = 4;
     uint unrolled_iters = num_iters & ~(unroll_count - 1);
 
+#if K_PER_ITER == 2
+    // If the K dimension is odd, we need lastiter==true on the last iteration
+    // so OOB is computed correctly. Skip some unrolling to make that happen.
+    if ((p.ncols & 1) != 0 &&
+        unrolled_iters == num_iters &&
+        unrolled_iters > 0) {
+        unrolled_iters -= unroll_count;
+    }
+#endif
+
     uint i = 0;
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
@@ -113,8 +123,18 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
             i++;
         }
     }
+
     unroll_count = 2;
     unrolled_iters = num_iters & ~(unroll_count - 1);
+
+#if K_PER_ITER == 2
+    if ((p.ncols & 1) != 0 &&
+        unrolled_iters == num_iters &&
+        unrolled_iters > 0) {
+        unrolled_iters -= unroll_count;
+    }
+#endif
+
     while (i < unrolled_iters) {
         // Manually partially unroll the loop
         [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
@@ -133,7 +153,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 void main() {
     const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
 
-#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+#ifdef NEEDS_INIT_IQ_SHMEM
     init_iq_shmem(gl_WorkGroupSize);
 #endif
 

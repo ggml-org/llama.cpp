@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.empty()) {
+    if (params.speculative.model.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -217,7 +217,7 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_kv_cache_seq_rm(ctx_tgt, 0, n_past, -1);
+            llama_kv_self_seq_rm(ctx_tgt, 0, n_past, -1);
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {

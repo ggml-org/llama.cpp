@@ -38,7 +38,7 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_model_load_from_file(params.model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
     if (model == NULL) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);
@@ -132,7 +132,7 @@ int main(int argc, char ** argv) {
 
                 const auto t_pp_start = ggml_time_us();
 
-                llama_kv_cache_clear(ctx);
+                llama_kv_self_clear(ctx);
 
                 if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
                     LOG_ERR("%s: llama_decode() failed\n", __func__);
@@ -141,7 +141,7 @@ int main(int argc, char ** argv) {
 
                 if (is_pp_shared) {
                     for (int32_t i = 1; i < pl; ++i) {
-                        llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+                        llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
                     }
                 }
 

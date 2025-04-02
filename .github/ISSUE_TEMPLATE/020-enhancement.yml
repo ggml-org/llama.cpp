@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        [Please post your idea first in Discussion if there is not yet a consensus for this enhancement request. This will help to keep this issue tracker focused on enhancements that the community has agreed needs to be implemented.](https://github.com/ggerganov/llama.cpp/discussions/categories/ideas)
+        [Please post your idea first in Discussion if there is not yet a consensus for this enhancement request. This will help to keep this issue tracker focused on enhancements that the community has agreed needs to be implemented.](https://github.com/ggml-org/llama.cpp/discussions/categories/ideas)
 
   - type: checkboxes
     id: prerequisites
@@ -16,11 +16,11 @@ body:
       options:
         - label: I am running the latest code. Mention the version if possible as well.
           required: true
-        - label: I carefully followed the [README.md](https://github.com/ggerganov/llama.cpp/blob/master/README.md).
+        - label: I carefully followed the [README.md](https://github.com/ggml-org/llama.cpp/blob/master/README.md).
           required: true
         - label: I searched using keywords relevant to my issue to make sure that I am creating a new issue that is not already open (or closed).
           required: true
-        - label: I reviewed the [Discussions](https://github.com/ggerganov/llama.cpp/discussions), and have a new and useful enhancement to share.
+        - label: I reviewed the [Discussions](https://github.com/ggml-org/llama.cpp/discussions), and have a new and useful enhancement to share.
           required: true
 
   - type: textarea

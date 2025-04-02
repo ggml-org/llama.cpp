@@ -77,7 +77,7 @@ int main(void) {
 
     argv = {"binary_name", "-m", "model_file.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "model_file.gguf");
+    assert(params.model.path == "model_file.gguf");
 
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -89,7 +89,7 @@ int main(void) {
 
     argv = {"binary_name", "-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "abc.gguf");
+    assert(params.model.path == "abc.gguf");
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
@@ -112,7 +112,7 @@ int main(void) {
     setenv("LLAMA_ARG_THREADS", "1010", true);
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "blah.gguf");
+    assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
 
@@ -122,7 +122,7 @@ int main(void) {
     setenv("LLAMA_ARG_THREADS", "1010", true);
     argv = {"binary_name", "-m", "overwritten.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "overwritten.gguf");
+    assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 

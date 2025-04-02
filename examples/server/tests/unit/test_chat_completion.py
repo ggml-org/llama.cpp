@@ -21,6 +21,8 @@ def create_server():
         (None, "Book", "What is the best book", 8, "^ blue",                    23, 8, "length", True, "This is not a chat template, it is"),
         ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", False, None),
         ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 64, "length", True, None),
+        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", False, None),
+        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", True, None),
     ]
 )
 def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason, jinja, chat_template):
@@ -44,7 +46,7 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
     assert res.body["usage"]["completion_tokens"] == n_predicted
     choice = res.body["choices"][0]
     assert "assistant" == choice["message"]["role"]
-    assert match_regex(re_content, choice["message"]["content"])
+    assert match_regex(re_content, choice["message"]["content"]), f'Expected {re_content}, got {choice["message"]["content"]}'
     assert choice["finish_reason"] == finish_reason
 
 
@@ -142,6 +144,7 @@ def test_apply_chat_template():
 @pytest.mark.parametrize("response_format,n_predicted,re_content", [
     ({"type": "json_object", "schema": {"const": "42"}}, 6, "\"42\""),
     ({"type": "json_object", "schema": {"items": [{"type": "integer"}]}}, 10, "[ -3000 ]"),
+    ({"type": "json_schema", "json_schema": {"schema": {"const": "foooooo"}}}, 10, "\"foooooo\""),
     ({"type": "json_object"}, 10, "(\\{|John)+"),
     ({"type": "sound"}, 0, None),
     # invalid response format (expected to fail)
@@ -167,6 +170,47 @@ def test_completion_with_response_format(response_format: dict, n_predicted: int
     else:
         assert res.status_code != 200
         assert "error" in res.body
+
+
+@pytest.mark.parametrize("jinja,json_schema,n_predicted,re_content", [
+    (False, {"const": "42"}, 6, "\"42\""),
+    (True, {"const": "42"}, 6, "\"42\""),
+])
+def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted: int, re_content: str):
+    global server
+    server.jinja = jinja
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": n_predicted,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+        "json_schema": json_schema,
+    })
+    assert res.status_code == 200, f'Expected 200, got {res.status_code}'
+    choice = res.body["choices"][0]
+    assert match_regex(re_content, choice["message"]["content"]), f'Expected {re_content}, got {choice["message"]["content"]}'
+
+
+@pytest.mark.parametrize("jinja,grammar,n_predicted,re_content", [
+    (False, 'root ::= "a"{5,5}', 6, "a{5,5}"),
+    (True, 'root ::= "a"{5,5}', 6, "a{5,5}"),
+])
+def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re_content: str):
+    global server
+    server.jinja = jinja
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": n_predicted,
+        "messages": [
+            {"role": "user", "content": "Does not matter what I say, does it?"},
+        ],
+        "grammar": grammar,
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    assert match_regex(re_content, choice["message"]["content"]), choice["message"]["content"]
 
 
 @pytest.mark.parametrize("messages", [

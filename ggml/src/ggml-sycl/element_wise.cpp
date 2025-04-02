@@ -1,7 +1,7 @@
 #include "common.hpp"
 #include "element_wise.hpp"
 
-void acc_f32(const float * x, const float * y, float * dst, const int ne,
+static void acc_f32(const float * x, const float * y, float * dst, const int ne,
     const int ne10, const int ne11, const int ne12,
     const int nb1, const int nb2, int offset, const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
@@ -20,7 +20,7 @@ void acc_f32(const float * x, const float * y, float * dst, const int ne,
     }
 }
 
-void gelu_f32(const float * x, float * dst, const int k,
+static void gelu_f32(const float * x, float * dst, const int k,
                      const sycl::nd_item<3> &item_ct1) {
     const float GELU_COEF_A    = 0.044715f;
     const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
@@ -37,7 +37,7 @@ void gelu_f32(const float * x, float * dst, const int k,
               sycl::tanh(SQRT_2_OVER_PI * xi * (1.0f + GELU_COEF_A * xi * xi)));
 }
 
-void silu_f32(const float * x, float * dst, const int k,
+static void silu_f32(const float * x, float * dst, const int k,
                      const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -48,7 +48,7 @@ void silu_f32(const float * x, float * dst, const int k,
     dst[i] = x[i] / (1.0f + sycl::native::exp(-x[i]));
 }
 
-void gelu_quick_f32(const float *x, float *dst, int k,
+static void gelu_quick_f32(const float *x, float *dst, int k,
                            const sycl::nd_item<3> &item_ct1) {
     const float GELU_QUICK_COEF = -1.702f;
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
@@ -59,7 +59,7 @@ void gelu_quick_f32(const float *x, float *dst, int k,
     dst[i] = x[i] * (1.0f / (1.0f + sycl::native::exp(GELU_QUICK_COEF * x[i])));
 }
 
-void tanh_f32(const float *x, float *dst, int k,
+static void tanh_f32(const float *x, float *dst, int k,
                      const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -69,7 +69,7 @@ void tanh_f32(const float *x, float *dst, int k,
     dst[i] = sycl::tanh((float)(x[i]));
 }
 
-void relu_f32(const float * x, float * dst, const int k,
+static void relu_f32(const float * x, float * dst, const int k,
                      const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -80,7 +80,7 @@ void relu_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::fmax((float)(x[i]), (float)0);
 }
 
-void sigmoid_f32(const float * x, float * dst, const int k,
+static void sigmoid_f32(const float * x, float * dst, const int k,
                             const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -91,7 +91,7 @@ void sigmoid_f32(const float * x, float * dst, const int k,
     dst[i] = 1.0f / (1.0f + sycl::native::exp(-x[i]));
 }
 
-void sqrt_f32(const float * x, float * dst, const int k,
+static void sqrt_f32(const float * x, float * dst, const int k,
                             const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -102,7 +102,7 @@ void sqrt_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::sqrt(x[i]);
 }
 
-void sin_f32(const float * x, float * dst, const int k,
+static void sin_f32(const float * x, float * dst, const int k,
                             const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -113,7 +113,7 @@ void sin_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::sin(x[i]);
 }
 
-void cos_f32(const float * x, float * dst, const int k,
+static void cos_f32(const float * x, float * dst, const int k,
                             const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -124,7 +124,7 @@ void cos_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::cos(x[i]);
 }
 
-void hardsigmoid_f32(const float * x, float * dst, const int k,
+static void hardsigmoid_f32(const float * x, float * dst, const int k,
                             const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -135,7 +135,7 @@ void hardsigmoid_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::fmin(1.0f, sycl::fmax(0.0f, (x[i] + 3.0f) / 6.0f));
 }
 
-void hardswish_f32(const float * x, float * dst, const int k,
+static void hardswish_f32(const float * x, float * dst, const int k,
                           const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -146,7 +146,7 @@ void hardswish_f32(const float * x, float * dst, const int k,
     dst[i] = x[i] * sycl::fmin(1.0f, sycl::fmax(0.0f, (x[i] + 3.0f) / 6.0f));
 }
 
-void exp_f32(const float * x, float * dst, const int k,
+static void exp_f32(const float * x, float * dst, const int k,
                           const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -157,7 +157,7 @@ void exp_f32(const float * x, float * dst, const int k,
     dst[i] = sycl::exp(x[i]);
 }
 
-void log_f32(const float * x, float * dst, const int k,
+static void log_f32(const float * x, float * dst, const int k,
                           const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -173,7 +173,7 @@ void log_f32(const float * x, float * dst, const int k,
     }
 }
 
-void neg_f32(const float * x, float * dst, const int k,
+static void neg_f32(const float * x, float * dst, const int k,
                           const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -184,7 +184,7 @@ void neg_f32(const float * x, float * dst, const int k,
     dst[i] = -x[i];
 }
 
-void step_f32(const float * x, float * dst, const int k,
+static void step_f32(const float * x, float * dst, const int k,
                           const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -195,7 +195,7 @@ void step_f32(const float * x, float * dst, const int k,
     dst[i] = x[i] > 0.0f;
 }
 
-void leaky_relu_f32(const float *x, float *dst, const int k, const float negative_slope,
+static void leaky_relu_f32(const float *x, float *dst, const int k, const float negative_slope,
                            const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -206,7 +206,7 @@ void leaky_relu_f32(const float *x, float *dst, const int k, const float negativ
              sycl::fmin((float)(x[i]), 0.0f) * negative_slope;
 }
 
-void sqr_f32(const float * x, float * dst, const int k,
+static void sqr_f32(const float * x, float * dst, const int k,
                     const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -217,7 +217,7 @@ void sqr_f32(const float * x, float * dst, const int k,
     dst[i] = x[i] * x[i];
 }
 
-void upscale_f32(const float  *x, float *dst, const int nb00, const int nb01,
+static void upscale_f32(const float  *x, float *dst, const int nb00, const int nb01,
                         const int nb02, const int nb03, const int ne10, const int ne11,
                         const int ne12, const int ne13, const float sf0, const float sf1,
                         const float sf2, const float sf3, const sycl::nd_item<1> &item_ct1) {
@@ -240,7 +240,7 @@ void upscale_f32(const float  *x, float *dst, const int nb00, const int nb01,
     dst[index] = *(const float *)((const char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00);
 }
 
-void pad_f32(const float  *x, float *dst, const int ne0, const int ne00, const int ne01, const int ne02,
+static void pad_f32(const float  *x, float *dst, const int ne0, const int ne00, const int ne01, const int ne02,
                     const sycl::nd_item<3> &item_ct1) {
     int nidx = item_ct1.get_local_id(2) +
                item_ct1.get_group(2) * item_ct1.get_local_range(2);
@@ -262,7 +262,7 @@ void pad_f32(const float  *x, float *dst, const int ne0, const int ne00, const i
 
 
 
-void acc_f32_sycl(const float *x, const float *y, float *dst,
+static void acc_f32_sycl(const float *x, const float *y, float *dst,
                          const int n_elements, const int ne10, const int ne11,
                          const int ne12, const int nb1, const int nb2,
                          const int offset, queue_ptr stream) {
@@ -277,7 +277,7 @@ void acc_f32_sycl(const float *x, const float *y, float *dst,
         });
 }
 
-void gelu_f32_sycl(const float *x, float *dst, const int k,
+static void gelu_f32_sycl(const float *x, float *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_GELU_BLOCK_SIZE - 1) / SYCL_GELU_BLOCK_SIZE;
     stream->parallel_for(
@@ -289,7 +289,7 @@ void gelu_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void silu_f32_sycl(const float *x, float *dst, const int k,
+static void silu_f32_sycl(const float *x, float *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_SILU_BLOCK_SIZE - 1) / SYCL_SILU_BLOCK_SIZE;
     stream->parallel_for(
@@ -301,7 +301,7 @@ void silu_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void gelu_quick_f32_sycl(const float *x, float *dst, const int k,
+static void gelu_quick_f32_sycl(const float *x, float *dst, const int k,
                                 queue_ptr stream) {
     const int num_blocks = (k + SYCL_GELU_BLOCK_SIZE - 1) / SYCL_GELU_BLOCK_SIZE;
     stream->parallel_for(
@@ -313,7 +313,7 @@ void gelu_quick_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void tanh_f32_sycl(const float *x, float *dst, const int k,
+static void tanh_f32_sycl(const float *x, float *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_TANH_BLOCK_SIZE - 1) / SYCL_TANH_BLOCK_SIZE;
     stream->parallel_for(
@@ -325,7 +325,7 @@ void tanh_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void relu_f32_sycl(const float *x, float *dst, const int k,
+static void relu_f32_sycl(const float *x, float *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_RELU_BLOCK_SIZE - 1) / SYCL_RELU_BLOCK_SIZE;
     stream->parallel_for(
@@ -337,7 +337,7 @@ void relu_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void hardsigmoid_f32_sycl(const float *x, float *dst, const int k,
+static void hardsigmoid_f32_sycl(const float *x, float *dst, const int k,
                                  queue_ptr stream) {
     const int num_blocks = (k + SYCL_HARDSIGMOID_BLOCK_SIZE - 1) / SYCL_HARDSIGMOID_BLOCK_SIZE;
     stream->parallel_for(
@@ -349,7 +349,7 @@ void hardsigmoid_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void hardswish_f32_sycl(const float *x, float *dst, const int k,
+static void hardswish_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_HARDSWISH_BLOCK_SIZE - 1) / SYCL_HARDSWISH_BLOCK_SIZE;
     stream->parallel_for(
@@ -361,7 +361,7 @@ void hardswish_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void exp_f32_sycl(const float *x, float *dst, const int k,
+static void exp_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_EXP_BLOCK_SIZE - 1) / SYCL_EXP_BLOCK_SIZE;
     stream->parallel_for(
@@ -373,7 +373,7 @@ void exp_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void log_f32_sycl(const float *x, float *dst, const int k,
+static void log_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_EXP_BLOCK_SIZE - 1) / SYCL_EXP_BLOCK_SIZE;
     stream->parallel_for(
@@ -385,7 +385,7 @@ void log_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void neg_f32_sycl(const float *x, float *dst, const int k,
+static void neg_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_NEG_BLOCK_SIZE - 1) / SYCL_NEG_BLOCK_SIZE;
     stream->parallel_for(
@@ -397,7 +397,7 @@ void neg_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void step_f32_sycl(const float *x, float *dst, const int k,
+static void step_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_NEG_BLOCK_SIZE - 1) / SYCL_NEG_BLOCK_SIZE;
     stream->parallel_for(
@@ -409,7 +409,7 @@ void step_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void sigmoid_f32_sycl(const float *x, float *dst, const int k,
+static void sigmoid_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIGMOID_BLOCK_SIZE - 1) / SYCL_SIGMOID_BLOCK_SIZE;
     stream->parallel_for(
@@ -421,7 +421,7 @@ void sigmoid_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void sqrt_f32_sycl(const float *x, float *dst, const int k,
+static void sqrt_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SQRT_BLOCK_SIZE - 1) / SYCL_SQRT_BLOCK_SIZE;
     stream->parallel_for(
@@ -433,7 +433,7 @@ void sqrt_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void sin_f32_sycl(const float *x, float *dst, const int k,
+static void sin_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIN_BLOCK_SIZE - 1) / SYCL_SIN_BLOCK_SIZE;
     stream->parallel_for(
@@ -445,7 +445,7 @@ void sin_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void cos_f32_sycl(const float *x, float *dst, const int k,
+static void cos_f32_sycl(const float *x, float *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIN_BLOCK_SIZE - 1) / SYCL_SIN_BLOCK_SIZE;
     stream->parallel_for(
@@ -457,7 +457,7 @@ void cos_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void leaky_relu_f32_sycl(const float *x, float *dst, const int k,
+static void leaky_relu_f32_sycl(const float *x, float *dst, const int k,
                                 const float negative_slope,
                                 queue_ptr stream) {
     const int num_blocks = (k + SYCL_RELU_BLOCK_SIZE - 1) / SYCL_RELU_BLOCK_SIZE;
@@ -470,7 +470,7 @@ void leaky_relu_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void sqr_f32_sycl(const float *x, float *dst, const int k,
+static void sqr_f32_sycl(const float *x, float *dst, const int k,
                          queue_ptr stream) {
     const int num_blocks = (k + SYCL_SQR_BLOCK_SIZE - 1) / SYCL_SQR_BLOCK_SIZE;
     stream->parallel_for(
@@ -482,7 +482,7 @@ void sqr_f32_sycl(const float *x, float *dst, const int k,
         });
 }
 
-void upscale_f32_sycl(const float *x, float *dst, const int nb00, const int nb01,
+static void upscale_f32_sycl(const float *x, float *dst, const int nb00, const int nb01,
                              const int nb02, const int nb03, const int ne10, const int ne11,
                              const int ne12, const int ne13, const float sf0, const float sf1,
                              const float sf2, const float sf3, queue_ptr stream) {
@@ -496,7 +496,7 @@ void upscale_f32_sycl(const float *x, float *dst, const int nb00, const int nb01
         });
 }
 
-void pad_f32_sycl(const float *x, float *dst, const int ne00,
+static void pad_f32_sycl(const float *x, float *dst, const int ne00,
                          const int ne01, const int ne02, const int ne0,
                          const int ne1, const int ne2, queue_ptr stream) {
     int num_blocks = (ne0 + SYCL_PAD_BLOCK_SIZE - 1) / SYCL_PAD_BLOCK_SIZE;
@@ -509,497 +509,409 @@ void pad_f32_sycl(const float *x, float *dst, const int ne00,
         });
 }
 
-inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                              ggml_tensor *dst, const float *src0_dd,
-                              const float *src1_dd, float *dst_dd,
-                              const queue_ptr &main_stream) {
+inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    silu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    silu_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                              ggml_tensor *dst, const float *src0_dd,
-                              const float *src1_dd, float *dst_dd,
-                              const queue_ptr &main_stream) {
+inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    gelu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
-}
-inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                    const ggml_tensor *src1, ggml_tensor *dst,
-                                    const float *src0_dd, const float *src1_dd,
-                                    float *dst_dd,
-                                    const queue_ptr &main_stream) {
-
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
-
-    gelu_quick_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    gelu_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                              ggml_tensor *dst, const float *src0_dd,
-                              const float *src1_dd, float *dst_dd,
-                              const queue_ptr &main_stream) {
+inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    tanh_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    gelu_quick_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                              ggml_tensor *dst, const float *src0_dd,
-                              const float *src1_dd, float *dst_dd,
-                              const queue_ptr &main_stream) {
+inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-
-    relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
+    tanh_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                     const ggml_tensor *src1, ggml_tensor *dst,
-                                     const float *src0_dd, const float *src1_dd,
-                                     float *dst_dd,
-                                     const queue_ptr &main_stream) {
+inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    hardsigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx,  ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    hardswish_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    hardsigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    exp_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    hardswish_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    log_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    exp_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    sigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    log_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    sqrt_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    sigmoid_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    sin_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    sqrt_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    cos_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    sin_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    step_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    cos_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                   const ggml_tensor *src1, ggml_tensor *dst,
-                                   const float *src0_dd, const float *src1_dd,
-                                   float *dst_dd, const queue_ptr &main_stream) {
+inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    neg_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    step_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                    const ggml_tensor *src1, ggml_tensor *dst,
-                                    const float *src0_dd, const float *src1_dd,
-                                    float *dst_dd,
-                                    const queue_ptr &main_stream) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
+
+    neg_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+}
+
+inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     float negative_slope;
     memcpy(&negative_slope, dst->op_params, sizeof(float));
 
-    leaky_relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), negative_slope, main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    leaky_relu_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), negative_slope, main_stream);
 }
 
-inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    sqr_f32_sycl(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
+    sqr_f32_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
 }
 
-inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                 const ggml_tensor *src1, ggml_tensor *dst,
-                                 const float *src0_dd, const float *src1_dd,
-                                 float *dst_dd,
-                                 const queue_ptr &main_stream) {
+inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
-    const float sf0 = (float)dst->ne[0]/src0->ne[0];
-    const float sf1 = (float)dst->ne[1]/src0->ne[1];
-    const float sf2 = (float)dst->ne[2]/src0->ne[2];
-    const float sf3 = (float)dst->ne[3]/src0->ne[3];
+    const float sf0 = (float)dst->ne[0]/dst->src[0]->ne[0];
+    const float sf1 = (float)dst->ne[1]/dst->src[0]->ne[1];
+    const float sf2 = (float)dst->ne[2]/dst->src[0]->ne[2];
+    const float sf3 = (float)dst->ne[3]/dst->src[0]->ne[3];
 
-    upscale_f32_sycl(src0_dd, dst_dd, src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+    upscale_f32_sycl(src0_dd, dst_dd, dst->src[0]->nb[0], dst->src[0]->nb[1], dst->src[0]->nb[2], dst->src[0]->nb[3],
                      dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3,
                      main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
 }
 
-inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(src0->ne[3] == 1 && dst->ne[3] == 1); // just 3D tensors
+    GGML_ASSERT(dst->src[0]->ne[3] == 1 && dst->ne[3] == 1); // just 3D tensors
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     pad_f32_sycl(src0_dd, dst_dd,
-        src0->ne[0], src0->ne[1], src0->ne[2],
+        dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2],
         dst->ne[0], dst->ne[1], dst->ne[2], main_stream);
-
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_dd);
-    GGML_UNUSED(ctx);
 }
 
-inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[1]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->ne[3] == 1); // just 3D tensors supported
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    const float * src1_dd = static_cast<const float*>(dst->src[1]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     int nb1 = dst->op_params[0] / 4; // 4 bytes of float32
     int nb2 = dst->op_params[1] / 4; // 4 bytes of float32
     // int nb3 = dst->op_params[2] / 4; // 4 bytes of float32 - unused
     int offset = dst->op_params[3] / 4; // offset in bytes
 
-    acc_f32_sycl(src0_dd, src1_dd, dst_dd, ggml_nelements(dst), src1->ne[0], src1->ne[1], src1->ne[2], nb1, nb2, offset, main_stream);
-
-    GGML_UNUSED(dst);
-    GGML_UNUSED(ctx);
+    acc_f32_sycl(src0_dd, src1_dd, dst_dd, ggml_nelements(dst), dst->src[1]->ne[0], dst->src[1]->ne[1], dst->src[1]->ne[2], nb1, nb2, offset, main_stream);
 }
 
-inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
-inline void ggml_sycl_op_sub(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_sub(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_sub>>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_sub>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
-inline void ggml_sycl_op_mul(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_mul(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_mul>>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_mul>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
-inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
-                             ggml_tensor *dst, const float *src0_dd,
-                             const float *src1_dd, float *dst_dd,
-                             const queue_ptr &main_stream) {
+inline void ggml_sycl_op_div(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
 
-    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_div>>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_div>>(ctx, dst->src[0], dst->src[1], dst);
 }
 
 
 void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sqrt);
+    ggml_sycl_op_sqrt(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sin);
+    ggml_sycl_op_sin(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_cos);
+    ggml_sycl_op_cos(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_acc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_acc);
+    ggml_sycl_op_acc(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_gelu);
+    ggml_sycl_op_gelu(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_silu);
+    ggml_sycl_op_silu(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_gelu_quick);
+    ggml_sycl_op_gelu_quick(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_tanh);
+    ggml_sycl_op_tanh(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_relu);
+    ggml_sycl_op_relu(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sigmoid);
+    ggml_sycl_op_sigmoid(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_hardsigmoid);
+    ggml_sycl_op_hardsigmoid(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_hardswish);
+    ggml_sycl_op_hardswish(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 
 void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_exp);
+    ggml_sycl_op_exp(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_log);
+    ggml_sycl_op_log(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_neg);
+    ggml_sycl_op_neg(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_step);
+    ggml_sycl_op_step(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_leaky_relu);
+    ggml_sycl_op_leaky_relu(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sqr);
+    ggml_sycl_op_sqr(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_upscale);
+    ggml_sycl_op_upscale(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_pad);
+    ggml_sycl_op_pad(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
@@ -1007,24 +919,24 @@ void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
 void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_add);
+    ggml_sycl_op_add(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_sub);
+    ggml_sycl_op_sub(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_mul);
+    ggml_sycl_op_mul(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_SYCL_DEBUG("call %s\n", __func__);
-    ggml_sycl_op_flatten(ctx, dst->src[0], dst->src[1], dst, ggml_sycl_op_div);
+    ggml_sycl_op_div(ctx, dst);
     GGML_SYCL_DEBUG("call %s done\n", __func__);
 }

@@ -198,7 +198,7 @@
 
 #ifndef __GNUC__
 #    define GGML_ATTRIBUTE_FORMAT(...)
-#elif defined(__MINGW32__)
+#elif defined(__MINGW32__) && !defined(__clang__)
 #    define GGML_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
 #else
 #    define GGML_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
@@ -454,6 +454,7 @@ extern "C" {
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
+        GGML_OP_L2_NORM,
 
         GGML_OP_MUL_MAT,
         GGML_OP_MUL_MAT_ID,
@@ -502,6 +503,7 @@ extern "C" {
         GGML_OP_ADD_REL_POS,
         GGML_OP_RWKV_WKV6,
         GGML_OP_GATED_LINEAR_ATTN,
+        GGML_OP_RWKV_WKV7,
 
         GGML_OP_UNARY,
 
@@ -1093,6 +1095,18 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   n_groups,
+            float                 eps);
+
+    // l2 normalize along rows
+    // used in rwkv v7
+    GGML_API struct ggml_tensor * ggml_l2_norm(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 eps);
+
+    GGML_API struct ggml_tensor * ggml_l2_norm_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
             float                 eps);
 
     // a - x
@@ -1777,11 +1791,11 @@ extern "C" {
 
 #define GGML_KQ_MASK_PAD 64
 
-    // q:    [n_embd, n_batch,     n_head,    1]
-    // k:    [n_embd, n_kv,        n_head_kv, 1]
-    // v:    [n_embd, n_kv,        n_head_kv, 1] !! not transposed !!
-    // mask: [n_kv,   n_batch_pad, 1,         1] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
-    // res:  [n_embd, n_head,      n_batch,   1] !! permuted !!
+    // q:    [n_embd_k, n_batch,     n_head,    1]
+    // k:    [n_embd_k, n_kv,        n_head_kv, 1]
+    // v:    [n_embd_v, n_kv,        n_head_kv, 1] !! not transposed !!
+    // mask: [n_kv,     n_batch_pad, 1,         1] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
+    // res:  [n_embd_v, n_head,      n_batch,   1] !! permuted !!
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -1889,6 +1903,16 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * state,
             float scale);
+
+    GGML_API struct ggml_tensor * ggml_rwkv_wkv7(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * w,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * state);
 
     // custom operators
 
@@ -2140,7 +2164,11 @@ extern "C" {
 #        define GGML_RESTRICT
 #    endif
 #else
-#    define GGML_RESTRICT restrict
+#    if defined (_MSC_VER) && (__STDC_VERSION__ < 201112L)
+#        define GGML_RESTRICT __restrict
+#    else
+#        define GGML_RESTRICT restrict
+#    endif
 #endif
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);

@@ -9,7 +9,7 @@ struct common_speculative_params {
     int n_draft = 16;  // max drafted tokens
     int n_reuse = 256;
 
-    float p_min = 0.9f; // min probabiliy required to accept a token in the draft
+    float p_min = 0.75f; // min probability required to accept a token in the draft
 };
 
 struct common_speculative * common_speculative_init(struct llama_context * ctx_dft);

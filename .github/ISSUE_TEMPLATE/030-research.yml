@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Don't forget to check for any [duplicate research issue tickets](https://github.com/ggerganov/llama.cpp/issues?q=is%3Aopen+is%3Aissue+label%3A%22research+%F0%9F%94%AC%22)
+        Don't forget to check for any [duplicate research issue tickets](https://github.com/ggml-org/llama.cpp/issues?q=is%3Aopen+is%3Aissue+label%3A%22research+%F0%9F%94%AC%22)
 
   - type: checkboxes
     id: research-stage

@@ -3,6 +3,7 @@ import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
+import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 
 interface SplitMessage {
   content: PendingMessage['content'];
@@ -12,17 +13,24 @@ interface SplitMessage {
 
 export default function ChatMessage({
   msg,
+  siblingLeafNodeIds,
+  siblingCurrIdx,
   id,
-  scrollToBottom,
+  onRegenerateMessage,
+  onEditMessage,
+  onChangeSibling,
   isPending,
 }: {
   msg: Message | PendingMessage;
+  siblingLeafNodeIds: Message['id'][];
+  siblingCurrIdx: number;
   id?: string;
-  scrollToBottom: (requiresNearBottom: boolean) => void;
+  onRegenerateMessage(msg: Message): void;
+  onEditMessage(msg: Message, content: string): void;
+  onChangeSibling(sibling: Message['id']): void;
   isPending?: boolean;
 }) {
-  const { viewingConversation, replaceMessageAndGenerate, config } =
-    useAppContext();
+  const { viewingChat, config } = useAppContext();
   const [editingContent, setEditingContent] = useState<string | null>(null);
   const timings = useMemo(
     () =>
@@ -37,6 +45,8 @@ export default function ChatMessage({
         : null,
     [msg.timings]
   );
+  const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
+  const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
   // for reasoning model, we split the message into content and thought
   // TODO: implement this as remark/rehype plugin in the future
@@ -64,13 +74,7 @@ export default function ChatMessage({
     return { content: actualContent, thought, isThinking };
   }, [msg]);
 
-  if (!viewingConversation) return null;
-
-  const regenerate = async () => {
-    replaceMessageAndGenerate(viewingConversation.id, msg.id, undefined, () =>
-      scrollToBottom(true)
-    );
-  };
+  if (!viewingChat) return null;
 
   return (
     <div className="group" id={id}>
@@ -105,13 +109,12 @@ export default function ChatMessage({
               </button>
               <button
                 className="btn mt-2"
-                onClick={() =>
-                  replaceMessageAndGenerate(
-                    viewingConversation.id,
-                    msg.id,
-                    editingContent
-                  )
-                }
+                onClick={() => {
+                  if (msg.content !== null) {
+                    setEditingContent(null);
+                    onEditMessage(msg as Message, editingContent);
+                  }
+                }}
               >
                 Submit
               </button>
@@ -156,6 +159,35 @@ export default function ChatMessage({
                         </div>
                       </details>
                     )}
+
+                    {msg.extra && msg.extra.length > 0 && (
+                      <details
+                        className={classNames({
+                          'collapse collapse-arrow mb-4 bg-base-200': true,
+                          'bg-opacity-10': msg.role !== 'assistant',
+                        })}
+                      >
+                        <summary className="collapse-title">
+                          Extra content
+                        </summary>
+                        <div className="collapse-content">
+                          {msg.extra.map(
+                            (extra, i) =>
+                              extra.type === 'textFile' ? (
+                                <div key={extra.name}>
+                                  <b>{extra.name}</b>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : extra.type === 'context' ? (
+                                <div key={i}>
+                                  <pre>{extra.content}</pre>
+                                </div>
+                              ) : null // TODO: support other extra types
+                          )}
+                        </div>
+                      </details>
+                    )}
+
                     <MarkdownDisplay
                       content={content}
                       isGenerating={isPending}
@@ -196,10 +228,35 @@ export default function ChatMessage({
       {msg.content !== null && (
         <div
           className={classNames({
-            'mx-4 mt-2 mb-2': true,
-            'text-right': msg.role === 'user',
+            'flex items-center gap-2 mx-4 mt-2 mb-2': true,
+            'flex-row-reverse': msg.role === 'user',
           })}
         >
+          {siblingLeafNodeIds && siblingLeafNodeIds.length > 1 && (
+            <div className="flex gap-1 items-center opacity-60 text-sm">
+              <button
+                className={classNames({
+                  'btn btn-sm btn-ghost p-1': true,
+                  'opacity-20': !prevSibling,
+                })}
+                onClick={() => prevSibling && onChangeSibling(prevSibling)}
+              >
+                <ChevronLeftIcon className="h-4 w-4" />
+              </button>
+              <span>
+                {siblingCurrIdx + 1} / {siblingLeafNodeIds.length}
+              </span>
+              <button
+                className={classNames({
+                  'btn btn-sm btn-ghost p-1': true,
+                  'opacity-20': !nextSibling,
+                })}
+                onClick={() => nextSibling && onChangeSibling(nextSibling)}
+              >
+                <ChevronRightIcon className="h-4 w-4" />
+              </button>
+            </div>
+          )}
           {/* user message */}
           {msg.role === 'user' && (
             <button
@@ -216,18 +273,22 @@ export default function ChatMessage({
               {!isPending && (
                 <button
                   className="badge btn-mini show-on-hover mr-2"
-                  onClick={regenerate}
+                  onClick={() => {
+                    if (msg.content !== null) {
+                      onRegenerateMessage(msg as Message);
+                    }
+                  }}
                   disabled={msg.content === null}
                 >
                   🔄 Regenerate
                 </button>
               )}
-              <CopyButton
-                className="badge btn-mini show-on-hover mr-2"
-                content={msg.content}
-              />
             </>
           )}
+          <CopyButton
+            className="badge btn-mini show-on-hover mr-2"
+            content={msg.content}
+          />
         </div>
       )}
     </div>

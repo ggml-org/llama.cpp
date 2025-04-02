@@ -195,7 +195,7 @@ class BuiltinRule:
         self.deps = deps or []
 
 # Constraining spaces to prevent model "running away".
-SPACE_RULE = '| " " | "\\n" [ \\t]{0,20}'
+SPACE_RULE = '| " " | "\\n"{1,2} [ \\t]{0,20}'
 
 PRIMITIVE_RULES = {
     'boolean'      : BuiltinRule('("true" | "false") space', []),

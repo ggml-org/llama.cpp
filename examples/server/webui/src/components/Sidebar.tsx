@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { classNames } from '../utils/misc';
 import { Conversation } from '../utils/types';
 import StorageUtils from '../utils/storage';
@@ -7,16 +7,17 @@ import { useNavigate, useParams } from 'react-router';
 export default function Sidebar() {
   const params = useParams();
   const navigate = useNavigate();
-  const currConv = useMemo(
-    () => StorageUtils.getOneConversation(params.convId ?? ''),
-    [params.convId]
-  );
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currConv, setCurrConv] = useState<Conversation | null>(null);
 
   useEffect(() => {
-    const handleConversationChange = () => {
-      setConversations(StorageUtils.getAllConversations());
+    StorageUtils.getOneConversation(params.convId ?? '').then(setCurrConv);
+  }, [params.convId]);
+
+  useEffect(() => {
+    const handleConversationChange = async () => {
+      setConversations(await StorageUtils.getAllConversations());
     };
     StorageUtils.onConversationChanged(handleConversationChange);
     handleConversationChange();
@@ -82,11 +83,11 @@ export default function Sidebar() {
               onClick={() => navigate(`/chat/${conv.id}`)}
               dir="auto"
             >
-              <span className="truncate">{conv.messages[0].content}</span>
+              <span className="truncate">{conv.name}</span>
             </div>
           ))}
           <div className="text-center text-xs opacity-40 mt-auto mx-4">
-            Conversations are saved to browser's localStorage
+            Conversations are saved to browser's IndexedDB
           </div>
         </div>
       </div>

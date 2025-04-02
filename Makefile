@@ -1,5 +1,5 @@
 ifndef LLAMA_MAKEFILE
-$(error The Makefile build is deprecated. Use the CMake build instead. For more details, see https://github.com/ggerganov/llama.cpp/blob/master/docs/build.md)
+$(error The Makefile build is deprecated. Use the CMake build instead. For more details, see https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
 endif
 
 # Define the default target now so that it is always the first target
@@ -463,7 +463,7 @@ endif
 ifneq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
 	# The stack is only 16-byte aligned on Windows, so don't let gcc emit aligned moves.
 	# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412
-	# https://github.com/ggerganov/llama.cpp/issues/2922
+	# https://github.com/ggml-org/llama.cpp/issues/2922
 	MK_CFLAGS   += -Xassembler -muse-unaligned-vector-move
 	MK_CXXFLAGS += -Xassembler -muse-unaligned-vector-move
 
@@ -680,6 +680,10 @@ ifdef GGML_CUDA_CCBIN
 	MK_NVCCFLAGS += -ccbin $(GGML_CUDA_CCBIN)
 endif # GGML_CUDA_CCBIN
 
+ifdef GGML_CUDA_NO_FA
+	MK_NVCCFLAGS += -DGGML_CUDA_NO_FA
+endif # GGML_CUDA_NO_FA
+
 ifdef GGML_CUDA_FA_ALL_QUANTS
 	MK_NVCCFLAGS += -DGGML_CUDA_FA_ALL_QUANTS
 endif # GGML_CUDA_FA_ALL_QUANTS
@@ -800,6 +804,10 @@ ifdef GGML_CUDA_NO_PEER_COPY
 	HIPFLAGS += -DGGML_CUDA_NO_PEER_COPY
 endif # GGML_CUDA_NO_PEER_COPY
 
+ifdef GGML_CUDA_NO_FA
+	HIPFLAGS += -DGGML_CUDA_NO_FA
+endif # GGML_CUDA_NO_FA
+
 	OBJ_GGML_EXT += ggml/src/ggml-cuda/ggml-cuda.o
 	OBJ_GGML_EXT += $(patsubst %.cu,%.o,$(wildcard ggml/src/ggml-cuda/*.cu))
 	OBJ_GGML_EXT += $(OBJ_CUDA_TMPL)
@@ -828,7 +836,7 @@ ifdef GGML_MUSA
 	else
 		MUSA_PATH ?= /opt/musa
 	endif
-	MUSA_ARCHITECTURES ?= 21;22
+	MUSA_ARCHITECTURES ?= 21;22;31
 
 	MK_CPPFLAGS += -DGGML_USE_MUSA -DGGML_USE_CUDA
 	MK_LDFLAGS += -L$(MUSA_PATH)/lib -Wl,-rpath=$(MUSA_PATH)/lib
@@ -847,7 +855,7 @@ ifdef GGML_MUSA
 	CXX := $(MUSA_PATH)/bin/clang++
 	MCC := $(CCACHE) $(MUSA_PATH)/bin/mcc
 
-	MUSAFLAGS  = -x musa -mtgpu
+	MUSAFLAGS  = -fsigned-char -x musa -mtgpu
 	MUSAFLAGS += $(foreach arch,$(subst ;, ,$(MUSA_ARCHITECTURES)),--cuda-gpu-arch=mp_$(arch))
 
 ifdef GGML_CUDA_FORCE_MMQ
@@ -875,6 +883,10 @@ endif # GGML_CUDA_PEER_MAX_BATCH_SIZE
 ifdef GGML_CUDA_NO_PEER_COPY
 	MUSAFLAGS += -DGGML_CUDA_NO_PEER_COPY
 endif # GGML_CUDA_NO_PEER_COPY
+
+ifdef GGML_CUDA_NO_FA
+	MUSAFLAGS += -DGGML_CUDA_NO_FA
+endif # GGML_CUDA_NO_FA
 
 ifdef GGML_CUDA_FA_ALL_QUANTS
 	MUSAFLAGS += -DGGML_CUDA_FA_ALL_QUANTS
@@ -1078,8 +1090,8 @@ endif
 ifdef REMOVE_WARNING
 $(info !!! REMOVAL WARNING !!!)
 $(info The following LLAMA_ options have been removed and are no longer supported)
-$(info   - LLAMA_DISABLE_LOGS   (https://github.com/ggerganov/llama.cpp/pull/9418))
-$(info   - LLAMA_SERVER_VERBOSE (https://github.com/ggerganov/llama.cpp/pull/9418))
+$(info   - LLAMA_DISABLE_LOGS   (https://github.com/ggml-org/llama.cpp/pull/9418))
+$(info   - LLAMA_SERVER_VERBOSE (https://github.com/ggml-org/llama.cpp/pull/9418))
 $(info )
 endif
 
@@ -1364,7 +1376,7 @@ llama-server: \
 	examples/server/index.html.hpp \
 	examples/server/loading.html.hpp \
 	common/chat.cpp \
-	common/chat.hpp \
+	common/chat.h \
 	common/chat-template.hpp \
 	common/json.hpp \
 	common/minja.hpp \

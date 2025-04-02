@@ -100,11 +100,17 @@ else()
     set(INS_ENB ON)
 endif()
 
+message(DEBUG "GGML_NATIVE         : ${GGML_NATIVE}")
+message(DEBUG "GGML_NATIVE_DEFAULT : ${GGML_NATIVE_DEFAULT}")
+message(DEBUG "INS_ENB             : ${INS_ENB}")
+
 option(GGML_CPU_HBM          "ggml: use memkind for CPU HBM" OFF)
 option(GGML_CPU_AARCH64      "ggml: use runtime weight conversion of Q4_0 to Q4_X_X" ON)
+option(GGML_CPU_KLEIDIAI     "ggml: use KleidiAI optimized kernels if applicable" OFF)
 option(GGML_AVX              "ggml: enable AVX"              ${INS_ENB})
 option(GGML_AVX_VNNI         "ggml: enable AVX-VNNI"         OFF)
 option(GGML_AVX2             "ggml: enable AVX2"             ${INS_ENB})
+option(GGML_BMI2             "ggml: enable BMI2"             ${INS_ENB})
 option(GGML_AVX512           "ggml: enable AVX512F"          OFF)
 option(GGML_AVX512_VBMI      "ggml: enable AVX512-VBMI"      OFF)
 option(GGML_AVX512_VNNI      "ggml: enable AVX512-VNNI"      OFF)
@@ -121,9 +127,12 @@ endif()
 option(GGML_LASX             "ggml: enable lasx"             ON)
 option(GGML_LSX              "ggml: enable lsx"              ON)
 option(GGML_RVV              "ggml: enable rvv"              ON)
+option(GGML_RV_ZFH           "ggml: enable riscv zfh"        OFF)
+option(GGML_VXE              "ggml: enable vxe"              ON)
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
-set(GGML_CPU_ARM_ARCH "" CACHE STRING "ggml: CPU architecture for ARM")
+set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
+set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
 
 
 if (WIN32)
@@ -150,12 +159,17 @@ set   (GGML_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
                                             "ggml: max. batch size for using peer access")
 option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copies"            OFF)
 option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
+option(GGML_CUDA_FA                         "ggml: compile ggml FlashAttention CUDA kernels"  ON)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
+set   (GGML_CUDA_COMPRESSION_MODE "size" CACHE STRING
+                                            "ggml: cuda link binary compression mode; requires cuda 12.8+")
+set_property(CACHE GGML_CUDA_COMPRESSION_MODE PROPERTY STRINGS "none;speed;balance;size")
 
 option(GGML_HIP                             "ggml: use HIP"                                   OFF)
 option(GGML_HIP_GRAPHS                      "ggml: use HIP graph, experimental, slow"         OFF)
 option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"                 ON)
+option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
 option(GGML_HIP_UMA                         "ggml: use HIP unified memory architecture"       OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
@@ -178,6 +192,7 @@ option(GGML_OPENMP                          "ggml: use OpenMP"                  
 option(GGML_RPC                             "ggml: use RPC"                                   OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
+option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
 set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
@@ -187,6 +202,8 @@ option(GGML_OPENCL                          "ggml: use OpenCL"                  
 option(GGML_OPENCL_PROFILING                "ggml: use OpenCL profiling (increases overhead)" OFF)
 option(GGML_OPENCL_EMBED_KERNELS            "ggml: embed kernels"                             ON)
 option(GGML_OPENCL_USE_ADRENO_KERNELS       "ggml: use optimized kernels for Adreno"          ON)
+set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
+                                            "gmml: OpenCL API version to target")
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
@@ -208,6 +225,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED true)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 
 find_package(Threads REQUIRED)
+
+include(GNUInstallDirs)
 
 #
 # build the library
@@ -232,7 +251,6 @@ endif ()
 # install
 #
 
-include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
 # all public headers
@@ -243,6 +261,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-backend.h
     include/ggml-blas.h
     include/ggml-cann.h
+    include/ggml-cpp.h
     include/ggml-cuda.h
     include/ggml-kompute.h
     include/ggml-opt.h

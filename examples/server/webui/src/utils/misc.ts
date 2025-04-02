@@ -4,7 +4,6 @@ import { APIMessage, Message } from './types';
 
 // ponyfill for missing ReadableStream asyncIterator on Safari
 import { asyncIterator } from '@sec-ant/readable-stream/ponyfill/asyncIterator';
-import { isDev } from '../Config';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const isString = (x: any) => !!x.toLowerCase;
@@ -23,7 +22,7 @@ export async function* getSSEStreamAsync(fetchResponse: Response) {
     .pipeThrough(new TextLineStream());
   // @ts-expect-error asyncIterator complains about type, but it should work
   for await (const line of asyncIterator(lines)) {
-    if (isDev) console.log({ line });
+    //if (isDev) console.log({ line });
     if (line.startsWith('data:') && !line.endsWith('[DONE]')) {
       const data = JSON.parse(line.slice(5));
       yield data;
@@ -54,12 +53,23 @@ export const copyStr = (textToCopy: string) => {
 
 /**
  * filter out redundant fields upon sending to API
+ * also format extra into text
  */
-export function normalizeMsgsForAPI(messages: Message[]) {
+export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
   return messages.map((msg) => {
+    let newContent = '';
+
+    for (const extra of msg.extra ?? []) {
+      if (extra.type === 'context') {
+        newContent += `${extra.content}\n\n`;
+      }
+    }
+
+    newContent += msg.content;
+
     return {
       role: msg.role,
-      content: msg.content,
+      content: newContent,
     };
   }) as APIMessage[];
 }
@@ -88,3 +98,31 @@ export function classNames(classes: Record<string, boolean>): string {
 
 export const delay = (ms: number) =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+export const throttle = <T extends unknown[]>(
+  callback: (...args: T) => void,
+  delay: number
+) => {
+  let isWaiting = false;
+
+  return (...args: T) => {
+    if (isWaiting) {
+      return;
+    }
+
+    callback(...args);
+    isWaiting = true;
+
+    setTimeout(() => {
+      isWaiting = false;
+    }, delay);
+  };
+};
+
+export const cleanCurrentUrl = (removeQueryParams: string[]) => {
+  const url = new URL(window.location.href);
+  removeQueryParams.forEach((param) => {
+    url.searchParams.delete(param);
+  });
+  window.history.replaceState({}, '', url.toString());
+};

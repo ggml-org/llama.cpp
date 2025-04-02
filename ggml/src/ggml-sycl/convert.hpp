@@ -21,7 +21,7 @@ using to_t_sycl_t = void (*)(const void *__restrict__ x, T *__restrict__ y,
 typedef to_t_sycl_t<float> to_fp32_sycl_t;
 typedef to_t_sycl_t<sycl::half> to_fp16_sycl_t;
 
-to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type);
-to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type);
+to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor *dst);
+to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst);
 
 #endif // GGML_SYCL_CONVERT_HPP

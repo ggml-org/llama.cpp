@@ -1,6 +1,6 @@
 # llama.cpp/example/simple-cmake-pkg
 
-This program builds [simple](../simple) using a relocatable CMake package. It serves as an example of using the `find_package()` CMake command to conveniently include [llama.cpp](https://github.com/ggerganov/llama.cpp) in projects which live outside of the source tree.
+This program builds [simple](../simple) using a relocatable CMake package. It serves as an example of using the `find_package()` CMake command to conveniently include [llama.cpp](https://github.com/ggml-org/llama.cpp) in projects which live outside of the source tree.
 
 ## Building
 
@@ -13,7 +13,7 @@ When hardware acceleration libraries are used (e.g. CUDA, Metal, Vulkan, etc.), 
 ### Build llama.cpp and install to llama.cpp/inst
 
 ```sh
-git clone https://github.com/ggerganov/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 cmake -S . -B build
 cmake --build build

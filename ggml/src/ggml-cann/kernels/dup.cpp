@@ -1,7 +1,5 @@
 #include "kernel_operator.h"
 
-#include <cmath>
-
 using namespace AscendC;
 
 #define BUFFER_NUM 2
@@ -183,7 +181,7 @@ extern "C" __global__ __aicore__ void ascendc_dup_by_rows_fp32(
     copy_to_ub(output_ne_gm, output_ne_ub, 32);
     copy_to_ub(output_nb_gm, output_nb_ub, 32);
 
-    DupByRows<float_t, float_t> op;
+    DupByRows<float, float> op;
     op.init(src_gm, dst_gm, input_ne_ub, input_nb_ub);
     op.dup();
 }
@@ -206,7 +204,7 @@ extern "C" __global__ __aicore__ void ascendc_dup_by_rows_fp32_to_fp16(
     copy_to_ub(output_ne_gm, output_ne_ub, 32);
     copy_to_ub(output_nb_gm, output_nb_ub, 32);
 
-    DupByRows<float_t, half> op;
+    DupByRows<float, half> op;
     op.init(src_gm, dst_gm, input_ne_ub, input_nb_ub);
     op.dup_with_cast();
 }
@@ -230,7 +228,7 @@ extern "C" __global__ __aicore__ void ascendc_dup_by_rows_fp16_to_fp32(
     copy_to_ub(output_ne_gm, output_ne_ub, 32);
     copy_to_ub(output_nb_gm, output_nb_ub, 32);
 
-    DupByRows<half, float_t> op;
+    DupByRows<half, float> op;
     op.init(src_gm, dst_gm, input_ne_ub, input_nb_ub);
     op.dup_with_cast();
 }

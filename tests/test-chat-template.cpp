@@ -1,13 +1,14 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <regex>
 
 #undef NDEBUG
 #include <cassert>
 
 #include "llama.h"
 #include "common.h"
-#include "chat-template.hpp"
+#include "chat.h"
 
 static std::string normalize_newlines(const std::string & s) {
 #ifdef _WIN32
@@ -16,6 +17,13 @@ static std::string normalize_newlines(const std::string & s) {
 #else
   return s;
 #endif
+}
+
+static common_chat_msg simple_msg(const std::string & role, const std::string & content) {
+    common_chat_msg msg;
+    msg.role = role;
+    msg.content = content;
+    return msg;
 }
 
 int main(void) {
@@ -50,7 +58,7 @@ int main(void) {
             /* .template_str= */ "{{ bos_token }}{% for message in messages %}{% if (message['role'] == 'user') != (loop.index0 % 2 == 0) %}{{ raise_exception('Conversation roles must alternate user/assistant/user/assistant/...') }}{% endif %}{% if message['role'] == 'user' %}{{ '[INST] ' + message['content'] + ' [/INST]' }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token}}{% else %}{{ raise_exception('Only user and assistant roles are supported!') }}{% endif %}{% endfor %}",
             /* .expected_output= */ "[INST] You are a helpful assistant\nHello [/INST]Hi there</s>[INST] Who are you [/INST]   I am an assistant   </s>[INST] Another question [/INST]",
             /* .expected_output_jinja= */ "",
-            /* .bos_token= */ "",
+            /* .bos_token= */ "<s>",
             /* .eos_token= */ "</s>",
         },
         {
@@ -72,8 +80,8 @@ int main(void) {
         {
             /* .name= */ "mlabonne/AlphaMonarch-7B",
             /* .template_str= */ "{% for message in messages %}{{bos_token + message['role'] + '\\n' + message['content'] + eos_token + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ bos_token + 'assistant\\n' }}{% endif %}",
-            /* .expected_output= */          "system\nYou are a helpful assistant</s>\n<s>user\nHello</s>\n<s>assistant\nHi there</s>\n<s>user\nWho are you</s>\n<s>assistant\n   I am an assistant   </s>\n<s>user\nAnother question</s>\n<s>assistant\n",
-            /* .expected_output_jinja= */ "<s>system\nYou are a helpful assistant</s>\n<s>user\nHello</s>\n<s>assistant\nHi there</s>\n<s>user\nWho are you</s>\n<s>assistant\n   I am an assistant   </s>\n<s>user\nAnother question</s>\n<s>assistant\n",
+            /* .expected_output= */ "system\nYou are a helpful assistant</s>\n<s>user\nHello</s>\n<s>assistant\nHi there</s>\n<s>user\nWho are you</s>\n<s>assistant\n   I am an assistant   </s>\n<s>user\nAnother question</s>\n<s>assistant\n",
+            /* .expected_output_jinja= */ "",
             /* .bos_token= */ "<s>",
             /* .eos_token= */ "</s>",
         },
@@ -87,7 +95,7 @@ int main(void) {
             /* .name= */ "OrionStarAI/Orion-14B-Chat",
             /* .template_str= */ "{% for message in messages %}{% if loop.first %}{{ bos_token }}{% endif %}{% if message['role'] == 'user' %}{{ 'Human: ' + message['content'] + '\\n\\nAssistant: ' + eos_token }}{% elif message['role'] == 'assistant' %}{{ message['content'] + eos_token }}{% endif %}{% endfor %}",
             /* .expected_output= */       "Human: You are a helpful assistant\n\nHello\n\nAssistant: </s>Hi there</s>Human: Who are you\n\nAssistant: </s>   I am an assistant   </s>Human: Another question\n\nAssistant: </s>",
-            /* .expected_output_jinja= */ "Human: You are a helpful assistant\nHello\n\nAssistant: </s>Hi there</s>Human: Who are you\n\nAssistant: </s>   I am an assistant   </s>Human: Another question\n\nAssistant: </s>",
+            /* .expected_output_jinja= */ "Human: You are a helpful assistant\nHello\n\nAssistant: </s>Hi there</s>Human: Who are you\n\nAssistant: </s>   I am an assistant   </s>Human: Another question\n\nAssistant: ",
             /* .bos_token= */ "",
             /* .eos_token= */ "</s>",
         },
@@ -262,6 +270,14 @@ int main(void) {
             /* .bos_token= */ "",
             /* .eos_token= */ "",
         },
+        {
+            /* .name= */ "yandex/YandexGPT-5-Lite-8B-instruct",
+            /* .template_str= */ "<s>{%- set names = {'assistant': ' Ассистент:', 'user': ' Пользователь:'} %}\n{%- set tools_prefix = 'Тебе доступны следующие функции:' %}\n{%- macro __render_tool(tool) %}\n    {%- set name = tool.function.name %}\n    {%- set description = tool.function.description|default('') %}\n    {%- set parameters = tool.function.parameters|tojson %}\n    {{- '\\n' }}function {{ '{' }}'name':'{{ name }}',\n    {%- if tool.function.description %}'description':'{{ description }}',{% endif %}\n'parameters':{{ parameters }}\n    {{- '}' }}\n{%- endmacro %}\n{%- macro __render_tools(tools) %}\n    {{- tools_prefix }}\n    {%- for tool in tools %}\n        {{- __render_tool(tool) }}\n    {%- endfor %}\n    {{- '\\n\\n' }}\n{%- endmacro %}\n{%- macro __render_tool_message(message) %}\n    {{- '\\n\\nРезультат вызова' }} {{ message.name }}: {{ message.content }} {{ '\\n\\n' }}\n{%- endmacro %}\n{%- if tools -%}\n    {{- __render_tools(tools) }}\n{%- endif -%}\n{%- macro __render_user_message(message) %}\n{{ names.user }} {{ message.content + '\\n\\n' }}\n{%- endmacro %}\n{%- macro __render_assistant_message(message) %}\n    {{- names.assistant }}\n    {%- set call = message['function_call'] %}\n    {%- if call %}\n        {{- '\\n[TOOL_CALL_START]' }}{{ call.name }}{{ '\\n' }}{{ call.arguments|tojson }}\n    {%- else %}\n        {{- ' ' + message.content + '\\n\\n' }}\n    {%- endif %}\n{%- endmacro %}\n{%- if not add_generation_prompt is defined %}\n{%- set add_generation_prompt = false %}\n{%- endif %}\n{%- for message in messages %}\n    {%- if message['role'] == 'user' %}\n        {{- __render_user_message(message) }}\n    {%- endif %}\n    {%- if message.role == 'assistant' and not loop.last %}\n        {{- __render_assistant_message(message) }}\n    {%- endif %}\n    {%- if message.role == 'tool' %}\n        {{- __render_tool_message(message) }}\n    {%- endif %}\n    {%- if loop.last %}\n        {{- ' Ассистент:[SEP]' }}\n    {%- endif %}\n{%- endfor %}\n",
+            /* .expected_output= */ "<s> Пользователь: Hello\n\n Ассистент: Hi there\n\n Пользователь: Who are you\n\n Ассистент:    I am an assistant   \n\n Пользователь: Another question\n\n Ассистент:[SEP]",
+            /* .expected_output_jinja= */ "<s> Пользователь: You are a helpful assistant\nHello\n\n Ассистент: Hi there\n\n Пользователь: Who are you\n\n Ассистент:    I am an assistant   \n\n Пользователь: Another question\n\n Ассистент:[SEP]",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+        },
     };
     std::vector<char> formatted_chat(1024);
     int32_t res;
@@ -304,12 +320,9 @@ int main(void) {
         }
     }
 
-    json messages = json::array();
+    std::vector<common_chat_msg> messages;
     for (const auto & msg : conversation) {
-        messages.push_back({
-            {"role", msg.role},
-            {"content", msg.content},
-        });
+        messages.push_back(simple_msg(msg.role, msg.content));
     }
     for (const auto & test_case : test_cases) {
         if (!test_case.supported_with_jinja) {
@@ -317,8 +330,13 @@ int main(void) {
         }
         printf("\n\n=== %s (jinja) ===\n\n", test_case.name.c_str());
         try {
-            minja::chat_template tmpl(test_case.template_str, test_case.bos_token, test_case.eos_token);
-            auto output = normalize_newlines(tmpl.apply(messages, json(), add_generation_prompt));
+            auto tmpls = common_chat_templates_init(/* model= */ nullptr, test_case.template_str.c_str(), test_case.bos_token, test_case.eos_token);
+            common_chat_templates_inputs inputs;
+            inputs.use_jinja = true;
+            inputs.messages = messages;
+            inputs.add_generation_prompt = add_generation_prompt;
+            auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
+            output = normalize_newlines(output);
             auto expected_output = normalize_newlines(test_case.expected_output_jinja.empty() ? test_case.expected_output : test_case.expected_output_jinja);
             if (output != expected_output) {
                 printf("Expected:\n%s\n", expected_output.c_str());
@@ -336,11 +354,11 @@ int main(void) {
     // test llama_chat_format_single for system message
     printf("\n\n=== llama_chat_format_single (system message) ===\n\n");
     std::vector<common_chat_msg> chat2;
-    common_chat_msg sys_msg{"system", "You are a helpful assistant", {}};
+    auto sys_msg = simple_msg("system", "You are a helpful assistant");
 
     auto fmt_sys = [&](std::string tmpl_str) {
-        minja::chat_template tmpl(tmpl_str, "", "");
-        auto output = common_chat_format_single(tmpl, chat2, sys_msg, false, /* use_jinja= */ false);
+        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str);
+        auto output = common_chat_format_single(tmpls.get(), chat2, sys_msg, false, /* use_jinja= */ false);
         printf("fmt_sys(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         printf("-------------------------\n");
         return output;
@@ -360,14 +378,14 @@ int main(void) {
 
     // test llama_chat_format_single for user message
     printf("\n\n=== llama_chat_format_single (user message) ===\n\n");
-    chat2.push_back({"system", "You are a helpful assistant", {}});
-    chat2.push_back({"user", "Hello", {}});
-    chat2.push_back({"assistant", "I am assistant", {}});
-    common_chat_msg new_msg{"user", "How are you", {}};
+    chat2.push_back(simple_msg("system", "You are a helpful assistant"));
+    chat2.push_back(simple_msg("user", "Hello"));
+    chat2.push_back(simple_msg("assistant", "I am assistant"));
+    auto new_msg = simple_msg("user", "How are you");
 
-    auto fmt_single = [&](std::string tmpl_str) {
-        minja::chat_template tmpl(tmpl_str, "", "");
-        auto output = common_chat_format_single(tmpl, chat2, new_msg, true, /* use_jinja= */ false);
+    auto fmt_single = [&](const std::string & tmpl_str) {
+        auto tmpls = common_chat_templates_init(/* model= */ nullptr, tmpl_str.c_str());
+        auto output = common_chat_format_single(tmpls.get(), chat2, new_msg, true, /* use_jinja= */ false);
         printf("fmt_single(%s) : %s\n", tmpl_str.c_str(), output.c_str());
         printf("-------------------------\n");
         return output;

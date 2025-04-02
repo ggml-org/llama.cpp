@@ -1,6 +1,6 @@
 # llama.cpp/examples/main
 
-This example program allows you to use various LLaMA language models easily and efficiently. It is specifically designed to work with the [llama.cpp](https://github.com/ggerganov/llama.cpp) project, which provides a plain C/C++ implementation with optional 4-bit quantization support for faster, lower memory inference, and is optimized for desktop CPUs. This program can be used to perform various inference tasks with LLaMA models, including generating text based on user-provided prompts and chat-like interactions with reverse prompts.
+This example program allows you to use various LLaMA language models easily and efficiently. It is specifically designed to work with the [llama.cpp](https://github.com/ggml-org/llama.cpp) project, which provides a plain C/C++ implementation with optional 4-bit quantization support for faster, lower memory inference, and is optimized for desktop CPUs. This program can be used to perform various inference tasks with LLaMA models, including generating text based on user-provided prompts and chat-like interactions with reverse prompts.
 
 ## Table of Contents
 
@@ -27,29 +27,53 @@ Once downloaded, place your model in the models folder in llama.cpp.
 ##### Input prompt (One-and-done)
 
 ```bash
-./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --prompt "Once upon a time"
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf -no-cnv --prompt "Once upon a time"
 ```
 ##### Conversation mode (Allow for continuous interaction with the model)
 
 ```bash
-./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf -cnv --chat-template gemma
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --chat-template gemma
+```
+
+##### Conversation mode using built-in jinja chat template
+
+```bash
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --jinja
+```
+
+##### One-and-done query using jinja with custom system prompt and a starting prompt
+
+```bash
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --jinja --single-turn -sys "You are a helpful assistant" -p "Hello"
 ```
 
 ##### Infinite text from a starting prompt (you can use `Ctrl-C` to stop it):
 ```bash
-./llama-cli -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
+./llama-cli -m models/gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 ```
 
 ### Windows:
 
 ##### Input prompt (One-and-done)
 ```powershell
-./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --prompt "Once upon a time"
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf -no-cnv --prompt "Once upon a time"
 ```
 ##### Conversation mode (Allow for continuous interaction with the model)
 
 ```powershell
-./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf -cnv --chat-template gemma
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --chat-template gemma
+```
+
+##### Conversation mode using built-in jinja chat template
+
+```powershell
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --jinja
+```
+
+##### One-and-done query using jinja with custom system prompt and a starting prompt
+
+```powershell
+./llama-cli.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --jinja --single-turn -sys "You are a helpful assistant" -p "Hello"
 ```
 
 #### Infinite text from a starting prompt (you can use `Ctrl-C` to stop it):
@@ -77,6 +101,8 @@ The `llama-cli` program provides several ways to interact with the LLaMA models 
 
 -   `--prompt PROMPT`: Provide a prompt directly as a command-line option.
 -   `--file FNAME`: Provide a file containing a prompt or multiple prompts.
+-   `--system-prompt PROMPT`: Provide a system prompt (will otherwise use the default one in the chat template (if provided)).
+-   `--system-prompt-file FNAME`: Provide a file containing a system prompt.
 -   `--interactive-first`: Run the program in interactive mode and wait for input right away. (More on this below.)
 
 ## Interaction
@@ -89,7 +115,10 @@ In interactive mode, users can participate in text generation by injecting their
 
 -   `-i, --interactive`: Run the program in interactive mode, allowing users to engage in real-time conversations or provide specific instructions to the model.
 -   `--interactive-first`: Run the program in interactive mode and immediately wait for user input before starting the text generation.
--   `-cnv,  --conversation`:  Run the program in conversation mode (does not print special tokens and suffix/prefix, use default chat template) (default: false)
+-   `-cnv,  --conversation`:  Run the program in conversation mode (does not print special tokens and suffix/prefix, use default or provided chat template) (default: true if chat template found)
+-   `-no-cnv`:  Disable conversation mode (default: false)
+-   `-st, --single-turn`:  Only process a single conversation turn (user input) and then exit.
+-   `--jinja`:  Enable jinja chat template parser, will use the model's built-in template or a user-provided one (default: false)
 -   `--color`: Enable colorized output to differentiate visually distinguishing between prompts, user input, and generated text.
 
 By understanding and utilizing these interaction options, you can create engaging and dynamic experiences with the LLaMA models, tailoring the text generation process to your specific needs.
@@ -121,9 +150,11 @@ When --in-prefix or --in-suffix options are enabled the chat template ( --chat-t
 
 ### Chat templates
 
- `--chat-template JINJA_TEMPLATE`: This option sets a custom jinja chat template. It accepts a string, not a file name.  Default: template taken from model's metadata. Llama.cpp only supports [some pre-defined templates](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template). These include llama2, llama3, gemma, monarch, chatml, orion, vicuna, vicuna-orca, deepseek, command-r, zephyr. When --in-prefix or --in-suffix options are enabled the chat template ( --chat-template ) is disabled.
+ `--chat-template JINJA_TEMPLATE`: This option sets a custom jinja chat template. It accepts a string, not a file name.  Default: template taken from model's metadata. Llama.cpp only supports [some pre-defined templates](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template). These include llama2, llama3, gemma, monarch, chatml, orion, vicuna, vicuna-orca, deepseek, command-r, zephyr. When --in-prefix or --in-suffix options are enabled the chat template ( --chat-template ) is disabled.
 
  Example usage: `--chat-template gemma`
+
+`--chat-template-file FNAME`:  Load a custom jinja chat template from an external file, useful if the model contains outdated or incompatible template, some examples can be found in models/templates. Up-to-date chat templates can be downloaded from Hugging Face using scripts/get_chat_template.py
 
 ## Context Management
 
@@ -264,6 +295,14 @@ By removing top tokens XTC can improve the variety of answers, break writing cli
 Being experimental and unique, XTC is disabled by default. The recommended combination of samplers is Min-P followed by XTC on its default settings: `--sampling-seq mx --min-p 0.02 --xtc-probability 0.5`.
 
 Example usage: `--xtc-probability 0.5 --xtc-threshold 0.1`
+
+### Top-nσ Sampling
+
+-   `--top-nsigma N`: Limit the next token selection to a subset of tokens with pre-softmax logits that are within n * σ less than the max logit (default: -1, -1 = disabled).
+
+Top-nσ sampling is a text generation method that selects tokens based on a statistical threshold in pre-softmax logits. It works by only sampling from tokens with logits that are within n * σ of the maximum logit. This method helps maintain a stable sampling space regardless of temperature scaling, allowing it to perform well on reasoning tasks even in high temperatures. Without complex probability manipulation, it efficiently filters tokens directly on the pre-softmax logits. A higher value for top-nsigma (e.g., 5) will take more noisy tokens into consideration, while a lower value (e.g., 1) will focous on the more informative region of the sampling space.
+
+Example usage: `--top-nsigma 1`
 
 ### Logit Bias
 

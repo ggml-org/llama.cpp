@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -99,7 +100,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     const float * data = is_host ? (const float *) src1->data : m_src1_data.data();
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
-    // ref: https://github.com/ggerganov/llama.cpp/pull/6387
+    // ref: https://github.com/ggml-org/llama.cpp/pull/6387
     if (t->op == GGML_OP_MUL_MAT_ID) {
         //   ids  -> [n_experts_used, n_tokens]
         //   src1 -> [cols, n_expert_used, n_tokens]
@@ -205,9 +206,6 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
 
 void IMatrixCollector::save_imatrix(int ncall) const {
     auto fname = m_params.out_file;
-    if (fname.empty()) {
-        fname = "imatrix.dat";
-    }
 
     if (ncall > 0) {
         fname += ".at_";
@@ -497,7 +495,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -581,6 +579,8 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
 
 int main(int argc, char ** argv) {
     common_params params;
+
+    params.out_file = "imatrix.dat" ;
 
     params.n_ctx = 512;
     params.logits_all = true;
