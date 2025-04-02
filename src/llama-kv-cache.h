@@ -144,6 +144,7 @@ public:
         uint32_t c1 = 0;
     };
 
+    // pending cell updates that are not yet committed
     struct {
         std::vector<slot_range> ranges;
     } pending;
