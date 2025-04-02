@@ -1443,7 +1443,7 @@ ggml_tensor * llm_graph_context::build_attn_mla(
     // note: this is the smaller n_ebed what we get after decompression
     const int64_t n_embd_head_v = hparams.n_embd_head_v;
 
-    // note: llm_build_deepseek2 passes as: {n_embd, n_tokens, n_head}
+    // note: call from llm_build_deepseek2 passes as: {n_embd, n_tokens, n_head}
     const auto n_tokens = q_cur->ne[1];
     const auto n_head = q_cur->ne[2];
 
@@ -1463,7 +1463,6 @@ ggml_tensor * llm_graph_context::build_attn_mla(
 
         v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_compressed, n_tokens);
 
-        // note: for deepseek MLA the V cache just holds a transposed copy of the K cache
         ggml_tensor * v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il],
                 n_tokens, n_embd_v_compressed,
                 (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
@@ -1484,25 +1483,25 @@ ggml_tensor * llm_graph_context::build_attn_mla(
 
     const auto n_kv = kv_self->n;
 
-    ggml_tensor * k_cache = ggml_view_2d(ctx0, kv_self->k_l[il],
+    ggml_tensor * k_compressed = ggml_view_2d(ctx0, kv_self->k_l[il],
             n_embd_k_compressed, n_kv,
             ggml_row_size(kv_self->k_l[il]->type, n_embd_k_compressed),
             0);
-    cb(k_cache, "k_cache", il);
+    cb(k_compressed, "k_compressed", il);
 
-    struct ggml_tensor * v_cache_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
+    struct ggml_tensor * v_compressed_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
             n_kv, n_embd_v_compressed,
             ggml_element_size(kv_self->v_l[il])*n_ctx,
             0);
-    cb(v_cache_trans, "v_cache_trans", il);
+    cb(v_compressed_trans, "v_compressed_trans", il);
 
-    ggml_tensor * q_states = ggml_view_2d(ctx0, q_cur,
+    ggml_tensor * q_compressed = ggml_view_2d(ctx0, q_cur,
             n_embd_k_compressed, n_tokens*n_head,
             ggml_row_size(q_cur->type, n_embd_k_compressed),
             0);
-    cb(q_states, "q_states_view", il);
+    cb(q_compressed, "q_compressed", il);
 
-    ggml_tensor * kq = ggml_mul_mat(ctx0, k_cache, q_states);
+    ggml_tensor * kq = ggml_mul_mat(ctx0, k_compressed, q_compressed);
     cb(kq, "kq", il);
 
     kq = ggml_view_3d(ctx0, kq, n_kv, n_tokens, n_head,
@@ -1520,7 +1519,7 @@ ggml_tensor * llm_graph_context::build_attn_mla(
             0);
     cb(kq_soft_max, "kq_soft_max_view", il);
 
-    ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, v_cache_trans, kq_soft_max);
+    ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, v_compressed_trans, kq_soft_max);
     cb(kqv_compressed, "kqv_compressed,", il);
 
     kqv_compressed = ggml_view_3d(ctx0, kqv_compressed,
