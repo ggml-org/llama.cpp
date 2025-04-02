@@ -27,8 +27,11 @@ file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
-find_package(IntelSYCL)
-if (IntelSYCL_FOUND)
+if (WIN32)
+  # The package can fail on some Unix systems
+  find_package(IntelSYCL)
+endif()
+if (WIN32 AND IntelSYCL_FOUND)
     # Use oneAPI CMake when possible
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
 else()
