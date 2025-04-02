@@ -17,7 +17,7 @@ i32vec2 repack(uint ib, uint iqs) {
 }
 
 ACC_TYPE mul_q8_1(int32_t q_sum, float da, vec2 dsb) {
-    return ACC_TYPE(da * (float(q_sum) * dsb.x - 8.0 * dsb.y));
+    return ACC_TYPE(da * (float(q_sum) * dsb.x - 8.0f * dsb.y));
 }
 #endif
 
@@ -51,7 +51,7 @@ i32vec2 repack(uint ib, uint iqs) {
 }
 
 ACC_TYPE mul_q8_1(int32_t q_sum, float da, vec2 dsb) {
-    return ACC_TYPE(da * (float(q_sum) * dsb.x - 16.0 * dsb.y));
+    return ACC_TYPE(da * (float(q_sum) * dsb.x - 16.0f * dsb.y));
 }
 #endif
 
