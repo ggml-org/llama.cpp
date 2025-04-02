@@ -540,7 +540,7 @@ struct llm_graph_context {
     ggml_tensor * build_attn_mla(
             llm_graph_input_attn_kv_unified * inp,
             ggml_cgraph * gf,
-            ggml_tensor * wv_decompress,
+            ggml_tensor * wv_b,
             ggml_tensor * wo,
             ggml_tensor * q_cur, // [n_embd_k, n_tokens, n_head]
             ggml_tensor * k_cur, // [n_embd_k, n_tokens]

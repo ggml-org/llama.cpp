@@ -1478,7 +1478,7 @@ ggml_tensor * llm_graph_context::build_attn(
 ggml_tensor * llm_graph_context::build_attn_mla(
         llm_graph_input_attn_kv_unified * inp,
         ggml_cgraph * gf,
-        ggml_tensor * wv_decompress,
+        ggml_tensor * wv_b,
         ggml_tensor * wo,
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
@@ -1497,8 +1497,8 @@ ggml_tensor * llm_graph_context::build_attn_mla(
     const auto kv_lora_rank = hparams.n_lora_kv;
 
     // note: deepseek with MLA option converts into MQA with larger n_ebed (ie: GQA with 1 group)
-    const int64_t n_embd_k_compressed = kv_lora_rank + hparams.n_rot;
-    const int64_t n_embd_v_compressed = kv_lora_rank;
+    const int64_t n_embd_k_cmpr = kv_lora_rank + hparams.n_rot;
+    const int64_t n_embd_v_cmpr = kv_lora_rank;
 
     // note: this is the smaller n_ebed what we get after decompression
     const int64_t n_embd_head_v = hparams.n_embd_head_v;
@@ -1514,17 +1514,17 @@ ggml_tensor * llm_graph_context::build_attn_mla(
         GGML_ASSERT(kv_self->size == n_ctx);
 
         ggml_tensor * k_cache_view = ggml_view_1d(ctx0, kv_self->k_l[il],
-                n_tokens*n_embd_k_compressed,
-                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_compressed)*kv_head);
+                n_tokens*n_embd_k_cmpr,
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_cmpr)*kv_head);
         //cb(k_cache_view, "k_cache_view", il);
 
         // note: storing RoPE-ed version of K in the KV cache
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_cur, k_cache_view));
 
-        v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_compressed, n_tokens);
+        v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_cmpr, n_tokens);
 
         ggml_tensor * v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il],
-                n_tokens, n_embd_v_compressed,
+                n_tokens, n_embd_v_cmpr,
                 (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
                 (kv_head)*ggml_element_size(kv_self->v_l[il]));
 
@@ -1543,34 +1543,34 @@ ggml_tensor * llm_graph_context::build_attn_mla(
 
     const auto n_kv = kv_self->n;
 
-    ggml_tensor * k_compressed = ggml_view_2d(ctx0, kv_self->k_l[il],
-            n_embd_k_compressed, n_kv,
-            ggml_row_size(kv_self->k_l[il]->type, n_embd_k_compressed),
+    ggml_tensor * k_cmpr = ggml_view_2d(ctx0, kv_self->k_l[il],
+            n_embd_k_cmpr, n_kv,
+            ggml_row_size(kv_self->k_l[il]->type, n_embd_k_cmpr),
             0);
-    cb(k_compressed, "k_compressed", il);
+    cb(k_cmpr, "k_cmpr", il);
 
-    struct ggml_tensor * v_compressed_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
-            n_kv, n_embd_v_compressed,
+    struct ggml_tensor * v_cmpr_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
+            n_kv, n_embd_v_cmpr,
             ggml_element_size(kv_self->v_l[il])*n_ctx,
             0);
-    cb(v_compressed_trans, "v_compressed_trans", il);
+    cb(v_cmpr_trans, "v_cmpr_trans", il);
 
-    ggml_tensor * q_compressed = ggml_view_2d(ctx0, q_cur,
-            n_embd_k_compressed, n_tokens*n_head,
-            ggml_row_size(q_cur->type, n_embd_k_compressed),
+    ggml_tensor * q_cmpr = ggml_view_2d(ctx0, q_cur,
+            n_embd_k_cmpr, n_tokens*n_head,
+            ggml_row_size(q_cur->type, n_embd_k_cmpr),
             0);
-    cb(q_compressed, "q_compressed", il);
+    cb(q_cmpr, "q_cmpr", il);
 
-    ggml_tensor * kq = ggml_mul_mat(ctx0, k_compressed, q_compressed);
-    cb(kq, "kq", il);
+    ggml_tensor * kq_cmpr = ggml_mul_mat(ctx0, k_cmpr, q_cmpr);
+    cb(kq_cmpr, "kq_cmpr", il);
 
-    kq = ggml_view_3d(ctx0, kq, n_kv, n_tokens, n_head,
-            ggml_row_size(kq->type, n_kv),
-            ggml_row_size(kq->type, n_kv)*n_tokens,
+    kq_cmpr = ggml_view_3d(ctx0, kq_cmpr, n_kv, n_tokens, n_head,
+            ggml_row_size(kq_cmpr->type, n_kv),
+            ggml_row_size(kq_cmpr->type, n_kv)*n_tokens,
             0);
-    cb(kq, "kq_view", il);
+    cb(kq_cmpr, "kq_view", il);
 
-    ggml_tensor * kq_soft_max = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+    ggml_tensor * kq_soft_max = ggml_soft_max_ext(ctx0, kq_cmpr, kq_mask, kq_scale, hparams.f_max_alibi_bias);
     cb(kq_soft_max, "kq_soft_max", il);
 
     kq_soft_max = ggml_view_2d(ctx0, kq_soft_max,
@@ -1579,24 +1579,24 @@ ggml_tensor * llm_graph_context::build_attn_mla(
             0);
     cb(kq_soft_max, "kq_soft_max_view", il);
 
-    ggml_tensor * kqv_compressed = ggml_mul_mat(ctx0, v_compressed_trans, kq_soft_max);
-    cb(kqv_compressed, "kqv_compressed,", il);
+    ggml_tensor * kqv_cmpr = ggml_mul_mat(ctx0, v_cmpr_trans, kq_soft_max);
+    cb(kqv_cmpr, "kqv_cmpr,", il);
 
-    kqv_compressed = ggml_view_3d(ctx0, kqv_compressed,
-            n_embd_v_compressed, n_tokens, n_head,
-            ggml_row_size(kqv_compressed->type, n_embd_v_compressed),
-            ggml_row_size(kqv_compressed->type, n_embd_v_compressed)*n_tokens,
+    kqv_cmpr = ggml_view_3d(ctx0, kqv_cmpr,
+            n_embd_v_cmpr, n_tokens, n_head,
+            ggml_row_size(kqv_cmpr->type, n_embd_v_cmpr),
+            ggml_row_size(kqv_cmpr->type, n_embd_v_cmpr)*n_tokens,
             0);
-    cb(kqv_compressed, "kqv_compressed_view", il);
+    cb(kqv_cmpr, "kqv_cmpr_view", il);
 
-    ggml_tensor * wv_decompress_view = ggml_view_3d(ctx0, wv_decompress,
-            n_embd_v_compressed, n_embd_head_v, n_head,
-            ggml_row_size(wv_decompress->type, n_embd_v_compressed),
-            ggml_row_size(wv_decompress->type, n_embd_v_compressed)*n_embd_head_v,
+    ggml_tensor * wv_b_view = ggml_view_3d(ctx0, wv_b,
+            n_embd_v_cmpr, n_embd_head_v, n_head,
+            ggml_row_size(wv_b->type, n_embd_v_cmpr),
+            ggml_row_size(wv_b->type, n_embd_v_cmpr)*n_embd_head_v,
             0);
-    cb(wv_decompress_view, "wv_decompress_view", il);
+    cb(wv_b_view, "wv_b_view", il);
 
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_decompress_view, kqv_compressed);
+    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_view, kqv_cmpr);
     cb(kqv, "kqv", il);
 
     kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
