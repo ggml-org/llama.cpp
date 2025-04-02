@@ -1298,7 +1298,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         {
             if (!kv_self->find_slot(ubatch)) {
                 LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
-                return -3;
+                return 1;
             }
 
             if (!kv_self->recurrent) {

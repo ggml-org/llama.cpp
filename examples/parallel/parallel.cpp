@@ -106,6 +106,8 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
+    params.n_predict = 128;
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
     }

@@ -204,6 +204,8 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 return false;
             }
         }
+
+        return true;
     }
 
     for (uint32_t i = 0; i < size; ++i) {
