@@ -1570,6 +1570,7 @@ struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_p
         new_clip->ctx_data = ggml_init(params);
         if (!new_clip->ctx_data) {
             LOG_ERR("%s: ggml_init() failed\n", __func__);
+            ggml_free(meta);
             clip_free(new_clip);
             gguf_free(ctx);
             return nullptr;
@@ -1578,6 +1579,7 @@ struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_p
         auto fin = std::ifstream(fname, std::ios::binary);
         if (!fin) {
             LOG_ERR("cannot open model file for loading tensors\n");
+            ggml_free(meta);
             clip_free(new_clip);
             gguf_free(ctx);
             return nullptr;
