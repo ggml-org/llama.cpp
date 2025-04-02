@@ -9514,6 +9514,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
         const uint32_t n_embd_head_qk_rope = hparams.n_rot;
         const uint32_t n_embd_head_qk_nope = hparams.n_embd_head_k - hparams.n_rot;
         const uint32_t kv_lora_rank = hparams.n_lora_kv;
+        const uint32_t n_embd_head_v = hparams.n_embd_head_v;
 
         ggml_tensor * cur;
         ggml_tensor * inpL;
@@ -9555,14 +9556,16 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 }
 
                 // split into {n_head * n_embd_head_qk_nope, n_tokens}
-                ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
+                ggml_tensor * q_nope = ggml_view_3d(ctx0, q,
+                        n_embd_head_qk_nope, n_head, n_tokens,
                         ggml_row_size(q->type, hparams.n_embd_head_k),
                         ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
                         0);
                 cb(q_nope, "q_nope", il);
 
                 // and {n_head * n_embd_head_qk_rope, n_tokens}
-                ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
+                ggml_tensor * q_pe = ggml_view_3d(ctx0, q,
+                        n_embd_head_qk_rope, n_head, n_tokens,
                         ggml_row_size(q->type, hparams.n_embd_head_k),
                         ggml_row_size(q->type, hparams.n_embd_head_k * n_head),
                         ggml_row_size(q->type, n_embd_head_qk_nope));
@@ -9578,7 +9581,8 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 cb(kv_compressed, "kv_compressed", il);
 
                 // and {n_embd_head_qk_rope, n_tokens}
-                ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed, n_embd_head_qk_rope, 1, n_tokens,
+                ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_pe_compresseed,
+                        n_embd_head_qk_rope, 1, n_tokens,
                         kv_pe_compresseed->nb[1],
                         kv_pe_compresseed->nb[1],
                         ggml_row_size(kv_pe_compresseed->type, kv_lora_rank));
@@ -9616,12 +9620,14 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     q_pe = ggml_permute(ctx0, q_pe, 0, 2, 1, 3);
                     cb(q_pe, "q_pe_perm", il);
 
-                    k_pe = ggml_view_2d(ctx0, k_pe, n_embd_head_qk_rope, n_tokens,
+                    k_pe = ggml_view_2d(ctx0, k_pe,
+                            n_embd_head_qk_rope, n_tokens,
                             ggml_row_size(k_pe->type, n_embd_head_qk_rope),
                             0);
                     cb(k_pe, "k_pe_view", il);
 
-                    ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b, n_embd_head_qk_nope, kv_lora_rank, n_head,
+                    ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b,
+                            n_embd_head_qk_nope, kv_lora_rank, n_head,
                             ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
                             ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank * n_embd_head_qk_nope),
                             0);
@@ -9629,9 +9635,9 @@ struct llm_build_deepseek2 : public llm_graph_context {
 
                     // note: this operation *MUST* use F32 (or have `wk_b` stored as F32 or BF16 in the GGUF)
                     ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, wk_b, q_nope);
-                    if (wk_b->type != GGML_TYPE_F32 && wk_b->type != GGML_TYPE_BF16) {
+                    //if (wk_b->type != GGML_TYPE_F32 && wk_b->type != GGML_TYPE_BF16) {
                         ggml_mul_mat_set_prec(q_nope_absorbed, GGML_PREC_F32);
-                    }
+                    //}
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
 
                     ggml_tensor * q_states = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
@@ -9651,30 +9657,33 @@ struct llm_build_deepseek2 : public llm_graph_context {
 
                     // note: this operation *MUST* use F32 (or have `wkv_b` stored as F32 or BF16 in the GGUF)
                     ggml_tensor * kv_decompressed = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_compressed);
-                    if (model.layers[il].wkv_b->type != GGML_TYPE_F32 && model.layers[il].wkv_b->type != GGML_TYPE_BF16) {
+                    //if (model.layers[il].wkv_b->type != GGML_TYPE_F32 && model.layers[il].wkv_b->type != GGML_TYPE_BF16) {
                         ggml_mul_mat_set_prec(kv_decompressed, GGML_PREC_F32);
-                    }
+                    //}
                     cb(kv_decompressed, "kv_decompressed", il);
 
                     // split into {n_head * n_embd_head_qk_nope, n_tokens}
-                    ggml_tensor * k_nope = ggml_view_3d(ctx0, kv_decompressed, n_embd_head_qk_nope, n_head, n_tokens,
-                            ggml_row_size(kv_decompressed->type, n_embd_head_qk_nope + hparams.n_embd_head_v),
-                            ggml_row_size(kv_decompressed->type, n_head * (n_embd_head_qk_nope + hparams.n_embd_head_v)),
+                    ggml_tensor * k_nope = ggml_view_3d(ctx0, kv_decompressed,
+                            n_embd_head_qk_nope, n_head, n_tokens,
+                            ggml_row_size(kv_decompressed->type, n_embd_head_qk_nope + n_embd_head_v),
+                            ggml_row_size(kv_decompressed->type, n_head * (n_embd_head_qk_nope + n_embd_head_v)),
                             0);
                     cb(k_nope, "k_nope", il);
 
                     // and {n_head * n_embd_head_v, n_tokens}
-                    ggml_tensor * v_states = ggml_view_3d(ctx0, kv_decompressed, hparams.n_embd_head_v, n_head, n_tokens,
-                            ggml_row_size(kv_decompressed->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)),
-                            ggml_row_size(kv_decompressed->type, (n_embd_head_qk_nope + hparams.n_embd_head_v)*n_head),
+                    ggml_tensor * v_states = ggml_view_3d(ctx0, kv_decompressed,
+                            n_embd_head_v, n_head, n_tokens,
+                            ggml_row_size(kv_decompressed->type, (n_embd_head_qk_nope + n_embd_head_v)),
+                            ggml_row_size(kv_decompressed->type, (n_embd_head_qk_nope + n_embd_head_v)*n_head),
                             ggml_row_size(kv_decompressed->type, (n_embd_head_qk_nope)));
                     cb(v_states, "v_states", il);
 
                     v_states = ggml_cont(ctx0, v_states);
                     cb(v_states, "v_states", il);
 
-                    v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v * n_head, n_tokens,
-                        ggml_row_size(v_states->type, hparams.n_embd_head_v * n_head),
+                    v_states = ggml_view_2d(ctx0, v_states,
+                            n_embd_head_v * n_head, n_tokens,
+                            ggml_row_size(v_states->type, n_embd_head_v * n_head),
                         0);
                     cb(v_states, "v_states", il);
 
