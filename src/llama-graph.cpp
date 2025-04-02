@@ -1532,8 +1532,8 @@ ggml_tensor * llm_graph_context::build_attn_mla(
 
     ggml_tensor * wv_b_view = ggml_view_3d(wv_b,
             n_embd_v_compressed, n_embd_head_v, n_head,
-            ggml_row_size(wv_b, n_embd_v_compressed),
-            ggml_row_size(wv_b, n_embd_v_compressed)*n_embd_head_v,
+            ggml_row_size(wv_b->type, n_embd_v_compressed),
+            ggml_row_size(wv_b->type, n_embd_v_compressed)*n_embd_head_v,
             0);
     cb(wv_b_view, "wv_b_view", il);
 
