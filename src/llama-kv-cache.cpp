@@ -492,6 +492,12 @@ bool llama_kv_cache_unified::find_slot(
     const uint32_t n_seqs   = ubatch.n_seqs;
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
 
+    // if we have enough unused cells before the current head ->
+    //   better to start searching from the beginning of the cache, hoping to fill it
+    if (head > used + 2*ubatch.n_tokens) {
+        head = 0;
+    }
+
     if (recurrent) {
         // For recurrent state architectures (like Mamba or RWKV),
         // each cache cell can store the state for a whole sequence.

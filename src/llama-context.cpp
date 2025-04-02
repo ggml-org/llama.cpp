@@ -1254,6 +1254,9 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -2;
     };
 
+    // handle any pending defrags/shifts
+    kv_self_update();
+
     int64_t n_outputs_prev = 0;
 
     while (sbatch.n_tokens > 0) {
@@ -1293,14 +1296,6 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         // find KV slot
         {
-            kv_self_update();
-
-            // if we have enough unused cells before the current head ->
-            //   better to start searching from the beginning of the cache, hoping to fill it
-            if (kv_self->head > kv_self->used + 2*ubatch.n_tokens) {
-                kv_self->head = 0;
-            }
-
             if (!kv_self->find_slot(ubatch)) {
                 LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
                 return -3;
@@ -1339,16 +1334,6 @@ int llama_context::decode(llama_batch & inp_batch) {
                 case GGML_STATUS_FAILED:
                 default:
                     return -3;
-            }
-        }
-
-        // update the kv ring buffer
-        {
-            kv_self->head += ubatch.n_tokens;
-
-            // Ensure kv cache head points to a valid index.
-            if (kv_self->head >= kv_self->size) {
-                kv_self->head = 0;
             }
         }
 
