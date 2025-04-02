@@ -600,7 +600,7 @@ llama_model_loader::llama_model_loader(
 
             if (trace > 0) {
                 const uint16_t sid = w.idx;
-                LLAMA_LOG_INFO("%s: - tensor split %2d: %32s %-8s [ %s ] %8.2f MB\n", __func__,
+                LLAMA_LOG_INFO("%s: - tensor split %2d: %32s %-8s [ %s ] %8.2f MiB\n", __func__,
                         sid, ggml_get_name(tensor), ggml_type_name(type), llama_format_tensor_shape(tensor).c_str(),
                         ggml_nbytes(tensor)/1024.0f/1024.0f);
             }
