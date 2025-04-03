@@ -31,8 +31,7 @@ jobs:
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
                          -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
                          -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-                         -DCMAKE_C_FLAGS_INIT='-fPIC' \
-                         -DCMAKE_CXX_FLAGS_INIT='-fPIC' \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                          -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
@@ -73,8 +72,7 @@ jobs:
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
                          -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
                          -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-                         -DCMAKE_C_FLAGS_INIT='-fPIC' \
-                         -DCMAKE_CXX_FLAGS_INIT='-fPIC' \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                          -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
@@ -114,8 +112,7 @@ jobs:
                          -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
                          -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
                          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-                         -DCMAKE_C_FLAGS_INIT='-fPIC' \
-                         -DCMAKE_CXX_FLAGS_INIT='-fPIC' \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                          -DCMAKE_FIND_ROOT_PATH=/usr/lib/aarch64-linux-gnu \
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
