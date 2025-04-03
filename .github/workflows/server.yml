@@ -111,6 +111,7 @@ jobs:
           cd examples/server/webui
           git status
 
+          npm install
           npm run build
           git status
           modified_files="$(git status -s)"
