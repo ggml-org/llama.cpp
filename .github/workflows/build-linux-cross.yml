@@ -18,7 +18,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
-                  crossbuild-essential-riscv64
+                  gcc-14-riscv64-linux-gnu \
+                  g++-14-riscv64-linux-gnu
 
       - name: Build
         run: |
