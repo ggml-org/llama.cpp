@@ -9,6 +9,7 @@
 #include <fstream>
 #include <cmath>
 #include <cctype>
+#include <algorithm>
 
 struct quant_option {
     std::string name;
