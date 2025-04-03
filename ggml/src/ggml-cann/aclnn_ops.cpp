@@ -3451,9 +3451,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor * src0 = dst->src[0];
 
     aclTensor* acl_src = ggml_cann_create_tensor(src0);
-    int64_t dst_ne[3] = {dst->ne[0], dst->ne[1], dst->ne[2]};
-    size_t dst_nb[3] = {dst->nb[0], dst->ne[1], dst->nb[2]};
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst_ne, dst_nb, 3);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3);
 
     uint64_t workspaceSize = 0;
     aclOpExecutor* executor;
