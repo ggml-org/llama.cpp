@@ -252,35 +252,32 @@ static const std::vector<std::string> ALLOWED_TENSOR_TYPE = {
     "attn_k",
     "attn_kv_a_mqa",
     "attn_kv_b",
-    "attn_out",
+    "attn_o",
+    "attn_output",
+    "attn_q",
     "attn_q_a",
     "attn_q_b",
-    "attn_q",
     "attn_qkv",
     "attn_v",
     "channel_mix_key",
     "channel_mix_receptance",
     "channel_mix_value",
-    "cls_out",
     "cls",
-    "dec_attn_k",
-    "dec_attn_out",
-    "dec_attn_q",
-    "dec_attn_v",
-    "dec_cross_attn_k",
-    "dec_cross_attn_out",
-    "dec_cross_attn_q",
-    "dec_cross_attn_v",
+    "cls.output",
+    "cross_attn_k",
+    "cross_attn_o",
+    "cross_attn_q",
+    "cross_attn_v",
     "ffn_act",
-    "ffn_down_exp",
-    "ffn_down_shexp",
     "ffn_down",
-    "ffn_gate_exp",
-    "ffn_gate_shexp",
+    "ffn_down_exps",
+    "ffn_down_shexp",
     "ffn_gate",
-    "ffn_up_exp",
-    "ffn_up_shexp",
+    "ffn_gate_exps",
+    "ffn_gate_shexp",
     "ffn_up",
+    "ffn_up_exps",
+    "ffn_up_shexp",
     "ssm_in",
     "ssm_out",
     "time_mix_gate",
@@ -296,7 +293,7 @@ struct tensor_quantization {
     ggml_type quant = GGML_TYPE_COUNT;
 };
 
-static bool string_parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
+static bool parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
     const char * sep = strchr(data, '=');
     if (sep == nullptr) {
         printf("\n%s: malformed tensor type '%s'\n\n", __func__, data);
@@ -322,7 +319,7 @@ static bool string_parse_tensor_type(const char * data, std::vector<tensor_quant
     bool found = false;
     for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
         // check if an allowed tensor exists and it's at the end of the kv string
-        if (tn.length() - allowed.length() == tn.find(allowed)) {
+        if (tn.length() - allowed.length() == tn.find(allowed) && tn == allowed) {
             found = true;
             break;
         }
@@ -379,7 +376,7 @@ int main(int argc, char ** argv) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
-            if (arg_idx == argc-1 || !string_parse_tensor_type(argv[++arg_idx], tensor_types)) {
+            if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
