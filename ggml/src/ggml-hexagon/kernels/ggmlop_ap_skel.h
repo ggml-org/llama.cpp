@@ -237,6 +237,7 @@ struct dsptensor {
    int32_t ne[4];
    int32_t nb[4];
    int32_t op;
+   int32_t op_params[16];
    int32_t flags;
    void * data;
    int data_len;
@@ -274,9 +275,9 @@ __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_close)(remote_handle64 h) __QA
 __QAIC_HEADER_EXPORT AEEResult __QAIC_HEADER(ggmlop_dsp_setclocks)(remote_handle64 _h, int32 power_level, int32 latency, int32 dcvs_enable) __QAIC_HEADER_ATTRIBUTE;
 __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_add)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
 __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_mulmat)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_mul)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_sub)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
-__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_div)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_softmax)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_rmsnorm)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
+__QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_pool2d)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
 #ifndef ggmlop_URI
 #define ggmlop_URI "file:///libggmlop_skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1"
 #endif /*ggmlop_URI*/

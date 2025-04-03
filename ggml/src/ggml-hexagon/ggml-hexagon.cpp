@@ -598,9 +598,9 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {true,  GGML_OP_ADD, 2, "ggmlop_dsp_add", ggmlop_dsp_add},
         {false, GGML_OP_ADD1, 0, nullptr, nullptr},
         {false, GGML_OP_ACC, 0, nullptr, nullptr},
-        {true,  GGML_OP_SUB, 2, "ggmlop_dsp_sub", ggmlop_dsp_sub},
-        {true,  GGML_OP_MUL, 2, "ggmlop_dsp_mul", ggmlop_dsp_mul},
-        {true,  GGML_OP_DIV, 2, "ggmlop_dsp_div", ggmlop_dsp_div},
+        {false,  GGML_OP_SUB, 2, nullptr, nullptr},
+        {false,  GGML_OP_MUL, 2, nullptr, nullptr},
+        {false,  GGML_OP_DIV, 2, nullptr, nullptr},
         {false, GGML_OP_SQR, 0, nullptr, nullptr},
         {false,  GGML_OP_SQRT, 0, nullptr, nullptr},
         {false,  GGML_OP_LOG, 0, nullptr, nullptr},
@@ -616,7 +616,7 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {false, GGML_OP_CONCAT, 0, nullptr, nullptr},
         {false, GGML_OP_SILU_BACK, 0, nullptr, nullptr},
         {false, GGML_OP_NORM, 0, nullptr, nullptr},
-        {false, GGML_OP_RMS_NORM, 0, nullptr, nullptr},
+        {true, GGML_OP_RMS_NORM, 1, "ggmlop_dsp_rmsnorm", ggmlop_dsp_rmsnorm},
         {false, GGML_OP_RMS_NORM_BACK, 0, nullptr, nullptr},
         {false, GGML_OP_GROUP_NORM, 0, nullptr, nullptr},
         {false, GGML_OP_L2_NORM, 0, nullptr, nullptr},
@@ -636,7 +636,7 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {false, GGML_OP_DIAG, 0, nullptr, nullptr},
         {false, GGML_OP_DIAG_MASK_INF, 0, nullptr, nullptr},
         {false, GGML_OP_DIAG_MASK_ZERO, 0, nullptr, nullptr},
-        {false, GGML_OP_SOFT_MAX, 0, nullptr, nullptr},
+        {true, GGML_OP_SOFT_MAX, 1, "ggmlop_dsp_softmax", ggmlop_dsp_softmax},
         {false, GGML_OP_SOFT_MAX_BACK, 0, nullptr, nullptr},
         {false, GGML_OP_ROPE, 0, nullptr, nullptr},
         {false, GGML_OP_ROPE_BACK, 0, nullptr, nullptr},
@@ -646,7 +646,7 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {false, GGML_OP_IM2COL_BACK, 0, nullptr, nullptr},
         {false, GGML_OP_CONV_TRANSPOSE_2D, 0, nullptr, nullptr},
         {false, GGML_OP_POOL_1D, 0, nullptr, nullptr},
-        {false, GGML_OP_POOL_2D, 0, nullptr, nullptr},
+        {true, GGML_OP_POOL_2D, 1, "ggmlop_dsp_pool2d", ggmlop_dsp_pool2d},
         {false, GGML_OP_POOL_2D_BACK, 0, nullptr, nullptr},
         {false, GGML_OP_UPSCALE, 0, nullptr, nullptr},
         {false, GGML_OP_PAD, 0, nullptr, nullptr},
@@ -694,10 +694,10 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {false, static_cast<ggml_op>(GGML_UNARY_OP_EXP), 0, nullptr, nullptr}
 };
 
-static_assert(ggmlhexagon_k_op_caps[GGML_OP_NONE].supported,    "GGML_OP_NONE is not true");
-static_assert(ggmlhexagon_k_op_caps[GGML_OP_ADD].supported,     "GGML_OP_ADD is not true");
-static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL].supported,     "GGML_OP_MUL is not true");
-static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL_MAT].supported, "GGML_OP_MUL_MAT is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_NONE].supported,     "GGML_OP_NONE is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_ADD].supported,      "GGML_OP_ADD is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_MUL_MAT].supported,  "GGML_OP_MUL_MAT is not true");
+static_assert(ggmlhexagon_k_op_caps[GGML_OP_SOFT_MAX].supported, "GGML_OP_SOFT_MAX is not true");
 static_assert(std::size(ggmlhexagon_k_op_caps) == (static_cast<size_t>(GGML_OP_COUNT) + static_cast<size_t>(GGML_UNARY_OP_COUNT)),
               "pls check ggmlhexagon_k_op_caps and ensure is corresponding to latest ggml.h");
 
@@ -5018,6 +5018,7 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     dsptensor_0.nb[3] = src0->nb[3];
 
     if (2 == input_tensor_count) {
+        GGML_ASSERT(nullptr != src1);
         dsptensor_1.data        = src1->data;
         dsptensor_1.type        = src1->type;
         dsptensor_1.data_len    = ggml_nbytes(src1);
@@ -5046,6 +5047,8 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     dsptensor_2.nb[1] = dst->nb[1];
     dsptensor_2.nb[2] = dst->nb[2];
     dsptensor_2.nb[3] = dst->nb[3];
+
+    memcpy(dsptensor_2.op_params, dst->op_params, GGML_MAX_OP_PARAMS / sizeof(int32_t));
 
     hexagon_error = op_func(ctx->ggmlop_handle, &dsptensor_0, &dsptensor_1, &dsptensor_2);
     if (AEE_SUCCESS != hexagon_error) {
@@ -5078,18 +5081,30 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
             if (!ggml_are_same_shape(src0, src1)) {
                 return false;
             }
-
-            //TODO: offload quantize GGML_OP_ADD to cDSP
-            return ggmlhexagon_same_types(ctx, op_tensor);
+            return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
         }
         case GGML_OP_MUL_MAT:
         {
             ggmlhexagon_dump_op_info(op_tensor);
             if (1 == g_hexagon_appcfg.enable_q_mulmat)
-                return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_Q6_K
+                return (src0->type == GGML_TYPE_F32
+                        || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0
+                        || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K
                        ) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
             else
                 return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+        }
+        case GGML_OP_SOFT_MAX:{
+            if (!ggml_is_contiguous(op_tensor))
+                return false;
+            if (!ggml_are_same_shape(src0, op_tensor))
+                return false;
+        }
+        case GGML_OP_RMS_NORM:
+        case GGML_OP_POOL_2D:
+        {
+
+            ggmlhexagon_dump_op_info(op_tensor);
         }
         default:
             break;
