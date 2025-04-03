@@ -318,7 +318,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             ++qs.i_ffn_down;
         }
-        else if (qs.model.hparams.n_expert >= 8 && name.find("ffn_gate.weight") != std::string::npos) {           
+        else if (qs.model.hparams.n_expert >= 8 && name.find("ffn_gate.weight") != std::string::npos) {
             if (qs.i_ffn_gate < qs.n_ffn_gate/16) {
                 new_type = GGML_TYPE_Q4_K;
             }
@@ -327,7 +327,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             ++qs.i_ffn_gate;
         }
-        else if (qs.model.hparams.n_expert >= 8 && name.find("ffn_up.weight") != std::string::npos) {     
+        else if (qs.model.hparams.n_expert >= 8 && name.find("ffn_up.weight") != std::string::npos) {
             if (qs.i_ffn_up < qs.n_ffn_up/16) {
                 new_type = GGML_TYPE_Q4_K;
             }
