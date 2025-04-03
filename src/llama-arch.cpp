@@ -75,6 +75,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_ARCHITECTURE,         "general.architecture"                  },
     { LLM_KV_GENERAL_QUANTIZATION_VERSION, "general.quantization_version"          },
     { LLM_KV_GENERAL_ALIGNMENT,            "general.alignment"                     },
+    { LLM_KV_GENERAL_FILE_TYPE,            "general.file_type"                     },
     { LLM_KV_GENERAL_NAME,                 "general.name"                          },
     { LLM_KV_GENERAL_AUTHOR,               "general.author"                        },
     { LLM_KV_GENERAL_VERSION,              "general.version"                       },

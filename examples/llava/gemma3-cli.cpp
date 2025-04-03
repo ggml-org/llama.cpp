@@ -78,7 +78,7 @@ struct gemma3_context {
     }
 
     void init_clip_model(common_params & params) {
-        const char * clip_path = params.mmproj.c_str();
+        const char * clip_path = params.mmproj.path.c_str();
         ctx_clip = clip_model_load(clip_path, params.verbosity > 1);
     }
 
@@ -232,13 +232,13 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.mmproj.empty()) {
+    if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
         return 1;
     }
 
     gemma3_context ctx(params);
-    printf("%s: %s\n", __func__, params.model.c_str());
+    printf("%s: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 

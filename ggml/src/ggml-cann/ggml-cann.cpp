@@ -1458,11 +1458,6 @@ static void ggml_backend_cann_free(ggml_backend_t backend) {
     ACL_CHECK(aclrtSynchronizeDevice());
     ACL_CHECK(aclrtResetDevice(cann_ctx->device));
 
-    // finalize when last backend freed.
-    if (cann_ctx->device == ggml_backend_cann_get_device_count() - 1) {
-        ACL_CHECK(aclFinalize());
-    }
-
     delete cann_ctx;
     delete backend;
 }
@@ -1688,11 +1683,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
-                case GGML_TYPE_Q8_0:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
-                case GGML_TYPE_Q4_0:
                     return true;
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+                    // only support contiguous for quantized types.
+                    return ggml_is_contiguous(op->src[0]) &&
+                            ggml_is_contiguous(op->src[1]);
                 default:
                     return false;
             }
@@ -1704,7 +1702,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             switch (op->src[0]->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
-                case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q8_0:
                     return true;
                 default:
@@ -1712,16 +1709,21 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
         } break;
         case GGML_OP_CPY: {
-            switch (op->type) {
-                case GGML_TYPE_F32:
-                case GGML_TYPE_F16:
-                case GGML_TYPE_Q8_0:
-                case GGML_TYPE_Q4_0:
-                    return true;
-                default:
-                    return false;
+            ggml_tensor *src = op->src[0];
+            if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
+                  (src->type != GGML_TYPE_F32 &&
+                    src->type != GGML_TYPE_F16)) {
+                // only support F32 and F16.
+                return false;
             }
-        }
+
+            if (!ggml_are_same_shape(op, src) && !ggml_is_contiguous(op)) {
+                // unsupport dst is not contiguous.
+                return false;
+            }
+
+            return true;
+        } break;
         case GGML_OP_CONT: {
             // TODO: support GGML_TYPE_BF16
             switch (op->src[0]->type) {
@@ -1734,13 +1736,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float * ext_factor = (float*)((int32_t*)op->op_params + 7);
+            float ext_factor = 0.0f;
+            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
                 return false;
             }
             // TODO: ext_factor != 0
-            if (*ext_factor != 0) {
+            if (ext_factor != 0) {
                 return false;
             }
 
@@ -1762,9 +1765,19 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         }
+        case GGML_OP_POOL_2D: {
+            const int32_t * opts = (const int32_t *) op->op_params;
+            const int       k0   = opts[1];
+            const int       k1   = opts[2];
+            const int       p0   = opts[5];
+            const int       p1   = opts[6];
+            // value of paddingH should be at most half of kernelH
+            // value of paddingW should be at most half of kernelW
+            return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
+        }
+        case GGML_OP_DUP:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
-        case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -1781,7 +1794,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_CLAMP:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
-        case GGML_OP_POOL_2D:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:

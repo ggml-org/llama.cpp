@@ -382,6 +382,8 @@ struct llama_model {
 
     ggml_backend_buffer_type_t select_buft(int il) const;
 
+    bool has_tensor_overrides() const;
+
     const struct ggml_tensor * get_tensor(const char * name) const;
 
     // TODO: move this to new llm_arch_model_i interface

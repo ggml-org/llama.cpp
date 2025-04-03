@@ -23,49 +23,35 @@ if (Vulkan_FOUND)
                              ../../include/ggml-vulkan.h
                             )
 
-    if(NOT DEFINED GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-        # Compile a test shader to determine whether GL_KHR_cooperative_matrix is supported.
-        # If it's not, there will be an error to stderr.
-        # If it's supported, set a define to indicate that we should compile those shaders
-        execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
-                        OUTPUT_VARIABLE glslc_output
-                        ERROR_VARIABLE glslc_error)
+    # Compile a test shader to determine whether GL_KHR_cooperative_matrix is supported.
+    # If it's not, there will be an error to stderr.
+    # If it's supported, set a define to indicate that we should compile those shaders
+    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
+                    OUTPUT_VARIABLE glslc_output
+                    ERROR_VARIABLE glslc_error)
 
-        if (${glslc_error} MATCHES ".*extension not supported: GL_KHR_cooperative_matrix.*")
-            message(STATUS "GL_KHR_cooperative_matrix not supported by glslc")
-            set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT OFF CACHE INTERNAL "Whether coopmat is supported by glslc")
-        else()
-            message(STATUS "GL_KHR_cooperative_matrix supported by glslc")
-            set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT ON CACHE INTERNAL "Whether coopmat is supported by glslc")
-        endif()
+    if (${glslc_error} MATCHES ".*extension not supported: GL_KHR_cooperative_matrix.*")
+        message(STATUS "GL_KHR_cooperative_matrix not supported by glslc")
+        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT OFF)
     else()
-        message(STATUS "GL_KHR_cooperative_matrix support already defined: ${GGML_VULKAN_COOPMAT_GLSLC_SUPPORT}")
-    endif()
-
-    if(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        message(STATUS "GL_KHR_cooperative_matrix supported by glslc")
+        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT ON)
         add_compile_definitions(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     endif()
 
-    if(NOT DEFINED GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-        # Compile a test shader to determine whether GL_NV_cooperative_matrix2 is supported.
-        # If it's not, there will be an error to stderr.
-        # If it's supported, set a define to indicate that we should compile those shaders
-        execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
-                        OUTPUT_VARIABLE glslc_output
-                        ERROR_VARIABLE glslc_error)
+    # Compile a test shader to determine whether GL_NV_cooperative_matrix2 is supported.
+    # If it's not, there will be an error to stderr.
+    # If it's supported, set a define to indicate that we should compile those shaders
+    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
+                    OUTPUT_VARIABLE glslc_output
+                    ERROR_VARIABLE glslc_error)
 
-        if (${glslc_error} MATCHES ".*extension not supported: GL_NV_cooperative_matrix2.*")
-            message(STATUS "GL_NV_cooperative_matrix2 not supported by glslc")
-            set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF CACHE INTERNAL "Whether coopmat2 is supported by glslc")
-        else()
-            message(STATUS "GL_NV_cooperative_matrix2 supported by glslc")
-            set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT ON CACHE INTERNAL "Whether coopmat2 is supported by glslc")
-        endif()
+    if (${glslc_error} MATCHES ".*extension not supported: GL_NV_cooperative_matrix2.*")
+        message(STATUS "GL_NV_cooperative_matrix2 not supported by glslc")
+        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF)
     else()
-        message(STATUS "GL_NV_cooperative_matrix2 support already defined: ${GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT}")
-    endif()
-
-    if(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+        message(STATUS "GL_NV_cooperative_matrix2 supported by glslc")
+        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT ON)
         add_compile_definitions(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
     endif()
 

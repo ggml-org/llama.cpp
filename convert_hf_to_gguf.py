@@ -5146,10 +5146,7 @@ class BailingMoeModel(Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
-        else:
-            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
+        rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
@@ -5175,7 +5172,7 @@ class BailingMoeModel(Model):
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
         n_embd = self.hparams["hidden_size"]
-        head_dim = self.hparams.get("head_dim", n_embd // n_head)
+        head_dim = self.hparams.get("head_dim") or n_embd // n_head
 
         output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
 
