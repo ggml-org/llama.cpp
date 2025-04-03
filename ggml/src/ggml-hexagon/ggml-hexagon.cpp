@@ -317,7 +317,7 @@ struct hexagon_appcfg_t {
     int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
     int enable_rpc_dma_mempool; // enable/disable rpc dma memory pool
     const char * cfgfilename;
-    const char * runtimelib_path;
+    const char * runtime_libpath;
     char ggml_hexagon_version[GGMLHEXAGON_TMPBUF_LEN];
 };
 
@@ -338,7 +338,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
-        .runtimelib_path        = "/data/local/tmp/",
+        .runtime_libpath        = "/data/local/tmp/",
 #elif defined(__linux__)
         .qnn_runtimelib_path    = "/tmp/",
 #elif defined(_WIN32)
@@ -989,7 +989,7 @@ private:
         if (pos != len) str.erase(pos);
     }
 
-    void trim(std::string& str) {
+    void trim(std::string & str) {
         ltrim(str);
         rtrim(str);
     }
@@ -1392,16 +1392,16 @@ static void ggmlhexagon_set_runtime_path(size_t device, const std::string & path
     if ((HEXAGON_BACKEND_QNNNPU == device) || (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach)) {
         std::string lib_runtime_path = path + ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images";
         if (0 == setenv("LD_LIBRARY_PATH", lib_runtime_path.c_str(), 1)) {
-            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s successfully", lib_runtime_path.c_str());
+            GGMLHEXAGON_LOG_DEBUG("setenv LD_LIBRARY_PATH %s successfully", lib_runtime_path.c_str());
         } else {
-            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s failure", lib_runtime_path.c_str());
+            GGMLHEXAGON_LOG_ERROR("setenv LD_LIBRARY_PATH %s failure", lib_runtime_path.c_str());
         }
 
         std::string adsp_runtime_path = path + ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/dsp;/vendor/dsp/images;/dsp";
         if (0 == setenv("ADSP_LIBRARY_PATH", adsp_runtime_path.c_str(), 1)) {
-            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s successfully", adsp_runtime_path.c_str());
+            GGMLHEXAGON_LOG_DEBUG("setenv ADSP_LIBRARY_PATH %s successfully", adsp_runtime_path.c_str());
         } else {
-            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s failure", adsp_runtime_path.c_str());
+            GGMLHEXAGON_LOG_ERROR("setenv ADSP_LIBRARY_PATH %s failure", adsp_runtime_path.c_str());
         }
     } else {
         if (0 == setenv("LD_LIBRARY_PATH",
@@ -1429,7 +1429,7 @@ static void ggmlhexagon_load_cfg() {
     memset(time_string, 0, GGMLHEXAGON_TMPBUF_LEN);
     ggmlhexagon_get_timestring(time_string);
     GGMLHEXAGON_LOG_DEBUG("program running start time:%s", time_string);
-    std::string cfg_filename = std::string(g_hexagon_appcfg.runtimelib_path) + std::string(g_hexagon_appcfg.cfgfilename);
+    std::string cfg_filename = std::string(g_hexagon_appcfg.runtime_libpath) + std::string(g_hexagon_appcfg.cfgfilename);
     GGMLHEXAGON_LOG_INFO("load hexagon appcfg from %s", cfg_filename.c_str());
     hexagon_appcfg qnncfg_instance;
     qnncfg_instance.load(cfg_filename);
@@ -1454,28 +1454,35 @@ static void ggmlhexagon_load_cfg() {
     qnncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
     qnncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 1);
     qnncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
-    GGMLHEXAGON_LOG_INFO("ggml_hexagon_version=%s", ggml_hexagon_version.c_str());
-    memcpy(g_hexagon_appcfg.ggml_hexagon_version, ggml_hexagon_version.c_str(), strlen(ggml_hexagon_version.c_str()));
+    GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
+    GGMLHEXAGON_LOG_INFO("external ggml_hexagon_version=%s", ggml_hexagon_version.c_str());
     GGMLHEXAGON_LOG_INFO("hwaccel_approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend=%d(%s)", g_hexagon_appcfg.hexagon_backend,
                          ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
-    GGMLHEXAGON_LOG_INFO("qnn runtime lib path=%s", g_hexagon_appcfg.runtimelib_path);
+    GGMLHEXAGON_LOG_INFO("runtime libpath=%s", g_hexagon_appcfg.runtime_libpath);
+
     if (precision_mode.find("fp16") != std::string::npos) {
         g_hexagon_appcfg.precision_mode = 1;
     } else {
         g_hexagon_appcfg.precision_mode = 0;
     }
 
-    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-        ggmlhexagon_set_runtime_path(HEXAGON_BACKEND_CDSP, g_hexagon_appcfg.runtimelib_path);
-    }
+    ggmlhexagon_set_runtime_path(HEXAGON_BACKEND_CDSP, g_hexagon_appcfg.runtime_libpath);
 
     initialized = true;
 }
 
 static bool ggmlhexagon_check_valid_appcfg() {
     bool is_valid_appcfg = true;
+
+    GGMLHEXAGON_LOG_DEBUG("user's specified hwaccel approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
+                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
+    GGMLHEXAGON_LOG_DEBUG("user's specified hexagon_backend=%d", g_hexagon_appcfg.hexagon_backend);
+    if (g_hexagon_appcfg.hexagon_backend >= GGML_HEXAGON_MAX_DEVICES) {
+        GGMLHEXAGON_LOG_INFO("using default ggml backend");
+        is_valid_appcfg = false;
+    }
 
     if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
         GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported");
@@ -2599,7 +2606,7 @@ int qnn_instance::load_system() {
     if (nullptr == _system_lib_handle) {
         GGMLHEXAGON_LOG_WARN("can not open QNN library %s, error: %s\n", system_lib_path.c_str(), dlerror());
         //re-try with default path of QNN binary runtime lib
-        _lib_path = std::string(g_hexagon_appcfg.runtimelib_path);
+        _lib_path = std::string(g_hexagon_appcfg.runtime_libpath);
 #if !defined(__ANDROID__) && !defined(__linux__)
         system_lib_path = _lib_path + "QnnSystem.dll";
 #else
@@ -2881,7 +2888,7 @@ int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
     }
 
 #if defined(__ANDROID__) || defined(__linux__)
-    std::filesystem::path full_path(std::string(g_hexagon_appcfg.runtimelib_path) + "libcdsprpc.so");
+    std::filesystem::path full_path(std::string(g_hexagon_appcfg.runtime_libpath) + "libcdsprpc.so");
     full_path /= std::filesystem::path("libcdsprpc.so").filename();
     _rpc_lib_handle = dlopen(full_path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
     if (nullptr == _rpc_lib_handle) {
@@ -5657,11 +5664,8 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
     GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
     size_t dev_index = 0;
 
-    //case-1: test-backend-ops or other similar scenairo: calling ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i)) directly in user's code
+    //case-1: test-backend-ops or other similar scenario: calling ggml_backend_dev_init(dev, reinterpret_cast<const char *>(i)) directly in user's code
     ggmlhexagon_load_cfg();
-    GGMLHEXAGON_LOG_DEBUG("user's specified hexagon_backend in cfgfile = %d", g_hexagon_appcfg.hexagon_backend);
-    GGMLHEXAGON_LOG_DEBUG("user's sepcified qnn runtime lib path in cfgfile = %s", g_hexagon_appcfg.runtimelib_path);
-
     if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
@@ -5681,7 +5685,7 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
         GGMLHEXAGON_LOG_INFO("program specified dev_index %d\n", dev_index);
     }
     GGMLHEXAGON_LOG_DEBUG("hexagon_backend=%d", dev_index);
-    ggml_backend_t hexagon_backend = ggml_backend_hexagon_init(dev_index, g_hexagon_appcfg.runtimelib_path);
+    ggml_backend_t hexagon_backend = ggml_backend_hexagon_init(dev_index, g_hexagon_appcfg.runtime_libpath);
     GGMLHEXAGON_LOG_DEBUG("leave %s\n", __func__);
 
     return hexagon_backend;
@@ -5872,8 +5876,11 @@ static const char * ggml_backend_hexagon_reg_get_name(ggml_backend_reg_t reg) {
 
 static size_t ggml_backend_hexagon_reg_get_device_count(ggml_backend_reg_t reg) {
     GGML_UNUSED(reg);
-    if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        //here is the trick:
+        //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
+        //so return 1
         return 1;
     } else {
         return GGML_HEXAGON_MAX_DEVICES;
@@ -5925,16 +5932,6 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
 
     //case-2: normal scenario, such as llama-cli or UI applicaton
     ggmlhexagon_load_cfg();
-    GGMLHEXAGON_LOG_DEBUG("hwaccel approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
-                     ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
-    GGMLHEXAGON_LOG_DEBUG("user's specified hexagon_backend=%d", g_hexagon_appcfg.hexagon_backend);
-    GGMLHEXAGON_LOG_DEBUG("user's specified runtime lib path=%s", g_hexagon_appcfg.runtimelib_path);
-    if (g_hexagon_appcfg.hexagon_backend >= GGML_HEXAGON_MAX_DEVICES) {
-        GGMLHEXAGON_LOG_INFO("using default ggml backend");
-        GGMLHEXAGON_LOG_DEBUG("leave ggml_backend_hexagon_reg");
-        return nullptr;
-    }
-
     if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
@@ -6050,26 +6047,30 @@ static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_
 /**
  *
  * @param device            0: HEXAGON_BACKEND_QNNCPU 1: HEXAGON_BACKEND_QNNGPU 2: HEXAGON_BACKEND_QNNNPU/HEXAGON_BACKEND_CDSP
- * @param qnn_lib_path      QNN binrary runtime library path, such as "/data/local/tmp/" on Android or specified in JNI layer
+ * @param runtime_libpath   binary runtime library path, such as "/data/local/tmp/" on Android or specified in user's code
  * @return
  */
-ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_path) {
+ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * runtime_libpath) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
-    //case-3: calling ggml_backend_hexagon_init() directly in user's code
-    ggmlhexagon_load_cfg();
-
-    if (nullptr == qnn_lib_path)
+    if (nullptr == runtime_libpath)
         return nullptr;
 
+    //case-3: calling ggml_backend_hexagon_init() directly in user's code
+    ggmlhexagon_load_cfg();
     if (!ggmlhexagon_check_valid_appcfg()) {
         return nullptr;
     }
 
     GGMLHEXAGON_LOG_DEBUG("device %d", device);
-    GGMLHEXAGON_LOG_DEBUG("qnn_lib_path %s", qnn_lib_path);
+    GGMLHEXAGON_LOG_DEBUG("runtime libpath %s", runtime_libpath);
     if (device >= GGML_HEXAGON_MAX_DEVICES) {
         GGMLHEXAGON_LOG_ERROR("invalid device %d", device);
         return nullptr;
+    }
+
+    if (0 != memcmp(runtime_libpath, g_hexagon_appcfg.runtime_libpath, strlen(g_hexagon_appcfg.runtime_libpath))) {
+        //re-setting runtime libpath
+        ggmlhexagon_set_runtime_path(device, runtime_libpath);
     }
 
     if (nullptr != g_hexagon_mgr[device].backend) {
@@ -6081,7 +6082,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
 
     //don't initialize QNN when hwaccel approach is offload ggml op to Hexagon cDSP directly
     if (HWACCEL_CDSP != g_hexagon_appcfg.hwaccel_approach) {
-        qnn_instance * instance = ggmlqnn_init_qnn_instance(device, qnn_lib_path);
+        qnn_instance * instance = ggmlqnn_init_qnn_instance(device, runtime_libpath);
         if (nullptr == instance)
             return nullptr;
     }
