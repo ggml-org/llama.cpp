@@ -2282,6 +2282,11 @@ llama_context * llama_init_from_model(
         params.mla_attn = false;
     }
 
+    if (params.mla_attn && params.flash_attn) {
+        LLAMA_LOG_WARN("%s: mla_attn is not compatible with flash_attn - forcing off\n", __func__);
+        params.flash_attn = false;
+    }
+
     if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
