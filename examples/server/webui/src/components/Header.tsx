@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import StorageUtils from '../utils/storage';
 import { useAppContext } from '../utils/app.context';
 import { classNames } from '../utils/misc';
-import daisyuiThemes from 'daisyui/src/theming/themes';
+import daisyuiThemes from 'daisyui/theme/object';
 import { THEMES } from '../Config';
 import { useNavigate } from 'react-router';
 
@@ -13,14 +13,13 @@ export default function Header() {
 
   const setTheme = (theme: string) => {
     StorageUtils.setTheme(theme);
-    setSelectedTheme(theme);
+    setSelectedTheme(StorageUtils.getTheme());
   };
 
   useEffect(() => {
     document.body.setAttribute('data-theme', selectedTheme);
     document.body.setAttribute(
       'data-color-scheme',
-      // @ts-expect-error daisyuiThemes complains about index type, but it should work
       daisyuiThemes[selectedTheme]?.['color-scheme'] ?? 'auto'
     );
   }, [selectedTheme]);
