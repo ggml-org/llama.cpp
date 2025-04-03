@@ -9634,7 +9634,8 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             0);
                     cb(wk_b, "wk_b", il);
 
-                    // note: this operation *MUST* use F32 or it will cause gibberish output
+                    // note: this operation *MUST* use F32 or it will cause gibberish output, as this
+                    //       effectively does the KQ multiplication here instead of in build_attn_mha()
                     ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, wk_b, q_nope);
                     ggml_mul_mat_set_prec(q_nope_absorbed, GGML_PREC_F32);
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
@@ -9648,9 +9649,16 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     ggml_tensor * v_states = kv_cmpr;
                     cb(v_states, "v_states", il);
 
+                    ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b,
+                            kv_lora_rank, n_embd_head_v, n_head,
+                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank),
+                            ggml_row_size(model.layers[il].wk_b->type, kv_lora_rank * n_embd_head_v),
+                            0);
+                    cb(wk_b, "wv_b", il);
+
                     cur = build_attn_mla(inp_attn, gf,
-                            model.layers[il].wv_b, model.layers[il].wo,
-                            q_states, k_states, v_states, kq_scale, il);
+                            model.layers[il].wo, NULL, wv_b,
+                            q_states, k_states, v_states, nullptr, kq_scale, il);
                 } else {
                     // note: deepseek without MLA option converts into MHA
 

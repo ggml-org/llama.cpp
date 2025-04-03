@@ -1130,6 +1130,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v,
          ggml_tensor * kq_b,
          ggml_tensor * kq_mask,
+         ggml_tensor * v_mha_proj,
              bool      v_trans,
              float     kq_scale) const {
   //const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
@@ -1141,11 +1142,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
   //const auto & n_embd_head_k = hparams.n_embd_head_k;
   //const auto & n_embd_head_v = hparams.n_embd_head_v;
 
-    const auto n_embd_head_v = v_trans ? v->ne[1] : v->ne[0];
+    const auto n_embd    = q->ne[0];
+    const auto n_tokens  = q->ne[1];
+    const auto n_head    = q->ne[2];
 
-    const auto n_tokens = q->ne[1];
-    const auto n_head   = q->ne[2];
-    const auto n_kv     = k->ne[1];
+    const auto n_kv      = k->ne[1];
+    const auto n_head_kv = k->ne[2];
+
+    // note: when using MLA, the final embedding size will be changed via v_mha_proj
+    const auto n_embd_head_v = v_mha_proj == nullptr ? v_trans ? v->ne[1] : v->ne[0] : v_mha_proj->ne[1];
+
+    GGML_ASSERT(k->ne[0] == q->ne[0] && "K and Q embedding size mismatch");
+    GGML_ASSERT(k->ne[2] == v->ne[2] && "K and V number of heads mismatch");
 
     ggml_tensor * cur;
 
@@ -1164,11 +1172,28 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v*n_head, n_tokens);
     } else {
+
+        // for MQA (ie: GQA with 1 group) we don't need to use a batched matrix multiply
+        if (n_head_kv == 1) {
+            q = ggml_view_2d(ctx0, q,
+                    n_embd, n_tokens*n_head,
+                    ggml_row_size(q->type, n_embd),
+                    0);
+        }
+
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
 
         // note: this op tends to require high floating point range
         //       while for some models F16 is enough, for others it is not, so we default to F32 here
         ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+
+        if (n_head_kv == 1) {
+            kq = ggml_view_3d(ctx0, kq,
+                    n_kv, n_tokens, n_head,
+                    ggml_row_size(kq->type, n_kv),
+                    ggml_row_size(kq->type, n_kv)*n_tokens,
+                    0);
+        }
 
         if (arch == LLM_ARCH_GROK) {
             // need to do the following:
@@ -1199,6 +1224,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
+
+        // for deepseek MLA we need to "decompress" from MQA back to MHA
+        if (v_mha_proj) {
+            kqv = ggml_mul_mat(ctx0, v_mha_proj, kqv);
+        }
 
         ggml_tensor * kqv_merged = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
 
@@ -1258,7 +1288,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
     //cb(k, "v", il);
 
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, false, kq_scale);
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, false, kq_scale);
 
     cb(cur, "kqv_out", il);
 
@@ -1397,7 +1427,7 @@ ggml_tensor * llm_graph_context::build_attn(
                 ggml_element_size(kv_self->v_l[il])*n_ctx*n_embd_head_v,
                 0);
 
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_trans, kq_scale);
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, v_trans, kq_scale);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1456,7 +1486,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
     //cb(k, "v", il);
 
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, false, kq_scale);
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, false, kq_scale);
 
     cb(cur, "kqv_out", il);
 
@@ -1478,11 +1508,13 @@ ggml_tensor * llm_graph_context::build_attn(
 ggml_tensor * llm_graph_context::build_attn_mla(
         llm_graph_input_attn_kv_unified * inp,
         ggml_cgraph * gf,
-        ggml_tensor * wv_b,
         ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * v_mha_proj,
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
         ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
             float     kq_scale,
             int       il) const {
     // these nodes are added to the graph together so that they are not reordered
@@ -1500,12 +1532,8 @@ ggml_tensor * llm_graph_context::build_attn_mla(
     const int64_t n_embd_k_cmpr = kv_lora_rank + hparams.n_rot;
     const int64_t n_embd_v_cmpr = kv_lora_rank;
 
-    // note: this is the smaller n_ebed what we get after decompression
-    const int64_t n_embd_head_v = hparams.n_embd_head_v;
-
     // note: call from llm_build_deepseek2() passes as: {n_embd, n_tokens, n_head}
     const auto n_tokens = q_cur->ne[1];
-    const auto n_head = q_cur->ne[2];
 
     // store to KV cache
     {
@@ -1534,80 +1562,38 @@ ggml_tensor * llm_graph_context::build_attn_mla(
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
     }
 
-    // NOTE: We can't pass this to `build_attn_mha()` due to:
-    // - There's no way to decompress as `build_attn_mha()` applies the kqv_merged and cont inside.
-    // - We lose the performance gain from using 2D views when applying MQA (ie: GQA with 1 group).
-    // - TODO: Consider refactoring `build_attn_mha()` and/or adding optimised `build_attn_mqa()` version.
-
     const auto & kq_mask = inp->get_kq_mask();
 
     const auto n_kv = kv_self->n;
 
-    ggml_tensor * k_cmpr = ggml_view_2d(ctx0, kv_self->k_l[il],
-            n_embd_k_cmpr, n_kv,
+    ggml_tensor * k = ggml_view_3d(ctx0, kv_self->k_l[il],
+            n_embd_k_cmpr, n_kv, 1,
+            ggml_row_size(kv_self->k_l[il]->type, n_embd_k_cmpr),
             ggml_row_size(kv_self->k_l[il]->type, n_embd_k_cmpr),
             0);
-    cb(k_cmpr, "k_cmpr", il);
+    //cb(k, "k", il);
 
-    struct ggml_tensor * v_cmpr_trans = ggml_view_2d(ctx0, kv_self->v_l[il],
-            n_kv, n_embd_v_cmpr,
+    struct ggml_tensor * v = ggml_view_3d(ctx0, kv_self->v_l[il],
+            n_kv, n_embd_v_cmpr, 1,
+            ggml_element_size(kv_self->v_l[il])*n_ctx,
             ggml_element_size(kv_self->v_l[il])*n_ctx,
             0);
-    cb(v_cmpr_trans, "v_cmpr_trans", il);
+    //cb(v, "v", il);
 
-    ggml_tensor * q_cmpr = ggml_view_2d(ctx0, q_cur,
-            n_embd_k_cmpr, n_tokens*n_head,
-            ggml_row_size(q_cur->type, n_embd_k_cmpr),
-            0);
-    cb(q_cmpr, "q_cmpr", il);
+    ggml_tensor * cur = build_attn_mha(gf, q_cur, k, v, kq_b, kq_mask, v_mha_proj, true, kq_scale);
+    cb(cur, "kqv_out", il);
 
-    ggml_tensor * kq_cmpr = ggml_mul_mat(ctx0, k_cmpr, q_cmpr);
-    cb(kq_cmpr, "kq_cmpr", il);
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
 
-    kq_cmpr = ggml_view_3d(ctx0, kq_cmpr, n_kv, n_tokens, n_head,
-            ggml_row_size(kq_cmpr->type, n_kv),
-            ggml_row_size(kq_cmpr->type, n_kv)*n_tokens,
-            0);
-    cb(kq_cmpr, "kq_view", il);
+    if (wo_b) {
+        //cb(cur, "kqv_wo", il);
+    }
 
-    ggml_tensor * kq_soft_max = ggml_soft_max_ext(ctx0, kq_cmpr, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-    cb(kq_soft_max, "kq_soft_max", il);
-
-    kq_soft_max = ggml_view_2d(ctx0, kq_soft_max,
-            n_kv, n_tokens*n_head,
-            ggml_row_size(kq_soft_max->type, n_kv),
-            0);
-    cb(kq_soft_max, "kq_soft_max_view", il);
-
-    ggml_tensor * kqv_cmpr = ggml_mul_mat(ctx0, v_cmpr_trans, kq_soft_max);
-    cb(kqv_cmpr, "kqv_cmpr,", il);
-
-    kqv_cmpr = ggml_view_3d(ctx0, kqv_cmpr,
-            n_embd_v_cmpr, n_tokens, n_head,
-            ggml_row_size(kqv_cmpr->type, n_embd_v_cmpr),
-            ggml_row_size(kqv_cmpr->type, n_embd_v_cmpr)*n_tokens,
-            0);
-    cb(kqv_cmpr, "kqv_cmpr_view", il);
-
-    ggml_tensor * wv_b_view = ggml_view_3d(ctx0, wv_b,
-            n_embd_v_cmpr, n_embd_head_v, n_head,
-            ggml_row_size(wv_b->type, n_embd_v_cmpr),
-            ggml_row_size(wv_b->type, n_embd_v_cmpr)*n_embd_head_v,
-            0);
-    cb(wv_b_view, "wv_b_view", il);
-
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, wv_b_view, kqv_cmpr);
-    cb(kqv, "kqv", il);
-
-    kqv = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-    cb(kqv, "kqv_merged", il);
-
-    ggml_tensor * cur = ggml_cont_2d(ctx0, kqv, n_embd_head_v*n_head, n_tokens);
-    cb(cur, "kqv_cont", il);
-
-    ggml_build_forward_expand(gf, cur);
-
-    cur = build_lora_mm(wo, cur);
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
 
     return cur;
 }
@@ -1762,4 +1748,3 @@ void llm_graph_context::build_pooling(
 
     ggml_build_forward_expand(gf, cur);
 }
-
