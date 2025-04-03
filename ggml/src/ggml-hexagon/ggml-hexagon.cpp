@@ -1390,21 +1390,18 @@ static void * ggmlhexagon_type_trait(ggml_backend_hexagon_context * ctx, ggml_te
 static void ggmlhexagon_set_runtime_path(size_t device, const std::string & path) {
 #if defined(__ANDROID__)
     if ((HEXAGON_BACKEND_QNNNPU == device) || (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach)) {
-        if (0 == setenv("LD_LIBRARY_PATH",
-                        (path +
-                         ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images").c_str(),
-                        1)) {
-            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv successfully");
+        std::string lib_runtime_path = path + ":/vendor/dsp/cdsp:/vendor/lib64:/vendor/dsp/dsp:/vendor/dsp/images";
+        if (0 == setenv("LD_LIBRARY_PATH", lib_runtime_path.c_str(), 1)) {
+            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s successfully", lib_runtime_path.c_str());
         } else {
-            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv failure");
+            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s failure", lib_runtime_path.c_str());
         }
-        if (0 == setenv("ADSP_LIBRARY_PATH",
-                        (path +
-                         ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/dsp;/vendor/dsp/images;/dsp").c_str(),
-                        1)) {
-            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv successfully");
+
+        std::string adsp_runtime_path = path + ";/vendor/dsp/cdsp;/vendor/lib/rfsa/adsp;/system/lib/rfsa/adsp;/vendor/dsp/dsp;/vendor/dsp/images;/dsp";
+        if (0 == setenv("ADSP_LIBRARY_PATH", adsp_runtime_path.c_str(), 1)) {
+            GGMLHEXAGON_LOG_DEBUG("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s successfully", adsp_runtime_path.c_str());
         } else {
-            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv failure");
+            GGMLHEXAGON_LOG_ERROR("HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP setenv %s failure", adsp_runtime_path.c_str());
         }
     } else {
         if (0 == setenv("LD_LIBRARY_PATH",
@@ -1469,6 +1466,11 @@ static void ggmlhexagon_load_cfg() {
     } else {
         g_hexagon_appcfg.precision_mode = 0;
     }
+
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+        ggmlhexagon_set_runtime_path(HEXAGON_BACKEND_CDSP, g_hexagon_appcfg.runtimelib_path);
+    }
+
     initialized = true;
 }
 
@@ -6070,8 +6072,6 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * qnn_lib_pat
         return nullptr;
     }
 
-    std::string path = qnn_lib_path;
-    ggmlhexagon_set_runtime_path(device, path);
     if (nullptr != g_hexagon_mgr[device].backend) {
         GGMLHEXAGON_LOG_DEBUG("backend %d(%s) already loaded", device,
                          ggml_backend_hexagon_get_devname(device));
