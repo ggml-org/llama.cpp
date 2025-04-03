@@ -319,8 +319,15 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
 
     bool found = false;
     for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
+        std::string tensor;
+        tensor = tn.rfind('.') != std::string::npos ? tn.substr(tn.rfind('.') + 1) : tn;
+        // handle special case of cls.output
+        std::string cls_output = "cls.output";
+        if (tn.find(cls_output) != std::string::npos) {
+            tensor = "cls.output";
+        }
         // check if an allowed tensor exists and it's at the end of the kv string
-        if (tn.length() - allowed.length() == tn.find(allowed) && tn == allowed) {
+        if (tensor == allowed) {
             found = true;
             break;
         }
