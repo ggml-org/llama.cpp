@@ -255,7 +255,8 @@ llama_context::llama_context(
             model.n_devices() > 1 &&
             model.params.n_gpu_layers > (int) model.hparams.n_layer &&
             model.params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
-            cparams.offload_kqv;
+            cparams.offload_kqv &&
+            !model.has_tensor_overrides();
 
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
@@ -1201,33 +1202,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     const int64_t n_tokens_all = batch.n_tokens;
     const int64_t n_embd       = hparams.n_embd;
 
-    // TODO: remove this stuff
-    class batch_guard {
-    public:
-        batch_guard(llama_kv_cache_unified & kv_self) : kv_slot_restorer(kv_self) {
-        }
-
-        ~batch_guard() {
-            if (!is_done) {
-                kv_slot_restorer.restore();
-            }
-        }
-
-        void done() {
-            is_done = true;
-        }
-
-        void save(const llama_kv_cache_slot_info & slot_info) {
-            kv_slot_restorer.save(slot_info);
-        }
-
-    private:
-        bool is_done = false;
-
-        llama_kv_slot_restorer kv_slot_restorer;
-    };
-
-    batch_guard bg(*kv_self);
+    llama_kv_cache_guard kv_guard(kv_self.get());
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
@@ -1280,6 +1255,9 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -2;
     };
 
+    // handle any pending defrags/shifts
+    kv_self_update();
+
     int64_t n_outputs_prev = 0;
 
     while (sbatch.n_tokens > 0) {
@@ -1319,21 +1297,11 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         // find KV slot
         {
-            kv_self_update();
+            if (!kv_self->find_slot(ubatch)) {
+                LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
 
-            // if we have enough unused cells before the current head ->
-            //   better to start searching from the beginning of the cache, hoping to fill it
-            if (kv_self->head > kv_self->used + 2*ubatch.n_tokens) {
-                kv_self->head = 0;
+                return 1;
             }
-
-            const auto slot_info = kv_self->find_slot(ubatch);
-            if (!slot_info) {
-                LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
-                return -3;
-            }
-
-            bg.save(slot_info);
 
             if (!kv_self->recurrent) {
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
@@ -1368,16 +1336,6 @@ int llama_context::decode(llama_batch & inp_batch) {
                 case GGML_STATUS_FAILED:
                 default:
                     return -3;
-            }
-        }
-
-        // update the kv ring buffer
-        {
-            kv_self->head += ubatch.n_tokens;
-
-            // Ensure kv cache head points to a valid index.
-            if (kv_self->head >= kv_self->size) {
-                kv_self->head = 0;
             }
         }
 
@@ -1467,7 +1425,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     }
 
     // finalize the batch processing
-    bg.done();
+    kv_guard.commit();
 
     // set output mappings
     {

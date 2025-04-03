@@ -302,6 +302,10 @@ cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -
 cmake --build build --config Release -j -v
 ```
 
+It is possible to come across some precision issues when running tests that stem from using faster
+instructions, which can be circumvented by setting the environment variable `SYCL_PROGRAM_COMPILE_OPTIONS`
+as `-cl-fp32-correctly-rounded-divide-sqrt`
+
 #### Nvidia GPU
 
 The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
@@ -321,6 +325,9 @@ cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DGGML_SYCL_DEVICE_ARCH=
 # build all binary
 cmake --build build --config Release -j -v
 ```
+
+It is possible to come across some precision issues when running tests that stem from using faster
+instructions, which can be circumvented by passing the `-fno-fast-math` flag to the compiler.
 
 #### AMD GPU
 

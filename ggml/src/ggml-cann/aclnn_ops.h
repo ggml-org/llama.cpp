@@ -484,6 +484,47 @@ void ggml_cann_mul_mat(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  */
 void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
+/**
+ * @brief   Computes the index of the maximum value along the specified dimension
+ *          of a ggml tensor using the CANN backend.
+ *
+ * @details This function performs an argmax operation on the input tensor.
+ *          It finds the index of the maximum value along the specified axis
+ *          and stores these indices in the destination tensor `dst`. The
+ *          operation is executed using the CANN backend for optimized performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the indices of the maximum values will be stored.
+ *            dst->op is `GGML_OP_ARGMAX`.
+ */
+void ggml_cann_argmax(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Computes the cosine of each element in a ggml tensor using the CANN backend.
+ *
+ * @details This function applies the cosine function element-wise to the input tensor.
+ *          The computed cosine values are stored in the destination tensor `dst`.
+ *          The operation is optimized using the CANN backend for improved performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the cosine values will be stored.
+ *            dst->op is `GGML_OP_COS`.
+ */
+void ggml_cann_cos(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Computes the sine of each element in a ggml tensor using the CANN backend.
+ *
+ * @details This function applies the sine function element-wise to the input tensor.
+ *          The computed sine values are stored in the destination tensor `dst`.
+ *          The operation is optimized using the CANN backend for improved performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the sine values will be stored.
+ *            dst->op is `GGML_OP_SIN`.
+ */
+void ggml_cann_sin(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
 template <aclnnStatus getWorkspaceSize(const aclTensor*, const aclTensor*,
                                        aclTensor*, uint64_t*, aclOpExecutor**),
           aclnnStatus execute(void*, uint64_t, aclOpExecutor*, aclrtStream)>
@@ -535,9 +576,6 @@ template <aclnnStatus getWorkspaceSize(const aclTensor*, aclTensor*, uint64_t*,
 void ggml_cann_activation(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
 
-    GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-
     aclTensor* acl_src = ggml_cann_create_tensor(src);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
@@ -565,9 +603,6 @@ template <aclnnStatus getWorkspaceSize(const aclTensor*, const aclTensor*,
                               const aclrtStream)>
 void ggml_cann_activation(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
-
-    GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     aclTensor* acl_src = ggml_cann_create_tensor(src);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
