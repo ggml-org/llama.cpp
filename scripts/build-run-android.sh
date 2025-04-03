@@ -8,6 +8,7 @@ ANDROID_PLATFORM=android-34
 ANDROID_NDK=${PWD}/android-ndk-r26c
 REMOTE_PATH=/data/local/tmp/
 GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
+GGUF_MODEL_NAME=/sdcard/gemma-3-4b-it-Q8_0.gguf
 
 #QNN SDK could be found at:
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
