@@ -13,7 +13,7 @@ export default function Header() {
 
   const setTheme = (theme: string) => {
     StorageUtils.setTheme(theme);
-    setSelectedTheme(StorageUtils.getTheme());
+    setSelectedTheme(theme);
   };
 
   useEffect(() => {
