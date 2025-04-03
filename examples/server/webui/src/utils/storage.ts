@@ -194,12 +194,7 @@ const StorageUtils = {
     localStorage.setItem('config', JSON.stringify(config));
   },
   getTheme(): string {
-    const theme = localStorage.getItem('theme') || 'auto';
-    const activeTheme = (theme === 'auto') ?
-      (window.matchMedia("(prefers-color-scheme: light)").matches ? 'light' : 'dark') :
-      theme;
-      
-    return activeTheme;
+    return localStorage.getItem('theme') || 'auto';
   },
   setTheme(theme: string) {
     if (theme === 'auto') {
