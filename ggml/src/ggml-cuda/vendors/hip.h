@@ -151,6 +151,10 @@
 #define CDNA
 #endif
 
+#if defined(__GFX12__)
+#define RDNA4
+#endif
+
 #if defined(__gfx1100__) || defined(__gfx1101__) || defined(__gfx1102__) || defined(__gfx1103__) || \
     defined(__gfx1150__) || defined(__gfx1151__)
 #define RDNA3

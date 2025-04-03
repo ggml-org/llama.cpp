@@ -65,7 +65,7 @@ if (GGML_LTO)
     endif()
 endif()
 
-if (GGML_CCACHE)
+if (GGML_CCACHE AND NOT CMAKE_C_COMPILER_LAUNCHER AND NOT CMAKE_CXX_COMPILER_LAUNCHER)
     find_program(GGML_CCACHE_FOUND ccache)
     find_program(GGML_SCCACHE_FOUND sccache)
 

@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.empty()) {
+    if (params.speculative.model.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }

@@ -2,7 +2,9 @@
 
 cp -rpv ../ggml/CMakeLists.txt       ./ggml/CMakeLists.txt
 cp -rpv ../ggml/src/CMakeLists.txt   ./ggml/src/CMakeLists.txt
-cp -rpv ../ggml/cmake/FindSIMD.cmake ./ggml/cmake/FindSIMD.cmake
+
+cp -rpv ../ggml/cmake/* ./ggml/cmake/
+cp -rpv ../ggml/src/ggml-cpu/cmake/* ./ggml/src/ggml-cpu/cmake/
 
 cp -rpv ../ggml/src/ggml*.c        ./ggml/src/
 cp -rpv ../ggml/src/ggml*.cpp      ./ggml/src/

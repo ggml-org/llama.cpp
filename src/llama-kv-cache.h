@@ -17,6 +17,9 @@ struct llama_ubatch;
 struct llama_kv_cache : public llama_memory_i {
     using llama_memory_i::llama_memory_i;
 
+    virtual void restore() = 0; // call if batch processing fails - restores the cache state
+    virtual void commit() = 0;  // call after successful batch processing - clears any pending state
+
     virtual int32_t  get_n_tokens()   const = 0;
     virtual uint32_t get_used_cells() const = 0; // TODO: remove, this is too-specific to the unified cache
 
@@ -25,9 +28,24 @@ struct llama_kv_cache : public llama_memory_i {
     bool get_can_edit() const override { return get_can_shift(); }
 };
 
+struct llama_kv_cache_guard {
+    llama_kv_cache_guard(llama_kv_cache * kv) : kv(kv) {}
+
+    ~llama_kv_cache_guard() {
+        kv->restore();
+    }
+
+    void commit() {
+        kv->commit();
+    }
+
+private:
+    llama_kv_cache * kv;
+};
+
 struct llama_kv_cell {
     llama_pos pos   = -1;
-    llama_pos delta = 0;
+    llama_pos delta =  0;
     int32_t   src   = -1; // used by recurrent state models to copy states
     int32_t   tail  = -1;
 
@@ -44,17 +62,6 @@ struct llama_kv_cell {
     bool is_same_seq(const llama_kv_cell & other) const {
         return seq_id == other.seq_id;
     }
-};
-
-// a structure holds information about the slot found in llama_kv_cache_find_slot
-struct llama_kv_cache_slot_info {
-    std::pair<uint32_t, uint32_t> boundaries; // slot boundaries [begin, end)
-    bool found = false;                       // the slot was found
-
-    explicit llama_kv_cache_slot_info(bool found_) : found{found_} {}
-    llama_kv_cache_slot_info(uint32_t begin, uint32_t end) : boundaries{begin, end}, found{true} {}
-
-    operator bool() const { return found; }
 };
 
 // ring-buffer of cached KV data
@@ -93,6 +100,9 @@ public:
     void clear() override;
     void defrag() override;
 
+    virtual void restore() override;
+    virtual void commit() override;
+
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
     void seq_keep(llama_seq_id seq_id) override;
@@ -105,10 +115,9 @@ public:
 
     // find an empty slot of size "n_tokens" in the cache
     // updates the cache head
-    // returns a structure holding information about the slot found
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
-    llama_kv_cache_slot_info find_slot(const llama_ubatch & batch);
+    bool find_slot(const llama_ubatch & batch);
 
     // TODO: maybe not needed
     uint32_t get_padding(const llama_cparams & cparams) const;
@@ -128,7 +137,19 @@ public:
     // return true if cells have been moved
     bool defrag_prepare(int32_t n_max_nodes);
 
-    // state save/load
+    // commit/restore cache
+
+    struct slot_range {
+        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
+        uint32_t c1 = 0;
+    };
+
+    // pending cell updates that are not yet committed
+    struct {
+        std::vector<slot_range> ranges;
+    } pending;
+
+    // state write/load
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1);
@@ -182,59 +203,6 @@ private:
 //public:
 //    using llama_kv_cache_unified::llama_kv_cache_unified;
 //};
-
-//
-// kv cache restore
-//
-
-// saves the kv_cache state for future recovery.
-// used to rollback llama_kv_cache_find_slot changes.
-struct llama_kv_slot_restorer {
-    struct llama_kv_cache_state {
-        uint32_t head = 0;
-        uint32_t n    = 0;
-    } old_state;
-
-    // for non-recurrent models only
-    // list of slots to restore
-    std::vector<std::pair<uint32_t, uint32_t>> slot_boundaries;
-
-    bool do_restore = false;
-
-    llama_kv_cache_unified & cache;
-
-    explicit llama_kv_slot_restorer(llama_kv_cache_unified & cache) : cache(cache) {
-        old_state.head = cache.head;
-        old_state.n    = cache.n;
-    }
-
-    // saves a slot information for future restoration
-    void save(const llama_kv_cache_slot_info & slot) {
-        if (slot) {
-            do_restore = true;
-            if (slot.boundaries.first != slot.boundaries.second) {
-                slot_boundaries.push_back(slot.boundaries);
-            }
-        }
-    }
-
-    // must be explicitly called to restore the kv_cache state
-    // and rollback changes from all llama_kv_cache_find_slot calls
-    void restore() {
-        if (do_restore) {
-            cache.head = old_state.head;
-            cache.n    = old_state.n;
-
-            if (cache.recurrent) { // recurrent models like Mamba or RWKV can't have a state partially erased
-                cache.seq_rm(-1, -1, -1);
-            } else {
-                for (auto & slot : slot_boundaries) {
-                    cache.seq_rm(-1, slot.first, slot.second);
-                }
-            }
-        }
-    }
-};
 
 // TODO: maybe become part of the public llama_kv_cache in the future
 int32_t llama_kv_cache_n_tokens(const llama_kv_cache * kv);
