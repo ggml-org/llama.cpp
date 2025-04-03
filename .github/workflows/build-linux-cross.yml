@@ -57,7 +57,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
-                  crossbuild-essential-riscv64 \
+                  gcc-14-riscv64-linux-gnu \
+                  g++-14-riscv64-linux-gnu \
                   libvulkan-dev:riscv64
 
       - name: Build
@@ -69,8 +70,8 @@ jobs:
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc \
-                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++ \
+                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
                          -DCMAKE_C_FLAGS_INIT='-fPIC' \
                          -DCMAKE_CXX_FLAGS_INIT='-fPIC' \
                          -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
