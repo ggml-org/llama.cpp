@@ -1,8 +1,19 @@
+#include "gguf.h" // for reading GGUF splits
 #include "arg.h"
 
+#include "common.h"
 #include "log.h"
 #include "sampling.h"
 #include "chat.h"
+
+// fix problem with std::min and std::max
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <climits>
@@ -13,6 +24,14 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+//#define LLAMA_USE_CURL
+
+#if defined(LLAMA_USE_CURL)
+#include <curl/curl.h>
+#include <curl/easy.h>
+#include <future>
+#endif
 
 #include "json-schema-to-grammar.h"
 
@@ -126,46 +145,548 @@ std::string common_arg::to_string() {
 }
 
 //
+// downloader
+//
+
+struct common_hf_file_res {
+    std::string repo; // repo name with ":tag" removed
+    std::string ggufFile;
+    std::string mmprojFile;
+};
+
+#ifdef LLAMA_USE_CURL
+
+#ifdef __linux__
+#include <linux/limits.h>
+#elif defined(_WIN32)
+#   if !defined(PATH_MAX)
+#   define PATH_MAX MAX_PATH
+#   endif
+#else
+#include <sys/syslimits.h>
+#endif
+#define LLAMA_CURL_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+//
+// CURL utils
+//
+
+using curl_ptr = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>;
+
+// cannot use unique_ptr for curl_slist, because we cannot update without destroying the old one
+struct curl_slist_ptr {
+    struct curl_slist * ptr = nullptr;
+    ~curl_slist_ptr() {
+        if (ptr) {
+            curl_slist_free_all(ptr);
+        }
+    }
+};
+
+#define CURL_MAX_RETRY 3
+#define CURL_RETRY_DELAY_SECONDS 2
+
+static bool curl_perform_with_retry(const std::string & url, CURL * curl, int max_attempts, int retry_delay_seconds) {
+    int remaining_attempts = max_attempts;
+
+    while (remaining_attempts > 0) {
+        LOG_INF("%s: Trying to download from %s (attempt %d of %d)...\n", __func__ , url.c_str(), max_attempts - remaining_attempts + 1, max_attempts);
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK) {
+            return true;
+        }
+
+        int exponential_backoff_delay = std::pow(retry_delay_seconds, max_attempts - remaining_attempts) * 1000;
+        LOG_WRN("%s: curl_easy_perform() failed: %s, retrying after %d milliseconds...\n", __func__, curl_easy_strerror(res), exponential_backoff_delay);
+
+        remaining_attempts--;
+        std::this_thread::sleep_for(std::chrono::milliseconds(exponential_backoff_delay));
+    }
+
+    LOG_ERR("%s: curl_easy_perform() failed after %d attempts\n", __func__, max_attempts);
+
+    return false;
+}
+
+// download one single file from remote URL to local path
+static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token) {
+    // Initialize libcurl
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    if (!curl) {
+        LOG_ERR("%s: error initializing libcurl\n", __func__);
+        return false;
+    }
+
+    bool force_download = false;
+
+    // Set the URL, allow to follow http redirection
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+
+    // Check if hf-token or bearer-token was specified
+    if (!bearer_token.empty()) {
+        std::string auth_header = "Authorization: Bearer " + bearer_token;
+        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+    }
+
+#if defined(_WIN32)
+    // CURLSSLOPT_NATIVE_CA tells libcurl to use standard certificate store of
+    //   operating system. Currently implemented under MS-Windows.
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+
+    // Check if the file already exists locally
+    auto file_exists = std::filesystem::exists(path);
+
+    // If the file exists, check its JSON metadata companion file.
+    std::string metadata_path = path + ".json";
+    nlohmann::json metadata;
+    std::string etag;
+    std::string last_modified;
+
+    if (file_exists) {
+        // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
+        std::ifstream metadata_in(metadata_path);
+        if (metadata_in.good()) {
+            try {
+                metadata_in >> metadata;
+                LOG_INF("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(), metadata.dump().c_str());
+                if (metadata.contains("url") && metadata.at("url").is_string()) {
+                    auto previous_url = metadata.at("url").get<std::string>();
+                    if (previous_url != url) {
+                        LOG_ERR("%s: Model URL mismatch: %s != %s\n", __func__, url.c_str(), previous_url.c_str());
+                        return false;
+                    }
+                }
+                if (metadata.contains("etag") && metadata.at("etag").is_string()) {
+                    etag = metadata.at("etag");
+                }
+                if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
+                    last_modified = metadata.at("lastModified");
+                }
+            } catch (const nlohmann::json::exception & e) {
+            LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+                return false;
+            }
+        }
+    } else {
+        LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
+    }
+
+    // Send a HEAD request to retrieve the etag and last-modified headers
+    struct common_load_model_from_url_headers {
+        std::string etag;
+        std::string last_modified;
+    };
+
+    common_load_model_from_url_headers headers;
+
+    {
+        typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
+        auto header_callback = [](char * buffer, size_t /*size*/, size_t n_items, void * userdata) -> size_t {
+            common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
+
+            static std::regex header_regex("([^:]+): (.*)\r\n");
+            static std::regex etag_regex("ETag", std::regex_constants::icase);
+            static std::regex last_modified_regex("Last-Modified", std::regex_constants::icase);
+
+            std::string header(buffer, n_items);
+            std::smatch match;
+            if (std::regex_match(header, match, header_regex)) {
+                const std::string & key = match[1];
+                const std::string & value = match[2];
+                if (std::regex_match(key, match, etag_regex)) {
+                    headers->etag = value;
+                } else if (std::regex_match(key, match, last_modified_regex)) {
+                    headers->last_modified = value;
+                }
+            }
+            return n_items;
+        };
+
+        curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L); // will trigger the HEAD verb
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
+        curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
+        curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
+
+        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
+        if (!was_perform_successful) {
+            return false;
+        }
+
+        long http_code = 0;
+        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code != 200) {
+            // HEAD not supported, we don't know if the file has changed
+            // force trigger downloading
+            force_download = true;
+            LOG_ERR("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+        }
+    }
+
+    bool should_download = !file_exists || force_download;
+    if (!should_download) {
+        if (!etag.empty() && etag != headers.etag) {
+            LOG_WRN("%s: ETag header is different (%s != %s): triggering a new download\n", __func__, etag.c_str(), headers.etag.c_str());
+            should_download = true;
+        } else if (!last_modified.empty() && last_modified != headers.last_modified) {
+            LOG_WRN("%s: Last-Modified header is different (%s != %s): triggering a new download\n", __func__, last_modified.c_str(), headers.last_modified.c_str());
+            should_download = true;
+        }
+    }
+    if (should_download) {
+        std::string path_temporary = path + ".downloadInProgress";
+        if (file_exists) {
+            LOG_WRN("%s: deleting previous downloaded file: %s\n", __func__, path.c_str());
+            if (remove(path.c_str()) != 0) {
+                LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
+                return false;
+            }
+        }
+
+        // Set the output file
+
+        struct FILE_deleter {
+            void operator()(FILE * f) const {
+                fclose(f);
+            }
+        };
+
+        std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "wb"));
+        if (!outfile) {
+            LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path.c_str());
+            return false;
+        }
+
+        typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * data, size_t size, size_t nmemb, void * fd);
+        auto write_callback = [](void * data, size_t size, size_t nmemb, void * fd) -> size_t {
+            return fwrite(data, size, nmemb, (FILE *)fd);
+        };
+        curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+        curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, outfile.get());
+
+        //  display download progress
+        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+
+        // helper function to hide password in URL
+        auto llama_download_hide_password_in_url = [](const std::string & url) -> std::string {
+            std::size_t protocol_pos = url.find("://");
+            if (protocol_pos == std::string::npos) {
+                return url;  // Malformed URL
+            }
+
+            std::size_t at_pos = url.find('@', protocol_pos + 3);
+            if (at_pos == std::string::npos) {
+                return url;  // No password in URL
+            }
+
+            return url.substr(0, protocol_pos + 3) + "********" + url.substr(at_pos);
+        };
+
+        // start the download
+        LOG_INF("%s: trying to download model from %s to %s (server_etag:%s, server_last_modified:%s)...\n", __func__,
+            llama_download_hide_password_in_url(url).c_str(), path.c_str(), headers.etag.c_str(), headers.last_modified.c_str());
+        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), CURL_MAX_RETRY, CURL_RETRY_DELAY_SECONDS);
+        if (!was_perform_successful) {
+            return false;
+        }
+
+        long http_code = 0;
+        curl_easy_getinfo (curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+        if (http_code < 200 || http_code >= 400) {
+            LOG_ERR("%s: invalid http status code received: %ld\n", __func__, http_code);
+            return false;
+        }
+
+        // Causes file to be closed explicitly here before we rename it.
+        outfile.reset();
+
+        // Write the updated JSON metadata file.
+        metadata.update({
+            {"url", url},
+            {"etag", headers.etag},
+            {"lastModified", headers.last_modified}
+        });
+        std::ofstream(metadata_path) << metadata.dump(4);
+        LOG_INF("%s: file metadata saved: %s\n", __func__, metadata_path.c_str());
+
+        if (rename(path_temporary.c_str(), path.c_str()) != 0) {
+            LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// download multiple files from remote URLs to local paths
+// the input is a vector of pairs <url, path>
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token) {
+    // Prepare download in parallel
+    std::vector<std::future<bool>> futures_download;
+    for (auto const & item : urls) {
+        futures_download.push_back(std::async(std::launch::async, [bearer_token](const std::pair<std::string, std::string> & it) -> bool {
+            return common_download_file_single(it.first, it.second, bearer_token);
+        }, item));
+    }
+
+    // Wait for all downloads to complete
+    for (auto & f : futures_download) {
+        if (!f.get()) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool common_download_model(
+        const common_params_model & model,
+        const std::string & bearer_token) {
+    // Basic validation of the model.url
+    if (model.url.empty()) {
+        LOG_ERR("%s: invalid model url\n", __func__);
+        return false;
+    }
+
+    if (!common_download_file_single(model.url, model.path, bearer_token)) {
+        return false;
+    }
+
+    // check for additional GGUFs split to download
+    int n_split = 0;
+    {
+        struct gguf_init_params gguf_params = {
+            /*.no_alloc = */ true,
+            /*.ctx      = */ NULL,
+        };
+        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), gguf_params);
+        if (!ctx_gguf) {
+            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.path.c_str());
+            return false;
+        }
+
+        auto key_n_split = gguf_find_key(ctx_gguf, LLM_KV_SPLIT_COUNT);
+        if (key_n_split >= 0) {
+            n_split = gguf_get_val_u16(ctx_gguf, key_n_split);
+        }
+
+        gguf_free(ctx_gguf);
+    }
+
+    if (n_split > 1) {
+        char split_prefix[PATH_MAX] = {0};
+        char split_url_prefix[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+
+        // Verify the first split file format
+        // and extract split URL and PATH prefixes
+        {
+            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), model.path.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, model.path.c_str(), n_split);
+                return false;
+            }
+
+            if (!llama_split_prefix(split_url_prefix, sizeof(split_url_prefix), model.url.c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model url: %s n_split=%d\n", __func__, model.url.c_str(), n_split);
+                return false;
+            }
+        }
+
+        std::vector<std::pair<std::string, std::string>> urls;
+        for (int idx = 1; idx < n_split; idx++) {
+            char split_path[PATH_MAX] = {0};
+            llama_split_path(split_path, sizeof(split_path), split_prefix, idx, n_split);
+
+            char split_url[LLAMA_CURL_MAX_URL_LENGTH] = {0};
+            llama_split_path(split_url, sizeof(split_url), split_url_prefix, idx, n_split);
+
+            if (std::string(split_path) == model.path) {
+                continue; // skip the already downloaded file
+            }
+
+            urls.push_back({split_url, split_path});
+        }
+
+        // Download in parallel
+        common_download_file_multiple(urls, bearer_token);
+    }
+
+    return true;
+}
+
+/**
+ * Allow getting the HF file from the HF repo with tag (like ollama), for example:
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:Q4_K_M
+ * - bartowski/Llama-3.2-3B-Instruct-GGUF:q5_k_s
+ * Tag is optional, default to "latest" (meaning it checks for Q4_K_M first, then Q4, then if not found, return the first GGUF file in repo)
+ *
+ * Return pair of <repo, file> (with "repo" already having tag removed)
+ *
+ * Note: we use the Ollama-compatible HF API, but not using the blobId. Instead, we use the special "ggufFile" field which returns the value for "hf_file". This is done to be backward-compatible with existing cache files.
+ */
+static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, const std::string & bearer_token) {
+    auto parts = string_split<std::string>(hf_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "latest";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+
+    // fetch model info from Hugging Face Hub API
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::string res_str;
+    std::string url = "https://huggingface.co/v2/" + hf_repo + "/manifests/" + tag;
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_str);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    if (!bearer_token.empty()) {
+        std::string auth_header = "Authorization: Bearer " + bearer_token;
+        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+    }
+    // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        throw std::runtime_error("error: cannot make GET request to HF API");
+    }
+
+    long res_code;
+    std::string ggufFile   = "";
+    std::string mmprojFile = "";
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+    if (res_code == 200) {
+        // extract ggufFile.rfilename in json, using regex
+        {
+            std::regex pattern("\"ggufFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch match;
+            if (std::regex_search(res_str, match, pattern)) {
+                ggufFile = match[1].str();
+            }
+        }
+        // extract mmprojFile.rfilename in json, using regex
+        {
+            std::regex pattern("\"mmprojFile\"[\\s\\S]*?\"rfilename\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch match;
+            if (std::regex_search(res_str, match, pattern)) {
+                mmprojFile = match[1].str();
+            }
+        }
+    } else if (res_code == 401) {
+        throw std::runtime_error("error: model is private or does not exist; if you are accessing a gated model, please provide a valid HF token");
+    } else {
+        throw std::runtime_error(string_format("error from HF API, response code: %ld, data: %s", res_code, res_str.c_str()));
+    }
+
+    // check response
+    if (ggufFile.empty()) {
+        throw std::runtime_error("error: model does not have ggufFile");
+    }
+
+    return { hf_repo, ggufFile, mmprojFile };
+}
+
+#else
+
+static bool common_download_file_single(const std::string &, const std::string &, const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download model from internet\n");
+    return false;
+}
+
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> &, const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return false;
+}
+
+static bool common_download_model(
+        const common_params_model &,
+        const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return false;
+}
+
+static struct common_hf_file_res common_get_hf_file(const std::string &, const std::string &) {
+    LOG_ERR("error: built without CURL, cannot download model from the internet\n");
+    return {};
+}
+
+#endif // LLAMA_USE_CURL
+
+//
 // utils
 //
 
-static void common_params_handle_model_default(
-        std::string & model,
-        const std::string & model_url,
-        std::string & hf_repo,
-        std::string & hf_file,
-        const std::string & hf_token,
-        const std::string & model_default) {
-    if (!hf_repo.empty()) {
-        // short-hand to avoid specifying --hf-file -> default it to --model
-        if (hf_file.empty()) {
-            if (model.empty()) {
-                auto auto_detected = common_get_hf_file(hf_repo, hf_token);
-                if (auto_detected.first.empty() || auto_detected.second.empty()) {
-                    exit(1); // built without CURL, error message already printed
+static void common_params_handle_model(
+        struct common_params_model & model,
+        const std::string & bearer_token,
+        const std::string & model_path_default,
+        bool is_mmproj = false) { // TODO: move is_mmproj to an enum when we have more files?
+    // handle pre-fill default model path and url based on hf_repo and hf_file
+    {
+        if (!model.hf_repo.empty()) {
+            // short-hand to avoid specifying --hf-file -> default it to --model
+            if (model.hf_file.empty()) {
+                if (model.path.empty()) {
+                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token);
+                    if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
+                        exit(1); // built without CURL, error message already printed
+                    }
+                    model.hf_repo = auto_detected.repo;
+                    model.hf_file = is_mmproj ? auto_detected.mmprojFile : auto_detected.ggufFile;
+                } else {
+                    model.hf_file = model.path;
                 }
-                hf_repo = auto_detected.first;
-                hf_file = auto_detected.second;
-            } else {
-                hf_file = model;
             }
+
+            // TODO: allow custom host
+            model.url = "https://huggingface.co/" + model.hf_repo + "/resolve/main/" + model.hf_file;
+
+            // make sure model path is present (for caching purposes)
+            if (model.path.empty()) {
+                // this is to avoid different repo having same file name, or same file name in different subdirs
+                std::string filename = model.hf_repo + "_" + model.hf_file;
+                // to make sure we don't have any slashes in the filename
+                string_replace_all(filename, "/", "_");
+                model.path = fs_get_cache_file(filename);
+            }
+
+        } else if (!model.url.empty()) {
+            if (model.path.empty()) {
+                auto f = string_split<std::string>(model.url, '#').front();
+                f = string_split<std::string>(f, '?').front();
+                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+            }
+
+        } else if (model.path.empty()) {
+            model.path = model_path_default;
         }
-        // make sure model path is present (for caching purposes)
-        if (model.empty()) {
-            // this is to avoid different repo having same file name, or same file name in different subdirs
-            std::string filename = hf_repo + "_" + hf_file;
-            // to make sure we don't have any slashes in the filename
-            string_replace_all(filename, "/", "_");
-            model = fs_get_cache_file(filename);
+    }
+
+    // then, download it if needed
+    if (!model.url.empty()) {
+        bool ok = common_download_model(model, bearer_token);
+        if (!ok) {
+            LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
+            exit(1);
         }
-    } else if (!model_url.empty()) {
-        if (model.empty()) {
-            auto f = string_split<std::string>(model_url, '#').front();
-            f = string_split<std::string>(f, '?').front();
-            model = fs_get_cache_file(string_split<std::string>(f, '/').back());
-        }
-    } else if (model.empty()) {
-        model = model_default;
     }
 }
 
@@ -300,10 +821,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    // TODO: refactor model params in a common struct
-    common_params_handle_model_default(params.model,             params.model_url,             params.hf_repo,             params.hf_file,             params.hf_token, DEFAULT_MODEL_PATH);
-    common_params_handle_model_default(params.speculative.model, params.speculative.model_url, params.speculative.hf_repo, params.speculative.hf_file, params.hf_token, "");
-    common_params_handle_model_default(params.vocoder.model,     params.vocoder.model_url,     params.vocoder.hf_repo,     params.vocoder.hf_file,     params.hf_token, "");
+    common_params_handle_model(params.model,             params.hf_token, DEFAULT_MODEL_PATH);
+    common_params_handle_model(params.speculative.model, params.hf_token, "");
+    common_params_handle_model(params.vocoder.model,     params.hf_token, "");
+
+    // allow --mmproj to be set from -hf
+    // assuming that mmproj is always in the same repo as text model
+    if (!params.model.hf_repo.empty() && ctx_arg.ex == LLAMA_EXAMPLE_LLAVA) {
+        params.mmproj.hf_repo = params.model.hf_repo;
+    }
+    common_params_handle_model(params.mmproj,            params.hf_token, "", true);
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -320,6 +847,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if (!params.kv_overrides.empty()) {
         params.kv_overrides.emplace_back();
         params.kv_overrides.back().key[0] = 0;
+    }
+
+    if (!params.tensor_buft_overrides.empty()) {
+        params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
     if (params.reranking && params.embedding) {
@@ -1561,7 +2092,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--mmproj"}, "FILE",
         "path to a multimodal projector file for LLaVA. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
-            params.mmproj = value;
+            params.mmproj.path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    add_opt(common_arg(
+        {"--mmproj-url"}, "URL",
+        "URL to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        [](common_params & params, const std::string & value) {
+            params.mmproj.url = value;
         }
     ).set_examples({LLAMA_EXAMPLE_LLAVA}));
     add_opt(common_arg(
@@ -1645,6 +2183,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
             }
             exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--override-tensor", "-ot"}, "<tensor name pattern>=<buffer type>,...",
+        "override tensor buffer type", [](common_params & params, const std::string & value) {
+            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+            if (buft_list.empty()) {
+                // enumerate all the devices and add their buffer types to the list
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    auto * buft = ggml_backend_dev_buffer_type(dev);
+                    if (buft) {
+                        buft_list[ggml_backend_buft_name(buft)] = buft;
+                    }
+                }
+            }
+
+            for (const auto & override : string_split<std::string>(value, ',')) {
+                std::string::size_type pos = override.find('=');
+                if (pos == std::string::npos) {
+                    throw std::invalid_argument("invalid value");
+                }
+                std::string tensor_name = override.substr(0, pos);
+                std::string buffer_type = override.substr(pos + 1);
+
+                if (buft_list.find(buffer_type) == buft_list.end()) {
+                    printf("Available buffer types:\n");
+                    for (const auto & it : buft_list) {
+                        printf("  %s\n", ggml_backend_buft_name(it.second));
+                    }
+                    throw std::invalid_argument("unknown buffer type");
+                }
+                // FIXME: this leaks memory
+                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+            }
         }
     ));
     add_opt(common_arg(
@@ -1790,14 +2363,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 "or `--model-url` if set, otherwise %s)", DEFAULT_MODEL_PATH
             ),
         [](common_params & params, const std::string & value) {
-            params.model = value;
+            params.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.model_url = value;
+            params.model.url = value;
         }
     ).set_env("LLAMA_ARG_MODEL_URL"));
     add_opt(common_arg(
@@ -1806,35 +2379,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "example: unsloth/phi-4-GGUF:q4_k_m\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {
-            params.hf_repo = value;
+            params.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HF_REPO"));
     add_opt(common_arg(
         {"-hfd", "-hfrd", "--hf-repo-draft"}, "<user>/<model>[:quant]",
         "Same as --hf-repo, but for the draft model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.speculative.hf_repo = value;
+            params.speculative.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HFD_REPO"));
     add_opt(common_arg(
         {"-hff", "--hf-file"}, "FILE",
         "Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.hf_file = value;
+            params.model.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.hf_repo = value;
+            params.vocoder.model.hf_repo = value;
         }
     ).set_env("LLAMA_ARG_HF_REPO_V"));
     add_opt(common_arg(
         {"-hffv", "--hf-file-v"}, "FILE",
         "Hugging Face model file for the vocoder model (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.hf_file = value;
+            params.vocoder.model.hf_file = value;
         }
     ).set_env("LLAMA_ARG_HF_FILE_V"));
     add_opt(common_arg(
@@ -2454,7 +3027,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-md", "--model-draft"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.speculative.model = value;
+            params.speculative.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
 
@@ -2462,7 +3035,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-mv", "--model-vocoder"}, "FNAME",
         "vocoder model for audio generation (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.model = value;
+            params.vocoder.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
      add_opt(common_arg(
@@ -2485,10 +3058,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tts-oute-default"},
         string_format("use default OuteTTS models (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
-            params.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
-            params.vocoder.hf_repo = "ggml-org/WavTokenizer";
-            params.vocoder.hf_file = "WavTokenizer-Large-75-F16.gguf";
+            params.model.hf_repo = "OuteAI/OuteTTS-0.2-500M-GGUF";
+            params.model.hf_file = "OuteTTS-0.2-500M-Q8_0.gguf";
+            params.vocoder.model.hf_repo = "ggml-org/WavTokenizer";
+            params.vocoder.model.hf_file = "WavTokenizer-Large-75-F16.gguf";
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
@@ -2496,8 +3069,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-bge-small-en-default"},
         string_format("use default bge-small-en-v1.5 model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
-            params.hf_file = "bge-small-en-v1.5-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
+            params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2510,8 +3083,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-e5-small-en-default"},
         string_format("use default e5-small-v2 model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
-            params.hf_file = "e5-small-v2-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/e5-small-v2-Q8_0-GGUF";
+            params.model.hf_file = "e5-small-v2-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2524,8 +3097,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--embd-gte-small-default"},
         string_format("use default gte-small model (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
-            params.hf_file = "gte-small-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/gte-small-Q8_0-GGUF";
+            params.model.hf_file = "gte-small-q8_0.gguf";
             params.pooling_type = LLAMA_POOLING_TYPE_NONE;
             params.embd_normalize = 2;
             params.n_ctx = 512;
@@ -2538,8 +3111,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-1.5b-default"},
         string_format("use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2554,8 +3127,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-3b-default"},
         string_format("use default Qwen 2.5 Coder 3B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-3B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-3b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2570,8 +3143,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-7b-default"},
         string_format("use default Qwen 2.5 Coder 7B (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
             params.port = 8012;
             params.n_gpu_layers = 99;
             params.flash_attn = true;
@@ -2586,10 +3159,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-7b-spec"},
         string_format("use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
-            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
-            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
             params.speculative.n_gpu_layers = 99;
             params.port = 8012;
             params.n_gpu_layers = 99;
@@ -2605,10 +3178,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--fim-qwen-14b-spec"},
         string_format("use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet)"),
         [](common_params & params) {
-            params.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
-            params.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
-            params.speculative.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
-            params.speculative.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-14b-q8_0.gguf";
+            params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
             params.speculative.n_gpu_layers = 99;
             params.port = 8012;
             params.n_gpu_layers = 99;

@@ -29,6 +29,7 @@ class TensorNameMap:
             "shared",                                    # t5
             "rwkv.embeddings",                           # rwkv6
             "model.embeddings",                          # rwkv7
+            "model.word_embeddings",                     # bailingmoe
         ),
 
         # Token type embeddings
