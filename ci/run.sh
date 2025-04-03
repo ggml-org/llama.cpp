@@ -16,6 +16,9 @@
 # # with VULKAN support
 # GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with MUSA support
+# GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -61,6 +64,12 @@ fi
 
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
+fi
+
+if [ ! -z ${GG_BUILD_MUSA} ]; then
+    # Use qy1 by default (MTT S80)
+    MUSA_ARCH=${MUSA_ARCH:-21}
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
 ## helpers
 
@@ -811,7 +820,7 @@ export LLAMA_LOG_PREFIX=1
 export LLAMA_LOG_TIMESTAMPS=1
 
 if [ -z ${GG_BUILD_LOW_PERF} ]; then
-    # Create symlink: ./llama.cpp/models-mnt -> $MNT/models/models-mnt
+    # Create symlink: ./llama.cpp/models-mnt -> $MNT/models
     rm -rf ${SRC}/models-mnt
     mnt_models=${MNT}/models
     mkdir -p ${mnt_models}
