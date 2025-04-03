@@ -6,11 +6,11 @@ import numpy as np
 from gguf import *
 from transformers import (
     AutoProcessor,
-    Qwen2VLForConditionalGeneration,
-    Qwen2_5_VLForConditionalGeneration,
-    Qwen2VLProcessor,
     Qwen2VLConfig,
-    Qwen2_5_VLConfig,
+    Qwen2VLProcessor,
+    Qwen2VLForConditionalGeneration,
+    Qwen2_5_VLConfig, # type: ignore[reportAttributeAccessIssue]
+    Qwen2_5_VLForConditionalGeneration, # type: ignore[reportAttributeAccessIssue]
 )
 
 
