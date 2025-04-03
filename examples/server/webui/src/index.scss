@@ -2,7 +2,7 @@
 @use 'tailwindcss';
 
 @plugin 'daisyui' {
-  themes: all,
+  themes: all;
 }
 
 html {
