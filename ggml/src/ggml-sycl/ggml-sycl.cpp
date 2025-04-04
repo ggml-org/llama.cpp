@@ -372,12 +372,9 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
     SYCL_CHECK(
         CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
-    char* host_buf = (char*)malloc(size);
-    memcpy(host_buf, data, size);
     SYCL_CHECK(
-        CHECK_TRY_ERROR((*stream).memcpy((char *)tensor->data + offset, host_buf, size)
+        CHECK_TRY_ERROR((*stream).memcpy((char *)tensor->data + offset, data, size)
                              .wait()));
-    free(host_buf);
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
