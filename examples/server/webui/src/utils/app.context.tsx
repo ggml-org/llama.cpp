@@ -186,6 +186,7 @@ export const AppContextProvider = ({
         messages,
         stream: true,
         cache_prompt: true,
+        conv_id: convId,
         samplers: config.samplers,
         temperature: config.temperature,
         dynatemp_range: config.dynatemp_range,

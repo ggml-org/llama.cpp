@@ -1,6 +1,7 @@
 #include "utils.hpp"
 
 #include "arg.h"
+#include "chat-memory/chat_memory.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "llama.h"
@@ -3909,8 +3910,21 @@ int main(int argc, char ** argv) {
         auto completion_id = gen_chatcmplid();
         std::vector<server_task> tasks;
 
+        std::string conv_id = "";
         try {
-            const auto & prompt = data.at("prompt");
+            // Read conv_id from JSON or skip if empty.
+            conv_id = data.value("conv_id", "");
+            if (conv_id.empty()) {
+                SRV_INF("%s", "No conv_id provided, chat memory will be disabled.\n");
+            }
+
+            std::string prefix = "";
+            if (!conv_id.empty()) {
+                auto& mem = get_or_create_chat_memory(conv_id);
+                prefix = mem.format_injection_prompt() + "\n\n";
+            }
+            std::string prompt = prefix + data.at("prompt").get<std::string>();
+
             // TODO: this log can become very long, put it behind a flag or think about a more compact format
             //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
@@ -3951,12 +3965,24 @@ int main(int argc, char ** argv) {
             ctx_server.receive_multi_results(task_ids, [&](std::vector<server_task_result_ptr> & results) {
                 if (results.size() == 1) {
                     // single result
-                    res_ok(res, results[0]->to_json());
+                    json out = results[0]->to_json();
+                    // Parse model output for memory commands
+                    if (!conv_id.empty() && !results.empty()) {
+                        auto& mem = get_or_create_chat_memory(conv_id);
+                        mem.parse_and_execute_command_json(out);
+                    }
+                    res_ok(res, out);
                 } else {
                     // multiple results (multitask)
                     json arr = json::array();
                     for (auto & res : results) {
-                        arr.push_back(res->to_json());
+                        json out = res->to_json();
+                         // Parse model output for memory commands from each task
+                         if (!conv_id.empty() && !out.empty()) {
+                             auto& mem = get_or_create_chat_memory(conv_id);
+                             mem.parse_and_execute_command_json(out);
+                         }
+                         arr.push_back(out);
                     }
                     res_ok(res, arr);
                 }
@@ -3966,9 +3992,16 @@ int main(int argc, char ** argv) {
 
             ctx_server.queue_results.remove_waiting_task_ids(task_ids);
         } else {
-            const auto chunked_content_provider = [task_ids, &ctx_server, oaicompat](size_t, httplib::DataSink & sink) {
+            const auto chunked_content_provider = [task_ids, &ctx_server, oaicompat, conv_id](size_t, httplib::DataSink & sink) {
                 ctx_server.receive_cmpl_results_stream(task_ids, [&](server_task_result_ptr & result) -> bool {
                     json res_json = result->to_json();
+                    if (!conv_id.empty()) {
+                         auto & mem = get_or_create_chat_memory(conv_id);
+                         mem.process_response(res_json, result->is_stop(),
+                             [&sink](const char* data, size_t size) {
+                                 sink.write(data, size);
+                         });
+                    }
                     if (res_json.is_array()) {
                         for (const auto & res : res_json) {
                             if (!server_sent_event(sink, "data", res)) {

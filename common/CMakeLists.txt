@@ -58,6 +58,11 @@ add_library(${TARGET} STATIC
     base64.hpp
     chat.cpp
     chat.h
+    chat-memory/chat_memory.cpp
+    chat-memory/chat_memory.h
+    chat-memory/chat_memory_simple.cpp
+    chat-memory/chat_memory_simple.h
+    chat-memory/chat_memory_factory.cpp
     common.cpp
     common.h
     console.cpp

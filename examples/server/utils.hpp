@@ -556,6 +556,11 @@ static json oaicompat_completion_params_parse(const json & body) {
         throw std::runtime_error("Only no echo is supported");
     }
 
+    // Added for server-side chat memory
+    if (body.contains("conv_id")) {
+        llama_params["conv_id"] = body["conv_id"];
+    }
+
     // Params supported by OAI but unsupported by llama.cpp
     static const std::vector<std::string> unsupported_params { "best_of", "suffix" };
     for (const auto & param : unsupported_params) {
@@ -658,6 +663,11 @@ static json oaicompat_completion_params_parse(
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
+
+    // Added for server-side chat memory
+    if (body.contains("conv_id")) {
+        llama_params["conv_id"] = body["conv_id"];
+    }
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
