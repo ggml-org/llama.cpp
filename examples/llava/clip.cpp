@@ -758,9 +758,6 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
                 KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
             } else {
                 KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f, 0.0f);
-                // KQ = ggml_scale_inplace(ctx0, KQ, 1.0f / sqrt((float)d_head));
-                // KQ = ggml_add(ctx0, KQ, window_mask);
-                // KQ = ggml_soft_max_inplace(ctx0, KQ);
             }
 
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
@@ -2739,9 +2736,8 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                         for (int dx = 0; dx < 2; dx++) {
                             auto remap = idx[ptr / mpow];
                             remap = remap * mpow + (ptr % mpow);
-                            // auto remap = ptr;
 
-                            positions_data[remap]                 = y + dy;
+                            positions_data[remap]                   = y + dy;
                             positions_data[num_patches + remap]     = x + dx;
                             positions_data[num_patches * 2 + remap] = y + dy;
                             positions_data[num_patches * 3 + remap] = x + dx;
@@ -2835,7 +2831,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 }
             }
         }
-
 
         if (window_idx) ggml_backend_tensor_set(window_idx, idx.data(), 0, ggml_nbytes(window_idx));
         if (inv_window_idx) ggml_backend_tensor_set(inv_window_idx, inv_idx.data(), 0, ggml_nbytes(inv_window_idx));
