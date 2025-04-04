@@ -9634,9 +9634,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             0);
                     cb(wk_b_trans, "wk_b_trans", il);
 
-                    // note: this operation seems to need F32 precision, needs further investigation/testing
                     ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, wk_b_trans, q_nope);
-                    ggml_mul_mat_set_prec(q_nope_absorbed, GGML_PREC_F32);
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
 
                     ggml_tensor * q_states = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
@@ -9661,9 +9659,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             model.layers[il].wo, NULL, wv_b,
                             q_states, k_states, v_states, nullptr, kq_scale, il);
                 } else {
-                    // note: this operation seems to need F32 precision, needs further investigation/testing
                     ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
-                    ggml_mul_mat_set_prec(kv, GGML_PREC_F32);
                     cb(kv, "kv", il);
 
                     // split into {n_embd_head_qk_nope, n_head, n_tokens}
