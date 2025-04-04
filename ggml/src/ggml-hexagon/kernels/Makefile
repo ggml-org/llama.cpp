@@ -9,7 +9,7 @@ CFLAGS=-m${HTP_ARCH_VERSION} -c -Ofast -Wall -Wstrict-prototypes -fno-zero-initi
 
 LDFLAGS=-m${HTP_ARCH_VERSION} -Wl,--defsym=ISDB_TRUSTED_FLAG=2 -Wl,--defsym=ISDB_SECURE_FLAG=2 -Wl,--no-threads -fpic -shared -Wl,-Bsymbolic -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--wrap=realloc -Wl,--wrap=memalign -lc -Wl,-soname=${TARGET}
 
-SRCS = ggmlop_cdsp.c  ggmlop_cdsp_skel.c
+SRCS = ggml-dsp.c  ggmlop_cdsp_skel.c
 OBJS = $(patsubst %.c, %.o, $(SRCS))
 
 ALL:$(OBJS)
