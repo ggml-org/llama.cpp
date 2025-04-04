@@ -74,4 +74,4 @@ In no particular order of importance, these are the things that bother me:
   - The args thing is cute, but it might be easier as a yaml file. Key value pairs. Flags can be keys with null values.
 - The `--ctx-size` parameter doesn't seem quite right given that new models have the training (or max) context size in their metadata. That size should be used subject to a maximum in a passed parameter. E.g. So a 128K model can run comfortably on a smaller device.
 - Write docs for a Deploying step. It should address the args file, removing the extra executable depending on platform, models, host, port. context size.
-- Make a '.gitattributes' file so we can set the default file to be displayed and keep the README.md from llama.cpp. This will help in syncing changes continually from upstream. Reference: https://git-scm.com/docs/gitattributes
+- Make a `.gitattributes` file so we can set the default file to be displayed and keep the README.md from llama.cpp. This will help in syncing changes continually from upstream. Reference: https://git-scm.com/docs/gitattributes
