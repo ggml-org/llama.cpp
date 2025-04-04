@@ -59,6 +59,8 @@ if [ ! -z ${GG_BUILD_SYCL} ]; then
     export ONEAPI_DEVICE_SELECTOR="level_zero:0"
     # Enable sysman for correct memory reporting
     export ZES_ENABLE_SYSMAN=1
+    # to circumvent precision issues on CPY operations
+    export SYCL_PROGRAM_COMPILE_OPTIONS="-cl-fp32-correctly-rounded-divide-sqrt"
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_SYCL=1 -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON"
 fi
 

@@ -1,8 +1,13 @@
 @use 'sass:meta';
+@use 'tailwindcss';
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@plugin 'daisyui' {
+  themes: all;
+}
+
+html {
+  scrollbar-gutter: auto;
+}
 
 .markdown {
   h1,

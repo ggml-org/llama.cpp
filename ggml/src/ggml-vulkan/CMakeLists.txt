@@ -64,8 +64,10 @@ if (Vulkan_FOUND)
 
     if (${glslc_error} MATCHES ".*extension not supported: GL_EXT_integer_dot_product.*")
         message(STATUS "GL_EXT_integer_dot_product not supported by glslc")
+        set(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT OFF)
     else()
         message(STATUS "GL_EXT_integer_dot_product supported by glslc")
+        set(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT ON)
         add_compile_definitions(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
     endif()
 
@@ -139,6 +141,7 @@ if (Vulkan_FOUND)
                     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
                     -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT_GLSLC_SUPPORT}
                     -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT}
+                    -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT=${GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT}
             BUILD_COMMAND ${CMAKE_COMMAND} --build .
             INSTALL_COMMAND ${CMAKE_COMMAND} --install .
             INSTALL_DIR ${CMAKE_BINARY_DIR}

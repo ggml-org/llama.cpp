@@ -1420,6 +1420,15 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_ARGSORT:
             ggml_cann_argsort(ctx, dst);
             break;
+        case GGML_OP_ARGMAX:
+            ggml_cann_argmax(ctx, dst);
+            break;
+        case GGML_OP_COS:
+            ggml_cann_cos(ctx, dst);
+            break;
+        case GGML_OP_SIN:
+            ggml_cann_sin(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -1802,6 +1811,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
+        case GGML_OP_ARGMAX:
+        case GGML_OP_COS:
+        case GGML_OP_SIN:
             return true;
         default:
             return false;
