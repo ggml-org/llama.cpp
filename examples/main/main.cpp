@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "llama.h"
 #include "chat.h"
+#include <json.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -14,6 +15,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifdef LLAMA_USE_TOOLCALL
+#    include "toolcall-client.h"
+#endif
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -83,6 +88,99 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+class chat_formatter {
+public:
+
+    struct result {
+        std::string formatted;
+        bool tool_was_called;
+    };
+
+    chat_formatter(common_params & params,
+                   std::vector<common_chat_msg> & chat_msgs,
+                   struct common_chat_templates * chat_templates)
+
+        : params_(params), chat_msgs_(chat_msgs), chat_templates_(chat_templates) {}
+
+#ifdef LLAMA_USE_TOOLCALL
+    chat_formatter(common_params & params,
+                   std::vector<common_chat_msg> & chat_msgs,
+                   struct common_chat_templates * chat_templates,
+                   const llama_vocab * vocab,
+                   toolcall::client::ptr tc_client)
+
+        : params_(params), chat_msgs_(chat_msgs), chat_templates_(chat_templates),
+          vocab_(vocab), tc_client_(tc_client),
+          chat_format_(COMMON_CHAT_FORMAT_CONTENT_ONLY),
+          formatted_() {}
+#endif
+
+    chat_formatter::result operator() (const std::string & role, const std::string & content) {
+
+        common_chat_msg new_msg = common_chat_parse(content, chat_format_);
+        new_msg.role = role;
+
+        common_chat_templates_inputs cinputs;
+        cinputs.use_jinja = params_.use_jinja;
+        cinputs.add_generation_prompt = (role == "user");
+#ifdef LLAMA_USE_TOOLCALL
+        if (tc_client_ != nullptr) {
+            cinputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tc_client_->tool_choice());
+            cinputs.tools = common_chat_tools_parse_oaicompat(tc_client_->tool_list());
+        }
+#endif
+        cinputs.messages.assign(chat_msgs_.cbegin(), chat_msgs_.cend());
+        cinputs.messages.push_back(new_msg);
+        chat_msgs_.push_back(new_msg);
+
+        bool tool_was_called = false;
+        if (! new_msg.tool_calls.empty()) { // Call tool and re-prompt
+            nlohmann::json result_array = nlohmann::json::array();
+            for (const auto & tc : new_msg.tool_calls) {
+                toolcall::result_set res = tc_client_->call(tc.name, tc.arguments, tc.id);
+                if (! res.empty()) {
+                    for (const auto & r : res) {
+                        result_array.push_back(r.data);
+                    }
+                }
+            }
+            common_chat_msg toolcall_msg;
+            toolcall_msg.role = "tool";
+            toolcall_msg.content = result_array.dump(-1);
+
+            cinputs.add_generation_prompt = true;
+            cinputs.messages.push_back(toolcall_msg);
+            chat_msgs_.push_back(toolcall_msg);
+
+            tool_was_called = true;
+        }
+
+        common_chat_params cparams = common_chat_templates_apply(chat_templates_, cinputs);
+        std::string formatted = cparams.prompt.substr(formatted_.size(), cparams.prompt.size());
+        formatted_ = cparams.prompt;
+
+        LOG_DBG("formatted: '%s'\n", formatted.c_str());
+
+#ifdef LLAMA_USE_TOOLCALL
+        chat_format_ = cparams.format;
+        common_chat_grammar_to_sampler(&cparams, vocab_, &params_.sampling);
+#endif
+        return chat_formatter::result{std::move(formatted), tool_was_called};
+    }
+
+private:
+    common_params & params_;
+    std::vector<common_chat_msg> & chat_msgs_;
+    struct common_chat_templates * chat_templates_;
+
+#ifdef LLAMA_USE_TOOLCALL
+    const llama_vocab * vocab_;
+    toolcall::client::ptr tc_client_;
+    common_chat_format chat_format_;
+    std::string formatted_;
+#endif
+};
+
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
@@ -93,6 +191,11 @@ int main(int argc, char ** argv) {
     common_init();
 
     auto & sparams = params.sampling;
+
+#ifdef LLAMA_USE_TOOLCALL
+    // Ensure parameters are validated before the model loads
+    toolcall::params tc_params(params.toolcall.tools, params.toolcall.choice);
+#endif
 
     // save choice to use color for later
     // (note for later: this is a slightly awkward choice)
@@ -266,15 +369,16 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> embd_inp;
 
     bool waiting_for_first_input = false;
-    auto chat_add_and_format = [&chat_msgs, &chat_templates](const std::string & role, const std::string & content) {
-        common_chat_msg new_msg;
-        new_msg.role = role;
-        new_msg.content = content;
-        auto formatted = common_chat_format_single(chat_templates.get(), chat_msgs, new_msg, role == "user", g_params->use_jinja);
-        chat_msgs.push_back(new_msg);
-        LOG_DBG("formatted: '%s'\n", formatted.c_str());
-        return formatted;
-    };
+
+#ifdef LLAMA_USE_TOOLCALL
+    auto tc_client = toolcall::create_client(tc_params);
+    if (tc_client) {
+        tc_client->initialize();
+    }
+    chat_formatter chat_add_and_format(params, chat_msgs, chat_templates.get(), vocab, tc_client);
+#else
+    chat_formatter chat_add_and_format(params, chat_msgs, chat_templates.get());
+#endif
 
     std::string prompt;
     {
@@ -296,6 +400,12 @@ int main(int argc, char ** argv) {
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
 
+#ifdef LLAMA_USE_TOOLCALL
+                if (tc_client != nullptr) {
+                    inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tc_client->tool_choice());
+                    inputs.tools = common_chat_tools_parse_oaicompat(tc_client->tool_list());
+                }
+#endif
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             }
         } else {
@@ -814,10 +924,17 @@ int main(int argc, char ** argv) {
                     }
 
                     if (params.enable_chat_template) {
-                        chat_add_and_format("assistant", assistant_ss.str());
+                        auto format_res = chat_add_and_format("assistant", assistant_ss.str());
+                        if (format_res.tool_was_called) {
+                            auto format_res_tok = common_tokenize(ctx, format_res.formatted, false, true);
+                            embd_inp.insert(embd_inp.end(), format_res_tok.begin(), format_res_tok.end());
+                            assistant_ss.str("");
+
+                        } else {
+                            is_interacting = true;
+                            LOG("\n");
+                        }
                     }
-                    is_interacting = true;
-                    LOG("\n");
                 }
             }
 
@@ -884,7 +1001,7 @@ int main(int argc, char ** argv) {
 
                     bool format_chat = params.conversation_mode && params.enable_chat_template;
                     std::string user_inp = format_chat
-                        ? chat_add_and_format("user", std::move(buffer))
+                        ? chat_add_and_format("user", std::move(buffer)).formatted
                         : std::move(buffer);
                     // TODO: one inconvenient of current chat template implementation is that we can't distinguish between user input and special tokens (prefix/postfix)
                     const auto line_pfx = common_tokenize(ctx, params.input_prefix, false, true);
