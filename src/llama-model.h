@@ -160,25 +160,24 @@ struct llama_layer {
     struct ggml_tensor * attn_norm_enc   = nullptr;
 
     // attention
-    struct ggml_tensor * wq        = nullptr;
-    struct ggml_tensor * wk        = nullptr;
-    struct ggml_tensor * wv        = nullptr;
-    struct ggml_tensor * wo        = nullptr;
-    struct ggml_tensor * wqkv      = nullptr;
-    struct ggml_tensor * wq_a      = nullptr;
-    struct ggml_tensor * wq_b      = nullptr;
-    struct ggml_tensor * wkv_a_mqa = nullptr;
-    struct ggml_tensor * wkv_b     = nullptr;
-    struct ggml_tensor * wk_b      = nullptr;
-    struct ggml_tensor * wv_b      = nullptr;
-    struct ggml_tensor * wq_cross  = nullptr;
-    struct ggml_tensor * wk_cross  = nullptr;
-    struct ggml_tensor * wv_cross  = nullptr;
-    struct ggml_tensor * wo_cross  = nullptr;
-    struct ggml_tensor * wq_enc    = nullptr;
-    struct ggml_tensor * wk_enc    = nullptr;
-    struct ggml_tensor * wv_enc    = nullptr;
-    struct ggml_tensor * wo_enc    = nullptr;
+    struct ggml_tensor * wq         = nullptr;
+    struct ggml_tensor * wk         = nullptr;
+    struct ggml_tensor * wv         = nullptr;
+    struct ggml_tensor * wo         = nullptr;
+    struct ggml_tensor * wqkv       = nullptr;
+    struct ggml_tensor * wq_a       = nullptr;
+    struct ggml_tensor * wq_b       = nullptr;
+    struct ggml_tensor * wkv_a_mqa  = nullptr;
+    struct ggml_tensor * wkv_b      = nullptr;
+    struct ggml_tensor * wk_b_trans = nullptr;
+    struct ggml_tensor * wq_cross   = nullptr;
+    struct ggml_tensor * wk_cross   = nullptr;
+    struct ggml_tensor * wv_cross   = nullptr;
+    struct ggml_tensor * wo_cross   = nullptr;
+    struct ggml_tensor * wq_enc     = nullptr;
+    struct ggml_tensor * wk_enc     = nullptr;
+    struct ggml_tensor * wv_enc     = nullptr;
+    struct ggml_tensor * wo_enc     = nullptr;
 
     // attention bias
     struct ggml_tensor * bq   = nullptr;

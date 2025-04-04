@@ -76,8 +76,9 @@ bool llama_kv_cache_unified::init(
         int64_t n_embd_k;
         int64_t n_embd_v;
 
-        // note: deepseek with MLA option converts into MQA (ie: GQA with 1 group)
+        // note: be sure to check model.arch or this will cause a bug if used with a non-MLA draft model!
         if (cparams.mla_attn && model.arch == LLM_ARCH_DEEPSEEK2) {
+            // note: deepseek2 with MLA option converts into MQA (ie: GQA with 1 group)
             n_embd_k = hparams.n_lora_kv + hparams.n_rot;
             n_embd_v = hparams.n_lora_kv;
         } else {

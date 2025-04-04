@@ -2277,14 +2277,17 @@ llama_context * llama_init_from_model(
         params.flash_attn = false;
     }
 
-    if (params.mla_attn && model->arch != LLM_ARCH_DEEPSEEK2) {
-        LLAMA_LOG_WARN("%s: mla_attn is only compatible with Deepseek2 - forcing off\n", __func__);
-        params.mla_attn = false;
-    }
-
-    if (params.flash_attn && params.mla_attn) {
-        LLAMA_LOG_WARN("%s: flash_attn is not compatible with mla_attn - forcing off\n", __func__);
-        params.flash_attn = false;
+    if (params.mla_attn) {
+        if (model->arch != LLM_ARCH_DEEPSEEK2) {
+            LLAMA_LOG_WARN("%s: mla_attn is only compatible with Deepseek2 - forcing off\n", __func__);
+            params.mla_attn = false;
+        } else if (model->layers[0].wk_b_trans == nullptr) {
+            LLAMA_LOG_WARN("%s: mla_attn requires a gguf with the new 'attn_k_b_trans' tensor - forcing off\n", __func__);
+            params.mla_attn = false;
+        } else if (params.flash_attn) {
+            LLAMA_LOG_WARN("%s: flash_attn is not compatible with mla_attn - forcing off\n", __func__);
+            params.flash_attn = false;
+        }
     }
 
     if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
