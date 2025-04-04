@@ -91,7 +91,7 @@ A `default-args` file in the archive can specify sane default parameters. The fo
 
 We don't yet support including the model inside the zip archive (yet). That has a 4GB size limitation on Windows anyway, as `.exe` files cannot exceed 4GB. So let's use an adjacent file called `model.gguf`.
 
-We will serve on localhost, port 8080 by default for safety. The `--ctx-size` parameter is the size of the context window. This is kinda screwy to have as a set size rather than a maximum because the `.gguf` files now have the training context size in metadata. We set it to 8192 to be sensible.
+We will serve on localhost, port 8080 by default for safety. The `--ctx-size` parameter is the size of the context window. This is kinda screwy to have as a set size rather than a maximum because the `.gguf` files now have the training context size in metadata. We set it to 8192 to be sensible. The `--threads-http` parameter ensures that the browser can ask for all the image files in our default UI at once.
 ```
 cat << EOF > $DEFAULT_ARGS
 -m
@@ -102,6 +102,8 @@ model.gguf
 8080
 --ctx-size
 8192
+--threads-http
+8
 --path
 /zip/website
 ...
