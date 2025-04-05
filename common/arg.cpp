@@ -656,9 +656,10 @@ static void common_params_handle_model(
                 }
             }
 
-            std::string hf_endpoint{"https://huggingface.co/"}; 
-            if(auto const* hf_endpoint_env = getenv("HF_ENDPOINT"); hf_endpoint_env) {
-                hf_endpoint = std::string{hf_endpoint_env};
+            std::string hf_endpoint = "https://huggingface.co/";
+            const char * hf_endpoint_env = getenv("HF_ENDPOINT");
+            if (hf_endpoint_env) {
+                hf_endpoint = hf_endpoint_env;
                 if (hf_endpoint.back() != '/') hf_endpoint += '/';
             }
             
