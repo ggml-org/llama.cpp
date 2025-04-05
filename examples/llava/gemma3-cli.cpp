@@ -10,7 +10,7 @@
 
 #include <vector>
 #include <limits.h>
-#include <inttypes.h>
+#include <cinttypes>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
