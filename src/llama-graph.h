@@ -492,7 +492,7 @@ struct llm_graph_context {
              ggml_tensor * v, // [n_embd_head_v, n_tokens, n_head_v] (v_trans == false)
              ggml_tensor * kq_b,
              ggml_tensor * kq_mask,
-             ggml_tensor * v_mha_proj,
+             ggml_tensor * v_mha_proj, // [n_embd_head_v_mqa, n_embd_head_v_mha, n_head]
                     bool   v_trans,
                    float   kq_scale) const;
 
@@ -543,10 +543,10 @@ struct llm_graph_context {
             ggml_cgraph * gf,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
-            ggml_tensor * v_mha_proj,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_tokens, n_head_q]
-            ggml_tensor * k_cur, // [n_embd_head_k, n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, n_tokens]
+            ggml_tensor * v_mha_proj, // [kv_lora_rank, n_embd_head_v_mha, n_head]
+            ggml_tensor * q_cur,      // [kv_lora_rank, n_tokens,n_head]
+            ggml_tensor * k_cur,      // [kv_lora_rank, n_tokens]
+            ggml_tensor * v_cur,      // [kv_lora_rank, n_tokens]
             ggml_tensor * kq_b,
                   float   kq_scale,
                     int   il) const;
