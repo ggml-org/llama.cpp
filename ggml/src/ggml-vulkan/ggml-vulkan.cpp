@@ -1736,19 +1736,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_warptile_mmq = { 128,  64,  64, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32, 32, 32, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
-        const uint32_t tm_int_l = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_m = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_s = device->coopmat_int_support ? device->coopmat_int_m : 2;
-        const uint32_t tn_int_l = device->coopmat_int_support ? device->coopmat_int_n : 4;
-        const uint32_t tn_int_m = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tn_int_s = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tk_int_l = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_m = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_s = device->coopmat_int_support ? device->coopmat_int_k : 1;
-
-        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_int_l, tn_int_l, tk_int_l, subgroup_size_8 };
-        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8, 32, 2,     tm_int_m, tn_int_m, tk_int_m, subgroup_size_8 };
-        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32, 32, 2,       tm_int_s, tn_int_s, tk_int_s, subgroup_size_8 };
+        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
+        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8,     32, 2, 2, 2, 1, subgroup_size_8 };
+        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32,       32, 2, 2, 1, 1, subgroup_size_8 };
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
@@ -7922,7 +7912,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
         128, 49, 49,
         4096, 49, 4096,
     };
-    const size_t num_it = 1;
+    const size_t num_it = 100;
 
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 0, GGML_TYPE_Q4_0);
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 1, GGML_TYPE_Q4_0);
