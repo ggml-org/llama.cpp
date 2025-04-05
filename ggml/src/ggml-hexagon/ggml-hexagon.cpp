@@ -5086,13 +5086,15 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
         case GGML_OP_MUL_MAT:
         {
             ggmlhexagon_dump_op_info(op_tensor);
-            if (1 == g_hexagon_appcfg.enable_q_mulmat)
+            if (1 == g_hexagon_appcfg.enable_q_mulmat) {
                 return (src0->type == GGML_TYPE_F32
                         || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0
                         || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K
                        ) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
-            else
-                return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) && (op_tensor->type == GGML_TYPE_F32);
+            } else {
+                return (src0->type == GGML_TYPE_F32) && (src1->type == GGML_TYPE_F32) &&
+                       (op_tensor->type == GGML_TYPE_F32);
+            }
         }
         case GGML_OP_SOFT_MAX:{
             if (!ggml_is_contiguous(op_tensor))
@@ -5124,13 +5126,9 @@ static bool ggmlhexagon_can_handle_op_through_qnn(ggml_backend_dev_t dev, const 
 
     struct ggml_tensor * src0 = op_tensor->src[0];
     struct ggml_tensor * src1 = op_tensor->src[1];
-    int64_t ne00        = 0;
-    uint32_t src0_rank  = 0;
-    uint32_t src1_rank  = 0;
-    if (nullptr != src0) {
-        src0_rank = ggml_n_dims(src0);
-        ne00      = src0->ne[0];
-    }
+    const int64_t ne00  = src0->ne[0];;
+    const int src0_rank = ggml_n_dims(src0);
+    int src1_rank       = 0;
     if (nullptr != src1) {
         src1_rank = ggml_n_dims(src1);
     }
@@ -6023,7 +6021,7 @@ const char * ggml_backend_hexagon_get_devname(size_t dev_num) {
         case HEXAGON_BACKEND_QNNNPU:
             return "HEXAGON_BACKEND_QNN_NPU";
         case HEXAGON_BACKEND_GGML:
-            return "ggml"; //"fake" QNN backend, used for compare performance between hexagon backend and the default ggml backend
+            return "ggml"; //"fake" hexagon backend, used for compare performance between hexagon backend and the default ggml backend
         default:
             return "unknown";
     }
