@@ -9,6 +9,7 @@
 #include <fstream>
 #include <cmath>
 #include <cctype>
+#include <algorithm>
 
 struct quant_option {
     std::string name;
@@ -16,7 +17,7 @@ struct quant_option {
     std::string desc;
 };
 
-static const std::vector<struct quant_option> QUANT_OPTIONS = {
+static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
     { "Q5_0",     LLAMA_FTYPE_MOSTLY_Q5_0,     " 5.21G, +0.1316 ppl @ Llama-3-8B",  },
@@ -105,7 +106,8 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 //
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n", executable);
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type]\n", executable);
+    printf("       [--token-embedding-type] [--tensor-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -114,6 +116,8 @@ static void usage(const char * executable) {
     printf("  --exclude-weights tensor_name: use importance matrix for this/these tensor(s)\n");
     printf("  --output-tensor-type ggml_type: use this ggml_type for the output.weight tensor\n");
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
+    printf("  --tensor-type TENSOR=TYPE: quantize this tensor to this ggml_type. example: --tensor-type attn_q=q8_0\n");
+    printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -244,6 +248,107 @@ static ggml_type parse_ggml_type(const char * arg) {
     return GGML_TYPE_COUNT;
 }
 
+// Allowed tensors for arbitrary quantization with --tensor-type option
+static const std::vector<std::string> ALLOWED_TENSOR_TYPE = {
+    "attn_k",
+    "attn_kv_a_mqa",
+    "attn_kv_b",
+    "attn_o",
+    "attn_output",
+    "attn_q",
+    "attn_q_a",
+    "attn_q_b",
+    "attn_qkv",
+    "attn_v",
+    "channel_mix_key",
+    "channel_mix_receptance",
+    "channel_mix_value",
+    "cls",
+    "cls.output",
+    "cross_attn_k",
+    "cross_attn_o",
+    "cross_attn_q",
+    "cross_attn_v",
+    "ffn_act",
+    "ffn_down",
+    "ffn_down_exps",
+    "ffn_down_shexp",
+    "ffn_gate",
+    "ffn_gate_exps",
+    "ffn_gate_shexp",
+    "ffn_up",
+    "ffn_up_exps",
+    "ffn_up_shexp",
+    "ssm_in",
+    "ssm_out",
+    "time_mix_gate",
+    "time_mix_key",
+    "time_mix_output",
+    "time_mix_receptance",
+    "time_mix_value",
+};
+
+// changes to this struct must be replicated in llama-quant.cpp
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
+};
+
+static bool parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
+    const char * sep = strchr(data, '=');
+    if (sep == nullptr) {
+        printf("\n%s: malformed tensor type '%s'\n\n", __func__, data);
+        return false;
+    }
+
+    const size_t tn_len = sep - data;
+    if (tn_len == 0) {
+        printf("\n%s: missing tensor name\n\n", __func__);
+        return false;
+    }
+
+    if (const size_t qt_len = strlen(sep); qt_len == 1) {
+        printf("\n%s: missing quantization type\n\n", __func__);
+        return false;
+    }
+
+    std::string tn(data, tn_len);
+    std::transform(tn.begin(), tn.end(), tn.begin(), tolower);
+    sep++;
+    const std::string qt(sep);
+
+    bool found = false;
+    for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
+        std::string tensor;
+        tensor = tn.rfind('.') != std::string::npos ? tn.substr(tn.rfind('.') + 1) : tn;
+        // handle special case of cls.output
+        std::string cls_output = "cls.output";
+        if (tn.find(cls_output) != std::string::npos) {
+            tensor = "cls.output";
+        }
+        // check if an allowed tensor exists and it's at the end of the kv string
+        if (tensor == allowed) {
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        printf("\n%s: invalid tensor name '%s'\n\n", __func__, tn.c_str());
+        return false;
+    }
+
+    if (parse_ggml_type(qt.c_str()) == GGML_TYPE_COUNT) {
+        printf("\n%s: invalid quantization type '%s'\n\n", __func__, qt.c_str());
+        return false;
+    }
+
+    tensor_quantization tqz;
+    tqz.name = tn;
+    tqz.quant = parse_ggml_type(qt.c_str());
+    tensor_type.emplace_back(std::move(tqz));
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -255,6 +360,7 @@ int main(int argc, char ** argv) {
     std::string imatrix_file;
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
+    std::vector<tensor_quantization> tensor_types;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -275,6 +381,10 @@ int main(int argc, char ** argv) {
                     usage(argv[0]);
                 }
             } else {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
+            if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
@@ -360,6 +470,9 @@ int main(int argc, char ** argv) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
         params.kv_overrides = &kv_overrides;
+    }
+    if (!tensor_types.empty()) {
+        params.tensor_types = &tensor_types;
     }
 
     llama_backend_init();
