@@ -776,6 +776,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
+        // do not quantize the split tensors used for MLA (DEEPSEEK2)
+        quantize &= name.find("attn_k_b_trans.weight") == std::string::npos;
+        quantize &= name.find("attn_v_b.weight") == std::string::npos;
+
         enum ggml_type new_type;
         void * new_data;
         size_t new_size;

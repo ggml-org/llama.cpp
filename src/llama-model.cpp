@@ -3073,6 +3073,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.wkv_a_mqa  = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA,  "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)}, 0);
                         layer.wkv_b      = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, 0);
                         layer.wk_b_trans = create_tensor(tn(LLM_TENSOR_ATTN_K_B_TRANS, "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, TENSOR_NOT_REQUIRED);
+                        layer.wv_b       = create_tensor(tn(LLM_TENSOR_ATTN_V_B,       "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, TENSOR_NOT_REQUIRED);
                         layer.wo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT,       "weight", i), {              n_head * (                      n_embd_head_v), n_embd}, 0);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
@@ -9613,7 +9614,9 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 cb(kv_cmpr, "kv_cmpr", il);
 
                 if (cparams.mla_attn) {
-                    GGML_ASSERT(model.layers[il].wk_b_trans != nullptr); // should not get here, see: llama_init_from_model()
+                    // should not get here, as mla_attn unset in llama_init_from_model() if missing
+                    GGML_ASSERT(model.layers[il].wk_b_trans != nullptr);
+                    GGML_ASSERT(model.layers[il].wv_b != nullptr);
 
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                     cb(q_nope, "q_nope_perm", il);
@@ -9647,11 +9650,11 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     cb(v_states, "v_states", il);
 
                     // {n_embd_head_v, n_head, n_tokens}
-                    ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wkv_b,
+                    ggml_tensor * wv_b = ggml_view_3d(ctx0, model.layers[il].wv_b,
                             kv_lora_rank, n_embd_head_v, n_head,
-                            ggml_row_size(model.layers[il].wkv_b->type, kv_lora_rank),
-                            ggml_row_size(model.layers[il].wkv_b->type, kv_lora_rank) * (n_embd_head_qk_nope + n_embd_head_v),
-                            ggml_row_size(model.layers[il].wkv_b->type, kv_lora_rank) * n_embd_head_qk_nope);
+                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
+                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank) * n_embd_head_v,
+                            0);
                     cb(wv_b, "wv_b", il);
 
                     // note: deepseek2 with MLA option converts into MQA (ie: GQA with 1 group)

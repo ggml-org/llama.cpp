@@ -660,6 +660,10 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.k_b_proj_trans",  # deepseek2 (MLA specific)
         ),
 
+        MODEL_TENSOR.ATTN_V_B: (
+            "model.layers.{bid}.self_attn.v_b_proj",  # deepseek2 (MLA specific)
+        ),
+
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
         ),

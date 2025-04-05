@@ -330,6 +330,8 @@ class Model:
                             gguf.MODEL_TENSOR.TIME_MIX_LERP_FUSED,
                             gguf.MODEL_TENSOR.POSNET_NORM1,
                             gguf.MODEL_TENSOR.POSNET_NORM2,
+                            gguf.MODEL_TENSOR.ATTN_K_B_TRANS,
+                            gguf.MODEL_TENSOR.ATTN_V_B,
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -4415,6 +4417,7 @@ class DeepseekV2Model(Model):
 
         if name.endswith("kv_b_proj.weight"):
             name_kb = name.replace("kv_b_proj", "k_b_proj_trans")
+            name_vb = name.replace("kv_b_proj", "v_b_proj")
 
             n_head_kv = self.hparams["num_key_value_heads"]
             v_head_dim = self.hparams["v_head_dim"]
@@ -4423,13 +4426,15 @@ class DeepseekV2Model(Model):
             assert data_torch.shape[0] == n_head_kv * (v_head_dim + qk_nope_head_dim)
 
             kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
-            k_b = kv_b[:, :qk_nope_head_dim, :]
+            k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
             k_b_trans = k_b.transpose(1, 2)
             k_b_trans = k_b_trans.reshape(n_head_kv * data_torch.shape[-1], qk_nope_head_dim)
+            v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
 
             return [
                 (self.map_tensor_name(name),    data_torch),
                 (self.map_tensor_name(name_kb), k_b_trans),
+                (self.map_tensor_name(name_vb), v_b)
             ]
 
         return [(self.map_tensor_name(name), data_torch)]
