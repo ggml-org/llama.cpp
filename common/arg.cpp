@@ -662,7 +662,6 @@ static void common_params_handle_model(
                 hf_endpoint = hf_endpoint_env;
                 if (hf_endpoint.back() != '/') hf_endpoint += '/';
             }
-            
             model.url = hf_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
