@@ -299,7 +299,9 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
 //  section-2: ggml-hexagon kernel's internal troubleshooting function
 // =================================================================================================
 static void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...) {
+#if !GGMLHEXAGON_DEBUG
     return;
+#endif
     static char s_ggmlhexagon_log_internal_buf[GGMLHEXAGON_LOGBUF_LEN];
     va_list args;
     va_start(args, format);
