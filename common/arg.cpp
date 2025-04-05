@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdarg>
+#include <filesystem>
 #include <fstream>
 #include <regex>
 #include <set>
