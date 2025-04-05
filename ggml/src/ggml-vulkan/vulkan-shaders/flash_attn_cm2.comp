@@ -256,7 +256,7 @@ void main() {
         }
 
         if (p.mask != 0) {
-            tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutM = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+            tensorLayoutNV<2, Clamp> tensorLayoutM = createTensorLayoutNV(2, Clamp);
             tensorLayoutM = setTensorLayoutDimensionNV(tensorLayoutM, p.nem1, KV);
             // When using grouped query attention, all rows use the same mask.
             if (p.gqa_ratio > 1) {
