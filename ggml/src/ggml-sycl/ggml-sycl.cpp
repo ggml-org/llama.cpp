@@ -670,13 +670,9 @@ static ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(ggml_backend_syc
 // sycl split buffer
 
 static int64_t get_row_rounding(ggml_type type, const std::array<float, GGML_SYCL_MAX_DEVICES> & tensor_split) {
-    int64_t min_compute_capability = INT_MAX;
     int64_t max_compute_capability = INT_MIN;
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         if (tensor_split[i] < (i + 1 < ggml_sycl_info().device_count ? tensor_split[i + 1] : 1.0f)) {
-            if (min_compute_capability > ggml_sycl_info().devices[i].cc) {
-                min_compute_capability = ggml_sycl_info().devices[i].cc;
-            }
             if (max_compute_capability < ggml_sycl_info().devices[i].cc) {
                 max_compute_capability = ggml_sycl_info().devices[i].cc;
             }
@@ -2907,7 +2903,6 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
 
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
-    int64_t min_compute_capability = INT_MAX;
 
     if (split) {
         ggml_backend_sycl_split_buffer_type_context * buft_ctx = (ggml_backend_sycl_split_buffer_type_context *) src0->buffer->buft->context;
@@ -2917,13 +2912,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             if (tensor_split[id] >= (id + 1 < ggml_sycl_info().device_count ? tensor_split[id + 1] : 1.0f)) {
                 continue;
             }
-
-            if (min_compute_capability > ggml_sycl_info().devices[id].cc) {
-                min_compute_capability = ggml_sycl_info().devices[id].cc;
-            }
         }
-    } else {
-        min_compute_capability    = ggml_sycl_info().devices[ctx.device].cc;
     }
 
     // check data types and tensor shapes for custom matrix multiplication kernels:
