@@ -67,6 +67,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
     { LLM_ARCH_PLM,              "plm"              },
     { LLM_ARCH_BAILINGMOE,       "bailingmoe"       },
+    { LLM_ARCH_ULTRAVOX_ENC,     "ultravox-enc"     },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -199,6 +200,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_ADAPTER_TYPE,       "adapter.type"       },
     { LLM_KV_ADAPTER_LORA_ALPHA, "adapter.lora.alpha" },
+
+    { LLM_KV_WHISPER_N_MEL_BINS, "%s.n_mel_bins" },
+
+    { LLM_KV_MM_STACK_FACTOR, "%s.mm.stack_factor" },
+    { LLM_KV_MM_EMBD_DIM,     "%s.mm.embd_dim" },
+    { LLM_KV_MM_OUTPUT_DIM,   "%s.mm.output_dim" },
 
     // deprecated
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
@@ -1435,6 +1442,28 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_ULTRAVOX_ENC,
+        {
+            { LLM_TENSOR_WHISPER_CONV1,       "whisper.conv1" },
+            { LLM_TENSOR_WHISPER_CONV2,       "whisper.conv2" },
+            { LLM_TENSOR_WHISPER_MEL_FILTERS, "whisper.mel_filters" },
+            { LLM_TENSOR_MM_PROJ_MLP_1,       "mm.proj.mlp_1" },
+            { LLM_TENSOR_MM_PROJ_MLP_2,       "mm.proj.mlp_2" },
+            { LLM_TENSOR_MM_PROJ_NORM_MID,    "mm.proj.norm_mid" },
+            { LLM_TENSOR_MM_PROJ_NORM_PRE,    "mm.proj.norm_pre" },
+            { LLM_TENSOR_POS_EMBD,            "position_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,         "output_norm" },
+            { LLM_TENSOR_ATTN_NORM,           "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,              "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,              "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,              "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,            "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,            "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_DOWN,            "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,              "blk.%d.ffn_up" },
+        }
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1595,6 +1624,14 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CONVNEXT_PW1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_PW2,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_GAMMA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // whisper & ultravox
+    { LLM_TENSOR_WHISPER_CONV1,       {LLM_TENSOR_LAYER_INPUT,  GGML_OP_IM2COL}},
+    { LLM_TENSOR_WHISPER_CONV2,       {LLM_TENSOR_LAYER_INPUT,  GGML_OP_IM2COL}},
+    { LLM_TENSOR_WHISPER_MEL_FILTERS, {LLM_TENSOR_LAYER_INPUT,  GGML_OP_NONE}},
+    { LLM_TENSOR_MM_PROJ_MLP_1,       {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    { LLM_TENSOR_MM_PROJ_MLP_2,       {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    { LLM_TENSOR_MM_PROJ_NORM_MID,    {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    { LLM_TENSOR_MM_PROJ_NORM_PRE,    {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}

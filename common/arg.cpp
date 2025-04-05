@@ -1412,7 +1412,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.in_files.push_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_ASR}));
     add_opt(common_arg(
         {"-bf", "--binary-file"}, "FNAME",
         "binary file containing the prompt (default: none)",
@@ -2098,14 +2098,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.mmproj.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples({LLAMA_EXAMPLE_LLAVA, LLAMA_EXAMPLE_ASR}));
     add_opt(common_arg(
         {"--mmproj-url"}, "URL",
         "URL to a multimodal projector file for LLaVA. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.url = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples({LLAMA_EXAMPLE_LLAVA, LLAMA_EXAMPLE_ASR}));
     add_opt(common_arg(
         {"--image"}, "FILE",
         "path to an image file. use with multimodal models. Specify multiple times for batching",

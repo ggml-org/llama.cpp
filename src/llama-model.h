@@ -338,6 +338,19 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
+    // whisper & ultravox
+    struct ggml_tensor * mel_filters = nullptr;
+    struct ggml_tensor * conv1d_1_w  = nullptr;
+    struct ggml_tensor * conv1d_1_b  = nullptr;
+    struct ggml_tensor * conv1d_2_w  = nullptr;
+    struct ggml_tensor * conv1d_2_b  = nullptr;
+
+    // mlp (ultravox only)
+    struct ggml_tensor * mm_proj_mlp_1    = nullptr;
+    struct ggml_tensor * mm_proj_mlp_2    = nullptr;
+    struct ggml_tensor * mm_proj_norm_pre = nullptr;
+    struct ggml_tensor * mm_proj_norm_mid = nullptr;
+
     std::vector<llama_layer> layers;
 
     llama_model_params params;
