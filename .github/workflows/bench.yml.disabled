@@ -104,7 +104,6 @@ jobs:
           cmake -B build \
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
               -DLLAMA_CUBLAS=ON \
               -DCUDAToolkit_ROOT=/usr/local/cuda \
               -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \

@@ -81,7 +81,7 @@ option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
 # 3rd party libs
-option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
+option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 # Required for relocatable CMake package
@@ -167,6 +167,10 @@ add_subdirectory(src)
 #
 # utils, programs, examples and tests
 #
+
+if (NOT LLAMA_BUILD_EXAMPLES OR NOT LLAMA_BUILD_COMMON)
+    set(LLAMA_CURL OFF)
+endif()
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)

@@ -19,12 +19,15 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu
+                  g++-14-riscv64-linux-gnu \
+                  libcurl4-openssl-dev
 
       - name: Build
+        # TODO: fix build with LLAMA_CURL=ON
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
+                         -DLLAMA_CURL=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
@@ -59,13 +62,16 @@ jobs:
                   glslc \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
-                  libvulkan-dev:riscv64
+                  libvulkan-dev:riscv64 \
+                  libcurl4-openssl-dev
 
       - name: Build
+        # TODO: fix build with LLAMA_CURL=ON
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
+                         -DLLAMA_CURL=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
@@ -99,13 +105,16 @@ jobs:
                   build-essential \
                   glslc \
                   crossbuild-essential-arm64 \
-                  libvulkan-dev:arm64
+                  libvulkan-dev:arm64 \
+                  libcurl4-openssl-dev
 
       - name: Build
+        # TODO: fix build with LLAMA_CURL=ON
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
+                         -DLLAMA_CURL=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
