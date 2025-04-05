@@ -64,3 +64,10 @@ set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME llama-llava-clip-quantize
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE common llava ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+set(TARGET llama-phi4mm-cli)
+add_executable(${TARGET} phi4mm-cli.cpp)
+set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME llama-phi4mm-cli)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE common llava ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
