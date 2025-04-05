@@ -405,11 +405,9 @@ static __inline int _stub_method_1(remote_handle64 _handle, uint32_t _mid, uintp
    _count_1(_numIn, _numROut, _numInH, _numROutH, (uint32_t*)&(((uint32_t*)_in1)[0]), (uint32_t*)&(((uint32_t*)_in1)[1]), (uint32_t*)&(((uint32_t*)_in1)[5]), (uint32_t*)&(((uint32_t*)_in1)[9]), (uint32_t*)&(((uint32_t*)_in1)[10]), (uint32_t*)&(((uint32_t*)_in1)[26]), SLIM_IFPTR32((char**)&(((uint32_t*)_in1)[27]), (char**)&(((uint64_t*)_in1)[14])), SLIM_IFPTR32((uint32_t*)&(((uint32_t*)_in1)[28]), (uint32_t*)&(((uint32_t*)_in1)[30])));
    _count(_numIn, _numROut, _numInH, _numROutH, (uint32_t*)&(((uint32_t*)_rout2)[0]), (uint32_t*)&(((uint32_t*)_rout2)[1]), (uint32_t*)&(((uint32_t*)_rout2)[5]), (uint32_t*)&(((uint32_t*)_rout2)[9]), (uint32_t*)&(((uint32_t*)_rout2)[10]), (uint32_t*)&(((uint32_t*)_rout2)[26]), SLIM_IFPTR32((char**)&(((uint32_t*)_rout2)[27]), (char**)&(((uint64_t*)_rout2)[14])), SLIM_IFPTR32((uint32_t*)&(((uint32_t*)_rout2)[28]), (uint32_t*)&(((uint32_t*)_rout2)[30])));
    if(_numIn[0]>=255){
-          _QAIC_FARF(RUNTIME_ERROR, "ERROR: Unsupported number of input buffers\n");
           return AEE_EUNSUPPORTED;
    }
    if(_numROut[0]>=255){
-          _QAIC_FARF(RUNTIME_ERROR, "ERROR: Unsupported number of output buffers\n");
           return AEE_EUNSUPPORTED;
    }
    _allocator_init(_al, 0, 0);
