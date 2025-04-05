@@ -656,9 +656,13 @@ static void common_params_handle_model(
                 }
             }
 
-            // TODO: allow custom host
-            model.url = "https://huggingface.co/" + model.hf_repo + "/resolve/main/" + model.hf_file;
-
+            std::string hf_endpoint{"https://huggingface.co/"}; 
+            if(auto const* hf_endpoint_env = getenv("HF_ENDPOINT"); hf_endpoint_env) {
+                hf_endpoint = std::string{hf_endpoint_env};
+                if (hf_endpoint.back() != '/') hf_endpoint += '/';
+            }
+            
+            model.url = hf_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs
