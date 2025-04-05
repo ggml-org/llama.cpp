@@ -18,6 +18,7 @@ QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
+#5.5.3.0 should be also ok because someone told me can't find 6.2.0.1 on 04/05/2025
 HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #available htp arch version:
 #v68 --- Snapdragon 888
