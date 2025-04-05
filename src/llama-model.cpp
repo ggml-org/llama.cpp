@@ -3071,9 +3071,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
 
                         layer.wkv_a_mqa  = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA,  "weight", i), {n_embd, kv_lora_rank + (n_embd_head_qk_rope)}, 0);
-                        layer.wkv_b      = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, 0);
-                        layer.wk_b_trans = create_tensor(tn(LLM_TENSOR_ATTN_K_B_TRANS, "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, TENSOR_NOT_REQUIRED);
-                        layer.wv_b       = create_tensor(tn(LLM_TENSOR_ATTN_V_B,       "weight", i), {kv_lora_rank, n_head * n_embd_head_v}, TENSOR_NOT_REQUIRED);
+
+                        // note: for legacy GGUF files (for use without --mla_attn option only)
+                        layer.wkv_b      = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v)}, TENSOR_NOT_REQUIRED);
+
+                        // note: for new GGUF files (for use with or without --mla_attn option)
+                        layer.wk_b       = create_tensor(tn(LLM_TENSOR_ATTN_K_B,       "weight", i), {kv_lora_rank,        n_head * n_embd_head_qk_nope}, TENSOR_NOT_REQUIRED);
+                        layer.wk_b_trans = create_tensor(tn(LLM_TENSOR_ATTN_K_B_TRANS, "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank       }, TENSOR_NOT_REQUIRED);
+                        layer.wv_b       = create_tensor(tn(LLM_TENSOR_ATTN_V_B,       "weight", i), {kv_lora_rank,        n_head * n_embd_head_v      }, TENSOR_NOT_REQUIRED);
+
                         layer.wo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT,       "weight", i), {              n_head * (                      n_embd_head_v), n_embd}, 0);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
@@ -9614,10 +9620,6 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 cb(kv_cmpr, "kv_cmpr", il);
 
                 if (cparams.mla_attn) {
-                    // should not get here, as mla_attn unset in llama_init_from_model() if missing
-                    GGML_ASSERT(model.layers[il].wk_b_trans != nullptr);
-                    GGML_ASSERT(model.layers[il].wv_b != nullptr);
-
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                     cb(q_nope, "q_nope_perm", il);
 
@@ -9662,27 +9664,51 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             model.layers[il].wo, NULL, wv_b,
                             q_states, k_states, v_states, nullptr, kq_scale, il);
                 } else {
-                    ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
-                    cb(kv, "kv", il);
+                    ggml_tensor * k_nope = nullptr;
+                    ggml_tensor * v_states = nullptr;
 
-                    // split into {n_embd_head_qk_nope, n_head, n_tokens}
-                    ggml_tensor * k_nope = ggml_view_3d(ctx0, kv,
-                            n_embd_head_qk_nope, n_head, n_tokens,
-                            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-                            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
-                            0);
-                    cb(k_nope, "k_nope", il);
+                    if (model.layers[il].wkv_b) {
+                        // legacy GGUF branch
+                        ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
+                        cb(kv, "kv", il);
 
-                    // and {n_embd_head_v, n_head, n_tokens}
-                    ggml_tensor * v_states = ggml_view_3d(ctx0, kv,
-                            n_embd_head_v, n_head, n_tokens,
-                            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-                            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
-                            ggml_row_size(kv->type, n_embd_head_qk_nope));
-                    cb(v_states, "v_states", il);
+                        // split into {n_embd_head_qk_nope, n_head, n_tokens}
+                        k_nope = ggml_view_3d(ctx0, kv,
+                                n_embd_head_qk_nope, n_head, n_tokens,
+                                ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
+                                ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
+                                0);
+                        cb(k_nope, "k_nope_view", il);
 
-                    v_states = ggml_cont(ctx0, v_states);
-                    cb(v_states, "v_states", il);
+                        // and {n_embd_head_v, n_head, n_tokens}
+                        v_states = ggml_view_3d(ctx0, kv,
+                                n_embd_head_v, n_head, n_tokens,
+                                ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
+                                ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head,
+                                ggml_row_size(kv->type, n_embd_head_qk_nope));
+                        cb(v_states, "v_states_view", il);
+
+                        v_states = ggml_cont(ctx0, v_states);
+                        cb(v_states, "v_states_cont", il);
+
+                    } else if (model.layers[il].wk_b && model.layers[il].wv_b){
+                        // new GGUF branch
+                        k_nope = ggml_mul_mat(ctx0, model.layers[il].wk_b, kv_cmpr);
+                        cb(k_nope, "k_nope", il);
+
+                        k_nope = ggml_view_3d(ctx0, k_nope,
+                                n_embd_head_qk_nope, n_head, n_tokens,
+                                ggml_row_size(k_nope->type, n_embd_head_qk_nope),
+                                ggml_row_size(k_nope->type, n_embd_head_qk_nope) * n_head,
+                                0);
+                        cb(k_nope, "k_nope_view", il);
+
+                        v_states = ggml_mul_mat(ctx0, model.layers[il].wv_b, kv_cmpr);
+                        cb(v_states, "v_states", il);
+
+                    } else {
+                        GGML_ABORT("%s: missing required tensors: attn_kv_b or attn_k_b + attn_v_b", __func__);
+                    }
 
                     v_states = ggml_view_2d(ctx0, v_states,
                             n_embd_head_v * n_head, n_tokens,

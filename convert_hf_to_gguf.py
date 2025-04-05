@@ -4414,7 +4414,8 @@ class DeepseekV2Model(Model):
                 return []
 
         if name.endswith("kv_b_proj.weight"):
-            name_kb = name.replace("kv_b_proj", "k_b_proj_trans")
+            name_kb = name.replace("kv_b_proj", "k_b_proj")
+            name_kb_trans = name.replace("kv_b_proj", "k_b_proj_trans")
             name_vb = name.replace("kv_b_proj", "v_b_proj")
 
             n_head_kv = self.hparams["num_key_value_heads"]
@@ -4426,13 +4427,14 @@ class DeepseekV2Model(Model):
             kv_b = data_torch.view(n_head_kv, v_head_dim + qk_nope_head_dim, data_torch.shape[-1])
             k_b, v_b = torch.split(kv_b, [qk_nope_head_dim, v_head_dim], dim=1)
             k_b_trans = k_b.transpose(1, 2)
+            k_b = k_b.reshape(n_head_kv * qk_nope_head_dim, data_torch.shape[-1])
             k_b_trans = k_b_trans.reshape(n_head_kv * data_torch.shape[-1], qk_nope_head_dim)
             v_b = v_b.reshape(n_head_kv * v_head_dim, data_torch.shape[-1])
 
             return [
-                (self.map_tensor_name(name),    data_torch),
-                (self.map_tensor_name(name_kb), k_b_trans),
-                (self.map_tensor_name(name_vb), v_b)
+                (self.map_tensor_name(name_kb),       k_b),
+                (self.map_tensor_name(name_kb_trans), k_b_trans),
+                (self.map_tensor_name(name_vb),       v_b)
             ]
 
         return [(self.map_tensor_name(name), data_torch)]
