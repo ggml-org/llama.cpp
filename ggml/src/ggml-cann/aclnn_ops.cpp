@@ -51,6 +51,7 @@
 #include <aclnnop/aclnn_triu.h>
 #include <aclnnop/aclnn_upsample_nearest_2d.h>
 #include <aclnnop/aclnn_weight_quant_batch_matmul_v2.h>
+#include <aclnnop/aclnn_argmax.h>
 #include <float.h>
 
 #include <cmath>
@@ -358,8 +359,6 @@ void ggml_cann_sqr(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
 void ggml_cann_clamp(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
-    GGML_ASSERT(src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     float min;
     float max;
@@ -1089,8 +1088,6 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
-
-    GGML_ASSERT(eps > 0.0f);
 
     uint64_t workspaceSize = 0;
     aclOpExecutor* executor;
@@ -3152,7 +3149,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     // TODO: use ascendc
     // Only test with LLAMA model.
     ggml_tensor* src0 = dst->src[0];  // input
-    ggml_tensor* src2 = dst->src[2];  // freq_factors
+    // ggml_tensor* src2 = dst->src[2];  // freq_factors, not used now.
 
     // param
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
@@ -3442,5 +3439,48 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_cos_reshape_tensor));
     ACL_CHECK(aclDestroyTensor(acl_sin_reshape_tensor));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+
+ void ggml_cann_argmax(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3);
+
+    uint64_t workspaceSize = 0;
+    aclOpExecutor* executor;
+    void* workspaceAddr = nullptr;
+
+    ACL_CHECK(aclnnArgMaxGetWorkspaceSize(acl_src, 3, false, acl_dst,
+                     &workspaceSize, &executor));
+    if (workspaceSize > 0) {
+        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
+        workspaceAddr = workspace_allocator.get();
+    }
+    ACL_CHECK(aclnnArgMax(workspaceAddr, workspaceSize, executor, ctx.stream()));
+
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_cos(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclnn_cos(ctx, acl_src, acl_dst);
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_sin(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclnn_sin(ctx, acl_src, acl_dst);
+    ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
