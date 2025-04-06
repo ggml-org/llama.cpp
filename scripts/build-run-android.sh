@@ -18,7 +18,7 @@ QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
-#5.5.3.0 should be also ok because someone told me can't find 6.2.0.1 on 04/05/2025
+#5.5.3.0 should be also ok
 HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #available htp arch version:
 #v68 --- Snapdragon 888
@@ -132,6 +132,16 @@ function build_arm64
     cd -
 }
 
+function build_arm64_debug
+{
+    cmake -H. -B./out/android -DCMAKE_BUILD_TYPE=Debug -DGGML_OPENMP=OFF -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=latest -DCMAKE_C_FLAGS=-march=armv8.7-a -DGGML_HEXAGON=ON -DQNN_SDK_PATH=${QNN_SDK_PATH} -DHEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} -DHTP_ARCH_VERSION=${HTP_ARCH_VERSION}
+    cd out/android
+    make -j16
+    show_pwd
+
+    cd -
+}
+
 
 function remove_temp_dir()
 {
@@ -177,7 +187,7 @@ function update_qnn_cfg()
 }
 
 
-function build_ggml_qnn()
+function build_ggml_hexagon()
 {
     show_pwd
     check_and_download_ndk
@@ -186,6 +196,17 @@ function build_ggml_qnn()
     dump_vars
     remove_temp_dir
     build_arm64
+}
+
+function build_ggml_hexagon_debug()
+{
+    show_pwd
+    check_and_download_ndk
+    check_and_download_qnn_sdk
+    check_hexagon_sdk
+    dump_vars
+    remove_temp_dir
+    build_arm64_debug
 }
 
 
@@ -341,6 +362,7 @@ function show_usage()
     echo "  $0 help"
     echo "  $0 print_oplist"
     echo "  $0 build"
+    echo "  $0 build_debug (enable debug log for developers on ARM-AP side and cDSP side)"
     echo "  $0 updateqnnlib"
     echo "  $0 run_testops"
     echo "  $0 run_testop          [ADD/MUL_MAT]"
@@ -371,7 +393,10 @@ elif [ $# == 1 ]; then
         print_oplist
         exit 1
     elif [ "$1" == "build" ]; then
-        build_ggml_qnn
+        build_ggml_hexagon
+        exit 0
+    elif [ "$1" == "build_debug" ]; then
+        build_ggml_hexagon_debug
         exit 0
     elif [ "$1" == "run_testops" ]; then
         run_test-ops
