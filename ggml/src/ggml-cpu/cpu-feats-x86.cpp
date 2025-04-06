@@ -274,8 +274,8 @@ static int ggml_backend_cpu_x86_score() {
     if (!is.F16C()) { return 0; }
     score += 1<<1;
 #endif
-#ifdef GGML_SSE42
-    if (!is.SSE42()) { return 0; }
+#ifdef GGML_SSE41
+    if (!is.SSE41()) { return 0; }
     score += 1<<2;
 #endif
 #ifdef GGML_BMI2
