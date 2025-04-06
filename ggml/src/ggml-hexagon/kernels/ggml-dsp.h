@@ -51,7 +51,7 @@ extern "C" {
 #define GGML_FP16_TO_FP32(x)            ggml_lookup_fp16_to_fp32(x)
 
 //NPU performance will be slower when enable GGMLHEXAGON_DEBUG
-#if 1//def NDEBUG
+#ifdef NDEBUG
 #define GGMLHEXAGON_DEBUG                                   0
 #else
 #define GGMLHEXAGON_DEBUG                                   1

@@ -129,7 +129,7 @@
 class  qnn_instance;
 struct ggml_backend_hexagon_context;
 
-#if 0//def NDEBUG
+#ifdef NDEBUG
 #define GGMLHEXAGON_DEBUG                               0
 #else
 #define GGMLHEXAGON_DEBUG                               1
@@ -141,6 +141,7 @@ struct ggml_backend_hexagon_context;
 #define GGMLHEXAGON_LOG_ERROR(...)                      ggmlhexagon_log_internal(GGML_LOG_LEVEL_ERROR, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLHEXAGON_LOG_WARN(...)                       ggmlhexagon_log_internal(GGML_LOG_LEVEL_WARN , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLHEXAGON_LOG_INFO(...)                       ggmlhexagon_log_internal(GGML_LOG_LEVEL_INFO , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#define GGMLHEXAGON_LOG_VERBOSE(...)                    ggmlhexagon_log_internal(GGML_LOG_LEVEL_CONT , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 
 #if GGMLHEXAGON_DEBUG
 #define GGMLHEXAGON_LOG_DEBUG(...)                      ggmlhexagon_log_internal(GGML_LOG_LEVEL_DEBUG, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
@@ -153,6 +154,10 @@ struct ggml_backend_hexagon_context;
 #define RPCMEM_HEAP_ID_SYSTEM                           25
 #define SIZE_IN_MB                                      (1 << 20)
 #define STATUS_CONTEXT                                  0x12345678
+
+#if !defined (_WINDOWS)
+#pragma weak remote_system_request
+#endif
 
 #define CHECK_QNN_API(error, result)                                            \
     do {                                                                        \
@@ -316,9 +321,11 @@ struct hexagon_appcfg_t {
     int hexagon_backend;        // 0: HEXAGON_BACKEND_QNNCPU 1: HEXAGON_BACKEND_QNNGPU 2: HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP
     int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
     int enable_rpc_dma_mempool; // enable/disable rpc dma memory pool
+    int enable_all_q_mulmat;    // enable/disable offload all quantized type mulmat to cDSP
     const char * cfgfilename;
     const char * runtime_libpath;
     char ggml_hexagon_version[GGMLHEXAGON_TMPBUF_LEN];
+    char ggml_dsp_version[GGMLHEXAGON_TMPBUF_LEN];
 };
 
 static struct hexagon_appcfg_t g_hexagon_appcfg = {
@@ -335,6 +342,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .hexagon_backend        = HEXAGON_BACKEND_CDSP,
         .enable_rpc_ion_mempool = 0,
         .enable_rpc_dma_mempool = 0,
+        .enable_all_q_mulmat    = 0,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -344,7 +352,8 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.00"},
+        .ggml_hexagon_version   = {"1.01"},
+        .ggml_dsp_version       = {"0.60"},
 };
 
 //file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/overview.html#tbl-supported-snapdragon-devices
@@ -857,6 +866,7 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
     memset(timestamp, 0, GGMLHEXAGON_TMPBUF_LEN);
 
     GGMLHEXAGON_LOG_INFO("ggml_hexagon_version:             %s", g_hexagon_appcfg.ggml_hexagon_version);
+    GGMLHEXAGON_LOG_INFO("ggml_dsp_version:                 %s", g_hexagon_appcfg.ggml_dsp_version);
     GGMLHEXAGON_LOG_INFO("hwaccel approach:                 %d(%s)", g_hexagon_appcfg.hwaccel_approach,
                      ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend:                  %d(%s)", g_hexagon_appcfg.hexagon_backend,
@@ -891,7 +901,7 @@ public:
             return;
         _end_time = ggml_time_us();
         _duration = (_end_time - _begin_time);
-        GGMLHEXAGON_LOG_DEBUG("duration of %s : %lld microseconds\n", _perf_name.c_str(), _duration);
+        GGMLHEXAGON_LOG_VERBOSE("duration of %s : %lld microseconds\n", _perf_name.c_str(), _duration);
     }
 
 private:
@@ -1454,7 +1464,9 @@ static void ggmlhexagon_load_cfg() {
     qnncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
     qnncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 1);
     qnncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
+    qnncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
     GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
+    GGMLHEXAGON_LOG_INFO("internal ggml_dsp_version=%s", g_hexagon_appcfg.ggml_dsp_version);
     GGMLHEXAGON_LOG_INFO("external ggml_hexagon_version=%s", ggml_hexagon_version.c_str());
     GGMLHEXAGON_LOG_INFO("hwaccel_approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
@@ -1503,6 +1515,13 @@ static bool ggmlhexagon_check_valid_appcfg() {
         if (1 == g_hexagon_appcfg.enable_rpc_dma_mempool) {
             GGMLHEXAGON_LOG_INFO("rpc dma mempool not supported");
             is_valid_appcfg = false;
+        }
+
+        if (1 == g_hexagon_appcfg.enable_all_q_mulmat) {
+            if (0 == g_hexagon_appcfg.enable_q_mulmat) {
+                GGMLHEXAGON_LOG_INFO("ensure set enable_q_mulmat to 1 firstly when set enable_all_q_mulmat to 1");
+                is_valid_appcfg = false;
+            }
         }
     }
 
@@ -2743,6 +2762,10 @@ static void ggmlqnn_sdk_logcallback(const char * fmt,
         vsnprintf(reinterpret_cast<char *const>(s_ggmlqnn_sdk_logbuf), GGMLHEXAGON_LOGBUF_LEN, fmt, argp);
         GGMLHEXAGON_LOG_DEBUG("%8.1fms [%-7s] %s\n", ms, log_level_desc, s_ggmlqnn_sdk_logbuf);
     }
+#if !GGMLHEXAGON_DEBUG
+    GGML_UNUSED(log_level_desc);
+    GGML_UNUSED(ms);
+#endif
 }
 
 int qnn_instance::qnn_init(const QnnSaver_Config_t ** saver_config) {
@@ -5075,6 +5098,7 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
 
     const struct ggml_tensor * src0 = op_tensor->src[0];
     const struct ggml_tensor * src1 = op_tensor->src[1];
+    const int src0_rank = ggml_n_dims(src0);
     switch (op_tensor->op) {
         case GGML_OP_ADD:
         {
@@ -5086,7 +5110,15 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
         case GGML_OP_MUL_MAT:
         {
             ggmlhexagon_dump_op_info(op_tensor);
+            //FIXME:remove this filter in the future
+            if (2 != src0_rank) {
+                return false;
+            }
             if (1 == g_hexagon_appcfg.enable_q_mulmat) {
+                if (1 == g_hexagon_appcfg.enable_all_q_mulmat) {
+                    return (src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type)) && (src1->type == GGML_TYPE_F32);
+                }
+
                 return (src0->type == GGML_TYPE_F32
                         || src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0
                         || src0->type == GGML_TYPE_Q6_K || src0->type == GGML_TYPE_Q8_K
@@ -5126,9 +5158,9 @@ static bool ggmlhexagon_can_handle_op_through_qnn(ggml_backend_dev_t dev, const 
 
     struct ggml_tensor * src0 = op_tensor->src[0];
     struct ggml_tensor * src1 = op_tensor->src[1];
-    const int64_t ne00  = src0->ne[0];;
-    const int src0_rank = ggml_n_dims(src0);
-    int src1_rank       = 0;
+    const int64_t ne00        = src0->ne[0];;
+    const int src0_rank       = ggml_n_dims(src0);
+    int src1_rank             = 0;
     if (nullptr != src1) {
         src1_rank = ggml_n_dims(src1);
     }
