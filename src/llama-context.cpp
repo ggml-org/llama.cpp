@@ -851,6 +851,10 @@ float * llama_context::get_logits_ith(int32_t i) {
     }
 }
 
+int32_t llama_context::get_n_outputs() {
+    return n_outputs;
+}
+
 float * llama_context::get_embeddings() {
     // reorder embeddings for backward compatibility
     output_reorder();
@@ -1403,10 +1407,21 @@ int llama_context::decode(llama_batch & inp_batch) {
                         GGML_ASSERT(embd != nullptr);
                         float * embd_out = embd + n_outputs_prev*n_embd;
 
-                        if (n_outputs) {
-                            GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                            GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs*n_embd*sizeof(float));
+                        if (model.arch == LLM_ARCH_SNAC_DEC) {
+                            // TODO: hack, SNAC outputs audio samples, not embeddings
+                            // Rely on n_outputs for now, but perhaps add an `n_samples_snac` to
+                            // llama_context to avoid doing these checks
+                            int64_t n_samples = t_embd->ne[0];
+                            if (n_samples > 0) {
+                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_samples * sizeof(float));
+                                n_outputs = n_samples; // Update for downstream
+                            }
+                        } else {
+                            if (n_outputs) {
+                                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                                GGML_ASSERT((n_outputs_prev + n_outputs)*n_embd <= (int64_t) embd_size);
+                                ggml_backend_tensor_get_async(backend_embd, t_embd, embd_out, 0, n_outputs * n_embd * sizeof(float));
+                            }
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_MEAN:
@@ -1471,8 +1486,11 @@ int llama_context::decode(llama_batch & inp_batch) {
         }
     }
 
-    // set to total number of outputs in the batch, for use in llama_get_logits_ith
-    n_outputs = n_outputs_all;
+    // TODO: Hack for now to avoid overwriting n_outputs in previous step
+    if (model.arch != LLM_ARCH_SNAC_DEC) {
+        // set to total number of outputs in the batch, for use in llama_get_logits_ith
+        n_outputs = n_outputs_all;
+    }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
@@ -2415,6 +2433,12 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_logits_ith(i);
+}
+
+int32_t llama_get_n_outputs(struct llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_n_outputs();
 }
 
 float * llama_get_embeddings(llama_context * ctx) {
