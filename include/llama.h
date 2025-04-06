@@ -629,6 +629,8 @@ extern "C" {
         llama_seq_id * cells_sequences;
     };
 
+    LLAMA_API int32_t llama_get_n_outputs(struct llama_context * ctx);
+
     // Create an empty KV cache view. (use only for debugging purposes)
     LLAMA_API struct llama_kv_cache_view llama_kv_cache_view_init(const struct llama_context * ctx, int32_t n_seq_max);
 

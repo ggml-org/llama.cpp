@@ -156,7 +156,7 @@ struct llama_layer_snac_dec_block {
         struct ggml_tensor * conv2_w     = nullptr;
         struct ggml_tensor * conv2_s = nullptr;
         struct ggml_tensor * conv2_b     = nullptr;
-    } res_units[3];
+    } res_unit;
 };
 
 struct llama_layer {
@@ -328,7 +328,7 @@ struct llama_layer {
     struct llama_layer_convnext convnext;
 
     struct ggml_tensor * conv_w         = nullptr;
-    struct ggml_tensor * conv_s     = nullptr;
+    struct ggml_tensor * conv_s         = nullptr;
     struct ggml_tensor * conv_b         = nullptr;
     struct ggml_tensor * alpha          = nullptr;
 

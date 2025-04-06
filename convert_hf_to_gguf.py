@@ -2494,7 +2494,7 @@ class SNACDecModel(Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_vocab_size         (4096) # TODO: Fix
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_uint32("snac.quantizer.codebook_size", self.hparams["codebook_size"])
         self.gguf_writer.add_uint32("snac.quantizer.codebook_dim", self.hparams["codebook_dim"])
         self.gguf_writer.add_embedding_length(self.hparams["decoder_dim"])  # 1024

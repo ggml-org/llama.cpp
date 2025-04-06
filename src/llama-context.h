@@ -48,6 +48,8 @@ struct llama_context {
     float * get_logits();
     float * get_logits_ith(int32_t i);
 
+    int32_t get_n_outputs();
+
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
