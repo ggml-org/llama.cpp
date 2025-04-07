@@ -85,7 +85,10 @@ set(LLAMA_COMMON_EXTRA_LIBS build_info)
 
 # Use curl to download model url
 if (LLAMA_CURL)
-    find_package(CURL REQUIRED)
+    find_package(CURL)
+    if (NOT CURL_FOUND)
+        message(FATAL_ERROR "Could NOT find CURL. Hint: to disable this feature, set -DLLAMA_CURL=OFF")
+    endif()
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
     include_directories(${CURL_INCLUDE_DIRS})
     find_library(CURL_LIBRARY curl REQUIRED)

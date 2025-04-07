@@ -24,6 +24,28 @@
 #include <future>
 #include <thread>
 
+#if defined(_MSC_VER)
+# define NOMINMAX 1
+# include <windows.h>
+# define YIELD() YieldProcessor()
+#elif defined(__clang__) || defined(__GNUC__)
+# if defined(__x86_64__) ||defined(__i386__)
+#  include <immintrin.h>
+#  define YIELD() _mm_pause()
+# elif defined(__arm__) || defined(__aarch64__)
+#  if defined(__clang__)
+#   include <arm_acle.h>
+#   define YIELD() __yield()
+#  else
+#   define YIELD() asm volatile("yield")
+#  endif
+# endif
+#endif
+
+#if !defined(YIELD)
+#define YIELD()
+#endif
+
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
@@ -787,7 +809,8 @@ struct ggml_backend_vk_context {
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k;
-    vk::Fence fence;
+    vk::Fence fence, almost_ready_fence;
+    bool almost_ready_fence_pending {};
 
     vk_buffer buffer_pool[MAX_VK_BUFFERS];
 
@@ -877,6 +900,39 @@ static void ggml_vk_check_results_1(ggml_tensor * tensor);
 typedef void (*ggml_vk_func_t)(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
 static void ggml_backend_vk_free(ggml_backend_t backend);
+
+// Wait for ctx->fence to be signaled.
+static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
+    // Use waitForFences while most of the graph executes. Hopefully the CPU can sleep
+    // during this wait.
+    if (ctx->almost_ready_fence_pending) {
+        VK_CHECK(ctx->device->device.waitForFences({ ctx->almost_ready_fence }, true, UINT64_MAX), "almost_ready_fence");
+        ctx->device->device.resetFences({ ctx->almost_ready_fence });
+        ctx->almost_ready_fence_pending = false;
+    }
+
+    // Spin (w/pause) waiting for the graph to finish executing.
+    vk::Result result;
+    while ((result = ctx->device->device.getFenceStatus(ctx->fence)) != vk::Result::eSuccess) {
+        if (result != vk::Result::eNotReady) {
+            fprintf(stderr, "ggml_vulkan: error %s at %s:%d\n", to_string(result).c_str(), __FILE__, __LINE__);
+            exit(1);
+        }
+        for (uint32_t i = 0; i < 100; ++i) {
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+            YIELD();
+        }
+    }
+    ctx->device->device.resetFences({ ctx->fence });
+}
 
 // variables to track number of compiles in progress
 static uint32_t compile_count = 0;
@@ -1680,19 +1736,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_warptile_mmq = { 128,  64,  64, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32, 32, 32, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
-        const uint32_t tm_int_l = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_m = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_s = device->coopmat_int_support ? device->coopmat_int_m : 2;
-        const uint32_t tn_int_l = device->coopmat_int_support ? device->coopmat_int_n : 4;
-        const uint32_t tn_int_m = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tn_int_s = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tk_int_l = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_m = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_s = device->coopmat_int_support ? device->coopmat_int_k : 1;
-
-        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_int_l, tn_int_l, tk_int_l, subgroup_size_8 };
-        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8, 32, 2,     tm_int_m, tn_int_m, tk_int_m, subgroup_size_8 };
-        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32, 32, 2,       tm_int_s, tn_int_s, tk_int_s, subgroup_size_8 };
+        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
+        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8,     32, 2, 2, 2, 1, subgroup_size_8 };
+        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32,       32, 2, 2, 1, 1, subgroup_size_8 };
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
@@ -1787,6 +1833,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // can't use 256 for D==80.
             uint32_t wg_size = (small_rows && (D % 32) == 0) ? 256 : 128;
             auto rows_cols = fa_rows_cols(D, clamp, type, small_rows);
+            // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
+            GGML_ASSERT((GGML_KQ_MASK_PAD % rows_cols[0]) == 0);
             return {wg_size, rows_cols[0], rows_cols[1], (D), clamp};
         };
 
@@ -3355,6 +3403,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_split_k = 0;
 
     ctx->fence = ctx->device->device.createFence({});
+    ctx->almost_ready_fence = ctx->device->device.createFence({});
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
     const char* skip_checks = getenv("GGML_VULKAN_SKIP_CHECKS");
@@ -5463,6 +5512,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     bool aligned = (KV % pipelines[1]->align) == 0 &&
                    // the "aligned" shader variant will forcibly align strides, for performance
                    (q_stride & 7) == 0 && (k_stride & 7) == 0 && (v_stride & 7) == 0;
+
+    // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
+    GGML_ASSERT((nem1 % GGML_KQ_MASK_PAD) == 0);
 
     vk_pipeline pipeline = pipelines[aligned];
     assert(pipeline);
@@ -7865,7 +7917,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
         128, 49, 49,
         4096, 49, 4096,
     };
-    const size_t num_it = 1;
+    const size_t num_it = 100;
 
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 0, GGML_TYPE_Q4_0);
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 1, GGML_TYPE_Q4_0);
@@ -7959,11 +8011,11 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
     }
 }
 
-static bool ggml_vk_compute_forward(ggml_backend_vk_context* ctx, ggml_tensor* tensor, int tensor_idx, bool use_fence);
+static bool ggml_vk_compute_forward(ggml_backend_vk_context* ctx, ggml_tensor* tensor, int tensor_idx, bool use_fence, bool almost_ready);
 
 // Returns true if node has enqueued work into the queue, false otherwise
 // If submit is true the current all operations queued so far are being submitted to Vulkan to overlap cmdlist creation and GPU execution.
-static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * node, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool dryrun, bool last_node, bool submit){
+static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * node, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool dryrun, bool last_node, bool almost_ready, bool submit){
     if (ggml_is_empty(node) || !node->buffer) {
         return false;
     }
@@ -8335,7 +8387,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
 
         ctx->compute_ctx.reset();
 
-        bool ok = ggml_vk_compute_forward(ctx, node_begin, node_idx_begin, false);
+        bool ok = ggml_vk_compute_forward(ctx, node_begin, node_idx_begin, false, almost_ready);
         if (!ok) {
             if (node->op == GGML_OP_UNARY) {
                 std::cerr << __func__ << ": error: op not supported UNARY " << node->name << " (" << ggml_unary_op_name(static_cast<ggml_unary_op>(node->op_params[0])) << ")" << std::endl;
@@ -8349,7 +8401,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
     return true;
 }
 
-static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor * tensor, int tensor_idx, bool use_fence = true){
+static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor * tensor, int tensor_idx, bool use_fence = true, bool almost_ready = false) {
     ggml_backend_buffer * buf = nullptr;
 
     switch (tensor->op) {
@@ -8452,12 +8504,15 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
 
-        ggml_vk_submit(subctx, use_fence ? ctx->fence : vk::Fence{});
+        if (almost_ready && !ctx->almost_ready_fence_pending && !use_fence) {
+            ggml_vk_submit(subctx, ctx->almost_ready_fence);
+            ctx->almost_ready_fence_pending = true;
+        } else {
+            ggml_vk_submit(subctx, use_fence ? ctx->fence : vk::Fence{});
+        }
 
         if (use_fence) {
-            VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_compute_forward waitForFences");
-
-            ctx->device->device.resetFences({ ctx->fence });
+            ggml_vk_wait_for_fence(ctx);
         }
 #ifdef GGML_VULKAN_CHECK_RESULTS
         ggml_vk_check_results_1(tensor);
@@ -8543,6 +8598,7 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ctx->gc.events.clear();
 
     ctx->device->device.destroyFence(ctx->fence);
+    ctx->device->device.destroyFence(ctx->almost_ready_fence);
 }
 
 static int ggml_vk_get_device_count() {
@@ -8889,8 +8945,7 @@ static void ggml_backend_vk_synchronize(ggml_backend_t backend) {
     }
 
     ggml_vk_submit(transfer_ctx, ctx->fence);
-    VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_backend_vk_synchronize waitForFences");
-    ctx->device->device.resetFences({ ctx->fence });
+    ggml_vk_wait_for_fence(ctx);
 
     for (auto& cpy : transfer_ctx->out_memcpys) {
         memcpy(cpy.dst, cpy.src, cpy.n);
@@ -8909,7 +8964,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     uint64_t total_mat_mul_bytes = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_vk_build_graph(ctx, cgraph->nodes[i], i, nullptr, 0, true, false, false);
+        ggml_vk_build_graph(ctx, cgraph->nodes[i], i, nullptr, 0, true, false, false, false);
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
             total_mat_mul_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
         }
@@ -8951,11 +9006,14 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             mul_mat_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
         }
 
+        // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
+        bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
         bool submit = (submitted_nodes >= nodes_per_submit) ||
                       (mul_mat_bytes >= mul_mat_bytes_per_submit) ||
-                      (i == last_node);
+                      (i == last_node) ||
+                      (almost_ready && !ctx->almost_ready_fence_pending);
 
-        bool enqueued = ggml_vk_build_graph(ctx, cgraph->nodes[i], i, cgraph->nodes[submit_node_idx], submit_node_idx, false, i == last_node, submit);
+        bool enqueued = ggml_vk_build_graph(ctx, cgraph->nodes[i], i, cgraph->nodes[submit_node_idx], submit_node_idx, false, i == last_node, almost_ready, submit);
 
         if (enqueued) {
             ++submitted_nodes;
@@ -8967,7 +9025,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 #endif
         }
 
-        if (submit) {
+        if (submit && enqueued) {
             first_node_in_batch = true;
             submitted_nodes = 0;
             mul_mat_bytes = 0;

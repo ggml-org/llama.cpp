@@ -10,7 +10,7 @@
 
 #include <vector>
 #include <limits.h>
-#include <inttypes.h>
+#include <cinttypes>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -79,7 +79,11 @@ struct gemma3_context {
 
     void init_clip_model(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
-        ctx_clip = clip_model_load(clip_path, params.verbosity > 1);
+        ctx_clip = clip_model_load(clip_path, GGML_LOG_LEVEL_INFO);
+        if (!ctx_clip) {
+            LOG_ERR("Failed to load CLIP model from %s\n", clip_path);
+            exit(1);
+        }
     }
 
     ~gemma3_context() {

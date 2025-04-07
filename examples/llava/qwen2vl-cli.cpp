@@ -330,7 +330,7 @@ static struct llava_context * llava_init_context(common_params * params, llama_m
         prompt = "describe the image in detail.";
     }
 
-    auto ctx_clip = clip_model_load(clip_path, /*verbosity=*/ 1);
+    auto ctx_clip = clip_model_load(clip_path, GGML_LOG_LEVEL_INFO);
 
     llama_context_params ctx_params = common_context_params_to_llama(*params);
     ctx_params.n_ctx           = params->n_ctx < 2048 ? 2048 : params->n_ctx; // we need a longer context size to process image embeddings
