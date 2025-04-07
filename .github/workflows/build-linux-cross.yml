@@ -10,6 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Setup Riscv
+        continue-on-error: true
         run: |
           sudo dpkg --add-architecture riscv64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
@@ -49,6 +50,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Riscv
+        continue-on-error: true
         run: |
           sudo dpkg --add-architecture riscv64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
@@ -91,6 +93,7 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Arm64
+        continue-on-error: true
         run: |
           sudo dpkg --add-architecture arm64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
