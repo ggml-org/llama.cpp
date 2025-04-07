@@ -18,6 +18,7 @@ android {
         }
         externalNativeBuild {
             cmake {
+                arguments += "-DLLAMA_CURL=OFF"
                 arguments += "-DLLAMA_BUILD_COMMON=ON"
                 arguments += "-DGGML_LLAMAFILE=OFF"
                 arguments += "-DCMAKE_BUILD_TYPE=Release"

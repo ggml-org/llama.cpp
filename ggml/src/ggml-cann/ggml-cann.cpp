@@ -803,7 +803,7 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
         return GGML_STATUS_SUCCESS;
     }
 
-    // TODO: can backend doesn't support quantized yet. Just leave the code
+    // TODO: cann backend doesn't support quantized yet. Just leave the code
     // here.
     if (ggml_is_quantized(tensor->type)) {
         // Initialize padding to 0 to avoid possible NaN values
@@ -1300,47 +1300,59 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-            ggml_cann_add(ctx, dst);
+        case GGML_OP_ADD1:
+            ggml_cann_binary_op<aclnn_add>(ctx, dst);
+            break;
+        case GGML_OP_SUB:
+            ggml_cann_binary_op<aclnn_sub>(ctx, dst);
             break;
         case GGML_OP_ACC:
             ggml_cann_acc(ctx, dst);
             break;
         case GGML_OP_MUL:
-            ggml_cann_mul_div<aclnnMulGetWorkspaceSize, aclnnMul>(ctx, dst);
+            ggml_cann_binary_op<aclnn_mul>(ctx, dst);
             break;
         case GGML_OP_DIV:
-            ggml_cann_mul_div<aclnnDivGetWorkspaceSize, aclnnDiv>(ctx, dst);
+            ggml_cann_binary_op<aclnn_div>(ctx, dst);
             break;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(dst)) {
+                case GGML_UNARY_OP_ABS:
+                    GGML_CANN_CALL_UNARY_OP(Abs);
+                    break;
+                case GGML_UNARY_OP_NEG:
+                    GGML_CANN_CALL_UNARY_OP(Neg);
+                    break;
                 case GGML_UNARY_OP_GELU:
-                    ggml_cann_activation<aclnnGeluGetWorkspaceSize, aclnnGelu>(
-                        ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Gelu);
                     break;
                 case GGML_UNARY_OP_SILU:
-                    ggml_cann_activation<aclnnSiluGetWorkspaceSize, aclnnSilu>(
-                        ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Silu);
                     break;
-                // TODO: Use faster gelu??
-                case GGML_UNARY_OP_GELU_QUICK:
-                    ggml_cann_activation<aclnnGeluGetWorkspaceSize, aclnnGelu>(
-                        ctx, dst);
+                case GGML_UNARY_OP_GELU_QUICK: {
+                        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) {
+                            GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                        };
+                        ggml_cann_unary_op<lambda>(ctx, dst);
+                    }
                     break;
                 case GGML_UNARY_OP_TANH:
-                    ggml_cann_activation<aclnnTanhGetWorkspaceSize, aclnnTanh>(
-                        ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Tanh);
                     break;
                 case GGML_UNARY_OP_RELU:
-                    ggml_cann_activation<aclnnReluGetWorkspaceSize, aclnnRelu>(
-                        ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Relu);
+                    break;
+                case GGML_UNARY_OP_SIGMOID:
+                    GGML_CANN_CALL_UNARY_OP(Sigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
-                    ggml_cann_activation<aclnnHardsigmoidGetWorkspaceSize,
-                                         aclnnHardsigmoid>(ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Hardsigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSWISH:
-                    ggml_cann_activation<aclnnHardswishGetWorkspaceSize,
-                                         aclnnHardswish>(ctx, dst);
+                    GGML_CANN_CALL_UNARY_OP(Hardswish);
+                    break;
+                case GGML_UNARY_OP_EXP:
+                    GGML_CANN_CALL_UNARY_OP(Exp);
                     break;
                 default:
                     return false;
@@ -1382,7 +1394,12 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_scale(ctx, dst);
             break;
         case GGML_OP_SQR:
-            ggml_cann_sqr(ctx, dst);
+            GGML_ASSERT(dst->src[1] == nullptr);
+            dst->src[1] = dst->src[0];
+            ggml_cann_binary_op<aclnn_mul>(ctx, dst);
+            break;
+        case GGML_OP_SQRT:
+            GGML_CANN_CALL_UNARY_OP(Sqrt);
             break;
         case GGML_OP_CLAMP:
             ggml_cann_clamp(ctx, dst);
@@ -1414,12 +1431,24 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_POOL_2D:
             ggml_cann_pool2d(ctx, dst);
             break;
+        case GGML_OP_SUM:
+            ggml_cann_sum(ctx, dst);
+            break;
         case GGML_OP_SUM_ROWS:
             ggml_cann_sum_rows(ctx, dst);
             break;
         case GGML_OP_ARGSORT:
             ggml_cann_argsort(ctx, dst);
             break;
+        case GGML_OP_ARGMAX:
+            ggml_cann_argmax(ctx, dst);
+            break;
+        case GGML_OP_COS:
+            ggml_cann_unary_op<aclnn_cos>(ctx, dst);
+            break;
+        case GGML_OP_SIN:
+            ggml_cann_unary_op<aclnn_sin>(ctx, dst);
+        break;
         default:
             return false;
     }
@@ -1457,11 +1486,6 @@ static void ggml_backend_cann_free(ggml_backend_t backend) {
         (ggml_backend_cann_context*)backend->context;
     ACL_CHECK(aclrtSynchronizeDevice());
     ACL_CHECK(aclrtResetDevice(cann_ctx->device));
-
-    // finalize when last backend freed.
-    if (cann_ctx->device == ggml_backend_cann_get_device_count() - 1) {
-        ACL_CHECK(aclFinalize());
-    }
 
     delete cann_ctx;
     delete backend;
@@ -1675,24 +1699,31 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
     switch (op->op) {
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
+                case GGML_UNARY_OP_ABS:
+                case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_EXP:
                     return true;
                 default:
                     return false;
             }
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
-                case GGML_TYPE_Q8_0:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
-                case GGML_TYPE_Q4_0:
                     return true;
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+                    // only support contiguous for quantized types.
+                    return ggml_is_contiguous(op->src[0]) &&
+                            ggml_is_contiguous(op->src[1]);
                 default:
                     return false;
             }
@@ -1704,7 +1735,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             switch (op->src[0]->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
-                case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q8_0:
                     return true;
                 default:
@@ -1712,16 +1742,21 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
         } break;
         case GGML_OP_CPY: {
-            switch (op->type) {
-                case GGML_TYPE_F32:
-                case GGML_TYPE_F16:
-                case GGML_TYPE_Q8_0:
-                case GGML_TYPE_Q4_0:
-                    return true;
-                default:
-                    return false;
+            ggml_tensor *src = op->src[0];
+            if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
+                  (src->type != GGML_TYPE_F32 &&
+                    src->type != GGML_TYPE_F16)) {
+                // only support F32 and F16.
+                return false;
             }
-        }
+
+            if (!ggml_are_same_shape(op, src) && !ggml_is_contiguous(op)) {
+                // unsupport dst is not contiguous.
+                return false;
+            }
+
+            return true;
+        } break;
         case GGML_OP_CONT: {
             // TODO: support GGML_TYPE_BF16
             switch (op->src[0]->type) {
@@ -1734,13 +1769,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_ROPE: {
             // TODO: with ops-test v == 1
-            float * ext_factor = (float*)((int32_t*)op->op_params + 7);
+            float ext_factor = 0.0f;
+            memcpy(&ext_factor, (const float *) op->op_params + 7, sizeof(float));
             // TODO: n_dims <= ne0
             if (op->src[0]->ne[0] != op->op_params[1]) {
                 return false;
             }
             // TODO: ext_factor != 0
-            if (*ext_factor != 0) {
+            if (ext_factor != 0) {
                 return false;
             }
 
@@ -1762,9 +1798,20 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         }
+        case GGML_OP_POOL_2D: {
+            const int32_t * opts = (const int32_t *) op->op_params;
+            const int       k0   = opts[1];
+            const int       k1   = opts[2];
+            const int       p0   = opts[5];
+            const int       p1   = opts[6];
+            // value of paddingH should be at most half of kernelH
+            // value of paddingW should be at most half of kernelW
+            return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
+        }
+        case GGML_OP_SUM:
+        case GGML_OP_DUP:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
-        case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -1773,15 +1820,17 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_TRANSPOSE:
         case GGML_OP_NORM:
         case GGML_OP_ADD:
+        case GGML_OP_ADD1:
+        case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_RMS_NORM:
         case GGML_OP_SCALE:
         case GGML_OP_SQR:
+        case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
-        case GGML_OP_POOL_2D:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:
@@ -1790,6 +1839,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
+        case GGML_OP_ARGMAX:
+        case GGML_OP_COS:
+        case GGML_OP_SIN:
             return true;
         default:
             return false;
