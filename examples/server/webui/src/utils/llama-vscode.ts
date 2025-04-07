@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { MessageExtraContext } from './types';
-import { AutosizeTextareaApi  } from '../components/useChatTextarea.ts';
+import { chatTextareaApi } from '../components/useChatTextarea.ts';
 
 // Extra context when using llama.cpp WebUI from llama-vscode, inside an iframe
 // Ref: https://github.com/ggml-org/llama.cpp/pull/11940
@@ -15,7 +15,7 @@ interface SetTextEvData {
  * window.postMessage({ command: 'setText', text: 'Spot the syntax error', context: 'def test()\n  return 123' }, '*');
  */
 
-export const useVSCodeContext = (textarea: AutosizeTextareaApi ) => {
+export const useVSCodeContext = (textarea: chatTextareaApi) => {
   const [extraContext, setExtraContext] = useState<MessageExtraContext | null>(
     null
   );

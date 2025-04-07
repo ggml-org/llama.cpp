@@ -6,11 +6,7 @@ import { classNames, cleanCurrentUrl, throttle } from '../utils/misc';
 import CanvasPyInterpreter from './CanvasPyInterpreter';
 import StorageUtils from '../utils/storage';
 import { useVSCodeContext } from '../utils/llama-vscode';
-import {
-  useChatTextarea,
-  AutosizeTextareaApi,
-} from './useChatTextarea.ts';
-
+import { useChatTextarea, chatTextareaApi } from './useChatTextarea.ts';
 
 /**
  * A message display is a message node with additional information for rendering.
@@ -95,7 +91,6 @@ const scrollToBottom = throttle(
 );
 
 export default function ChatScreen() {
-
   const {
     viewingChat,
     sendMessage,
@@ -106,9 +101,7 @@ export default function ChatScreen() {
     replaceMessageAndGenerate,
   } = useAppContext();
 
-  const textarea: AutosizeTextareaApi = useChatTextarea(
-    prefilledMsg.content()
-  );
+  const textarea: chatTextareaApi = useChatTextarea(prefilledMsg.content());
 
   const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
   // TODO: improve this when we have "upload file" feature
@@ -267,7 +260,7 @@ export default function ChatScreen() {
             onInput={textarea.onInput} // Hook's input handler (will only resize height on lg+ screens)
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-			        if (e.key === 'Enter' && !e.shiftKey) {
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendNewMessage();
               }

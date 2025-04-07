@@ -32,7 +32,7 @@ const adjustTextareaHeight = (textarea: HTMLTextAreaElement | null) => {
 };
 
 // Interface describing the API returned by the hook
-export interface AutosizeTextareaApi {
+export interface chatTextareaApi {
   value: () => string;
   setValue: (value: string) => void;
   focus: () => void;
@@ -43,7 +43,7 @@ export interface AutosizeTextareaApi {
 // This is a workaround to prevent the textarea from re-rendering when the inner content changes
 // See https://github.com/ggml-org/llama.cpp/pull/12299
 // combined now with auto-sizing logic.
-export function useChatTextarea(initValue: string): AutosizeTextareaApi {
+export function useChatTextarea(initValue: string): chatTextareaApi {
   const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -63,10 +63,13 @@ export function useChatTextarea(initValue: string): AutosizeTextareaApi {
     }
   }, [textareaRef, savedInitValue]); // Depend on ref and savedInitValue
 
-  const handleInput = useCallback((event: React.FormEvent<HTMLTextAreaElement>) => {
-    // Call adjustTextareaHeight on every input - it will decide whether to act
-    adjustTextareaHeight(event.currentTarget);
-  }, []);
+  const handleInput = useCallback(
+    (event: React.FormEvent<HTMLTextAreaElement>) => {
+      // Call adjustTextareaHeight on every input - it will decide whether to act
+      adjustTextareaHeight(event.currentTarget);
+    },
+    []
+  );
 
   return {
     // Method to get the current value directly from the textarea
@@ -75,12 +78,12 @@ export function useChatTextarea(initValue: string): AutosizeTextareaApi {
     },
     // Method to programmatically set the value and trigger height adjustment
     setValue: (value: string) => {
-        const textarea = textareaRef.current;
-        if (textarea) {
-            textarea.value = value;
-            // Call adjustTextareaHeight - it will check screen size internally
-            setTimeout(() => adjustTextareaHeight(textarea), 0);
-        }
+      const textarea = textareaRef.current;
+      if (textarea) {
+        textarea.value = value;
+        // Call adjustTextareaHeight - it will check screen size internally
+        setTimeout(() => adjustTextareaHeight(textarea), 0);
+      }
     },
     focus: () => {
       if (textareaRef.current) {
