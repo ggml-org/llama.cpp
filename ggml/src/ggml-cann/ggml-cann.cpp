@@ -1318,41 +1318,41 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(dst)) {
                 case GGML_UNARY_OP_ABS:
-                    CANN_CALL_UNARY_OP(Abs);
+                    GGML_CANN_CALL_UNARY_OP(Abs);
                     break;
                 case GGML_UNARY_OP_NEG:
-                    CANN_CALL_UNARY_OP(Neg);
+                    GGML_CANN_CALL_UNARY_OP(Neg);
                     break;
                 case GGML_UNARY_OP_GELU:
-                    CANN_CALL_UNARY_OP(Gelu);
+                    GGML_CANN_CALL_UNARY_OP(Gelu);
                     break;
                 case GGML_UNARY_OP_SILU:
-                    CANN_CALL_UNARY_OP(Silu);
+                    GGML_CANN_CALL_UNARY_OP(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
                         auto lambda = [](auto ctx, auto acl_src, auto acl_dst) {
-                            CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                            GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
                         };
                         ggml_cann_unary_op<lambda>(ctx, dst);
                     }
                     break;
                 case GGML_UNARY_OP_TANH:
-                    CANN_CALL_UNARY_OP(Tanh);
+                    GGML_CANN_CALL_UNARY_OP(Tanh);
                     break;
                 case GGML_UNARY_OP_RELU:
-                    CANN_CALL_UNARY_OP(Relu);
+                    GGML_CANN_CALL_UNARY_OP(Relu);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    CANN_CALL_UNARY_OP(Sigmoid);
+                    GGML_CANN_CALL_UNARY_OP(Sigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
-                    CANN_CALL_UNARY_OP(Hardsigmoid);
+                    GGML_CANN_CALL_UNARY_OP(Hardsigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSWISH:
-                    CANN_CALL_UNARY_OP(Hardswish);
+                    GGML_CANN_CALL_UNARY_OP(Hardswish);
                     break;
                 case GGML_UNARY_OP_EXP:
-                    CANN_CALL_UNARY_OP(Exp);
+                    GGML_CANN_CALL_UNARY_OP(Exp);
                     break;
                 default:
                     return false;
@@ -1399,7 +1399,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_binary_op<aclnn_mul>(ctx, dst);
             break;
         case GGML_OP_SQRT:
-            CANN_CALL_UNARY_OP(Sqrt);
+            GGML_CANN_CALL_UNARY_OP(Sqrt);
             break;
         case GGML_OP_CLAMP:
             ggml_cann_clamp(ctx, dst);
@@ -1486,11 +1486,6 @@ static void ggml_backend_cann_free(ggml_backend_t backend) {
         (ggml_backend_cann_context*)backend->context;
     ACL_CHECK(aclrtSynchronizeDevice());
     ACL_CHECK(aclrtResetDevice(cann_ctx->device));
-
-    // finalize when last backend freed.
-    if (cann_ctx->device == ggml_backend_cann_get_device_count() -1) {
-        // ACL_CHECK(aclFinalize());
-    }
 
     delete cann_ctx;
     delete backend;
@@ -1814,7 +1809,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
         }
         case GGML_OP_SUM:
-            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
         case GGML_OP_DUP:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
@@ -1833,6 +1827,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_RMS_NORM:
         case GGML_OP_SCALE:
         case GGML_OP_SQR:
+        case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
