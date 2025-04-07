@@ -6,7 +6,7 @@ import { classNames, cleanCurrentUrl, throttle } from '../utils/misc';
 import CanvasPyInterpreter from './CanvasPyInterpreter';
 import StorageUtils from '../utils/storage';
 import { useVSCodeContext } from '../utils/llama-vscode';
-import { useChatTextarea, chatTextareaApi } from './useChatTextarea.ts';
+import { useChatTextarea, ChatTextareaApi } from './useChatTextarea.ts';
 
 /**
  * A message display is a message node with additional information for rendering.
@@ -101,7 +101,7 @@ export default function ChatScreen() {
     replaceMessageAndGenerate,
   } = useAppContext();
 
-  const textarea: chatTextareaApi = useChatTextarea(prefilledMsg.content());
+  const textarea: ChatTextareaApi = useChatTextarea(prefilledMsg.content());
 
   const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
   // TODO: improve this when we have "upload file" feature

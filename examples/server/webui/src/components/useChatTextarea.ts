@@ -32,7 +32,7 @@ const adjustTextareaHeight = (textarea: HTMLTextAreaElement | null) => {
 };
 
 // Interface describing the API returned by the hook
-export interface chatTextareaApi {
+export interface ChatTextareaApi {
   value: () => string;
   setValue: (value: string) => void;
   focus: () => void;
@@ -43,7 +43,7 @@ export interface chatTextareaApi {
 // This is a workaround to prevent the textarea from re-rendering when the inner content changes
 // See https://github.com/ggml-org/llama.cpp/pull/12299
 // combined now with auto-sizing logic.
-export function useChatTextarea(initValue: string): chatTextareaApi {
+export function useChatTextarea(initValue: string): ChatTextareaApi {
   const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
