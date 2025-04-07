@@ -757,7 +757,7 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
             if (full_attn) {
                 KQ = ggml_soft_max_ext(ctx0, KQ, nullptr, 1.0f / sqrtf((float)d_head), 0.0f);
             } else {
-                KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f, 0.0f);
+                KQ = ggml_soft_max_ext(ctx0, KQ, window_mask, 1.0f / sqrtf((float)d_head), 0.0f);
             }
 
             struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ);
