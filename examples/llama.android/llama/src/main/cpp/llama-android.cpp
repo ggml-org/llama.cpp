@@ -8,6 +8,15 @@
 #include "llama.h"
 #include "common.h"
 
+template <class T> static std::string join(const std::vector<T> & values, const std::string & delim) {
+    std::ostringstream str;
+    for (size_t i = 0; i < values.size(); i++) {
+        str << values[i];
+        if (i < values.size() - 1) { str << delim; }
+    }
+    return str.str();
+}
+
 /**
  * Logging utils
  */
@@ -275,8 +284,7 @@ Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, 
     const auto model_size = double(llama_model_size(g_model)) / 1024.0 / 1024.0 / 1024.0;
     const auto model_n_params = double(llama_model_n_params(g_model)) / 1e9;
 
-    const auto *const backend = "(Android)"; // TODO: What should this be?
-
+    const auto backend = get_backend();
     std::stringstream result;
     result << std::setprecision(2);
     result << "| model | size | params | backend | test | t/s |\n";
@@ -285,7 +293,6 @@ Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, 
            << backend << " | pp " << pp << " | " << pp_avg << " ± " << pp_std << " |\n";
     result << "| " << model_desc << " | " << model_size << "GiB | " << model_n_params << "B | "
            << backend << " | tg " << tg << " | " << tg_avg << " ± " << tg_std << " |\n";
-
     return env->NewStringUTF(result.str().c_str());
 }
 
