@@ -10752,14 +10752,14 @@ struct llm_build_context {
 
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
-
+#ifdef PIM_KERNEL
                 if (il < NR_LAYER && Qcur->op == GGML_OP_MUL_MAT && n_tokens == 1) {
                   Qcur->flags |= GGML_TENSOR_FLAG_PIM;
                   Qcur->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
                   Qcur->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;
                   Qcur->layerid = il;
                 }
-
+#endif
                 struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
 
                 struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);

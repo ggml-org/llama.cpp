@@ -12481,6 +12481,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+#ifdef PIM_KERNEL
 static int dpu_launch_gemv_async(
         const struct ggml_tensor * input,
         char* wdata,
@@ -12491,6 +12492,7 @@ static int dpu_launch_gemv_async(
 static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set);
 
 static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res);
+#endif
 
 #define TENSOR_EXPORT 0
 
@@ -12619,6 +12621,7 @@ UseGgmlGemm1:;
             }
         }
 
+#ifdef PIM_KERNEL
 	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
           dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
@@ -12667,7 +12670,8 @@ UseGgmlGemm1:;
           quant_src1->data = wdata;
           tensor_export(quant_src1, filenamebq);
         }
-#endif
+#endif // TENSOR_EXPORT
+#endif // PIM_KERNEL
     }
 
     if (ith == 0) {
