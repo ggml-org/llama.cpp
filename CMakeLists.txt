@@ -81,7 +81,7 @@ option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
 # 3rd party libs
-option(LLAMA_CURL "llama: use libcurl to download model from an URL" OFF)
+option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 # Required for relocatable CMake package
@@ -168,6 +168,11 @@ add_subdirectory(src)
 # utils, programs, examples and tests
 #
 
+if (NOT LLAMA_BUILD_COMMON)
+    message(STATUS "LLAMA_BUILD_COMMON is OFF, disabling LLAMA_CURL")
+    set(LLAMA_CURL OFF)
+endif()
+
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
 endif()
@@ -242,3 +247,20 @@ configure_file(cmake/llama.pc.in
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
+
+#
+# copy the license files
+#
+
+# Check if running in GitHub Actions
+if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+    message(STATUS "Running inside GitHub Actions - copying license files")
+
+    # Copy all files from licenses/ to build/bin/
+    file(GLOB LICENSE_FILES "${CMAKE_SOURCE_DIR}/licenses/*")
+    foreach(LICENSE_FILE ${LICENSE_FILES})
+        get_filename_component(FILENAME ${LICENSE_FILE} NAME)
+        configure_file(${LICENSE_FILE} "${CMAKE_BINARY_DIR}/bin/${FILENAME}" COPYONLY)
+    endforeach()
+endif()
+

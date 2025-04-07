@@ -577,12 +577,7 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model_ttc);
 
-    // TODO: refactor in a common struct
-    params.model     = params.vocoder.model;
-    params.model_url = params.vocoder.model_url;
-    params.hf_repo   = params.vocoder.hf_repo;
-    params.hf_file   = params.vocoder.hf_file;
-
+    params.model = params.vocoder.model;
     params.embedding = true;
 
     common_init_result llama_init_cts = common_init_from_params(params);

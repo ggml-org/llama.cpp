@@ -924,27 +924,24 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // TODO: fixme: these sizes are hardcoded for now.
     //  they should be allocated based on the model's size
     //  and the device's max alloc size
-    size_t max_alloc_size;
-    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &max_alloc_size, NULL));
-
     // Allocate intermediate buffers and images
     size_t required_A_q_d_bytes = 311164928;
     size_t required_A_s_d_bytes = 38895616;
     size_t required_B_d_bytes = 45088768;
 
     // Ensure buffer sizes do not exceed the maximum allocation size
-    size_t max_A_q_d_bytes = MIN(required_A_q_d_bytes, max_alloc_size);
-    size_t max_A_s_d_bytes = MIN(required_A_s_d_bytes, max_alloc_size);
-    size_t max_B_d_bytes   = MIN(required_B_d_bytes, max_alloc_size);
-    if (required_A_q_d_bytes > max_alloc_size) {
+    size_t max_A_q_d_bytes = MIN(required_A_q_d_bytes, backend_ctx->max_alloc_size);
+    size_t max_A_s_d_bytes = MIN(required_A_s_d_bytes, backend_ctx->max_alloc_size);
+    size_t max_B_d_bytes   = MIN(required_B_d_bytes, backend_ctx->max_alloc_size);
+    if (required_A_q_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: A_q_d buffer size reduced from %zu to %zu due to device limitations.\n",
                       required_A_q_d_bytes, max_A_q_d_bytes);
     }
-    if (required_A_s_d_bytes > max_alloc_size) {
+    if (required_A_s_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: A_s_d buffer size reduced from %zu to %zu due to device limitations.\n",
                       required_A_s_d_bytes, max_A_s_d_bytes);
     }
-    if (required_B_d_bytes > max_alloc_size) {
+    if (required_B_d_bytes > backend_ctx->max_alloc_size) {
         GGML_LOG_WARN("ggml_opencl: B_d buffer size reduced from %zu to %zu due to device limitations.\n",
                       required_B_d_bytes, max_B_d_bytes);
     }

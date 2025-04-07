@@ -1,6 +1,7 @@
 #ifndef CLIP_H
 #define CLIP_H
 
+#include "ggml.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -41,7 +42,7 @@ struct clip_image_f32_batch {
 
 struct clip_context_params {
     bool use_gpu;
-    int verbosity;
+    ggml_log_level verbosity;
 };
 
 // deprecated, use clip_init

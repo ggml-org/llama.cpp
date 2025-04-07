@@ -4,6 +4,26 @@
 >
 > This is very experimental, only used for demo purpose.
 
+## Quick started
+
+You can use pre-quantized model from [ggml-org](https://huggingface.co/ggml-org)'s Hugging Face account
+
+```bash
+# build
+cmake -B build
+cmake --build build --target llama-gemma3-cli
+
+# alternatively, install from brew (MacOS)
+brew install llama.cpp
+
+# run it
+llama-gemma3-cli -hf ggml-org/gemma-3-4b-it-GGUF
+llama-gemma3-cli -hf ggml-org/gemma-3-12b-it-GGUF
+llama-gemma3-cli -hf ggml-org/gemma-3-27b-it-GGUF
+
+# note: 1B model does not support vision
+```
+
 ## How to get mmproj.gguf?
 
 ```bash
