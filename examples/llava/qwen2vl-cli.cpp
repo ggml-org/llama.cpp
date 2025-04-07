@@ -314,7 +314,7 @@ static struct llama_model * llava_init(common_params * params) {
 
     llama_model_params model_params = common_model_params_to_llama(*params);
 
-    llama_model * model = llama_model_load_from_file(params->model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params->model.path.c_str(), model_params);
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return NULL;
@@ -323,14 +323,14 @@ static struct llama_model * llava_init(common_params * params) {
 }
 
 static struct llava_context * llava_init_context(common_params * params, llama_model * model) {
-    const char * clip_path = params->mmproj.c_str();
+    const char * clip_path = params->mmproj.path.c_str();
 
     auto prompt = params->prompt;
     if (prompt.empty()) {
         prompt = "describe the image in detail.";
     }
 
-    auto ctx_clip = clip_model_load(clip_path, /*verbosity=*/ 1);
+    auto ctx_clip = clip_model_load(clip_path, GGML_LOG_LEVEL_INFO);
 
     llama_context_params ctx_params = common_context_params_to_llama(*params);
     ctx_params.n_ctx           = params->n_ctx < 2048 ? 2048 : params->n_ctx; // we need a longer context size to process image embeddings
@@ -524,7 +524,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.mmproj.empty() || (params.image.empty() && !prompt_contains_image(params.prompt))) {
+    if (params.mmproj.path.empty() || (params.image.empty() && !prompt_contains_image(params.prompt))) {
         print_usage(argc, argv);
         return 1;
     }

@@ -52,6 +52,18 @@ static __global__ void flash_attn_tile_ext_f32(
     return;
 #endif // FP16_MMA_AVAILABLE
     if (use_logit_softcap && !(D == 128 || D == 256)) {
+        GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
+        GGML_UNUSED(dst); GGML_UNUSED(dst_meta); GGML_UNUSED(scale);
+        GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
+        GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
+        GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02);
+        GGML_UNUSED(ne03); GGML_UNUSED(ne10); GGML_UNUSED(ne11);
+        GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(ne31);
+        GGML_UNUSED(nb31); GGML_UNUSED(nb01); GGML_UNUSED(nb02);
+        GGML_UNUSED(nb03); GGML_UNUSED(nb11); GGML_UNUSED(nb12);
+        GGML_UNUSED(nb13); GGML_UNUSED(nb21); GGML_UNUSED(nb22);
+        GGML_UNUSED(nb23); GGML_UNUSED(ne0); GGML_UNUSED(ne1);
+        GGML_UNUSED(ne2); GGML_UNUSED(ne3);
         NO_DEVICE_CODE;
         return;
     }
@@ -281,6 +293,18 @@ static __global__ void flash_attn_tile_ext_f32(
         }
     }
 #else
+    GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
+    GGML_UNUSED(dst); GGML_UNUSED(dst_meta); GGML_UNUSED(scale);
+    GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
+    GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
+    GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02);
+    GGML_UNUSED(ne03); GGML_UNUSED(ne10); GGML_UNUSED(ne11);
+    GGML_UNUSED(ne12); GGML_UNUSED(ne13); GGML_UNUSED(ne31);
+    GGML_UNUSED(nb31); GGML_UNUSED(nb01); GGML_UNUSED(nb02);
+    GGML_UNUSED(nb03); GGML_UNUSED(nb11); GGML_UNUSED(nb12);
+    GGML_UNUSED(nb13); GGML_UNUSED(nb21); GGML_UNUSED(nb22);
+    GGML_UNUSED(nb23); GGML_UNUSED(ne0); GGML_UNUSED(ne1);
+    GGML_UNUSED(ne2); GGML_UNUSED(ne3);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }

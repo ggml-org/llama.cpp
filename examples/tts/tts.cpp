@@ -577,12 +577,7 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model_ttc);
 
-    // TODO: refactor in a common struct
-    params.model     = params.vocoder.model;
-    params.model_url = params.vocoder.model_url;
-    params.hf_repo   = params.vocoder.hf_repo;
-    params.hf_file   = params.vocoder.hf_file;
-
+    params.model = params.vocoder.model;
     params.embedding = true;
 
     common_init_result llama_init_cts = common_init_from_params(params);
@@ -699,11 +694,13 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
             const std::string voice_data = audio_data;
 
             auto tmp = common_tokenize(vocab, voice_data, false, true);
-            printf("\n\n");
+
+            std::ostringstream tokens_oss;
             for (size_t i = 0; i < tmp.size(); ++i) {
-                printf("%d, ", tmp[i]);
+                tokens_oss << tmp[i] << ", ";
             }
-            printf("\n\n");
+            LOG_INF("\n\n%s: llama tokens: %s\n\n", __func__, tokens_oss.str().c_str());
+
             prompt_add(prompt_inp, tmp);
 #else
             prompt_add(prompt_inp, llama_tokens {
