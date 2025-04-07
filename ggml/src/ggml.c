@@ -12492,6 +12492,8 @@ static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set);
 
 static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res);
 
+#define TENSOR_EXPORT 0
+
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -12540,6 +12542,7 @@ static void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
+#if TENSOR_EXPORT
     // export the first gemv's tensor
     if (dst->flags & GGML_TENSOR_FLAG_PIM &&
         type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32 &&
@@ -12553,6 +12556,7 @@ static void ggml_compute_forward_mul_mat(
       tensor_export(src0, filenamea);
       tensor_export(src1, filenameb);
     }
+#endif
 
 
 #if GGML_USE_LLAMAFILE
@@ -12582,7 +12586,9 @@ static void ggml_compute_forward_mul_mat(
 UseGgmlGemm1:;
 #endif
 
+#if TENSOR_EXPORT
     struct ggml_tensor * pim_res = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
+#endif
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -12616,7 +12622,7 @@ UseGgmlGemm1:;
 	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
           dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
-
+#if TENSOR_EXPORT
           pim_res->type = dst->type;
           pim_res->dpu_set = dst->dpu_set;
           pim_res->inout_offset = dst->inout_offset;
@@ -12631,14 +12637,17 @@ UseGgmlGemm1:;
           pim_res->data = malloc(ggml_nbytes(pim_res));
           GGML_ASSERT(pim_res->data != NULL);
           dpu_get_gemv_res(src1, src0, pim_res);
+#endif
           dpu_get_gemv_res(src1, src0, dst);
-
+#if TENSOR_EXPORT
           if (to_export && !exported) {
             tensor_export(dst, filenamec_pim);
           }
+#else
           return;
+#endif
         }
-
+#if TENSOR_EXPORT
         if (to_export && !exported) {
           struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
           const char* quant_name = "token_quantified";
@@ -12658,6 +12667,7 @@ UseGgmlGemm1:;
           quant_src1->data = wdata;
           tensor_export(quant_src1, filenamebq);
         }
+#endif
     }
 
     if (ith == 0) {
@@ -12775,6 +12785,7 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
+#if TENSOR_EXPORT
     if (to_export && !exported) {
       tensor_export(dst, filenamec);
       exported = true;
@@ -12784,6 +12795,7 @@ UseGgmlGemm2:;
       struct tensor_differ td = max_diff(pim_res, dst);
       printf("Diff - max_abs = %f, diff_sum = %f, diff_abs_sum = %f\n", td.max_abs_diff, td.diff_sum, td.diff_abs_sum);
     }
+#endif
 }
 
 // ggml_compute_forward_mul_mat_id
