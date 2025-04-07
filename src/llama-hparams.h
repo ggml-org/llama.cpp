@@ -112,6 +112,12 @@ struct llama_hparams {
     bool use_alibi     = false;
     bool attn_soft_cap = false;
 
+    // whisper & ultravox
+    uint32_t n_mel_bins      = 0;
+    uint32_t mm_stack_factor = 0;
+    uint32_t mm_embd_dim     = 0;
+    uint32_t mm_output_dim   = 0;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
