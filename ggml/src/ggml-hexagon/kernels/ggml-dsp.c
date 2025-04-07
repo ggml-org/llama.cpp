@@ -803,10 +803,10 @@ static void quantize_row_q6_K(const float * GGML_RESTRICT x, void * GGML_RESTRIC
 static void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
-            UNUSED(nrc);
-            UNUSED(bx);
-            UNUSED(by);
-            UNUSED(bs);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
 
     const block_q6_K * GGML_RESTRICT x = vx;
     const block_q8_K * GGML_RESTRICT y = vy;
@@ -1061,6 +1061,9 @@ static void ggml_compute_forward_add_f32(
     uint64_t end_time = ggml_time_us();
     uint64_t duration = (end_time - start_time);
     GGMLHEXAGON_LOG_DEBUG("duration %llu us", duration);
+#if !GGMLHEXAGON_DEBUG
+    UNUSED(duration);
+#endif
 
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
 }
