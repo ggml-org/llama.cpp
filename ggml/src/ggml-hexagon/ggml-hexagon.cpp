@@ -127,6 +127,7 @@
 //  section-1: forward/prototype declaration, global vars, macros, data structures
 // =================================================================================================
 class  qnn_instance;
+class  hexagon_profiler;
 struct ggml_backend_hexagon_context;
 
 #ifdef NDEBUG
@@ -309,7 +310,8 @@ struct hexagon_op_caps {
 
 struct hexagon_appcfg_t {
     int print_qnn_internal_log; // enable/disable QNN's internal log
-    int enable_perf;            // enable/disable perf of op function
+    int enable_perf;            // enable/disable perf of a specified ggml op
+    int enable_profiler;        // enable/disable profiler feature to visualization comparison between HWACCEL_CDSP and HWACCEL_QNN
     int print_tensors_info;     // enable/disable print tensors info in op function
     int dump_op_info;           // enable/disable dump op info in handle_op
     int enable_q_mulmat;        // enable/disable offload quantized mulmat
@@ -322,6 +324,8 @@ struct hexagon_appcfg_t {
     int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
     int enable_rpc_dma_mempool; // enable/disable rpc dma memory pool
     int enable_all_q_mulmat;    // enable/disable offload all quantized type mulmat to cDSP
+    int profiler_duration;      // threshold of duration in profiler, per seconds
+    int profiler_counts;        // threshold of counts in profiler
     const char * cfgfilename;
     const char * runtime_libpath;
     char ggml_hexagon_version[GGMLHEXAGON_TMPBUF_LEN];
@@ -330,7 +334,8 @@ struct hexagon_appcfg_t {
 
 static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .print_qnn_internal_log = 0,
-        .enable_perf            = 0,
+        .enable_perf            = 1,
+        .enable_profiler        = 0,
         .print_tensors_info     = 0,
         .dump_op_info           = 0,
         .enable_q_mulmat        = 0,
@@ -343,6 +348,8 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .enable_rpc_ion_mempool = 0,
         .enable_rpc_dma_mempool = 0,
         .enable_all_q_mulmat    = 0,
+        .profiler_duration      = 5,
+        .profiler_counts        = 100,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -352,7 +359,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.01"},
+        .ggml_hexagon_version   = {"1.80"},
         .ggml_dsp_version       = {"0.60"},
 };
 
@@ -714,8 +721,39 @@ static int32_t g_qnntensor_idx = 0; //ensure every QNN tensor name is unique
 static int32_t g_qnnopcfg_idx  = 0; //ensure every QNN opconfig name is unique
 
 // =================================================================================================
-//  section-2: ggml-hexagon internal troubleshooting function/class
+//  section-2: ggml-hexagon internal troubleshooting and profiler function/class
 // =================================================================================================
+static const char * ggmlhexagon_get_hwaccel_approach_name(int hwaccle_approach) {
+    switch (hwaccle_approach) {
+        case HWACCEL_QNN:
+            return "HWACCEL_QNN";
+        case HWACCEL_QNN_SINGLEGRAPH:
+            return "HWACCEL_QNN_SINGLEGRAPH";
+        case HWACCEL_CDSP:
+            return "HWACCEL_CDSP";
+        default:
+            return "unknown hwaccel approach";
+    }
+}
+
+static void ggmlhexagon_get_timestring(char * p_currenttime) {
+#if defined(__ANDROID__) || defined(__linux__)
+    time_t n_seconds    = 0;
+    struct tm now_time;
+
+    if (nullptr == p_currenttime)
+        return;
+
+    time(&n_seconds);
+    localtime_r(&n_seconds, &now_time);
+    snprintf(p_currenttime, GGMLHEXAGON_TMPBUF_LEN, "%04d-%02d-%02d,%02d:%02d:%02d",
+             now_time.tm_year + 1900, now_time.tm_mon + 1, now_time.tm_mday,
+             now_time.tm_hour, now_time.tm_min, now_time.tm_sec);
+#else
+    //TODO: WoA
+#endif
+}
+
 static void ggmlhexagon_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...) {
     static std::mutex ggmlhexagon_log_internal_mutex;
     static char s_ggmlhexagon_log_internal_buf[GGMLHEXAGON_LOGBUF_LEN];
@@ -829,66 +867,313 @@ static void ggmlhexagon_dump_tensor(const ggml_tensor * tensor, const char * nam
     GGMLHEXAGON_LOG_DEBUG("\n");
 }
 
-static const char * ggmlhexagon_get_hwaccel_approach_name(int hwaccle_approach) {
-    switch (hwaccle_approach) {
-        case HWACCEL_QNN:
-            return "HWACCEL_QNN";
-        case HWACCEL_QNN_SINGLEGRAPH:
-            return "HWACCEL_QNN_SINGLEGRAPH";
-        case HWACCEL_CDSP:
-            return "HWACCEL_CDSP";
-        default:
-            return "unknown hwaccel approach";
+//a simple high-cohesion and low-coupling class to collect necessary profiler data and visualize NPU performance accordingly
+class hexagon_profiler {
+public:
+    static hexagon_profiler & get_instance() {
+        //make thread-safety without using complex dynamic resource management
+        static hexagon_profiler instance;
+        return instance;
     }
-}
 
-static void ggmlhexagon_get_timestring(char * p_currenttime) {
-#if defined(__ANDROID__) || defined(__linux__)
-    time_t n_seconds    = 0;
-    struct tm now_time;
+public:
+    void profiler_init(int profiler_threshold_duration, int profiler_threshold_counts) {
+        reset();
+        //here is not accurate profiler start time because inference wasn't launched at the moment
+        _profiler_starttime = ggml_time_us();
 
-    if (nullptr == p_currenttime)
-        return;
+        _profiler_threshold_duration = profiler_threshold_duration;
+        _profiler_threshold_counts   = profiler_threshold_counts;
 
-    time(&n_seconds);
-    localtime_r(&n_seconds, &now_time);
-    snprintf(p_currenttime, GGMLHEXAGON_TMPBUF_LEN, "%04d-%02d-%02d,%02d:%02d:%02d",
-             now_time.tm_year + 1900, now_time.tm_mon + 1, now_time.tm_mday,
-             now_time.tm_hour, now_time.tm_min, now_time.tm_sec);
-#else
-    //TODO: WoA
-#endif
-}
+        //FIXME:hardcode filename of profiler data
+        std::string filename = std::string(g_hexagon_appcfg.runtime_libpath) + "/";
+        if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+            if (0 == g_hexagon_appcfg.enable_rpc_ion_mempool) {
+                filename = filename + "hexagon_perf_cdsp.dat";
+            } else {
+                filename = filename + "hexagon_perf_cdsp_ion.dat";
+            }
+        } else {
+            filename = filename + "hexagon_perf_qnn.dat";
+        }
+        GGMLHEXAGON_LOG_DEBUG("profiler name:%s", filename.c_str());
+        const char * profiler_filename = filename.c_str();
+        _fp_profile_file = fopen(profiler_filename, "w");
+        if (nullptr == _fp_profile_file) {
+            GGMLHEXAGON_LOG_WARN("can't open profiler file %s, reason:%s", profiler_filename, strerror(errno));
+            reset();
+            return;
+        } else {
+            size_t written_size = 0;
+            char profiler_info[GGMLHEXAGON_TMPBUF_LEN];
+            const char * prefix = "### starting hexagon profiler at ";
 
-static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx);
-static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * ctx) {
-    char timestamp[GGMLHEXAGON_TMPBUF_LEN];
-    memset(timestamp, 0, GGMLHEXAGON_TMPBUF_LEN);
+            written_size = fwrite(prefix, 1, strlen(prefix), _fp_profile_file);
+            if (written_size != strlen(prefix)) {
+                GGMLHEXAGON_LOG_WARN("write data to file %s failed, reason: %s", profiler_filename, strerror(errno));
+                reset();
+                return;
+            }
 
-    GGMLHEXAGON_LOG_INFO("ggml_hexagon_version:             %s", g_hexagon_appcfg.ggml_hexagon_version);
-    GGMLHEXAGON_LOG_INFO("ggml_dsp_version:                 %s", g_hexagon_appcfg.ggml_dsp_version);
-    GGMLHEXAGON_LOG_INFO("hwaccel approach:                 %d(%s)", g_hexagon_appcfg.hwaccel_approach,
-                     ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
-    GGMLHEXAGON_LOG_INFO("hexagon_backend:                  %d(%s)", g_hexagon_appcfg.hexagon_backend,
-                     ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
-    ggmlhexagon_get_timestring(timestamp);
-    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-        GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
-        GGMLHEXAGON_LOG_INFO("using rpc ion memory pool:        %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
-        GGMLHEXAGON_LOG_INFO("using rpc dma memory pool:        %s", g_hexagon_appcfg.enable_rpc_dma_mempool ? "YES" : "NO");
-        ggmlhexagon_probe_dspinfo(ctx);
-    } else {
-        GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
+            memset(profiler_info, 0, GGMLHEXAGON_TMPBUF_LEN);
+            ggmlhexagon_get_timestring(profiler_info);
+            written_size = fwrite(profiler_info, 1, strlen(profiler_info), _fp_profile_file);
+            if (written_size != strlen(profiler_info)) {
+                GGMLHEXAGON_LOG_WARN("write data to file %s failed, reason: %s", profiler_filename, strerror(errno));
+                reset();
+                return;
+            }
+            fprintf(_fp_profile_file, "\n\n");
+            fprintf(_fp_profile_file,
+                    "#frame     input   max     total     avg         elapse     frame       max        total      avg\n");
+            fprintf(_fp_profile_file,
+                    "#                                                           inference   inference  inference  inference\n");
+            fprintf(_fp_profile_file,
+                    "#index     len     i-len   i-len     i-speed     time       time        time       time       time\n");
+            fprintf(_fp_profile_file, "\n\n");
+        }
+        _enable_profiler = true;
     }
-    GGMLHEXAGON_LOG_INFO("running timestamp:%s", timestamp);
-}
 
+    void profiler_deinit() {
+        if (nullptr != _fp_profile_file) {
+            fclose(_fp_profile_file);
+            _fp_profile_file = nullptr;
+        }
+        reset();
+    }
+
+/**
+ * \param inference_time          microseconds, inference time for a single GGML op
+ * \param inference_input_size    bytes, total input data size for a single GGML op
+ * \param inference_output_size   bytes, total output data size for a single GGML op
+ */
+    void profiler_update_profilerdata(const char * ggml_opname, int inference_time, int inference_input_size, int inference_output_size) {
+        if (!_enable_profiler)
+            return;
+
+        //1.get the accurate profiler starting time in this function when frame index is 0
+        //2.update frame index in this function accordingly
+        profiler_update_frameindex();
+
+        int64_t elapse_time = ggml_time_us() - profiler_get_starttime();
+        profiler_update_elapsetime(elapse_time);
+        if (elapse_time > (_profiler_threshold_duration * SIZE_IN_MB)) {
+            //do nothing when elapsed profiler time > profiler_duration in ggml-hexagon.cfg
+            return;
+        }
+        if (profiler_get_frame_index() >= _profiler_threshold_counts) {
+            //do nothing when frame_index >= profiler_counts in ggml-hexagon.cfg
+            return;
+        }
+
+        if (inference_input_size > profiler_get_max_inputsize()) {
+            profiler_set_max_inputsize(inference_input_size);
+        }
+
+        if (inference_output_size > profiler_get_max_outputsize()) {
+            profiler_set_max_outputsize(inference_output_size);
+        }
+
+        if (inference_time > profiler_get_max_inferencetime()) {
+            profiler_set_max_inferencetime(inference_time);
+        }
+
+        profiler_update_total_inputsize(inference_input_size);
+        profiler_update_total_outputsize(inference_output_size);
+        profiler_update_total_inferencetime(inference_time);
+        profiler_update_elapsetime(elapse_time);
+
+        if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+            if (10 > _frame_index) {
+                //FIXME:why some initial profiler data in llama-cli looks unusual
+                //return;
+            }
+        }
+
+        if (0 == elapse_time) {
+            //filter invalid profiler data
+            GGMLHEXAGON_LOG_DEBUG("_enable_profiler %d", _enable_profiler);
+            return;
+        }
+
+        if (NULL != _fp_profile_file) {
+            fprintf(_fp_profile_file, "%-8d  %-6d  %-6d  %-10ld %-11ld %-10ld %-12d %-9d %-11ld %-3ld\n",
+                    profiler_get_frame_index(),
+                    inference_input_size,
+                    profiler_get_max_inputsize(),
+                    profiler_get_total_inputputsize(),
+                    profiler_get_total_inputputsize() / profiler_get_frame_index(),
+
+                    elapse_time,
+                    inference_time,
+                    profiler_get_max_inferencetime(),
+                    profiler_get_total_inferencetime(),
+                    profiler_get_total_inferencetime() / profiler_get_frame_index()
+            );
+        }
+
+        //print/compare NPU's I/O performance between 8Gen3 and 8Elite(aka 8Gen4) , removed in the future
+        char bps_string[GGMLHEXAGON_TMPBUF_LEN];
+        memset(bps_string, 0, GGMLHEXAGON_TMPBUF_LEN);
+        profiler_get_bpsstring(_total_inputsize + _total_outputsize, elapse_time, bps_string);
+        GGMLHEXAGON_LOG_VERBOSE("I/O performance:%s", bps_string);
+    }
+
+    int profiler_get_frame_index() {
+        return _frame_index;
+    }
+
+    int profiler_get_threshold_count() {
+        return _profiler_threshold_counts;
+    }
+
+private:
+    void profiler_set_max_inputsize(int input_size) {
+        _max_inputsize = input_size;
+    }
+
+    void profiler_set_max_outputsize(int output_size) {
+        _max_outputsize = output_size;
+    }
+
+    void profiler_set_max_inferencetime(int inference_time) {
+        _max_inferencetime = inference_time;
+    }
+
+    void profiler_update_frameindex() {
+        if (0 == _frame_index) {
+            _profiler_starttime = ggml_time_us();
+        }
+        _frame_index += 1;
+    }
+
+    void profiler_update_elapsetime(int64_t elapse_time_microseconds) {
+        _profiler_elapsetime = elapse_time_microseconds;
+    }
+
+    void profiler_update_total_inferencetime(int inference_time) {
+        _total_inferencetime += inference_time;
+    }
+
+    void profiler_update_total_inputsize(int input_size) {
+        _total_inputsize += input_size;
+    }
+
+    void profiler_update_total_outputsize(int output_size) {
+        _total_outputsize += output_size;
+    }
+
+    int profiler_get_max_inputsize() {
+        return _max_inputsize;
+    }
+
+    int profiler_get_max_outputsize() {
+        return _max_outputsize;
+    }
+
+    int profiler_get_max_inferencetime() {
+        return _max_inferencetime;
+    }
+
+    int64_t profiler_get_total_inferencetime() {
+        return _total_inferencetime;
+    }
+
+    int64_t profiler_get_total_inputputsize() {
+        return _total_inputsize;
+    }
+
+    //might-be used to calculate total I/O performance in the future
+    int64_t profiler_get_total_outputsize() {
+        return _total_outputsize;
+    }
+
+    int64_t profiler_get_starttime() {
+        return _profiler_starttime;
+    }
+
+    int64_t profiler_get_elapsedtime() {
+        return _profiler_elapsetime;
+    }
+
+    void profiler_get_bpsstring(int64_t data_size, int64_t elapse_time_microseconds, char * bps_string) {
+        if (nullptr == bps_string) {
+            return;
+        }
+
+        float bps = 0.0f;
+        bps = (data_size * SIZE_IN_MB * 1.0f) / (elapse_time_microseconds * 1.0f);
+        if (bps >= SIZE_IN_MB) {
+            snprintf(bps_string, GGMLHEXAGON_TMPBUF_LEN, "%.2f MiB/s", ((float) bps) / SIZE_IN_MB);
+        } else if (bps >= 1000) {
+            snprintf(bps_string, GGMLHEXAGON_TMPBUF_LEN, "%.1f KiB/s", ((float) bps) / 1000);
+        } else {
+            snprintf(bps_string, GGMLHEXAGON_TMPBUF_LEN, "%.2f B/s", bps);
+        }
+    }
+
+    void reset() {
+        _frame_index         = 0;
+
+        _max_inputsize       = 0;
+        _max_outputsize      = 0;
+        _max_inferencetime   = 0;
+
+        _total_inputsize     = 0;
+        _total_outputsize    = 0;
+        _total_inferencetime = 0;
+
+        _profiler_starttime  = 0;
+        _profiler_elapsetime = 0;
+        _fp_profile_file     = nullptr;
+        _enable_profiler     = false;
+        _profiler_threshold_duration = 100;
+        _profiler_threshold_duration = 5;
+    }
+
+private:
+    hexagon_profiler() {
+        reset();
+    }
+
+    hexagon_profiler(const hexagon_profiler &) = delete;
+
+    hexagon_profiler(const hexagon_profiler &&) = delete;
+
+    hexagon_profiler & operator= (const hexagon_profiler &) = delete;
+
+private:
+    int _frame_index;
+
+    int _max_inputsize;             //bytes
+    int _max_outputsize;            //bytes
+    int _max_inferencetime;         //bytes
+
+    int64_t _total_inputsize;       //bytes
+    int64_t _total_outputsize;      //bytes
+    int64_t _total_inferencetime;   //microsecond
+
+    int64_t _profiler_starttime;    //microsecond
+    int64_t _profiler_elapsetime;   //microsecond
+    FILE *  _fp_profile_file;
+
+    bool _enable_profiler;
+    int  _profiler_threshold_duration; //seconds
+    int  _profiler_threshold_counts;
+};
+static hexagon_profiler & g_hexagon_profiler = hexagon_profiler::get_instance();
+
+//a simple perf class to probe NPU performance
 class hexagon_perf {
 public:
     hexagon_perf(const std::string & perf_name) : _perf_name(std::move(perf_name)) {}
-    hexagon_perf() = delete;
-    hexagon_perf(const hexagon_perf & ) = delete;
-    hexagon_perf & operator= (const hexagon_perf & ) = delete;
+    hexagon_perf(const std::string & perf_name, const char * op_name, int input_size, int output_size)
+               : _perf_name(std::move(perf_name)), _op_name(op_name),
+                 _input_size(input_size),
+                 _output_size(output_size) {
+
+    }
 
     void start() {
         if (0 == g_hexagon_appcfg.enable_perf)
@@ -897,22 +1182,46 @@ public:
     }
 
     void info() {
-        if (0 == g_hexagon_appcfg.enable_perf)
+        if (0 == g_hexagon_appcfg.enable_perf) {
             return;
+        }
+
         _end_time = ggml_time_us();
         _duration = (_end_time - _begin_time);
-        GGMLHEXAGON_LOG_VERBOSE("duration of %s : %lld microseconds\n", _perf_name.c_str(), _duration);
+        //I think add following judgement will useful for other developers and AI experts although:
+        // it breaks the original logic
+        // it's not mandatory
+        // I had to expose two public function in hexagon_profiler class
+        if (g_hexagon_profiler.profiler_get_frame_index() <= g_hexagon_profiler.profiler_get_threshold_count()) {
+            GGMLHEXAGON_LOG_VERBOSE("inference duration of %s through %s: %lld microseconds",
+                                    _perf_name.c_str(), ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach), _duration);
+        }
+
+        //update profiler data
+        g_hexagon_profiler.profiler_update_profilerdata(_op_name, _duration, _input_size, _output_size);
     }
+
+private:
+    hexagon_perf() = delete;
+    hexagon_perf(const hexagon_perf & ) = delete;
+    hexagon_perf(const hexagon_perf && ) = delete;
+    hexagon_perf & operator= (const hexagon_perf & ) = delete;
 
 private:
     int64_t _begin_time = 0LL;
     int64_t _end_time   = 0LL;
     int64_t _duration   = 0LL;
     std::string _perf_name;
+    const char * _op_name;
+    int   _input_size   = 0;
+    int   _output_size  = 0;
 };
 
+//a simple class to load configurations from ggml-hexagon.cfg
 class hexagon_appcfg {
 public:
+    hexagon_appcfg() {}
+
     void dump(std::function<void(const std::string &, const std::string &, const std::string &)> worker) {
         if (!_load_success) {
             GGMLHEXAGON_LOG_INFO("qnn cfg file %s not loaded", _cfg_filename.c_str());
@@ -1045,6 +1354,12 @@ private:
         trim(value);
         return true;
     }
+
+private:
+    hexagon_appcfg(const hexagon_appcfg & ) = delete;
+    hexagon_appcfg(const hexagon_appcfg && ) = delete;
+    hexagon_appcfg & operator= (const hexagon_appcfg & ) = delete;
+
 private:
     std::unordered_map<std::string, std::unordered_map<std::string, std::string>> _hexagon_appcfg;
     bool _load_success = false;
@@ -1441,30 +1756,36 @@ static void ggmlhexagon_load_cfg() {
     GGMLHEXAGON_LOG_DEBUG("program running start time:%s", time_string);
     std::string cfg_filename = std::string(g_hexagon_appcfg.runtime_libpath) + std::string(g_hexagon_appcfg.cfgfilename);
     GGMLHEXAGON_LOG_INFO("load hexagon appcfg from %s", cfg_filename.c_str());
-    hexagon_appcfg qnncfg_instance;
-    qnncfg_instance.load(cfg_filename);
-    qnncfg_instance.dump([](const std::string & section, const std::string & key, const std::string value) {
+    hexagon_appcfg hexagoncfg_instance;
+    hexagoncfg_instance.load(cfg_filename);
+    hexagoncfg_instance.dump([](const std::string & section, const std::string & key, const std::string value) {
         std::ostringstream  tmposs;
         tmposs << "section[" << std::setw(10) << std::left << section << "],[" << std::setw(25) << std::left << key << "] = [" << value << "]";
         GGMLHEXAGON_LOG_INFO("%s", tmposs.str().c_str());
     });
     std::string precision_mode;
     std::string ggml_hexagon_version;
-    qnncfg_instance.get_stringvalue("general", "ggml_hexagon_version", ggml_hexagon_version, "1.00");
-    qnncfg_instance.get_intvalue("general", "print_qnn_internal_log", g_hexagon_appcfg.print_qnn_internal_log, 0);
-    qnncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
-    qnncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
-    qnncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
-    qnncfg_instance.get_intvalue("general", "hwaccel_approach", g_hexagon_appcfg.hwaccel_approach, HWACCEL_CDSP);
-    qnncfg_instance.get_intvalue("general", "hexagon_backend", g_hexagon_appcfg.hexagon_backend, HEXAGON_BACKEND_CDSP);
-    qnncfg_instance.get_intvalue("general", "enable_q_mulmat", g_hexagon_appcfg.enable_q_mulmat, 0);
-    qnncfg_instance.get_intvalue("qnn", "hvx_threads", g_hexagon_appcfg.hvx_threads, 4);
-    qnncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_hexagon_appcfg.vtcm_size_in_mb, 8);
-    qnncfg_instance.get_intvalue("qnn", "enable_dlbc", g_hexagon_appcfg.enable_dlbc, 1);
-    qnncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
-    qnncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 1);
-    qnncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
-    qnncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
+    hexagoncfg_instance.get_stringvalue("general", "ggml_hexagon_version", ggml_hexagon_version, "1.00");
+    hexagoncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
+    hexagoncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
+    hexagoncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
+    hexagoncfg_instance.get_intvalue("general", "hwaccel_approach", g_hexagon_appcfg.hwaccel_approach, HWACCEL_CDSP);
+    hexagoncfg_instance.get_intvalue("general", "hexagon_backend", g_hexagon_appcfg.hexagon_backend, HEXAGON_BACKEND_CDSP);
+    hexagoncfg_instance.get_intvalue("general", "enable_q_mulmat", g_hexagon_appcfg.enable_q_mulmat, 0);
+    hexagoncfg_instance.get_intvalue("general", "enable_profiler", g_hexagon_appcfg.enable_profiler, 0);
+    hexagoncfg_instance.get_intvalue("general", "profiler_duration", g_hexagon_appcfg.profiler_duration, 5);
+    hexagoncfg_instance.get_intvalue("general", "profiler_counts", g_hexagon_appcfg.profiler_counts, 100);
+
+    hexagoncfg_instance.get_intvalue("qnn", "hvx_threads", g_hexagon_appcfg.hvx_threads, 4);
+    hexagoncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_hexagon_appcfg.vtcm_size_in_mb, 8);
+    hexagoncfg_instance.get_intvalue("qnn", "enable_dlbc", g_hexagon_appcfg.enable_dlbc, 1);
+    hexagoncfg_instance.get_stringvalue("qnn", "precision_mode", precision_mode, "fp32");
+    hexagoncfg_instance.get_intvalue("qnn", "print_qnn_internal_log", g_hexagon_appcfg.print_qnn_internal_log, 0);
+
+    hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 0);
+    hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
+    hexagoncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
+
     GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
     GGMLHEXAGON_LOG_INFO("internal ggml_dsp_version=%s", g_hexagon_appcfg.ggml_dsp_version);
     GGMLHEXAGON_LOG_INFO("external ggml_hexagon_version=%s", ggml_hexagon_version.c_str());
@@ -1473,6 +1794,8 @@ static void ggmlhexagon_load_cfg() {
     GGMLHEXAGON_LOG_INFO("hexagon_backend=%d(%s)", g_hexagon_appcfg.hexagon_backend,
                          ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
     GGMLHEXAGON_LOG_INFO("runtime libpath=%s", g_hexagon_appcfg.runtime_libpath);
+    GGMLHEXAGON_LOG_INFO("enable_perf=%d", g_hexagon_appcfg.enable_perf);
+    GGMLHEXAGON_LOG_INFO("enable_profiler=%d", g_hexagon_appcfg.enable_profiler);
 
     if (precision_mode.find("fp16") != std::string::npos) {
         g_hexagon_appcfg.precision_mode = 1;
@@ -1481,6 +1804,11 @@ static void ggmlhexagon_load_cfg() {
     }
 
     ggmlhexagon_set_runtime_path(HEXAGON_BACKEND_CDSP, g_hexagon_appcfg.runtime_libpath);
+
+    if (1 == g_hexagon_appcfg.enable_profiler) {
+        //make sure this function is called only once
+        g_hexagon_profiler.profiler_init(g_hexagon_appcfg.profiler_duration, g_hexagon_appcfg.profiler_counts);
+    }
 
     initialized = true;
 }
@@ -1529,6 +1857,34 @@ static bool ggmlhexagon_check_valid_appcfg() {
         GGMLHEXAGON_LOG_INFO("it seems there is wrong configuration in ggml-hexagon.cfg, will using the default ggml backend accordingly");
     }
     return is_valid_appcfg;
+}
+
+static void ggmlhexagon_probe_dspinfo(ggml_backend_hexagon_context * ctx);
+static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * ctx) {
+    char timestamp[GGMLHEXAGON_TMPBUF_LEN];
+    memset(timestamp, 0, GGMLHEXAGON_TMPBUF_LEN);
+
+    GGMLHEXAGON_LOG_INFO("ggml_hexagon_version:             %s", g_hexagon_appcfg.ggml_hexagon_version);
+    GGMLHEXAGON_LOG_INFO("ggml_dsp_version:                 %s", g_hexagon_appcfg.ggml_dsp_version);
+    GGMLHEXAGON_LOG_INFO("hwaccel approach:                 %d(%s)", g_hexagon_appcfg.hwaccel_approach,
+                         ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
+    GGMLHEXAGON_LOG_INFO("hexagon_backend:                  %d(%s)", g_hexagon_appcfg.hexagon_backend,
+                         ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
+    ggmlhexagon_get_timestring(timestamp);
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+        GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
+        GGMLHEXAGON_LOG_INFO("using rpc ion memory pool:        %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
+        GGMLHEXAGON_LOG_INFO("using rpc dma memory pool:        %s", g_hexagon_appcfg.enable_rpc_dma_mempool ? "YES" : "NO");
+        ggmlhexagon_probe_dspinfo(ctx);
+    } else {
+        GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
+    }
+    GGMLHEXAGON_LOG_INFO("running timestamp:%s", timestamp);
+
+    if (1 == g_hexagon_appcfg.enable_profiler) {
+        //make sure this function is called only once
+        g_hexagon_profiler.profiler_deinit();
+    }
 }
 
 // =================================================================================================
@@ -2350,8 +2706,6 @@ void qnn_instance::free_rpcmem(void * buf) {
         }
         if (rpcbuffer_size != 0) {
             _rpcmem_usage_map.erase(buf);
-        } else {
-            GGMLHEXAGON_LOG_WARN("it shouldn't happen, pls check why?");
         }
         _pfn_rpc_mem_free(_rpcmem_store_map[buf]);
         _rpcmem_store_map.erase(buf);
@@ -3568,13 +3922,17 @@ static void ggmlqnn_compute_elementwise(ggml_backend_hexagon_context * ctx, ggml
     size_t qnn_op_index                         = ggmlhexagon_get_op_index(op);
     const char * qnn_op_name                    = ggmlqnn_k_op_caps[qnn_op_index].qnn_op_name;
     size_t input_param_count                    = ggmlqnn_k_op_caps[qnn_op_index].input_param_count;
-    std::string ggml_op_name_string             = std::string("ggml_") + ggml_op_name(op->op);
+    const char * ggml_original_opname           = ggml_op_name(op->op);
+    std::string ggml_op_name_string             = std::string("ggml_") + ggml_original_opname;
     const char * ggml_op_name                   = ggml_op_name_string.c_str();
 
     std::string graph_name;
     ggmlhexagon_get_opkey_from_op(op, graph_name);
 
-    hexagon_perf op_perf(graph_name);
+    int input_size = ggml_nbytes(src0);
+    if (nullptr != src1)
+        input_size += ggml_nbytes(src1);
+    hexagon_perf op_perf(graph_name, ggml_original_opname, input_size, ggml_nbytes(dst));
     op_perf.start();
 
     bool enable_npu_rpc = instance->enable_qnn_rpc() && ctx->device == HEXAGON_BACKEND_QNNNPU;
@@ -3953,13 +4311,16 @@ static void ggmlqnn_compute_mul_mat(ggml_backend_hexagon_context * ctx, ggml_ten
     const enum ggml_type src0_type              = src0->type;
     const uint32_t src0_rank                    = ggml_n_dims(src0);
     const uint32_t src1_rank                    = ggml_n_dims(src1);
-
+    const char * ggml_original_opname           = ggml_op_name(op->op);
     ggmlhexagon_print_tensors_info(__func__, ctx, src0, src1, dst);
 
     std::string graph_name;
     ggmlhexagon_get_opkey_from_op(op, graph_name);
 
-    hexagon_perf op_perf(graph_name);
+    int input_size = ggml_nbytes(src0);
+    if (nullptr != src1)
+        input_size += ggml_nbytes(src1);
+    hexagon_perf op_perf(graph_name, ggml_original_opname, input_size, ggml_nbytes(dst));
     op_perf.start();
 
     GGML_ASSERT(src0_rank == src1_rank);
@@ -5001,10 +5362,8 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     struct dsptensor dsptensor_1;
     struct dsptensor dsptensor_2;
     std::string op_name;
+    const char * ggml_opname = ggml_op_name(op->op);
     ggmlhexagon_get_opkey_from_op(op, op_name);
-
-    hexagon_perf op_perf(op_name);
-    op_perf.start();
 
     int hexagon_error               = AEE_SUCCESS;
     ggmlhexagon_op_func_t op_func   = nullptr;
@@ -5013,6 +5372,12 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     ggml_tensor * src0  = op->src[0];
     ggml_tensor * src1  = op->src[1];
     ggml_tensor * dst   = op;
+
+    int input_size = ggml_nbytes(src0);
+    if (nullptr != src1)
+        input_size += ggml_nbytes(src1);
+    hexagon_perf op_perf(op_name, ggml_opname, input_size, ggml_nbytes(dst));
+    op_perf.start();
 
     input_tensor_count  =  ggmlhexagon_k_op_caps[ggmlhexagon_get_op_index(op)].input_param_count;
     op_func             =  ggmlhexagon_k_op_caps[ggmlhexagon_get_op_index(op)].dsp_op_func;
@@ -5096,9 +5461,13 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
         return false;
     }
 
-    const struct ggml_tensor * src0 = op_tensor->src[0];
-    const struct ggml_tensor * src1 = op_tensor->src[1];
-    const int src0_rank = ggml_n_dims(src0);
+    const ggml_tensor * src0 = op_tensor->src[0];
+    const ggml_tensor * src1 = op_tensor->src[1];
+    const int src0_rank      = ggml_n_dims(src0);
+    int src1_rank            = 0;
+    if (nullptr != src1) {
+        src1_rank = ggml_n_dims(src1);
+    }
     switch (op_tensor->op) {
         case GGML_OP_ADD:
         {
@@ -5110,10 +5479,13 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
         case GGML_OP_MUL_MAT:
         {
             ggmlhexagon_dump_op_info(op_tensor);
-            //FIXME:remove this filter in the future
-            if (2 != src0_rank) {
+            //FIXME:keep same filter logic with QNN solution to compare NPU performance between cDSP approach
+            //      and QNN-NPU approach, remove these filters in the future
+            if (src0_rank != src1_rank)
                 return false;
-            }
+            if (src0_rank != 2)
+                return false;
+
             if (1 == g_hexagon_appcfg.enable_q_mulmat) {
                 if (1 == g_hexagon_appcfg.enable_all_q_mulmat) {
                     return (src0->type == GGML_TYPE_F32 || ggml_is_quantized(src0->type)) && (src1->type == GGML_TYPE_F32);
@@ -5199,14 +5571,12 @@ static bool ggmlhexagon_can_handle_op_through_qnn(ggml_backend_dev_t dev, const 
             if (src0_rank != src1_rank) // make QNN SDK happy
                 return false;
 
-            if (src0_rank < 2) // QNN's limitation, make QNN SDK happy
+            if (src0_rank != 2) {
+                // FIXME: there are some limitations for mulmat in QNN SDK: rank >= 2.
+                //        keep same filter logic with QNN solution to compare NPU performance between
+                //        cDSP approach and QNN-NPU approach, remove these filters in the future
                 return false;
-
-            if (4 == src0_rank) //TODO: 4D matrix mulmat in CT
-                return false;
-
-            if ((src1->ne[2] != src0->ne[2]) || (src1->ne[3] != src0->ne[3])) // make QNN SDK happy
-                return false;
+            }
 
             if (ctx->device == HEXAGON_BACKEND_QNNNPU) {
                 if (1 == g_hexagon_appcfg.enable_q_mulmat)
