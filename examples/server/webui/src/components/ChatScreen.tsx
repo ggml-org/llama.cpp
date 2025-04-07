@@ -6,7 +6,10 @@ import { classNames, cleanCurrentUrl, throttle } from '../utils/misc';
 import CanvasPyInterpreter from './CanvasPyInterpreter';
 import StorageUtils from '../utils/storage';
 import { useVSCodeContext } from '../utils/llama-vscode';
-import { useAutosizeTextarea, AutosizeTextareaApi } from './useAutosizeTextarea.ts';
+import {
+  useChatTextarea,
+  AutosizeTextareaApi,
+} from './useChatTextarea.ts';
 
 
 /**
@@ -102,7 +105,10 @@ export default function ChatScreen() {
     canvasData,
     replaceMessageAndGenerate,
   } = useAppContext();
-  const textarea: AutosizeTextareaApi = useAutosizeTextarea(prefilledMsg.content());
+
+  const textarea: AutosizeTextareaApi = useChatTextarea(
+    prefilledMsg.content()
+  );
 
   const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
   // TODO: improve this when we have "upload file" feature
@@ -251,37 +257,42 @@ export default function ChatScreen() {
         </div>
 
         {/* chat input */}
-          <div className="flex flex-row items-start pt-8 pb-6 sticky bottom-0 bg-base-100">
-            <textarea
-              className="textarea textarea-bordered w-full resize-none max-h-48 overflow-y-auto" 
-              placeholder="Type a message (Shift+Enter to add a new line)"
-              ref={textarea.ref}  
-              onInput={textarea.onInput} 
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();  
-                  sendNewMessage();
-                }
-              }}
-              id="msg-input"
-              dir="auto"
-              rows={1}  
-            ></textarea>
-            {isGenerating(currConvId ?? '') ? (
-              <button
-                className="btn btn-neutral ml-2"
-                onClick={() => stopGenerating(currConvId ?? '')}
-              >
-                Stop
-              </button>
-            ) : (
-              <button className="btn btn-primary ml-2" onClick={sendNewMessage}>
-                Send
-              </button>
-            )}
-          </div>
-		 </div> 
+        <div className="flex flex-row items-end pt-8 pb-6 sticky bottom-0 bg-base-100">
+          <textarea
+            // Default (mobile): Enable vertical resize, overflow auto for scrolling if needed
+            // Large screens (lg:): Disable manual resize, apply max-height for autosize limit
+            className="textarea textarea-bordered w-full resize-vertical lg:resize-none lg:max-h-48 lg:overflow-y-auto" // Adjust lg:max-h-48 as needed (e.g., lg:max-h-60)
+            placeholder="Type a message (Shift+Enter to add a new line)"
+            ref={textarea.ref}
+            onInput={textarea.onInput} // Hook's input handler (will only resize height on lg+ screens)
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+			        if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendNewMessage();
+              }
+            }}
+            id="msg-input"
+            dir="auto"
+            // Set a base height of 2 rows for mobile views
+            // On lg+ screens, the hook will calculate and set the initial height anyway
+            rows={2}
+          ></textarea>
+
+          {isGenerating(currConvId ?? '') ? (
+            <button
+              className="btn btn-neutral ml-2"
+              onClick={() => stopGenerating(currConvId ?? '')}
+            >
+              Stop
+            </button>
+          ) : (
+            <button className="btn btn-primary ml-2" onClick={sendNewMessage}>
+              Send
+            </button>
+          )}
+        </div>
+      </div>
       <div className="w-full sticky top-[7em] h-[calc(100vh-9em)]">
         {canvasData?.type === CanvasType.PY_INTERPRETER && (
           <CanvasPyInterpreter />
