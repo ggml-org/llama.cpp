@@ -7,6 +7,8 @@ android {
     namespace = "android.llama.cpp"
     compileSdk = 35
 
+    ndkVersion = "29.0.13113456 rc1"
+
     defaultConfig {
         minSdk = 33
 
@@ -14,15 +16,20 @@ android {
         consumerProguardFiles("consumer-rules.pro")
 
         ndk {
-            // Add NDK properties if wanted, e.g.
-            // abiFilters += listOf("arm64-v8a")
+             abiFilters += listOf("arm64-v8a")
         }
         externalNativeBuild {
             cmake {
-                arguments += "-DLLAMA_CURL=OFF"
-                arguments += "-DLLAMA_BUILD_COMMON=ON"
-                arguments += "-DGGML_LLAMAFILE=OFF"
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
+                arguments += "-DCMAKE_C_FLAGS=\"-march=armv8.7a+dotprod+i8mm+sve\""
+                arguments += "-DCMAKE_CXX_FLAGS=\"-march=armv8.7a+dotprod+i8mm+sve\""
+
+                arguments += "-DGGML_CPU_KLEIDIAI=ON"
+                arguments += "-DGGML_LLAMAFILE=OFF"
+
+                arguments += "-DLLAMA_BUILD_COMMON=ON"
+                arguments += "-DLLAMA_CURL=OFF"
+
                 cppFlags += listOf()
                 arguments += listOf()
 
@@ -43,7 +50,7 @@ android {
     externalNativeBuild {
         cmake {
             path("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
+            version = "3.31.6"
         }
     }
     compileOptions {
