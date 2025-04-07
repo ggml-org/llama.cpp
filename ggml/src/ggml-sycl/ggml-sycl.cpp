@@ -3853,7 +3853,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
-                    return ggml_is_contiguous(op->src[0]); // && (op->src[0]->type == GGML_TYPE_F32);
+                    return ggml_is_contiguous(op->src[0]);
                 default:
                     return false;
             }
