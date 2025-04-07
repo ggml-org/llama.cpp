@@ -2,6 +2,18 @@
 #define GGML_SYCL_ELEMENTWISE_HPP
 
 #include "common.hpp"
+#include <limits.h>
+
+template <typename T>
+T neg_infinity() {
+    return -std::numeric_limits<T>::infinity();
+}
+
+template <typename T>
+constexpr T to_T(float value) {
+    return static_cast<T>(value);
+}
+
 
 static __dpct_inline__ float op_repeat(const float a, const float b) {
     return b;
@@ -64,6 +76,10 @@ void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+// ---------
 
 void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
