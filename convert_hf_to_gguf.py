@@ -2460,84 +2460,13 @@ class Qwen2MoeModel(Model):
 
 
 @Model.register("Qwen3ForCausalLM")
-class Qwen3Model(Model):
+class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
-
-    def set_vocab(self):
-        try:
-            self._set_vocab_sentencepiece()
-        except FileNotFoundError:
-            self._set_vocab_gpt2()
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "yarn":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
-                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
 
 @Model.register("Qwen3MoeForCausalLM")
-class Qwen3MoeModel(Model):
+class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        if (n_experts := self.hparams.get("num_experts")) is not None:
-            self.gguf_writer.add_expert_count(n_experts)
-        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
-            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
-            logger.info(f"gguf: expert feed forward length = {moe_intermediate_size}")
-
-    _experts: list[dict[str, Tensor]] | None = None
-
-    # Copied from: Qwen2MoeModel
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # process the experts separately
-        if name.find("experts") != -1:
-            n_experts = self.hparams["num_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                tensors: list[tuple[str, Tensor]] = []
-
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    new_name = self.map_tensor_name(merged_name)
-
-                    tensors.append((new_name, data_torch))
-                return tensors
-            else:
-                return []
-
-        return [(self.map_tensor_name(name), data_torch)]
-
-    # Copied from: Qwen2MoeModel
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @Model.register("GPT2LMHeadModel")
