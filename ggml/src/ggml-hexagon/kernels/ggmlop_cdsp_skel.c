@@ -397,11 +397,12 @@ static __inline int _skel_method(int (*_pfn)(remote_handle64, const dsptensor*, 
    _allocator_deinit(_al);
    return _nErr;
 }
-static __inline int _skel_method_1(int (*_pfn)(remote_handle64, int32, int32, int32), remote_handle64 _h, uint32_t _sc, remote_arg* _pra) {
+static __inline int _skel_method_1(int (*_pfn)(remote_handle64, int32, int32, int32, int32), remote_handle64 _h, uint32_t _sc, remote_arg* _pra) {
    remote_arg* _praEnd = 0;
    uint32_t _in0[1] = {0};
    uint32_t _in1[1] = {0};
    uint32_t _in2[1] = {0};
+   uint32_t _in3[1] = {0};
    uint32_t* _primIn= 0;
    int _nErr = 0;
    _praEnd = ((_pra + REMOTE_SCALARS_INBUFS(_sc)) + REMOTE_SCALARS_OUTBUFS(_sc) + REMOTE_SCALARS_INHANDLES(_sc) + REMOTE_SCALARS_OUTHANDLES(_sc));
@@ -415,7 +416,8 @@ static __inline int _skel_method_1(int (*_pfn)(remote_handle64, int32, int32, in
    _COPY(_in0, 0, _primIn, 0, 4);
    _COPY(_in1, 0, _primIn, 4, 4);
    _COPY(_in2, 0, _primIn, 8, 4);
-   _TRY(_nErr, _pfn(_h, (int32)*_in0, (int32)*_in1, (int32)*_in2));
+   _COPY(_in3, 0, _primIn, 12, 4);
+   _TRY(_nErr, _pfn(_h, (int32)*_in0, (int32)*_in1, (int32)*_in2, (int32)*_in3));
    _QAIC_CATCH(_nErr) {}
    return _nErr;
 }
