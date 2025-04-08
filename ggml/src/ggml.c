@@ -12492,6 +12492,8 @@ static int dpu_launch_gemv_async(
 static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set);
 
 static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res);
+#define PIM_DEBUG_PERF_PRINT 0
+static uint64_t get_time_us();
 #endif
 
 #define TENSOR_EXPORT 0
@@ -12623,8 +12625,15 @@ UseGgmlGemm1:;
 
 #ifdef PIM_KERNEL
 	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
+#if PIM_DEBUG_PERF_PRINT
+        uint64_t t_start = get_time_us();
+#endif
           dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t t_us = get_time_us() - t_start;
+          printf("\n%s: PIM launch time = %ld  \n", __FUNCTION__, t_us);
+#endif
 #if TENSOR_EXPORT
           pim_res->type = dst->type;
           pim_res->dpu_set = dst->dpu_set;
@@ -12641,7 +12650,14 @@ UseGgmlGemm1:;
           GGML_ASSERT(pim_res->data != NULL);
           dpu_get_gemv_res(src1, src0, pim_res);
 #endif
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t tt_start = get_time_us();
+#endif
           dpu_get_gemv_res(src1, src0, dst);
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t tt_us = get_time_us() - tt_start;
+          printf("\n%s: PIM get gemv res time = %ld  \n", __FUNCTION__, tt_us);
+#endif
 #if TENSOR_EXPORT
           if (to_export && !exported) {
             tensor_export(dst, filenamec_pim);
@@ -17365,6 +17381,16 @@ static void ggml_compute_forward_opt_step_adamw(
 }
 
 #ifdef PIM_KERNEL
+
+// utils
+#include <sys/time.h>
+
+static uint64_t get_time_us() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (((uint64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
+}
+
 static int dpu_launch_gemv_async(
         const struct ggml_tensor * input,
         char* wdata,
@@ -17412,11 +17438,15 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     struct dpu_set_t dpu_set, dpu;
     float *mul_mat_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
+
+#if PIM_DEBUG_PERF_PRINT
     static bool offset_printed = false;
     if( !offset_printed) {
-      printf("%s: offset = %d  ", __FUNCTION__, output_offset);
-      offset_printed = true;
+    printf("%s: offset = %d  ", __FUNCTION__, output_offset);
+    offset_printed = true;
     }
+#endif
+
     dpu_set = *(res->dpu_set);
     int nr_dpus;
     dpu_get_nr_dpus(dpu_set, &nr_dpus);
