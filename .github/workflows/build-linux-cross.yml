@@ -9,7 +9,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - name: Setup ports
+      - name: Setup port
         run: |
           sudo dpkg --add-architecture riscv64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
@@ -22,7 +22,7 @@ jobs:
             build-essential
             gcc-14-riscv64-linux-gnu
             g++-14-riscv64-linux-gnu
-            libcurl4-openssl-dev:riscv64
+            "libcurl4-openssl-dev:riscv64"
           version: 1.0
 
       - name: Build
@@ -51,20 +51,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Riscv
+      - name: Setup port
         run: |
           sudo dpkg --add-architecture riscv64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
                  /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  glslc \
-                  gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu \
-                  libvulkan-dev:riscv64 \
-                  libcurl4-openssl-dev:riscv64
+
+      - name: Setup toolchain
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: >
+            build-essential
+            glslc
+            gcc-14-riscv64-linux-gnu
+            g++-14-riscv64-linux-gnu
+            "libvulkan-dev:riscv64"
+            "libcurl4-openssl-dev:riscv64"
+          version: 1.0
 
       - name: Build
         run: |
@@ -93,19 +96,21 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Arm64
-        run: |
+      - name: Setup port
           sudo dpkg --add-architecture arm64
           sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
                  /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-                  build-essential \
-                  glslc \
-                  crossbuild-essential-arm64 \
-                  libvulkan-dev:arm64 \
-                  libcurl4-openssl-dev:arm64
+
+      - name: Setup toolchain
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: >
+            build-essential
+            glslc
+            crossbuild-essential-arm64
+            "libvulkan-dev:arm64"
+            "libcurl4-openssl-dev:arm64"
+          version: 1.0
 
       - name: Build
         run: |
