@@ -83,7 +83,7 @@ static void relu(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = sycl::fmax((T)(x[i]), (T)0);
+    dst[i] = sycl::fmax((x[i]), static_cast<T>(0));
 }
 
 template<typename T>
@@ -208,7 +208,7 @@ static void step(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = x[i] > (T)0.0f;
+    dst[i] = x[i] > static_cast<T>(0.0f);
 }
 
 template<typename T>
@@ -219,8 +219,8 @@ static void leaky_relu(const T *x, T *dst, const int k, const float negative_slo
     if (i >= k) {
         return;
     }
-    dst[i] = sycl::fmax((T)(x[i]), (T)0) +
-             sycl::fmin((T)(x[i]), (T)0.0f) * negative_slope;
+    dst[i] = sycl::fmax((x[i]), static_cast<T>(0)) +
+             sycl::fmin((x[i]), static_cast<T>(0.0f)) * negative_slope;
 }
 
 template<typename T>
@@ -291,7 +291,7 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
         return;
     }
 
-    dst[i] = x[i] < (T)min ? (T)min : (x[i] > (T)max ? (T)max : x[i]);
+    dst[i] = x[i] < static_cast<T>(min) ? static_cast<T>(min) : (x[i] > static_cast<T>(max) ? static_cast<T>(max) : x[i]);
 }
 
 static void acc_f32_sycl(const float *x, const float *y, float *dst,
