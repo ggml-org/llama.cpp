@@ -24,8 +24,8 @@ class LLamaAndroid {
     private external fun benchModel(pp: Int, tg: Int, pl: Int, nr: Int): String
 
     private external fun processSystemPrompt(systemPrompt: String): Int
-    private external fun processUserPrompt(userPrompt: String, nPredict: Int): Int
-    private external fun predictLoop(): String?
+    private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
+    private external fun completionLoop(): String?
 
     /**
      * Thread local state
@@ -128,7 +128,7 @@ class LLamaAndroid {
 
                 Log.i(TAG, "User prompt processed! Generating assistant prompt...")
                 while (true) {
-                    predictLoop()?.let { utf8token ->
+                    completionLoop()?.let { utf8token ->
                         if (utf8token.isNotEmpty()) emit(utf8token)
                     } ?: break
                 }
