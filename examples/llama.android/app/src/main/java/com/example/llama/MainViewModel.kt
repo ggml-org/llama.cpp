@@ -46,7 +46,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
         viewModelScope.launch {
             // TODO-hyin: implement format message
-            llamaAndroid.sendUserPrompt(formattedMessage = text)
+            llamaAndroid.sendUserPrompt(message = actualText)
                 .catch {
                     Log.e(tag, "send() failed", it)
                     messages += it.message!!

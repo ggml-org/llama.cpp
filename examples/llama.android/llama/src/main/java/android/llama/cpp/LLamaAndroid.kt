@@ -57,7 +57,7 @@ class LLamaAndroid {
     /**
      * Load the LLM, then process the formatted system prompt if provided
      */
-    suspend fun load(pathToModel: String, formattedSystemPrompt: String? = null) =
+    suspend fun load(pathToModel: String, systemPrompt: String? = null) =
         withContext(runLoop) {
             when (threadLocalState.get()) {
                 is State.NotInitialized -> {
@@ -70,8 +70,8 @@ class LLamaAndroid {
                     Log.i(TAG, "Loaded model $pathToModel")
                     threadLocalState.set(State.EnvReady)
 
-                    formattedSystemPrompt?.let {
-                        initWithSystemPrompt(formattedSystemPrompt)
+                    systemPrompt?.let {
+                        initWithSystemPrompt(systemPrompt)
                     } ?: run {
                         Log.w(TAG, "No system prompt to process.")
                         threadLocalState.set(State.AwaitingUserPrompt)
@@ -108,10 +108,10 @@ class LLamaAndroid {
      * Send formatted user prompt to LLM
      */
     fun sendUserPrompt(
-        formattedMessage: String,
-        nPredict: Int = DEFAULT_PREDICT_LENGTH,
+        message: String,
+        predictLength: Int = DEFAULT_PREDICT_LENGTH,
     ): Flow<String> = flow {
-        require(formattedMessage.isNotEmpty()) {
+        require(message.isNotEmpty()) {
             Log.w(TAG, "User prompt discarded due to being empty!")
         }
 
@@ -119,7 +119,7 @@ class LLamaAndroid {
             is State.AwaitingUserPrompt -> {
                 Log.i(TAG, "Sending user prompt...")
                 threadLocalState.set(State.Processing)
-                processUserPrompt(formattedMessage, nPredict).let { result ->
+                processUserPrompt(message, predictLength).let { result ->
                     if (result != 0) {
                         Log.e(TAG, "Failed to process user prompt: $result")
                         return@flow
