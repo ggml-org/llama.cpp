@@ -296,24 +296,25 @@ __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_open)(const char* uri, remote_hand
 __QAIC_STUB_EXPORT int __QAIC_STUB(ggmlop_dsp_close)(remote_handle64 h) __QAIC_STUB_ATTRIBUTE {
    return __QAIC_REMOTE(remote_handle64_close)(h);
 }
-static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uint32_t _in0[1], uint32_t _in1[1], uint32_t _in2[1]) {
+static __inline int _stub_method(remote_handle64 _handle, uint32_t _mid, uint32_t _in0[1], uint32_t _in1[1], uint32_t _in2[1], uint32_t _in3[1]) {
    remote_arg _pra[1] = {0};
-   uint32_t _primIn[3]= {0};
+   uint32_t _primIn[4]= {0};
    int _nErr = 0;
    _pra[0].buf.pv = (void*)_primIn;
    _pra[0].buf.nLen = sizeof(_primIn);
    _COPY(_primIn, 0, _in0, 0, 4);
    _COPY(_primIn, 4, _in1, 0, 4);
    _COPY(_primIn, 8, _in2, 0, 4);
+   _COPY(_primIn, 12,_in3, 0, 4);
    _TRY_FARF(_nErr, __QAIC_REMOTE(remote_handle64_invoke)(_handle, REMOTE_SCALARS_MAKEX(0, _mid, 1, 0, 0, 0), _pra));
    _CATCH_FARF(_nErr) {
       _QAIC_FARF(RUNTIME_ERROR, "ERROR 0x%x: handle=0x%"PRIx64", scalar=0x%x, method ID=%d: %s failed\n", _nErr , _handle, REMOTE_SCALARS_MAKEX(0, _mid, 1, 0, 0, 0), _mid, __func__);
    }
    return _nErr;
 }
-__QAIC_STUB_EXPORT AEEResult __QAIC_STUB(ggmlop_dsp_setclocks)(remote_handle64 _handle, int32 power_level, int32 latency, int32 dcvs_enable) __QAIC_STUB_ATTRIBUTE {
+__QAIC_STUB_EXPORT AEEResult __QAIC_STUB(ggmlop_dsp_setclocks)(remote_handle64 _handle, int32 power_level, int32 latency, int32 dcvs_enable, int32 threads) __QAIC_STUB_ATTRIBUTE {
    uint32_t _mid = 2;
-   return _stub_method(_handle, _mid, (uint32_t*)&power_level, (uint32_t*)&latency, (uint32_t*)&dcvs_enable);
+   return _stub_method(_handle, _mid, (uint32_t*)&power_level, (uint32_t*)&latency, (uint32_t*)&dcvs_enable, (uint32_t*)&threads);
 }
 static __inline int _stub_unpack(_ATTRIBUTE_UNUSED remote_arg* _praROutPost, _ATTRIBUTE_UNUSED remote_arg* _ppraROutPost[1], _ATTRIBUTE_UNUSED void* _primROut, _ATTRIBUTE_UNUSED uint32_t _rout0[1], _ATTRIBUTE_UNUSED uint32_t _rout1[4], _ATTRIBUTE_UNUSED uint32_t _rout2[4], _ATTRIBUTE_UNUSED uint32_t _rout3[1], _ATTRIBUTE_UNUSED uint32_t _rout4[16], _ATTRIBUTE_UNUSED uint32_t _rout5[1], _ATTRIBUTE_UNUSED char* _rout6[1], _ATTRIBUTE_UNUSED uint32_t _rout6Len[1]) {
    int _nErr = 0;

@@ -876,6 +876,7 @@ static int64_t ggml_time_us(void) {
 // =================================================================================================
 //  section-4: ggml-hexagon kernel helper function
 // =================================================================================================
+static int32 g_thread_counts = 1;
 int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
     void *tptr = NULL;
     FARF(HIGH, "uri %s", uri);
@@ -897,12 +898,14 @@ int ggmlop_dsp_close(remote_handle64 handle) {
     return 0;
 }
 
-AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled) {
+AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled, int32 thread_counts) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
     HAP_power_request_t request;
     memset(&request, 0, sizeof(HAP_power_request_t));
     request.type = HAP_power_set_apptype;
     request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
+
+    g_thread_counts = thread_counts;
 
     void * ggmop_ctx = (void*)(handle);
     int retval = HAP_power_set(ggmop_ctx, &request);
@@ -1192,7 +1195,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 }
 
 //FIXME: only support fp32 mulmat on cDSP
-int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+static int ggmlop_dsp_mulmat_singlethread(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
     ggmlhexagon_dump_tensor(src0, 0);
     ggmlhexagon_dump_tensor(src1, 0);
@@ -1350,6 +1353,21 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const ggml_tensor * src0, const ggml_te
     }
 
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
+    return 0;
+}
+
+int ggmlop_dsp_mulmat_multithread(remote_handle64 h, const struct dsptensor * src0, const struct dsptensor * src1, dsptensor * dst) {
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
+    return 0;
+}
+
+int ggmlop_dsp_mulmat(remote_handle64 h, const struct dsptensor * src0, const struct dsptensor * src1, dsptensor * dst) {
+    if (g_thread_counts > 1) {
+        return ggmlop_dsp_mulmat_multithread(h, src0, src1, dst);
+    } else {
+        return ggmlop_dsp_mulmat_singlethread(h, src0, src1, dst);
+    }
     return 0;
 }
 
