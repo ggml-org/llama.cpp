@@ -325,6 +325,7 @@ struct hexagon_appcfg_t {
     int enable_all_q_mulmat;    // enable/disable offload all quantized type mulmat to cDSP
     int profiler_duration;      // threshold of duration in profiler, per seconds
     int profiler_counts;        // threshold of counts in profiler
+    int thread_counts;          // thread_counts on cDSP side
     const char * cfgfilename;
     const char * runtime_libpath;
     char ggml_hexagon_version[GGMLHEXAGON_TMPBUF_LEN];
@@ -348,6 +349,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .enable_all_q_mulmat    = 0,
         .profiler_duration      = 5,
         .profiler_counts        = 100,
+        .thread_counts          = 4,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
 //Android command line program
@@ -357,8 +359,8 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.80"},
-        .ggml_dsp_version       = {"0.60"},
+        .ggml_hexagon_version   = {"1.81"},
+        .ggml_dsp_version       = {"0.61"},
 };
 
 //file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/overview.html#tbl-supported-snapdragon-devices
@@ -886,10 +888,19 @@ public:
         //FIXME:hardcode filename of profiler data
         std::string filename = std::string(g_hexagon_appcfg.runtime_libpath) + "/";
         if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-            if (0 == g_hexagon_appcfg.enable_rpc_ion_mempool) {
-                filename = filename + "hexagon_perf_cdsp.dat";
+            if (g_hexagon_appcfg.thread_counts > 1) {
+                //multi-threading feature enabled on cDSP side
+                if (0 == g_hexagon_appcfg.enable_rpc_ion_mempool) {
+                    filename = filename + "hexagon_perf_cdsp_mt.dat";
+                } else {
+                    filename = filename + "hexagon_perf_cdsp_ion_mt.dat";
+                }
             } else {
-                filename = filename + "hexagon_perf_cdsp_ion.dat";
+                if (0 == g_hexagon_appcfg.enable_rpc_ion_mempool) {
+                    filename = filename + "hexagon_perf_cdsp.dat";
+                } else {
+                    filename = filename + "hexagon_perf_cdsp_ion.dat";
+                }
             }
         } else {
             filename = filename + "hexagon_perf_qnn.dat";
@@ -1782,6 +1793,7 @@ static void ggmlhexagon_load_cfg() {
 
     hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 0);
     hexagoncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
+    hexagoncfg_instance.get_intvalue("cdsp", "thread_counts", g_hexagon_appcfg.thread_counts, 4);
 
     GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
     GGMLHEXAGON_LOG_INFO("internal ggml_dsp_version=%s", g_hexagon_appcfg.ggml_dsp_version);
@@ -5315,7 +5327,8 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         //FIXME: only support offload fp32 GGML_OP_MUL_MAT to cDSP
         GGMLHEXAGON_LOG_INFO("only support offload fp32 GGML_OP_ADD and fp32 GGML_OP_MUL_MAT to cDSP currently");
         ggmlhexagon_probe_dspinfo(ctx);
-        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1);
+        //FIXME: re-use this function to pass thread_counts info to code on cDSP side before fully understand qidl mechanism
+        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1, g_hexagon_appcfg.thread_counts);
         ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 100);
         int result = ggmlhexagon_init_rpcmempool(ctx);
         if (0 != result) {
