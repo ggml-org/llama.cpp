@@ -2606,14 +2606,12 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
     aclIntArray *padding = aclCreateIntArray(paddingVal, 1);
     int64_t dilationVal[] = {1};
     aclIntArray *dilation = aclCreateIntArray(dilationVal, 1);
-    int64_t outputPaddingVal[] = {0};
-    aclIntArray *outputPadding = aclCreateIntArray(outputPaddingVal, 1);
     bool transposed = true;
     int64_t groups = 1;
     int8_t cubeMathType = 0;
 
     GGML_CANN_CALL_ACLNN_OP(Convolution, acl_input, acl_weight, nullptr, stride,
-        padding, dilation, transposed, outputPadding, groups, acl_dst, cubeMathType);
+        padding, dilation, transposed, padding, groups, acl_dst, cubeMathType);
 
     ACL_CHECK(aclDestroyTensor(acl_weight));
     ACL_CHECK(aclDestroyTensor(acl_dst));
@@ -2628,12 +2626,8 @@ void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst){
     float ONE = 1.0f;
     aclScalar* alpha = nullptr;
     alpha = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
-    aclScalar* scale = nullptr;
-    scale = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
-    aclScalar* inputScale = nullptr;
-    inputScale = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
 
-    GGML_CANN_CALL_ACLNN_OP(Elu, acl_input, alpha, scale, inputScale,
+    GGML_CANN_CALL_ACLNN_OP(Elu, acl_input, alpha, alpha, alpha,
         acl_dst);
 
     ACL_CHECK(aclDestroyTensor(acl_input));

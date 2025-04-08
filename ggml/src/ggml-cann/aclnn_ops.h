@@ -729,9 +729,8 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @param ctx The CANN backend context for managing resources and execution.
  * @param dst The destination tensor. Its src[0] is treated as the input tensor.
  */
-using unary_func_ptr = void (*)(ggml_backend_cann_context&, aclTensor*, aclTensor*);
-
-static void ggml_cann_unary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst, unary_func_ptr unary_op) {
+template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
+    void ggml_cann_unary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
 
     aclTensor* acl_src = ggml_cann_create_tensor(src);
@@ -740,28 +739,6 @@ static void ggml_cann_unary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     unary_op(ctx, acl_src, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
-}
-
-#define DEFINE_ACLNN_WRAPPER(OP_NAME)                                      \
-    static void aclnn_##OP_NAME##_wrapper(ggml_backend_cann_context& ctx,        \
-                                   aclTensor* src, aclTensor* dst) {      \
-        GGML_CANN_CALL_ACLNN_OP(OP_NAME, src, dst);                       \
-    }
-
-DEFINE_ACLNN_WRAPPER(Abs)
-DEFINE_ACLNN_WRAPPER(Neg)
-DEFINE_ACLNN_WRAPPER(Gelu)
-DEFINE_ACLNN_WRAPPER(Silu)
-DEFINE_ACLNN_WRAPPER(Tanh)
-DEFINE_ACLNN_WRAPPER(Relu)
-DEFINE_ACLNN_WRAPPER(Sigmoid)
-DEFINE_ACLNN_WRAPPER(Hardsigmoid)
-DEFINE_ACLNN_WRAPPER(Hardswish)
-DEFINE_ACLNN_WRAPPER(Exp)
-DEFINE_ACLNN_WRAPPER(Sqrt)
-
-static void aclnn_GeluV2_wrapper(ggml_backend_cann_context& ctx, aclTensor* src, aclTensor* dst) {
-    GGML_CANN_CALL_ACLNN_OP(GeluV2, src, 0, dst);
 }
 
 /**
@@ -783,7 +760,10 @@ static void aclnn_GeluV2_wrapper(ggml_backend_cann_context& ctx, aclTensor* src,
  */
 #define GGML_CANN_CALL_UNARY_OP(OP_NAME)                         \
     do {                                                         \
-        ggml_cann_unary_op(ctx, dst, aclnn_##OP_NAME##_wrapper); \
+        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) { \
+            GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
+        };                                                       \
+        ggml_cann_unary_op<lambda>(ctx, dst);                    \
     }                                                            \
     while (0)
 
