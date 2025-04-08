@@ -194,6 +194,18 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // else new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
             ++qs.i_attention_wv;
         }
+        else if (
+            (name.find("blk.1.ffn_gate_exps.weight") != std::string::npos) ||
+            (name.find("blk.1.ffn_down_exps.weight") != std::string::npos) ||
+            (name.find("blk.1.ffn_up_exps.weight")   != std::string::npos) ||
+            (name.find("blk.3.ffn_gate_exps.weight") != std::string::npos) ||
+            (name.find("blk.3.ffn_down_exps.weight") != std::string::npos) ||
+            (name.find("blk.3.ffn_up_exps.weight")   != std::string::npos) ||            (name.find("blk.1.ffn_gate_exps.weight") != std::string::npos) ||
+            (name.find("blk.45.ffn_down_exps.weight") != std::string::npos) ||
+            (name.find("blk.45.ffn_up_exps.weight")   != std::string::npos) ||
+            (name.find("blk.45.ffn_down_exps.weight") != std::string::npos) ) {
+            new_type = GGML_TYPE_Q4_K;
+        }
         else if (qs.model.hparams.n_expert == 8 && name.find("attn_k.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
         }
