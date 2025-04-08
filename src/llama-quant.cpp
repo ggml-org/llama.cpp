@@ -338,6 +338,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // new_type = GGML_TYPE_IQ2_S;
             new_type = GGML_TYPE_Q4_K;
         }
+        else
+            new_type = GGML_TYPE_Q4_K;
     } else if (name.find("attn_q.weight") != std::string::npos) {
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS) {
             // new_type = GGML_TYPE_IQ3_XXS;
@@ -347,6 +349,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             // new_type = GGML_TYPE_IQ2_S;
             new_type = GGML_TYPE_Q4_K;
         }
+        else
+            new_type = GGML_TYPE_Q4_K;
     } else if (name.find("ffn_down.weight") != std::string::npos) {
         // First 3 Layers
         new_type = GGML_TYPE_Q6_K;
