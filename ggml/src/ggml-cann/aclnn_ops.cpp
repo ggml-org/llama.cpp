@@ -28,7 +28,6 @@
 #include <aclnnop/aclnn_cast.h>
 #include <aclnnop/aclnn_constant_pad_nd.h>
 #include <aclnnop/aclnn_copy.h>
-#include <aclnnop/aclnn_cos.h>
 #include <aclnnop/aclnn_div.h>
 #include <aclnnop/aclnn_embedding.h>
 #include <aclnnop/aclnn_exp.h>
@@ -45,13 +44,19 @@
 #include <aclnnop/aclnn_repeat.h>
 #include <aclnnop/aclnn_repeat_interleave.h>
 #include <aclnnop/aclnn_roll.h>
-#include <aclnnop/aclnn_sin.h>
 #include <aclnnop/aclnn_softmax.h>
 #include <aclnnop/aclnn_tril.h>
 #include <aclnnop/aclnn_triu.h>
 #include <aclnnop/aclnn_upsample_nearest_2d.h>
 #include <aclnnop/aclnn_weight_quant_batch_matmul_v2.h>
 #include <aclnnop/aclnn_argmax.h>
+#include <aclnnop/aclnn_sum.h>
+#include <aclnnop/aclnn_rms_norm.h>
+#include <aclnnop/aclnn_im2col.h>
+#include <aclnnop/aclnn_add.h>
+#include <aclnnop/aclnn_sub.h>
+#include <aclnnop/aclnn_mul.h>
+#include <aclnnop/aclnn_div.h>
 #include <float.h>
 
 #include <cmath>
@@ -64,6 +69,22 @@
 #define GGML_COMMON_DECL_C
 
 #include "../ggml-common.h"
+
+void bcast_shape(ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst, aclTensor ** acl_src0,
+                 aclTensor ** acl_src1, aclTensor ** acl_dst) {
+    GGML_ASSERT(ggml_are_same_shape(src0, dst) && ggml_can_repeat(src1, src0));
+    // Need bcast
+    if (!ggml_are_same_shape(src0, src1) && ggml_cann_need_bcast(src0, src1)) {
+        BCAST_SHAPE(src0, src1)
+        *acl_src0 = ggml_cann_create_tensor(src0, BCAST_PARAM(src0));
+        *acl_src1 = ggml_cann_create_tensor(src1, BCAST_PARAM(src1));
+        *acl_dst  = ggml_cann_create_tensor(dst, BCAST_PARAM(src0));
+    } else {
+        *acl_src0 = ggml_cann_create_tensor(src0);
+        *acl_src1 = ggml_cann_create_tensor(src1);
+        *acl_dst  = ggml_cann_create_tensor(dst);
+    }
+}
 
 /**
  * @brief Repeats elements of a tensor along each dimension according to the
@@ -80,24 +101,26 @@ static void aclnn_repeat(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     // repeat tensor along each dim with repeat_array
     aclIntArray* repeats = aclCreateIntArray(repeat_array, GGML_MAX_DIMS);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnRepeatGetWorkspaceSize(acl_src, repeats, acl_dst,
-                                          &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        // Memory from allocator will "free" immediately, and this memory
-        // will be alloced to other pointers, but it won't access before
-        // this async task end because all tasks in same stream will execute
-        // in queue.
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-    ACL_CHECK(
-        aclnnRepeat(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(Repeat, acl_src, repeats, acl_dst);
     ACL_CHECK(aclDestroyIntArray(repeats));
+}
+
+/**
+ * @brief Casts the data type of a source tensor to a destination tensor.
+ *
+ * This function casts the data type of the source tensor `acl_src` to the
+ * specified data type `cast_data_type` and stores the result in the destination
+ * tensor `acl_dst`.
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param acl_src The source tensor whose data type will be casted.
+ * @param acl_dst The destination tensor where the casted result will be stored.
+ * @param cast_data_type The target data type to which the source tensor will be
+ * casted.
+ */
+static void aclnn_cast(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    aclTensor* acl_dst, aclDataType cast_data_type) {
+    GGML_CANN_CALL_ACLNN_OP(Cast, acl_src, cast_data_type, acl_dst);
 }
 
 /**
@@ -114,19 +137,7 @@ static void aclnn_repeat(ggml_backend_cann_context& ctx, aclTensor* acl_src,
  */
 static void aclnn_cast(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                     aclTensor* acl_dst, ggml_tensor* dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-    ACL_CHECK(aclnnCastGetWorkspaceSize(acl_src,
-                                        ggml_cann_type_mapping(dst->type),
-                                        acl_dst, &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnCast(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    aclnn_cast(ctx, acl_src, acl_dst, ggml_cann_type_mapping(dst->type));
 }
 
 void ggml_cann_repeat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -144,69 +155,75 @@ void ggml_cann_repeat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
 
-/**
- * @brief Adds two tensors element-wise and stores the result in a destination
- * tensor.
- *
- * This function performs the operation:
- * \f[
- *    dst = acl\_src0 + alpha \times acl\_src1
- * \f]
- * where alpha is a scalar value and defaults to 1.0f.
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src0 The first source tensor.
- * @param acl_src1 The second source tensor.
- * @param acl_dst The destination tensor where the result will be stored.
- */
-static void aclnn_add(ggml_backend_cann_context& ctx, aclTensor* acl_src0,
+void aclnn_add(ggml_backend_cann_context& ctx, aclTensor* acl_src0,
                       aclTensor* acl_src1, aclTensor* acl_dst) {
-    aclScalar* alpha = nullptr;
     float alphaValue = 1.0f;
-    alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnAddGetWorkspaceSize(acl_src0, acl_src1, alpha, acl_dst,
-                                       &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnAdd(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    aclScalar* alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
+    if (acl_dst != nullptr)
+        GGML_CANN_CALL_ACLNN_OP(Add, acl_src0, acl_src1, alpha, acl_dst);
+    else
+        GGML_CANN_CALL_ACLNN_OP(InplaceAdd, acl_src0, acl_src1, alpha);
     ACL_CHECK(aclDestroyScalar(alpha));
 }
 
-void ggml_cann_add(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
-    ggml_tensor* src0 = dst->src[0];
-    ggml_tensor* src1 = dst->src[1];
-    GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+void aclnn_sub(ggml_backend_cann_context& ctx, aclTensor* acl_src0,
+    aclTensor* acl_src1, aclTensor* acl_dst) {
+    float alphaValue = 1.0f;
+    aclScalar* alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
+    if (acl_dst != nullptr)
+        GGML_CANN_CALL_ACLNN_OP(Sub, acl_src0, acl_src1, alpha, acl_dst);
+    else
+        GGML_CANN_CALL_ACLNN_OP(InplaceSub, acl_src0, acl_src1, alpha);
+    ACL_CHECK(aclDestroyScalar(alpha));
+}
 
-    aclTensor* acl_src0;
-    aclTensor* acl_src1;
-    aclTensor* acl_dst;
+void aclnn_mul(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    aclTensor* acl_other, aclTensor* acl_dst) {
+    if (acl_dst != nullptr)
+        GGML_CANN_CALL_ACLNN_OP(Mul, acl_src, acl_other, acl_dst);
+    else
+        GGML_CANN_CALL_ACLNN_OP(InplaceMul, acl_src, acl_other);
+}
 
-    // Need bcast
-    if (!ggml_are_same_shape(src0, src1) && ggml_cann_need_bcast(src0, src1)) {
-        BCAST_SHAPE(src0, src1)
-        acl_src0 = ggml_cann_create_tensor(src0, BCAST_PARAM(src0));
-        acl_src1 = ggml_cann_create_tensor(src1, BCAST_PARAM(src1));
-        acl_dst = ggml_cann_create_tensor(dst, BCAST_PARAM(src0));
+void aclnn_div(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    aclTensor* acl_other, aclTensor* acl_dst) {
+    if (acl_dst != nullptr)
+        GGML_CANN_CALL_ACLNN_OP(Div, acl_src, acl_other, acl_dst);
+    else
+        GGML_CANN_CALL_ACLNN_OP(InplaceDiv, acl_src, acl_other);
+}
+
+/**
+ * @brief Multiplies elements of a tensor by a scalar value, optionally
+ * in-place.
+ *
+ * This function multiplies each element of the source tensor `acl_src` by the
+ * scalar `scale` and stores the result in the destination tensor `acl_dst`. If
+ * `inplace` is true, `acl_dst` will not be used and the operation is performed
+ *  in-place on `acl_src`.
+ * The operation is defined as:
+ * \f[
+ *     \text {acl_dst }_i=\text {acl_src }_i \times \text {scale}
+ * \f]
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param acl_src The source tensor whose elements will be multiplied.
+ * @param scale The scalar value by which each element of `acl_src` will be
+ *  multiplied.
+ * @param acl_dst The destination tensor where the result will be stored if
+ * `inplace` is false.
+ * @param inplace Flag indicating whether to perform the operation in-place on
+ * `acl_src`.
+ */
+static void aclnn_muls(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    float scale, aclTensor* acl_dst, bool inplace) {
+    aclScalar* acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
+    if (inplace) {
+        GGML_CANN_CALL_ACLNN_OP(InplaceMuls, acl_src, acl_scale);
     } else {
-        acl_src0 = ggml_cann_create_tensor(src0);
-        acl_src1 = ggml_cann_create_tensor(src1);
-        acl_dst = ggml_cann_create_tensor(dst);
+        GGML_CANN_CALL_ACLNN_OP(Muls, acl_src, acl_scale, acl_dst);
     }
-
-    aclnn_add(ctx, acl_src0, acl_src1, acl_dst);
-
-    ACL_CHECK(aclDestroyTensor(acl_src0));
-    ACL_CHECK(aclDestroyTensor(acl_src1));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyScalar(acl_scale));
 }
 
 void ggml_cann_leaky_relu(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -223,19 +240,7 @@ void ggml_cann_leaky_relu(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclScalar* acl_negative_slope =
         aclCreateScalar(&negative_slope, aclDataType::ACL_FLOAT);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnLeakyReluGetWorkspaceSize(
-        acl_src, acl_negative_slope, acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnLeakyRelu(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(LeakyRelu, acl_src, acl_negative_slope, acl_dst);
 
     ACL_CHECK(aclDestroyScalar(acl_negative_slope));
     ACL_CHECK(aclDestroyTensor(acl_src));
@@ -255,18 +260,7 @@ void ggml_cann_leaky_relu(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 static void aclnn_concat(ggml_backend_cann_context& ctx,
                          aclTensorList* tensorList, aclTensor* acl_dst,
                          int64_t concat_dim) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnCatGetWorkspaceSize(tensorList, concat_dim, acl_dst,
-                                       &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnCat(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(Cat, tensorList, concat_dim, acl_dst);
 }
 
 void ggml_cann_concat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -312,24 +306,11 @@ static void aclnn_arange(ggml_backend_cann_context& ctx, aclTensor* acl_dst,
     int64_t steps = (int64_t)std::ceil((stop - start) / step);
     GGML_ASSERT(n_elements == steps);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
     aclScalar* acl_start = aclCreateScalar(&start, aclDataType::ACL_FLOAT);
     aclScalar* acl_end = aclCreateScalar(&stop, aclDataType::ACL_FLOAT);
     aclScalar* acl_step = aclCreateScalar(&step, aclDataType::ACL_FLOAT);
 
-    ACL_CHECK(aclnnArangeGetWorkspaceSize(acl_start, acl_end, acl_step, acl_dst,
-                                          &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnArange(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(Arange, acl_start, acl_end, acl_step, acl_dst);
     ACL_CHECK(aclDestroyScalar(acl_start));
     ACL_CHECK(aclDestroyScalar(acl_end));
     ACL_CHECK(aclDestroyScalar(acl_step));
@@ -352,11 +333,6 @@ void ggml_cann_arange(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
 
-void ggml_cann_sqr(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
-    dst->src[1] = dst->src[0];
-    ggml_cann_mul_div<aclnnMulGetWorkspaceSize, aclnnMul>(ctx, dst);
-}
-
 void ggml_cann_clamp(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
 
@@ -371,19 +347,7 @@ void ggml_cann_clamp(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclScalar* acl_min = aclCreateScalar(&min, aclDataType::ACL_FLOAT);
     aclScalar* acl_max = aclCreateScalar(&max, aclDataType::ACL_FLOAT);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnClampGetWorkspaceSize(acl_src, acl_min, acl_max, acl_dst,
-                                         &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnClamp(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(Clamp, acl_src, acl_min, acl_max, acl_dst);
     ACL_CHECK(aclDestroyScalar(acl_min));
     ACL_CHECK(aclDestroyScalar(acl_max));
     ACL_CHECK(aclDestroyTensor(acl_src));
@@ -401,19 +365,7 @@ void ggml_cann_scale(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* acl_src = ggml_cann_create_tensor(src);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnMulsGetWorkspaceSize(acl_src, scale, acl_dst, &workspaceSize,
-                                        &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnMuls(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(Muls, acl_src, scale, acl_dst);
     ACL_CHECK(aclDestroyScalar(scale));
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
@@ -431,33 +383,9 @@ void ggml_cann_argsort(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* tmp_tensor =
         ggml_cann_create_tensor(buffer, ACL_INT64, ggml_type_size(dst->type),
                                 dst->ne, dst->nb, GGML_MAX_DIMS);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnArgsortGetWorkspaceSize(
-        acl_src, -1, (order == GGML_SORT_ORDER_DESC ? true : false), tmp_tensor,
-        &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnArgsort(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
-    workspaceSize = 0;
-    ACL_CHECK(aclnnCastGetWorkspaceSize(tmp_tensor,
-                                        ggml_cann_type_mapping(dst->type),
-                                        acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnCast(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(Argsort, acl_src, -1, (order == GGML_SORT_ORDER_DESC ? true : false),
+                      tmp_tensor);
+    GGML_CANN_CALL_ACLNN_OP(Cast, tmp_tensor, ggml_cann_type_mapping(dst->type), acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(tmp_tensor));
     ACL_CHECK(aclDestroyTensor(acl_dst));
@@ -472,24 +400,10 @@ void ggml_cann_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
     std::vector<int64_t> normData = {dst->ne[0]};
     aclIntArray* norm = aclCreateIntArray(normData.data(), normData.size());
-    ACL_CHECK(aclnnLayerNormGetWorkspaceSize(acl_src, norm, nullptr, nullptr,
-                                             eps, acl_dst, nullptr, nullptr,
-                                             &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnLayerNorm(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(LayerNorm, acl_src, norm, nullptr, nullptr,
+                    eps, acl_dst, nullptr, nullptr);
     ACL_CHECK(aclDestroyIntArray(norm));
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
@@ -505,10 +419,6 @@ void ggml_cann_group_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     float eps;
     memcpy(&eps, dst->op_params + 1, sizeof(float));
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
 
     int64_t N = src->ne[3];
     int64_t C = src->ne[2];
@@ -526,18 +436,8 @@ void ggml_cann_group_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* acl_rstd_out = ggml_cann_create_tensor(
         (char*)buffer + n_bytes, ACL_FLOAT, type_size, ne, nb, ACL_FORMAT_ND);
 
-    ACL_CHECK(aclnnGroupNormGetWorkspaceSize(
-        acl_src, nullptr, nullptr, N, C, HxW, n_groups, eps, acl_dst,
-        acl_mean_out, acl_rstd_out, &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnGroupNorm(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(GroupNorm, acl_src, nullptr, nullptr, N, C, HxW, n_groups, eps,
+        acl_dst, acl_mean_out, acl_rstd_out);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
     ACL_CHECK(aclDestroyTensor(acl_mean_out));
@@ -564,68 +464,57 @@ void ggml_cann_acc(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     float alphaValue = 1.0f;
     alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
     if (!inplace) {
         size_t cpy_size = ggml_nbytes(dst);
         ACL_CHECK(aclrtMemcpyAsync(dst->data, cpy_size, src0->data, cpy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE, ctx.stream()));
         aclTensor* acl_src0 = ggml_cann_create_tensor(
             src0, src1->ne, src0->nb, GGML_MAX_DIMS, ACL_FORMAT_ND, offset);
-        ACL_CHECK(aclnnAddGetWorkspaceSize(acl_src0, acl_src1, alpha, acl_dst,
-                                           &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-        ACL_CHECK(
-            aclnnAdd(workspaceAddr, workspaceSize, executor, ctx.stream()));
+
+        GGML_CANN_CALL_ACLNN_OP(Add, acl_src0, acl_src1, alpha, acl_dst);
         ACL_CHECK(aclDestroyTensor(acl_src0));
     } else {
-        ACL_CHECK(aclnnInplaceAddGetWorkspaceSize(acl_dst, acl_src1, alpha,
-                                                  &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-        ACL_CHECK(aclnnInplaceAdd(workspaceAddr, workspaceSize, executor,
-                                  ctx.stream()));
+        GGML_CANN_CALL_ACLNN_OP(InplaceAdd, acl_dst, acl_src1, alpha);
     }
 
     ACL_CHECK(aclDestroyTensor(acl_src1));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
 
-void ggml_cann_sum_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
-    ggml_tensor* src = dst->src[0];
+/**
+ * @brief Performs sum reduction on a given tensor along specified dimensions.
+ *
+ * This function reduces the input tensor by summing along the specified dimensions.
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param dst The destination tensor where the reduced result will be stored.
+ * @param dim An array of dimension indices.
+ * @param dim_size The number of dimensions.
+ */
 
-    aclTensor* acl_src = ggml_cann_create_tensor(src);
-
+static void aclnn_reduce_sum(ggml_backend_cann_context& ctx, ggml_tensor* dst,
+                             int64_t* dim, size_t dim_size) {
     GGML_ASSERT(dst->ne[0] == 1);
+    ggml_tensor* src = dst->src[0];
+    aclTensor* acl_src = ggml_cann_create_tensor(src);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclIntArray* reduce_dims = aclCreateIntArray(dim, dim_size);
 
-    int64_t reduce_dims_host[] = {3};
-    aclIntArray* reduce_dims = aclCreateIntArray(reduce_dims_host, 1);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnReduceSumGetWorkspaceSize(
-        acl_src, reduce_dims, true, ggml_cann_type_mapping(src->type), acl_dst,
-        &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnReduceSum(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(ReduceSum, acl_src, reduce_dims, true,
+                      ggml_cann_type_mapping(dst->type), acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyIntArray(reduce_dims));
+}
+
+void ggml_cann_sum_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    int64_t reduce_dims[] = {3};
+    aclnn_reduce_sum(ctx, dst, reduce_dims, 1);
+}
+
+void ggml_cann_sum(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    int64_t reduce_dims[] = {0, 1, 2, 3};
+    aclnn_reduce_sum(ctx, dst, reduce_dims, 4);
 }
 
 void ggml_cann_upsample_nearest2d(ggml_backend_cann_context& ctx,
@@ -639,20 +528,7 @@ void ggml_cann_upsample_nearest2d(ggml_backend_cann_context& ctx,
     std::vector<int64_t> output_size{dst->ne[1], dst->ne[0]};
     auto output_size_array = aclCreateIntArray(output_size.data(), 2);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnUpsampleNearest2dGetWorkspaceSize(
-        acl_src, output_size_array, acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnUpsampleNearest2d(workspaceAddr, workspaceSize, executor,
-                                     ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(UpsampleNearest2d, acl_src, output_size_array, acl_dst);
     ACL_CHECK(aclDestroyIntArray(output_size_array));
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
@@ -678,21 +554,7 @@ static void aclnn_pad(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     aclIntArray* acl_pad = aclCreateIntArray(paddings, GGML_MAX_DIMS * 2);
     aclScalar* acl_value = aclCreateScalar(&value, aclDataType::ACL_FLOAT);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnConstantPadNdGetWorkspaceSize(
-        acl_src, acl_pad, acl_value, acl_dst, &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnConstantPadNd(workspaceAddr, workspaceSize, executor,
-                                 ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(ConstantPadNd, acl_src, acl_pad, acl_value, acl_dst);
     ACL_CHECK(aclDestroyIntArray(acl_pad));
     ACL_CHECK(aclDestroyScalar(acl_value));
 }
@@ -758,23 +620,9 @@ static void ggml_cann_avg_pool2d(ggml_backend_cann_context& ctx,
     bool count_include_pad = true;
     int64_t divisor_override = 0;
     int8_t cube_math_type = 0;
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnAvgPool2dGetWorkspaceSize(
-        acl_src, kernel_size, strides, paddings_avg, ceil_mode,
-        count_include_pad, divisor_override, cube_math_type, acl_dst,
-        &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-    ACL_CHECK(
-        aclnnAvgPool2d(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(AvgPool2d, acl_src, kernel_size, strides, paddings_avg,
+                    ceil_mode, count_include_pad, divisor_override,
+                    cube_math_type, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
     ACL_CHECK(aclDestroyIntArray(kernel_size));
@@ -847,22 +695,8 @@ static void ggml_cann_max_pool2d(ggml_backend_cann_context& ctx,
 
     bool ceil_mode = false;
     int64_t auto_pads = 0;
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnMaxPoolGetWorkspaceSize(
-        tmp_tensor, kernel_size, strides, auto_pads, paddings_max, dilations,
-        ceil_mode, acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnMaxPool(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(MaxPool, tmp_tensor, kernel_size, strides, auto_pads,
+                    paddings_max, dilations, ceil_mode, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
     ACL_CHECK(aclDestroyTensor(tmp_tensor));
@@ -900,20 +734,7 @@ void ggml_cann_pool2d(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  */
 static void cann_copy(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                       aclTensor* acl_dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceCopyGetWorkspaceSize(acl_dst, acl_src, &workspaceSize,
-                                               &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnInplaceCopy(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(InplaceCopy, acl_dst, acl_src);
 }
 
 void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -989,21 +810,6 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-aclnnStatus aclnnRmsNormGetWorkspaceSize(const aclTensor* x,
-                                         const aclTensor* gamma, double epsilon,
-                                         const aclTensor* yOut,
-                                         const aclTensor* rstdOout,
-                                         uint64_t* workspaceSize,
-                                         aclOpExecutor** executor);
-aclnnStatus aclnnRmsNorm(void* workspace, uint64_t workspaceSize,
-                         aclOpExecutor* executor, aclrtStream stream);
-#ifdef __cplusplus
-}
-#endif
-
 /**
  * @brief Creates an ACL tensor initialized with zeros using a provided buffer.
  *
@@ -1062,21 +868,7 @@ static aclTensor* aclnn_values(ggml_backend_cann_context& ctx, void* buffer,
     float alpha_host = 1.0f;
     aclScalar* alpha = aclCreateScalar(&alpha_host, aclDataType::ACL_FLOAT);
     aclScalar* other = aclCreateScalar(&value, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceAddsGetWorkspaceSize(acl_tensor, other, alpha,
-                                               &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-    ACL_CHECK(
-        aclnnInplaceAdds(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(InplaceAdds, acl_tensor, other, alpha);
     return acl_tensor;
 }
 
@@ -1088,11 +880,6 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
     size_t one_tensor_n_bytes = src->ne[0] * ggml_element_size(src);
     ggml_cann_pool_alloc one_tensor_allocator(ctx.pool(), one_tensor_n_bytes);
 
@@ -1107,18 +894,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
         aclnn_zero(ctx, zero_tensor_allocator.get(), zero_tensor_n_bytes,
                    src->ne, GGML_MAX_DIMS, ggml_cann_type_mapping(src->type),
                    ggml_element_size(src));
-
-    ACL_CHECK(aclnnRmsNormGetWorkspaceSize(
-        acl_src, acl_gamma, eps, acl_dst, acl_rstd, &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnRmsNorm(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(RmsNorm, acl_src, acl_gamma, eps, acl_dst, acl_rstd);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
     ACL_CHECK(aclDestroyTensor(acl_gamma));
@@ -1144,75 +920,17 @@ void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
                      src->ne, GGML_MAX_DIMS, ggml_cann_type_mapping(src->type),
                      ggml_element_size(src), value);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceTriuGetWorkspaceSize(mask_tensor, n_past + 1,
-                                               &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnInplaceTriu(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
-    ACL_CHECK(aclnnTrilGetWorkspaceSize(acl_src, n_past + 1, acl_dst,
-                                        &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnTril(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
     aclScalar* alpha = nullptr;
     float alphaValue = 1.0f;
     alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
 
-    ACL_CHECK(aclnnInplaceAddGetWorkspaceSize(acl_dst, mask_tensor, alpha,
-                                              &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-    ACL_CHECK(
-        aclnnInplaceAdd(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(InplaceTriu, mask_tensor, n_past + 1);
+    GGML_CANN_CALL_ACLNN_OP(Tril, acl_src, n_past + 1, acl_dst);
+    GGML_CANN_CALL_ACLNN_OP(InplaceAdd, acl_dst, mask_tensor, alpha);
     ACL_CHECK(aclDestroyScalar(alpha));
     ACL_CHECK(aclDestroyTensor(mask_tensor));
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
-}
-
-/**
- * @brief Casts the data type of a source tensor to a destination tensor.
- *
- * This function casts the data type of the source tensor `acl_src` to the
- * specified data type `cast_data_type` and stores the result in the destination
- * tensor `acl_dst`.
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor whose data type will be casted.
- * @param acl_dst The destination tensor where the casted result will be stored.
- * @param cast_data_type The target data type to which the source tensor will be
- * casted.
- */
-static void aclnn_cast(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                       aclTensor* acl_dst, aclDataType cast_data_type) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnCastGetWorkspaceSize(acl_src, cast_data_type, acl_dst,
-                                        &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnCast(workspaceAddr, workspaceSize, executor, ctx.stream()));
 }
 
 /**
@@ -1233,39 +951,8 @@ static void aclnn_cast(ggml_backend_cann_context& ctx, aclTensor* acl_src,
 static void aclnn_permute(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                           aclTensor* acl_dst, int64_t* new_dim, uint64_t dims) {
     aclIntArray* acl_dims = aclCreateIntArray(new_dim, dims);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnPermuteGetWorkspaceSize(acl_src, acl_dims, acl_dst,
-                                           &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnPermute(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
-    ACL_CHECK(aclDestroyIntArray(acl_dims));
+    GGML_CANN_CALL_ACLNN_OP(Permute, acl_src, acl_dims, acl_dst);
 }
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-aclnnStatus aclnnIm2colGetWorkspaceSize(const aclTensor* self,
-                                        const aclIntArray* kernelSize,
-                                        const aclIntArray* dilation,
-                                        const aclIntArray* padding,
-                                        const aclIntArray* stride,
-                                        aclTensor* out, uint64_t* workspaceSize,
-                                        aclOpExecutor** executor);
-aclnnStatus aclnnIm2col(void* workspace, uint64_t workspaceSize,
-                        aclOpExecutor* executor, aclrtStream stream);
-#ifdef __cplusplus
-}
-#endif
 
 static void ggml_cann_im2col_2d_post_process(ggml_backend_cann_context& ctx,
                                              ggml_tensor* dst,
@@ -1430,23 +1117,8 @@ void ggml_cann_im2col(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     auto* dilations = aclCreateIntArray(dilation_size.data(), 2);
     auto* paddings = aclCreateIntArray(padding_dims.data(), 2);
     auto* strides = aclCreateIntArray(stride_dims.data(), 2);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnIm2colGetWorkspaceSize(acl_src1, kernel_size, dilations,
-                                          paddings, strides, tmp_im2col_tensor,
-                                          &workspaceSize, &executor));
-
-    ggml_cann_pool_alloc workspace_allocator(ctx.pool());
-    if (workspaceSize > 0) {
-        workspace_allocator.alloc(workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnIm2col(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(Im2col, acl_src1, kernel_size, dilations,
+                    paddings, strides, tmp_im2col_tensor);
 
     // Cast if dst is f16.
     aclTensor* tmp_cast_tensor = nullptr;
@@ -1465,8 +1137,7 @@ void ggml_cann_im2col(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             tmp_cast_buffer, ggml_cann_type_mapping(dst->type),
             ggml_type_size(dst->type), tmp_im2col_ne, temp_cast_nb,
             GGML_MAX_DIMS - 1, ACL_FORMAT_ND);
-        aclnn_cast(ctx, tmp_im2col_tensor, tmp_cast_tensor,
-                   ggml_cann_type_mapping(dst->type));
+        aclnn_cast(ctx, tmp_im2col_tensor, tmp_cast_tensor, dst);
     }
 
     // post-processing
@@ -1504,285 +1175,17 @@ void ggml_cann_im2col(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @param acl_src The tensor on which the exponential function will be applied.
  */
 static void aclnn_exp(ggml_backend_cann_context& ctx, aclTensor* acl_src) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(
-        aclnnInplaceExpGetWorkspaceSize(acl_src, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnInplaceExp(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(InplaceExp, acl_src);
 }
 
-/**
- * @brief Multiplies elements of a tensor by a scalar value, optionally
- * in-place.
- *
- * This function multiplies each element of the source tensor `acl_src` by the
- * scalar `scale` and stores the result in the destination tensor `acl_dst`. If
- * `inplace` is true, `acl_dst` will not be used and the operation is performed
- *  in-place on `acl_src`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst }_i=\text {acl_src }_i \times \text {scale}
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor whose elements will be multiplied.
- * @param scale The scalar value by which each element of `acl_src` will be
- * multiplied.
- * @param acl_dst The destination tensor where the result will be stored if
- * `inplace` is false.
- * @param inplace Flag indicating whether to perform the operation in-place on
- * `acl_src`.
- */
-static void aclnn_muls(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                       float scale, aclTensor* acl_dst, bool inplace) {
-    aclScalar* acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    if (inplace) {
-        ACL_CHECK(aclnnInplaceMulsGetWorkspaceSize(acl_src, acl_scale,
-                                                   &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-
-        ACL_CHECK(aclnnInplaceMuls(workspaceAddr, workspaceSize, executor,
-                                   ctx.stream()));
-    } else {
-        ACL_CHECK(aclnnMulsGetWorkspaceSize(acl_src, acl_scale, acl_dst,
-                                            &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-
-        ACL_CHECK(
-            aclnnMuls(workspaceAddr, workspaceSize, executor, ctx.stream()));
-    }
-
-    ACL_CHECK(aclDestroyScalar(acl_scale));
-}
-
-/**
- * @brief Performs an in-place element-wise multiplication of two tensors.
- *
- * This function performs an element-wise multiplication of the tensors
- * `acl_src` and `acl_other` and stores the result in `acl_src`.
- * The operation is defined as:
- * \f[
- *     \text {acl_src }_i=\text {acl_src }_i \times \text {acl_other }_i
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor where the multiplication result will be
- * stored.
- * @param acl_other The tensor whose elements will be multiplied with `acl_src`.
- */
-static void aclnn_inplace_mul(ggml_backend_cann_context& ctx,
-                              aclTensor* acl_src, aclTensor* acl_other) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceMulGetWorkspaceSize(acl_src, acl_other,
-                                              &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnInplaceMul(workspaceAddr, workspaceSize, executor, ctx.stream()));
-}
-
-/**
- * @brief Performs element-wise multiplication of two tensors and stores the
- * result in a destination tensor.
- *
- * This function performs element-wise multiplication of the tensors `acl_src`
- * and `acl_other` and stores the result in the destination tensor `acl_dst`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst }_i=\text {acl_src }_i \times \text {acl_other }_i
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The first tensor for element-wise multiplication.
- * @param acl_other The second tensor for element-wise multiplication.
- * @param acl_dst The destination tensor where the result will be stored.
- */
-static void aclnn_mul(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                      aclTensor* acl_other, aclTensor* acl_dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnMulGetWorkspaceSize(acl_src, acl_other, acl_dst,
-                                       &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnMul(workspaceAddr, workspaceSize, executor, ctx.stream()));
-}
-
-/**
- * @brief Applies element-wise cosine function to the elements of a tensor.
- *
- * This function computes the cosine of each element in the source tensor
- * `acl_src` and stores the result in the destination tensor `acl_dst`. The
- * operation is defined as: \f[ \text {acl_dst }_i=\cos \left(\text {acl_src
- * }_i\right) \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor on which the cosine function will be
- * applied.
- * @param acl_dst The destination tensor where the cosine results will be
- * stored.
- */
-static void aclnn_cos(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+void aclnn_cos(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                       aclTensor* acl_dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(
-        aclnnCosGetWorkspaceSize(acl_src, acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnCos(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(Cos, acl_src, acl_dst);
 }
 
-/**
- * @brief Applies element-wise sine function to the elements of a tensor.
- *
- * This function computes the sine of each element in the source tensor
- `acl_src`
- * and stores the result in the destination tensor `acl_dst`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst }_i=\sin \left(\text {acl_src }_i\right)
- * \f]
-
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor on which the sine function will be applied.
- * @param acl_dst The destination tensor where the sine results will be stored.
- */
-static void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                       aclTensor* acl_dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(
-        aclnnSinGetWorkspaceSize(acl_src, acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnSin(workspaceAddr, workspaceSize, executor, ctx.stream()));
-}
-
-/**
- * @brief Performs element-wise division of tensor1 by tensor2 , multiplies the
- result by the scalar value and adds it to self .
- *
- * Performs element-wise division of tensor1 by tensor2,
- * multiplies the result by the scalar value and adds it to self .
- * The operation is defined as:
- * \f[
- *     \text{out}_i = \text{selft}_i + \text{value} \times
- \frac{\text{tensor1}_i}{\text{tensor2}_i}
- * \f]
-
- * @param ctx The context for the CANN backend operations.
- * @param acl_self The source tensor on which the addcdiv function will be
- applied.
- * @param tensor1 Numerator tensor.
- * @param tensor2 Denominator tensor.
- * @param value The value to be used for coefficient.
- */
-static void aclnn_inplace_addcdiv(ggml_backend_cann_context& ctx,
-                                  aclTensor* acl_self, aclTensor* tensor1,
-                                  aclTensor* tensor2, float value) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-    aclScalar* acl_value = aclCreateScalar(&value, aclDataType::ACL_FLOAT);
-
-    ACL_CHECK(aclnnInplaceAddcdivGetWorkspaceSize(
-        acl_self, tensor1, tensor2, acl_value, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnInplaceAddcdiv(workspaceAddr, workspaceSize, executor,
-                                  ctx.stream()));
-}
-
-/**
- * @brief Matrix division, optionally in-place.
- *
- * This function division each element of the source tensor `acl_src` by the
- * tensor `acl_other` and stores the result in the destination tensor `acl_dst`.
- * If `inplace` is true, `acl_dst` will not be used and the operation is
- * performed in-place on `acl_src`. The operation is defined as: \f[
- *     \text{dst}_i = \frac{\text{acl_src}_i}{\text{acl_other}_i}
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src Numerator tensor..
- * @param acl_other Denominator tensor.
- * @param acl_dst The destination tensor where the result will be stored if
- * `inplace` is false.
- * @param inplace Flag indicating whether to perform the operation in-place on
- * `acl_src`.
- */
-static void aclnn_div_tensor(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                             aclTensor* acl_other, aclTensor* acl_dst,
-                             bool inplace) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    if (inplace) {
-        ACL_CHECK(aclnnInplaceDivGetWorkspaceSize(acl_src, acl_other,
-                                                  &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-
-        ACL_CHECK(aclnnInplaceDiv(workspaceAddr, workspaceSize, executor,
-                                  ctx.stream()));
-    } else {
-        ACL_CHECK(aclnnDivGetWorkspaceSize(acl_src, acl_other, acl_dst,
-                                           &workspaceSize, &executor));
-        if (workspaceSize > 0) {
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-            workspaceAddr = workspace_allocator.get();
-        }
-
-        ACL_CHECK(
-            aclnnDiv(workspaceAddr, workspaceSize, executor, ctx.stream()));
-    }
+    GGML_CANN_CALL_ACLNN_OP(Sin, acl_src, acl_dst);
 }
 
 void ggml_cann_timestep_embedding(ggml_backend_cann_context& ctx,
@@ -1912,20 +1315,7 @@ void ggml_cann_timestep_embedding(ggml_backend_cann_context& ctx,
 static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
                               aclTensor* acl_dst) {
     auto acl_scalar = aclCreateScalar(&scalar, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceFillScalarGetWorkspaceSize(
-        acl_dst, acl_scalar, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnInplaceFillScalar(workspaceAddr, workspaceSize, executor,
-                                     ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(InplaceFillScalar, acl_dst, acl_scalar);
     ACL_CHECK(aclDestroyScalar(acl_scalar));
 }
 
@@ -1947,19 +1337,7 @@ static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
  */
 static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
                                     aclTensor* acl_dst, aclTensor* acl_exp) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplacePowTensorTensorGetWorkspaceSize(
-        acl_dst, acl_exp, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnInplacePowTensorTensor(workspaceAddr, workspaceSize,
-                                          executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(InplacePowTensorTensor, acl_dst, acl_exp);
 }
 
 /**
@@ -2127,41 +1505,6 @@ void ggml_cann_cpy(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 }
 
 /**
- * @brief Performs element-wise addition of two tensors in place.
- *
- * This function adds the source tensor `acl_src` to the destination tensor
- * `acl_dst` element-wise and stores the result in the destination tensor
- * `acl_dst`.
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_src The source tensor to be added.
- * @param acl_dst The destination tensor which will hold the result of the
- * addition.
- */
-static void aclnn_inplace_add(ggml_backend_cann_context& ctx,
-                              aclTensor* acl_src, aclTensor* acl_dst) {
-    aclScalar* alpha = nullptr;
-    float alphaValue = 1.0f;
-    alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceAddGetWorkspaceSize(acl_dst, acl_src, alpha,
-                                              &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnInplaceAdd(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
-    ACL_CHECK(aclDestroyScalar(alpha));
-}
-
-/**
  * @brief Applies the softmax function to a tensor along a specified dimension.
  *
  * This function computes the softmax of the source tensor `acl_src` along the
@@ -2177,20 +1520,7 @@ static void aclnn_inplace_add(ggml_backend_cann_context& ctx,
  */
 static void aclnn_softmax(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                           int64_t dim, aclTensor* acl_dst) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnSoftmaxGetWorkspaceSize(acl_src, dim, acl_dst,
-                                           &workspaceSize, &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    aclrtStream stream = ctx.stream();
-    ACL_CHECK(aclnnSoftmax(workspaceAddr, workspaceSize, executor, stream));
+    GGML_CANN_CALL_ACLNN_OP(Softmax, acl_src, dim, acl_dst);
 }
 
 void ggml_cann_softmax(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -2351,23 +1681,7 @@ static void aclnn_embedding_4d(ggml_backend_cann_context& ctx, void* src_buffer,
                 (char*)dst->data + i * dst->nb[3] + j * dst->nb[2],
                 ggml_cann_type_mapping(dst->type), ggml_element_size(dst),
                 acl_out_ne, acl_out_nb, 2);
-
-            uint64_t workspaceSize = 0;
-            aclOpExecutor* executor;
-            void* workspaceAddr = nullptr;
-
-            ACL_CHECK(aclnnEmbeddingGetWorkspaceSize(
-                acl_src_tensor, acl_index, acl_out, &workspaceSize, &executor));
-
-            if (workspaceSize > 0) {
-                ggml_cann_pool_alloc workspace_allocator(ctx.pool(),
-                                                         workspaceSize);
-                workspaceAddr = workspace_allocator.get();
-            }
-
-            ACL_CHECK(aclnnEmbedding(workspaceAddr, workspaceSize, executor,
-                                     ctx.stream()));
-
+            GGML_CANN_CALL_ACLNN_OP(Embedding, acl_src_tensor, acl_index, acl_out);
             ACL_CHECK(aclDestroyTensor(acl_src_tensor));
             ACL_CHECK(aclDestroyTensor(acl_index));
             ACL_CHECK(aclDestroyTensor(acl_out));
@@ -2492,133 +1806,8 @@ static void aclnn_repeat_interleave(ggml_backend_cann_context& ctx,
                                     aclTensor* acl_src, aclTensor* acl_dst,
                                     int64_t dim, int64_t repeats,
                                     int64_t output_size) {
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnRepeatInterleaveIntWithDimGetWorkspaceSize(
-        acl_src, repeats, dim, output_size, acl_dst, &workspaceSize,
-        &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnRepeatInterleaveIntWithDim(workspaceAddr, workspaceSize,
-                                              executor, ctx.stream()));
-}
-
-/**
- * @brief Performs matrix multiplication of two tensors.
- *
- * This function computes the matrix multiplication of the input tensor
- * `acl_input` and the weight tensor `acl_weight`, and stores the result in the
- * destination tensor `acl_dst`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst}=\text {acl_input@acl_weight}
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_input The input tensor for the matrix multiplication.
- * @param acl_weight The weight tensor for the matrix multiplication.
- * @param acl_dst The destination tensor where the result of the matrix
- * multiplication will be stored.
- */
-static void aclnn_mat_mul(ggml_backend_cann_context& ctx, aclTensor* acl_input,
-                          aclTensor* acl_weight, aclTensor* acl_dst) {
-    int8_t cube_math_type = 1;  // ALLOW_FP32_DOWN_PRECISION, when input is
-                                // fp32, atlas a2 will transpose it to HFLOAT32.
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnMatmulGetWorkspaceSize(acl_input, acl_weight, acl_dst,
-                                          cube_math_type, &workspaceSize,
-                                          &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnMatmul(workspaceAddr, workspaceSize, executor, ctx.stream()));
-}
-
-/**
- * @brief Performs matrix multiplication of two 2D tensors.
- *
- * This function computes the matrix multiplication of the input tensor
- * `acl_input` and the weight tensor `acl_weight`, and stores the result in the
- * destination tensor `acl_dst`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst}=\text {acl_input@acl_weight}
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_input The input tensor for the matrix multiplication.
- * @param acl_weight The weight tensor for the matrix multiplication.
- * @param acl_dst The destination tensor where the result of the matrix
- * multiplication will be stored.
- */
-static void aclnn_mat_mul_2d(ggml_backend_cann_context& ctx,
-                             aclTensor* acl_input, aclTensor* acl_weight,
-                             aclTensor* acl_dst) {
-    int8_t cube_math_type = 2;
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnMmGetWorkspaceSize(acl_input, acl_weight, acl_dst,
-                                      cube_math_type, &workspaceSize,
-                                      &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnMm(workspaceAddr, workspaceSize, executor, ctx.stream()));
-}
-
-/**
- * @brief Performs matrix multiplication of two 3D tensors.
- *
- * This function computes the matrix multiplication of the input tensor
- * `acl_input` and the weight tensor `acl_weight`, and stores the result in the
- * destination tensor `acl_dst`.
- * The operation is defined as:
- * \f[
- *     \text {acl_dst}=\text {acl_input@acl_weight}
- * \f]
- *
- * @param ctx The context for the CANN backend operations.
- * @param acl_input The input tensor for the matrix multiplication.
- * @param acl_weight The weight tensor for the matrix multiplication.
- * @param acl_dst The destination tensor where the result of the matrix
- * multiplication will be stored.
- */
-static void aclnn_mat_mul_3d(ggml_backend_cann_context& ctx,
-                             aclTensor* acl_input, aclTensor* acl_weight,
-                             aclTensor* acl_dst) {
-    int8_t cube_math_type = 2;
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnBatchMatMulGetWorkspaceSize(acl_input, acl_weight, acl_dst,
-                                               cube_math_type, &workspaceSize,
-                                               &executor));
-
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(
-        aclnnBatchMatMul(workspaceAddr, workspaceSize, executor, ctx.stream()));
+    GGML_CANN_CALL_ACLNN_OP(RepeatInterleaveIntWithDim, acl_src, repeats, dim,
+                  output_size, acl_dst);
 }
 
 /**
@@ -2666,13 +1855,15 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
 
     switch (n_dims) {
         case 2:
-            aclnn_mat_mul_2d(ctx, acl_input_tensor, acl_weight_tensor, acl_dst);
+            GGML_CANN_CALL_ACLNN_OP(Mm, acl_input_tensor, acl_weight_tensor, acl_dst, 2);
             break;
         case 3:
-            aclnn_mat_mul_3d(ctx, acl_input_tensor, acl_weight_tensor, acl_dst);
+            GGML_CANN_CALL_ACLNN_OP(BatchMatMul, acl_input_tensor, acl_weight_tensor, acl_dst, 2);
             break;
         default:
-            aclnn_mat_mul(ctx, acl_input_tensor, acl_weight_tensor, acl_dst);
+            // ALLOW_FP32_DOWN_PRECISION, when input is
+            // fp32, atlas a2 will transpose it to HFLOAT32.
+            GGML_CANN_CALL_ACLNN_OP(Matmul, acl_input_tensor, acl_weight_tensor, acl_dst, 1);
             break;
     }
 
@@ -2765,9 +1956,6 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
     int64_t max_elem_size = 65535;
     int64_t split_size = (src0->ne[1] / max_elem_size) + 1;
     ggml_cann_pool_alloc workspace_allocator(ctx.pool());
-    aclOpExecutor* executor = nullptr;
-    uint64_t workspaceSize = 0;
-    void* workspaceAddr = nullptr;
     for (int64_t n1 = 0; n1 < src1->ne[3]; n1++) {
         for (int64_t c1 = 0; c1 < src1->ne[2]; c1++) {
             int64_t n0 = n1 / (src1->ne[3] / src0->ne[3]);
@@ -2806,17 +1994,10 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
             if (src0->ne[0] > QK8_0) {
                 antiquantGroupSize = QK8_0;
             }
-
-            ACL_CHECK(aclnnWeightQuantBatchMatmulV2GetWorkspaceSize(
-                acl_input_tensor, acl_weight_tensor, acl_scale_tensor, nullptr,
-                nullptr, nullptr, nullptr, antiquantGroupSize,
-                acl_output_tensor, &workspaceSize, &executor));
-            if (workspaceAddr == nullptr) {
-                workspaceAddr = workspace_allocator.alloc(workspaceSize);
-            }
-            ACL_CHECK(aclnnWeightQuantBatchMatmulV2(
-                workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+            GGML_CANN_CALL_ACLNN_OP(WeightQuantBatchMatmulV2, acl_input_tensor,
+                           acl_weight_tensor, acl_scale_tensor, nullptr,
+                           nullptr, nullptr, nullptr, antiquantGroupSize,
+                           acl_output_tensor);
             ACL_CHECK(aclDestroyTensor(acl_weight_tensor));
             ACL_CHECK(aclDestroyTensor(acl_scale_tensor));
             ACL_CHECK(aclDestroyTensor(acl_output_tensor));
@@ -2846,14 +2027,10 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
                     (char*)output_buffer + batch1 * output_stride, ACL_FLOAT16,
                     output_elem_size, output_ne, output_nb, 2, ACL_FORMAT_ND,
                     output_ne_offset);
-
-                ACL_CHECK(aclnnWeightQuantBatchMatmulV2GetWorkspaceSize(
-                    acl_input_tensor, acl_weight_tensor, acl_scale_tensor,
-                    nullptr, nullptr, nullptr, nullptr, antiquantGroupSize,
-                    acl_output_tensor, &workspaceSize, &executor));
-                ACL_CHECK(aclnnWeightQuantBatchMatmulV2(
-                    workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+                GGML_CANN_CALL_ACLNN_OP(WeightQuantBatchMatmulV2, acl_input_tensor,
+                                   acl_weight_tensor, acl_scale_tensor, nullptr,
+                                   nullptr, nullptr, nullptr, antiquantGroupSize,
+                                   acl_output_tensor);
                 ACL_CHECK(aclDestroyTensor(acl_weight_tensor));
                 ACL_CHECK(aclDestroyTensor(acl_scale_tensor));
                 ACL_CHECK(aclDestroyTensor(acl_output_tensor));
@@ -2876,8 +2053,7 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
             output_buffer, ACL_FLOAT16, output_elem_size, output_cast_ne,
             output_cast_nb, GGML_MAX_DIMS);
         aclTensor* acl_dst_tensor = ggml_cann_create_tensor(dst);
-        aclnn_cast(ctx, acl_output_tensor, acl_dst_tensor,
-                   ggml_cann_type_mapping(dst->type));
+        aclnn_cast(ctx, acl_output_tensor, acl_dst_tensor, dst);
 
         ACL_CHECK(aclDestroyTensor(acl_output_tensor));
         ACL_CHECK(aclDestroyTensor(acl_dst_tensor));
@@ -2896,7 +2072,7 @@ void ggml_cann_mul_mat(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_cann_mul_mat_quant(ctx, dst, type);
             break;
         default:
-            GGML_ABORT("fatal error");
+            GGML_ABORT("Unsupported type for mul_mat");
             break;
     }
 }
@@ -2921,20 +2097,7 @@ static void aclnn_roll(ggml_backend_cann_context& ctx, aclTensor* acl_src,
                        aclTensor* acl_dst, int64_t* shifts, int64_t* dims) {
     aclIntArray* acl_shifts = aclCreateIntArray(shifts, 1);
     aclIntArray* acl_dims = aclCreateIntArray(dims, 1);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnRollGetWorkspaceSize(acl_src, acl_shifts, acl_dims, acl_dst,
-                                        &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnRoll(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(Roll, acl_src, acl_shifts, acl_dims, acl_dst);
     ACL_CHECK(aclDestroyIntArray(acl_shifts));
     ACL_CHECK(aclDestroyIntArray(acl_dims));
 }
@@ -2958,21 +2121,7 @@ static void aclnn_index_fill_tensor(ggml_backend_cann_context& ctx,
                                     float value) {
     aclIntArray* acl_index = aclCreateIntArray(index, index_num);
     aclScalar* acl_value = aclCreateScalar(&value, aclDataType::ACL_FLOAT);
-
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnInplaceIndexFillTensorGetWorkspaceSize(
-        acl_src, dim, acl_index, acl_value, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnInplaceIndexFillTensor(workspaceAddr, workspaceSize,
-                                          executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(InplaceIndexFillTensor, acl_src, dim, acl_index, acl_value);
     ACL_CHECK(aclDestroyIntArray(acl_index));
     ACL_CHECK(aclDestroyScalar(acl_value));
 }
@@ -3031,8 +2180,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         aclTensor* acl_freq_factors_tensor = ggml_cann_create_tensor(
             src2->data, ggml_cann_type_mapping(src2->type),
             ggml_type_size(src2->type), arange_ne, arange_nb, GGML_MAX_DIMS);
-        aclnn_div_tensor(ctx, acl_theta_scale_tensor, acl_freq_factors_tensor,
-                         nullptr, true);
+        aclnn_div(ctx, acl_theta_scale_tensor, acl_freq_factors_tensor);
         ACL_CHECK(aclDestroyTensor(acl_freq_factors_tensor));
     }
 
@@ -3331,8 +2479,8 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     // output
     void* output_fp32_buffer;
     if (src0->type == GGML_TYPE_F32) {
-        aclnn_inplace_mul(ctx, acl_src, acl_cos_reshape_tensor);
-        aclnn_inplace_mul(ctx, acl_input_roll_mul_scale_tensor,
+        aclnn_mul(ctx, acl_src, acl_cos_reshape_tensor);
+        aclnn_mul(ctx, acl_input_roll_mul_scale_tensor,
                           acl_sin_reshape_tensor);
         aclnn_add(ctx, acl_src, acl_input_roll_mul_scale_tensor, acl_dst);
         // TODO: ne0 != n_dims in mode2
@@ -3405,37 +2553,21 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_type_size(src0->type), sin_final_ne, sin_final_nb,
             GGML_MAX_DIMS);
 
-        aclnn_cast(ctx, acl_sin_reshape_tensor, acl_sin_final_tensor,
-                   ggml_cann_type_mapping(src0->type));
-        aclnn_cast(ctx, acl_cos_reshape_tensor, acl_cos_final_tensor,
-                   ggml_cann_type_mapping(src0->type));
+        aclnn_cast(ctx, acl_sin_reshape_tensor, acl_sin_final_tensor, dst);
+        aclnn_cast(ctx, acl_cos_reshape_tensor, acl_cos_final_tensor, dst);
         ACL_CHECK(aclDestroyTensor(acl_cos_reshape_tensor));
         ACL_CHECK(aclDestroyTensor(acl_sin_reshape_tensor));
         acl_sin_reshape_tensor = acl_sin_final_tensor;
         acl_cos_reshape_tensor = acl_cos_final_tensor;
     }
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-
-    void* workspaceAddr = nullptr;
-
     int acl_mode = mode;
     if (mode == 0) {
         acl_mode = 1;
     }
 
-    ACL_CHECK(aclnnRotaryPositionEmbeddingGetWorkspaceSize(
-        acl_src, acl_cos_reshape_tensor, acl_sin_reshape_tensor, acl_mode,
-        acl_dst, &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-
-    ACL_CHECK(aclnnRotaryPositionEmbedding(workspaceAddr, workspaceSize,
-                                           executor, ctx.stream()));
-
+    GGML_CANN_CALL_ACLNN_OP(RotaryPositionEmbedding, acl_src, acl_cos_reshape_tensor,
+                  acl_sin_reshape_tensor, acl_mode, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_cos_reshape_tensor));
     ACL_CHECK(aclDestroyTensor(acl_sin_reshape_tensor));
@@ -3449,38 +2581,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* acl_src = ggml_cann_create_tensor(src0);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3);
 
-    uint64_t workspaceSize = 0;
-    aclOpExecutor* executor;
-    void* workspaceAddr = nullptr;
-
-    ACL_CHECK(aclnnArgMaxGetWorkspaceSize(acl_src, 3, false, acl_dst,
-                     &workspaceSize, &executor));
-    if (workspaceSize > 0) {
-        ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);
-        workspaceAddr = workspace_allocator.get();
-    }
-    ACL_CHECK(aclnnArgMax(workspaceAddr, workspaceSize, executor, ctx.stream()));
-
-    ACL_CHECK(aclDestroyTensor(acl_src));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
-}
-
-void ggml_cann_cos(ggml_backend_cann_context& ctx, ggml_tensor* dst){
-    ggml_tensor * src0 = dst->src[0];
-
-    aclTensor* acl_src = ggml_cann_create_tensor(src0);
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
-    aclnn_cos(ctx, acl_src, acl_dst);
-    ACL_CHECK(aclDestroyTensor(acl_src));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
-}
-
-void ggml_cann_sin(ggml_backend_cann_context& ctx, ggml_tensor* dst){
-    ggml_tensor * src0 = dst->src[0];
-
-    aclTensor* acl_src = ggml_cann_create_tensor(src0);
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
-    aclnn_sin(ctx, acl_src, acl_dst);
+    GGML_CANN_CALL_ACLNN_OP(ArgMax, acl_src, 3, false, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }

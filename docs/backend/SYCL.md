@@ -475,6 +475,12 @@ b. Enable oneAPI running environment:
 "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64
 ```
 
+- if you are using Powershell, enable the runtime environment with the following:
+
+```
+cmd.exe "/K" '"C:\Program Files (x86)\Intel\oneAPI\setvars.bat" && powershell'
+```
+
 c. Verify installation
 
 In the oneAPI command line, run the following to print the available SYCL devices:
@@ -505,13 +511,13 @@ You could download the release package for Windows directly, which including bin
 
 Choose one of following methods to build from source code.
 
-1. Script
+#### 1. Script
 
 ```sh
 .\examples\sycl\win-build-sycl.bat
 ```
 
-2. CMake
+#### 2. CMake
 
 On the oneAPI command line window, step into the llama.cpp main directory and run the following:
 
@@ -540,13 +546,84 @@ cmake --preset x64-windows-sycl-debug
 cmake --build build-x64-windows-sycl-debug -j --target llama-cli
 ```
 
-3. Visual Studio
+#### 3. Visual Studio
 
-You can use Visual Studio to open llama.cpp folder as a CMake project. Choose the sycl CMake presets (`x64-windows-sycl-release` or `x64-windows-sycl-debug`) before you compile the project.
+You have two options to use Visual Studio to build llama.cpp:
+- As CMake Project using CMake presets.
+- Creating a Visual Studio solution to handle the project.
+
+**Note**:
+
+All following commands are executed in PowerShell.
+
+##### - Open as a CMake Project
+
+You can use Visual Studio to open the `llama.cpp` folder directly as a CMake project. Before compiling, select one of the SYCL CMake presets:
+
+- `x64-windows-sycl-release`
+
+- `x64-windows-sycl-debug`
 
 *Notes:*
+- For a minimal experimental setup, you can build only the inference executable using:
 
-- In case of a minimal experimental setup, the user can build the inference executable only through `cmake --build build --config Release -j --target llama-cli`.
+    ```Powershell
+    cmake --build build --config Release -j --target llama-cli
+    ```
+
+##### - Generating a Visual Studio Solution
+
+You can use Visual Studio solution to build and work on llama.cpp on Windows. You need to convert the CMake Project into a `.sln` file.
+
+If you want to use the Intel C++ Compiler for the entire `llama.cpp` project, run the following command:
+
+```Powershell
+cmake -B build -G "Visual Studio 17 2022" -T "Intel C++ Compiler 2025" -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release
+```
+
+If you prefer to use the Intel C++ Compiler only for `ggml-sycl`, ensure that `ggml` and its backend libraries are built as shared libraries ( i.e. `-DBUILD_SHARED_LIBRARIES=ON`, this is default behaviour):
+
+```Powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release \
+      -DSYCL_INCLUDE_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\include" \
+      -DSYCL_LIBRARY_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\lib"
+```
+
+If successful the build files have been written to: *path/to/llama.cpp/build*
+Open the project file **build/llama.cpp.sln** with Visual Studio.
+
+Once the Visual Studio solution is created, follow these steps:
+
+1. Open the solution in Visual Studio.
+
+2. Right-click on `ggml-sycl` and select **Properties**.
+
+3. In the left column, expand **C/C++** and select **DPC++**.
+
+4. In the right panel, find **Enable SYCL Offload** and set it to `Yes`.
+
+5. Apply the changes and save.
+
+
+*Navigation Path:*
+
+```
+Properties -> C/C++ -> DPC++ -> Enable SYCL Offload (Yes)
+```
+
+Now, you can build `llama.cpp` with the SYCL backend as a Visual Studio project.
+To do it from menu: `Build -> Build Solution`.
+Once it is completed, final results will be in **build/Release/bin**
+
+*Additional Note*
+
+- You can avoid specifying `SYCL_INCLUDE_DIR` and `SYCL_LIBRARY_DIR` in the CMake command by setting the environment variables:
+
+    - `SYCL_INCLUDE_DIR_HINT`
+
+    - `SYCL_LIBRARY_DIR_HINT`
+
+- Above instruction has been tested with Visual Studio 17 Community edition and oneAPI 2025.0. We expect them to work also with future version if the instructions are adapted accordingly.
 
 ### III. Run the inference
 

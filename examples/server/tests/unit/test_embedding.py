@@ -49,6 +49,26 @@ def test_embedding_multiple():
         assert len(d['embedding']) > 1
 
 
+def test_embedding_multiple_with_fa():
+    server = ServerPreset.bert_bge_small_with_fa()
+    server.pooling = 'last'
+    server.start()
+    # one of these should trigger the FA branch (i.e. context size % 256 == 0)
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": [
+            "a "*253,
+            "b "*254,
+            "c "*255,
+            "d "*256,
+        ],
+    })
+    assert res.status_code == 200
+    assert len(res.body['data']) == 4
+    for d in res.body['data']:
+        assert 'embedding' in d
+        assert len(d['embedding']) > 1
+
+
 @pytest.mark.parametrize(
     "input,is_multi_prompt",
     [

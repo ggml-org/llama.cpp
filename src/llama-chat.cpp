@@ -61,6 +61,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
+    { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -174,6 +175,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_YANDEX;
     } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("'HUMAN'")) {
         return LLM_CHAT_TEMPLATE_BAILING;
+    } else if (tmpl_contains("<|header_start|>") && tmpl_contains("<|header_end|>")) {
+        return LLM_CHAT_TEMPLATE_LLAMA4;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -608,7 +611,16 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << "<role>ASSISTANT</role>";
         }
-    } else {
+    } else if (tmpl == LLM_CHAT_TEMPLATE_LLAMA4) {
+        // Llama 4
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << "<|header_start|>" << role << "<|header_end|>\n\n" << trim(message->content) << "<|eot|>";
+        }
+        if (add_ass) {
+            ss << "<|header_start|>assistant<|header_end|>\n\n";
+        }
+    }  else {
         // template not supported
         return -1;
     }

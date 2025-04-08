@@ -1,6 +1,7 @@
 #ifndef CLIP_H
 #define CLIP_H
 
+#include "ggml.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -41,7 +42,7 @@ struct clip_image_f32_batch {
 
 struct clip_context_params {
     bool use_gpu;
-    int verbosity;
+    ggml_log_level verbosity;
 };
 
 // deprecated, use clip_init
@@ -105,6 +106,8 @@ CLIP_API bool clip_model_quantize(const char * fname_inp, const char * fname_out
 CLIP_API int clip_is_minicpmv(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_glm(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_qwen2vl(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_llava(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_gemma3(const struct clip_ctx * ctx);
 
 CLIP_API int get_deepest_feature_layer(const struct clip_ctx * ctx);
 

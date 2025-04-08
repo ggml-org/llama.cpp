@@ -746,6 +746,9 @@ class GGUFWriter:
     def add_token_shift_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.TOKEN_SHIFT_COUNT.format(arch=self.arch), count)
 
+    def add_interleave_moe_layer_step(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.INTERLEAVE_MOE_LAYER_STEP.format(arch=self.arch), value)
+
     def add_layer_norm_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.LAYERNORM_EPS.format(arch=self.arch), value)
 

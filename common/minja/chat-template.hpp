@@ -9,9 +9,18 @@
 #pragma once
 
 #include "minja.hpp"
-#include <json.hpp>
+
+#include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <exception>
+#include <iomanip>
+#include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
+
+#include <json.hpp>
 
 using json = nlohmann::ordered_json;
 
@@ -425,7 +434,7 @@ class chat_template {
                         auto obj = json {
                             {"tool_calls", tool_calls},
                         };
-                        if (!content.is_null() && content != "") {
+                        if (!content.is_null() && !content.empty()) {
                             obj["content"] = content;
                         }
                         message["content"] = obj.dump(2);
@@ -435,13 +444,12 @@ class chat_template {
                 if (polyfill_tool_responses && role == "tool") {
                     message["role"] = "user";
                     auto obj = json {
-                        {"tool_response", {
-                            {"content", message.at("content")},
-                        }},
+                        {"tool_response", json::object()},
                     };
                     if (message.contains("name")) {
-                        obj["tool_response"]["name"] = message.at("name");
+                        obj["tool_response"]["tool"] = message.at("name");
                     }
+                    obj["tool_response"]["content"] = message.at("content");
                     if (message.contains("tool_call_id")) {
                         obj["tool_response"]["tool_call_id"] = message.at("tool_call_id");
                     }
@@ -510,7 +518,7 @@ class chat_template {
     static nlohmann::ordered_json add_system(const nlohmann::ordered_json & messages, const std::string & system_prompt) {
         json messages_with_system = messages;
 
-        if (messages_with_system.size() > 0 && messages_with_system[0].at("role") == "system") {
+        if (!messages_with_system.empty() && messages_with_system[0].at("role") == "system") {
             std::string existing_system = messages_with_system.at(0).at("content");
             messages_with_system[0] = json {
                 {"role", "system"},

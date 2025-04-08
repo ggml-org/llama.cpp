@@ -408,8 +408,6 @@ static void gguf_merge(const split_params & split_params) {
         exit(EXIT_FAILURE);
     }
 
-    std::ofstream fout(split_params.output.c_str(), std::ios::binary);
-    fout.exceptions(std::ofstream::failbit); // fail fast on write errors
 
     auto * ctx_out = gguf_init_empty();
 
@@ -453,7 +451,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -466,7 +463,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -479,7 +475,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -500,9 +495,11 @@ static void gguf_merge(const split_params & split_params) {
 
         fprintf(stderr, "\033[3Ddone\n");
     }
-
-    // placeholder for the meta data
-    {
+    std::ofstream fout;
+    if (!split_params.dry_run) {
+        fout.open(split_params.output.c_str(), std::ios::binary);
+        fout.exceptions(std::ofstream::failbit); // fail fast on write errors
+        // placeholder for the meta data
         auto meta_size = gguf_get_meta_size(ctx_out);
         ::zeros(fout, meta_size);
     }
@@ -518,7 +515,9 @@ static void gguf_merge(const split_params & split_params) {
                 ggml_free(ctx_metas[i]);
             }
             gguf_free(ctx_out);
-            fout.close();
+            if (!split_params.dry_run) {
+                fout.close();
+            }
             exit(EXIT_FAILURE);
         }
         fprintf(stderr, "%s: writing tensors %s ...", __func__, split_path);
@@ -540,10 +539,11 @@ static void gguf_merge(const split_params & split_params) {
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
             f_input.read((char *)read_data.data(), n_bytes);
-
-            // write tensor data + padding
-            fout.write((const char *)read_data.data(), n_bytes);
-            zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+            if (!split_params.dry_run) {
+                // write tensor data + padding
+                fout.write((const char *)read_data.data(), n_bytes);
+                zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+            }
         }
 
         gguf_free(ctx_gguf);
@@ -552,16 +552,15 @@ static void gguf_merge(const split_params & split_params) {
         fprintf(stderr, "\033[3Ddone\n");
     }
 
-    {
+    if (!split_params.dry_run) {
         // go back to beginning of file and write the updated metadata
         fout.seekp(0);
         std::vector<uint8_t> data(gguf_get_meta_size(ctx_out));
         gguf_get_meta_data(ctx_out, data.data());
         fout.write((const char *)data.data(), data.size());
-
         fout.close();
-        gguf_free(ctx_out);
     }
+    gguf_free(ctx_out);
 
     fprintf(stderr, "%s: %s merged from %d split with %d tensors.\n",
             __func__, split_params.output.c_str(), n_split, total_tensors);
