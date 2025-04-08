@@ -5065,11 +5065,15 @@ static int ggmlhexagon_request_status_notifications(int domain_id, void * contex
     return hexagon_error;
 }
 
-static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
+static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     size_t candidate_size   = 0;
     uint8_t * rpc_buffer    = nullptr;
     size_t probe_slots[]    = {1024, 1536, 2000, 2048};
     size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
+
+    if (nullptr == ctx)
+        return 1;
+
     for (size_t idx = 0; idx < probe_counts; idx++) {
         rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
         if (nullptr == rpc_buffer) {
@@ -5087,18 +5091,15 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     GGMLHEXAGON_LOG_INFO("capacity of rpc memory %d MiB", ctx->rpc_mempool_capacity / SIZE_IN_MB);
 
     if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
-        //FIXME: reasonable rpc memory pool size through a better approach rather than hardcoded size
-        ctx->rpc_mempool_len = 1024 * SIZE_IN_MB;
-        if (ctx->rpc_mempool_len > ctx->rpc_mempool_capacity) {
-            GGMLHEXAGON_LOG_WARN("rpc mempool is too big");
-            return;
-        }
+        GGML_ASSERT(ctx->rpc_mempool_capacity > (8 * SIZE_IN_MB));
+        ctx->rpc_mempool_len = ctx->rpc_mempool_capacity - (8 * SIZE_IN_MB);
+
         //FIXME: it seems there is unknown issue with another ION memory pool
         ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
                                         ctx->rpc_mempool_len);
         if (nullptr == ctx->rpc_mempool) {
             GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %d failed", ctx->rpc_mempool_len);
-            return;
+            return 2;
         } else {
             GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d MiB)",
                                   ctx->rpc_mempool, ctx->rpc_mempool_len,
@@ -5109,7 +5110,7 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         remote_register_buf(ctx->rpc_mempool, ctx->rpc_mempool_len, ctx->rpc_mempool_handle);
     }
 
-    return;
+    return 0;
 }
 
 static void ggmlhexagon_deinit_rpcmempool(ggml_backend_hexagon_context * ctx) {
@@ -5316,7 +5317,11 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         ggmlhexagon_probe_dspinfo(ctx);
         ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1);
         ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 100);
-        ggmlhexagon_init_rpcmempool(ctx);
+        int result = ggmlhexagon_init_rpcmempool(ctx);
+        if (0 != result) {
+            GGMLHEXAGON_LOG_INFO("failed to init rpc mempool");
+            goto bail;
+        }
     } else {
         GGMLHEXAGON_LOG_INFO("error 0x%x: failed to open domain %d(%s)", hexagon_error, domain_id,
                              ggmlhexagon_get_dsp_name(domain_id));
