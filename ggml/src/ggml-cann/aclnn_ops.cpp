@@ -2623,9 +2623,9 @@ void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst){
     aclTensor* acl_input = ggml_cann_create_tensor(src0);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
-    float ONE = 1.0f;
+    float alphaValue = 1.0f;
     aclScalar* alpha = nullptr;
-    alpha = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
+    alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
 
     GGML_CANN_CALL_ACLNN_OP(Elu, acl_input, alpha, alpha, alpha,
         acl_dst);
