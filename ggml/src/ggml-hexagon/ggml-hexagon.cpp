@@ -909,7 +909,7 @@ public:
             written_size = fwrite(prefix, 1, strlen(prefix), _fp_profile_file);
             if (written_size != strlen(prefix)) {
                 GGMLHEXAGON_LOG_WARN("write data to file %s failed, reason: %s", profiler_filename, strerror(errno));
-                reset();
+                profiler_deinit();
                 return;
             }
 
@@ -918,7 +918,7 @@ public:
             written_size = fwrite(profiler_info, 1, strlen(profiler_info), _fp_profile_file);
             if (written_size != strlen(profiler_info)) {
                 GGMLHEXAGON_LOG_WARN("write data to file %s failed, reason: %s", profiler_filename, strerror(errno));
-                reset();
+                profiler_deinit();
                 return;
             }
             fprintf(_fp_profile_file, "\n\n");
