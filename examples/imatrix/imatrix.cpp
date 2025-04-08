@@ -35,7 +35,7 @@ struct Stats {
 
 struct Tally {
     std::string tensor;
-    float value = 0;
+    double bias = 0;
     int count = 0;
 };
 
@@ -370,19 +370,20 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<Tally> * tal
         }
 
         // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
-        float total = 0;
+        double total = 0;
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
-            total += tmp[i];
             e.counts[i] += ncall;
+            const double avg_sq = (1.0 * e.values[i]) / e.counts[i];
+            total += avg_sq;
         }
         e.ncall += ncall;
 
         if (tally) {
             tally->emplace_back();
-            auto & [tensor, value, count] = (*tally)[i];
+            auto & [tensor, bias, count] = (*tally)[i];
             tensor = name_as_vec.data();
-            value = total;
+            bias = total;
             count = nval;
         }
     }
@@ -647,25 +648,25 @@ int main(int argc, char ** argv) {
             LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
             return 1;
         }
-        float total = 0;
+        double total = 0;
         for (const auto & tallie : tallies) {
-            total += tallie.value / static_cast<float>(tallie.count);
+            total += tallie.bias;
         }
 
         struct tally_sort {
             bool operator()(const Tally& x, const Tally & y) const {
-                return x.value / static_cast<float>(x.count) > y.value / static_cast<float>(y.count);
+                return x.bias > y.bias;
             }
         };
         std::sort(tallies.begin(), tallies.end(), tally_sort());
 
         LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(tallies.size()));
-        LOG_INF("\n Layer\t               Tensor\t          μ(Importance Scores)\t   Contribution\n");
-        LOG_INF("================================================================================\n");
-        for (const auto & [tensor, value, count] : tallies) {
+        LOG_INF("\n Layer\t               Tensor\t              Total Bias\tAvg Bias\t  Contribution\n");
+        LOG_INF("===============================================================================================\n");
+        for (const auto & [tensor, bias, count] : tallies) {
             std::string layer, name;
             process_tensor_name(tensor, layer, name);
-            LOG_INF("%5s\t%30s\t%15.2f\t%20.4f %%\n", layer.c_str(), name.c_str(), value / count, 100.0f * (value / count / total));
+            LOG_INF("%5s\t%30s\t%15.2f\t%15.4f\t%19.4f%%\n", layer.c_str(), name.c_str(), bias, bias / count, 100.0 * bias / total);
         }
         LOG_INF("\n");
         return 0;
