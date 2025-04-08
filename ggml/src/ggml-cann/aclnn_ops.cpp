@@ -57,6 +57,8 @@
 #include <aclnnop/aclnn_sub.h>
 #include <aclnnop/aclnn_mul.h>
 #include <aclnnop/aclnn_div.h>
+#include <aclnnop/aclnn_convolution.h>
+#include <aclnnop/aclnn_elu.h>
 #include <float.h>
 
 #include <cmath>
@@ -2583,5 +2585,57 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     GGML_CANN_CALL_ACLNN_OP(ArgMax, acl_src, 3, false, acl_dst);
     ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+    ggml_tensor * src1 = dst->src[1];
+
+    // stride
+    int64_t s0 = ((const int32_t*)(dst->op_params))[0];
+
+    aclTensor* acl_input = ggml_cann_create_tensor(src1, src1->ne, src1->nb, 3, ACL_FORMAT_NCL);
+    aclTensor* acl_weight = ggml_cann_create_tensor(src0, src0->ne, src0->nb, 3, ACL_FORMAT_NCL);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3, ACL_FORMAT_NCL);
+
+    int64_t strideVal[1];
+    strideVal[0] = s0;
+    aclIntArray *stride = aclCreateIntArray(strideVal, 1);
+    int64_t paddingVal[] = {0};
+    aclIntArray *padding = aclCreateIntArray(paddingVal, 1);
+    int64_t dilationVal[] = {1};
+    aclIntArray *dilation = aclCreateIntArray(dilationVal, 1);
+    int64_t outputPaddingVal[] = {0};
+    aclIntArray *outputPadding = aclCreateIntArray(outputPaddingVal, 1);
+    bool transposed = true;
+    int64_t groups = 1;
+    int8_t cubeMathType = 0;
+
+    GGML_CANN_CALL_ACLNN_OP(Convolution, acl_input, acl_weight, nullptr, stride,
+        padding, dilation, transposed, outputPadding, groups, acl_dst, cubeMathType);
+
+    ACL_CHECK(aclDestroyTensor(acl_weight));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
+void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_input = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+
+    float ONE = 1.0f;
+    aclScalar* alpha = nullptr;
+    alpha = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
+    aclScalar* scale = nullptr;
+    scale = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
+    aclScalar* inputScale = nullptr;
+    inputScale = aclCreateScalar(&ONE, aclDataType::ACL_FLOAT);
+
+    GGML_CANN_CALL_ACLNN_OP(Elu, acl_input, alpha, scale, inputScale,
+        acl_dst);
+
+    ACL_CHECK(aclDestroyTensor(acl_input));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }

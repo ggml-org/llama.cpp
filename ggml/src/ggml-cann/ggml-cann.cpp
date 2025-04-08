@@ -1330,12 +1330,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     GGML_CANN_CALL_UNARY_OP(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
-                        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) {
-                            GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
-                        };
-                        ggml_cann_unary_op<lambda>(ctx, dst);
-                    }
+                    GGML_CANN_CALL_UNARY_OP(GeluV2);
                     break;
+                }
                 case GGML_UNARY_OP_TANH:
                     GGML_CANN_CALL_UNARY_OP(Tanh);
                     break;
@@ -1353,6 +1350,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     break;
                 case GGML_UNARY_OP_EXP:
                     GGML_CANN_CALL_UNARY_OP(Exp);
+                    break;
+                case GGML_UNARY_OP_ELU:
+                    ggml_cann_elu(ctx, dst);
                     break;
                 default:
                     return false;
@@ -1444,11 +1444,14 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_argmax(ctx, dst);
             break;
         case GGML_OP_COS:
-            ggml_cann_unary_op<aclnn_cos>(ctx, dst);
+            ggml_cann_unary_op(ctx, dst, aclnn_cos);
             break;
         case GGML_OP_SIN:
-            ggml_cann_unary_op<aclnn_sin>(ctx, dst);
-        break;
+            ggml_cann_unary_op(ctx, dst, aclnn_sin);
+            break;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            ggml_cann_conv_transpose_1d(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -1710,6 +1713,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_ELU:
                     return true;
                 default:
                     return false;
@@ -1842,6 +1846,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARGMAX:
         case GGML_OP_COS:
         case GGML_OP_SIN:
+        case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
         default:
             return false;
