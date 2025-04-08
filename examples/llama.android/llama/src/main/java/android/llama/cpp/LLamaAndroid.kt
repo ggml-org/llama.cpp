@@ -25,7 +25,7 @@ class LLamaAndroid {
 
     private external fun processSystemPrompt(systemPrompt: String): Int
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
-    private external fun completionLoop(): String?
+    private external fun generateNextToken(): String?
 
     /**
      * Thread local state
@@ -128,7 +128,7 @@ class LLamaAndroid {
 
                 Log.i(TAG, "User prompt processed! Generating assistant prompt...")
                 while (true) {
-                    completionLoop()?.let { utf8token ->
+                    generateNextToken()?.let { utf8token ->
                         if (utf8token.isNotEmpty()) emit(utf8token)
                     } ?: break
                 }
