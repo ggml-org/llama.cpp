@@ -556,6 +556,81 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_snac::set_input(const llama_ubatch * ubatch) {
+
+    LLAMA_LOG_INFO("Setting SNAC input for layer %d\n", ilayer);
+
+    const int n_tokens = ubatch->n_tokens;
+    if (n_tokens % frame_size != 0) {
+        return; // TODO: handle gracefully
+    }
+    const int n_frames = n_tokens / frame_size;
+
+    int64_t expected_elements = 0;
+    int     vocab_offset      = 0;
+    int     tokens_per_frame  = 0;
+
+    switch (ilayer) {
+    case 0: // Layer 1
+        tokens_per_frame = 1;
+        vocab_offset     = 128266; // TODO: hparams
+        break;
+    case 1: // Layer 2
+        tokens_per_frame = 2;
+        vocab_offset     = 132362;
+        break;
+    case 2: // Layer 3
+        tokens_per_frame = 4;
+        vocab_offset     = 136458;
+        break;
+    default:
+        LLAMA_LOG_ERROR("%s: Invalid SNAC layer index %d encountered.\n", __func__, ilayer);
+        GGML_ASSERT(false && "Invalid SNAC layer index"); // Should be caught by constructor assert
+        return;
+    }
+    expected_elements = (int64_t)n_frames * tokens_per_frame;
+
+    std::vector<int32_t> indices;
+    indices.reserve(expected_elements);
+
+    const llama_token * tokens_data = ubatch->token;
+
+    for (int i_frame = 0; i_frame < n_frames; ++i_frame) {
+        const int frame_start_idx = i_frame * frame_size;
+        const llama_token * frame_tokens = tokens_data + frame_start_idx;
+
+        switch (ilayer) {
+            case 0: { // L1: token 0
+                int32_t index = (int32_t)(frame_tokens[0] - vocab_offset);
+
+                indices.push_back(index);
+                break;
+            }
+            case 1: { // L2: tokens 1, 4
+                int32_t index1 = (int32_t)(frame_tokens[1] - vocab_offset);
+                int32_t index4 = (int32_t)(frame_tokens[4] - vocab_offset);
+
+                indices.push_back(index1);
+                indices.push_back(index4);
+                break;
+            }
+            case 2: { // L3: tokens 2, 3, 5, 6
+                int32_t index2 = (int32_t)(frame_tokens[2] - vocab_offset);
+                int32_t index3 = (int32_t)(frame_tokens[3] - vocab_offset);
+                int32_t index5 = (int32_t)(frame_tokens[5] - vocab_offset);
+                int32_t index6 = (int32_t)(frame_tokens[6] - vocab_offset);
+
+                indices.push_back(index2);
+                indices.push_back(index3);
+                indices.push_back(index5);
+                indices.push_back(index6);
+                break;
+            }
+        }
+    }
+    ggml_backend_tensor_set(target, indices.data(), 0, ggml_nbytes(target));
+}
+
 //
 // llm_graph_context
 //
@@ -985,8 +1060,6 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
         }
     } else {
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
-        LLAMA_LOG_DEBUG("build_inp_embd: inp->embd shape = [%ld, %ld, %ld, %ld]\n",
-                    inp->embd->ne[0], inp->embd->ne[1], inp->embd->ne[2], inp->embd->ne[3]);
         ggml_set_input(inp->embd);
 
         cur = inp->embd;

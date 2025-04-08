@@ -1348,13 +1348,13 @@ int llama_context::decode(llama_batch & inp_batch) {
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
         if (compute_status != GGML_STATUS_SUCCESS) {
             switch (compute_status) {
-                case GGML_STATUS_ABORTED:
-                    return 2;
-                case GGML_STATUS_ALLOC_FAILED:
-                    return -2;
-                case GGML_STATUS_FAILED:
-                default:
-                    return -3;
+            case GGML_STATUS_ABORTED:
+                return 2;
+            case GGML_STATUS_ALLOC_FAILED:
+                return -2;
+            case GGML_STATUS_FAILED:
+            default:
+                return -3;
             }
         }
 

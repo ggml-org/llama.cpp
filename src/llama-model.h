@@ -138,6 +138,7 @@ struct llama_layer_convnext {
 };
 
 struct llama_layer_snac_dec_block {
+
     struct ggml_tensor * alpha           = nullptr;
 
     struct ggml_tensor * up_weight       = nullptr;

@@ -268,6 +268,20 @@ public:
     const llama_cross * cross = nullptr;
 };
 
+class llm_graph_input_snac : public llm_graph_input_i {
+public:
+    llm_graph_input_snac(ggml_tensor * target, int ilayer,
+                         const llama_hparams & hparams) : target(target), ilayer(ilayer), hparams(hparams) {}
+    virtual ~llm_graph_input_snac() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * target; // idx tensor 1, 2, or 3
+    const llama_hparams & hparams;
+    const int ilayer;
+    const int frame_size = 7;
+};
+
 //
 // llm_graph_result
 //

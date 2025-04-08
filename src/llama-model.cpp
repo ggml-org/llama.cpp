@@ -1489,8 +1489,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
         auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
-            std::string tn_str = tn.str();
-            ggml_tensor * t_meta = ml.get_tensor_meta(tn_str.c_str());
+            ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
             if (!t_meta) {
                 if (flags & TENSOR_NOT_REQUIRED) {
@@ -11743,21 +11742,22 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
     }
 };
 
-// TODO: Placeholder
 struct llm_build_snac_dec : public llm_graph_context {
 
     llm_build_snac_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
         ggml_tensor * cur;
         ggml_tensor * emb_layer_1, * emb_layer_2, * emb_layer_3;
-        build_codebook_embd(model, &emb_layer_1, &emb_layer_2, &emb_layer_3);
 
-        if (emb_layer_1 == nullptr || emb_layer_2 == nullptr || emb_layer_3 == nullptr) {
+        bool inputs = build_snac_inputs(model, &emb_layer_1, &emb_layer_2, &emb_layer_3);
+
+        if (!inputs) {
             // graph build is called with garbage ubatch codes during model init
             // in this case, bypass normal graph construction and return a dummy
             LLAMA_LOG_INFO("build_codebook_inputs returned null, using dummy tensor\n");
             cur = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 768, ubatch.n_tokens > 0 ? ubatch.n_tokens : 64, 1, 1);
             ggml_set_input(cur);
         } else {
+            // TODO: Upsampling is wrong
             // Projections
             cur = ggml_mul_mat(ctx0, ggml_reshape_2d(ctx0, model.codebook_proj_w[0], 8, 768), emb_layer_1);
             cur = ggml_reshape_4d(ctx0, cur, 768, emb_layer_1->ne[1], 1, 1);
@@ -11859,113 +11859,76 @@ struct llm_build_snac_dec : public llm_graph_context {
 
         cur = ggml_cpy(ctx0, cur, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]));
 
-        cb(cur, "result_embd", -1);
+        LLAMA_LOG_INFO("Final shape of cur = [%ld, %ld, %ld, %ld]\n",
+                         cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+        //cb(cur, "result_embd", -1);
         res->t_embd = cur;
         ggml_build_forward_expand(gf, cur);
     }
 private:
-    // TODO: SNAC expects a multilayered input from 3 different embedding matrices
-    void build_codebook_embd(const llama_model & model,
-                              ggml_tensor ** emb_layer_1,
-                              ggml_tensor ** emb_layer_2,
-                              ggml_tensor ** emb_layer_3) {
+    // Create 3 input nodes used for lookups into 3 embd matrices
+    bool build_snac_inputs(const llama_model & model,
+                           ggml_tensor ** emb_layer_1_out,
+                           ggml_tensor ** emb_layer_2_out,
+                           ggml_tensor ** emb_layer_3_out) {
 
-        *emb_layer_1 = nullptr;
-        *emb_layer_2 = nullptr;
-        *emb_layer_3 = nullptr;
+        *emb_layer_1_out = nullptr;
+        *emb_layer_2_out = nullptr;
+        *emb_layer_3_out = nullptr;
 
-
-
-        bool is_initialized = (ubatch.token != nullptr && ubatch.n_tokens > 0);
-        if (is_initialized) {
-            for (int i = 0; i < ubatch.n_tokens; ++i) {
-                if (ubatch.token[i] < 0 || ubatch.token[i] >= 4096) {
-                    is_initialized = false;
-                    break;
-                }
-            }
+        if (this->ubatch.n_tokens <= 0 || this->ubatch.n_tokens % 7 != 0) {
+            LLAMA_LOG_WARN("%s: Invalid ubatch size n_tokens=%d provided for SNAC graph definition. Cannot define input nodes.\n",
+                           __func__, this->ubatch.n_tokens);
+            return false;
         }
 
-        if (!is_initialized) {
-            return;
+        const int32_t n_tokens = this->ubatch.n_tokens;
+        const int32_t n_frames = n_tokens / 7;
+
+        const int32_t n_indices_l1 = n_frames * 1;
+        const int32_t n_indices_l2 = n_frames * 2;
+        const int32_t n_indices_l3 = n_frames * 4;
+
+        ggml_tensor * idx1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_indices_l1);
+        ggml_tensor * idx2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_indices_l2);
+        ggml_tensor * idx3 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_indices_l3);
+
+        if (!idx1 || !idx2 || !idx3) {
+            LLAMA_LOG_ERROR("%s: Failed to allocate ggml index tensors.\n", __func__);
+            return false;
         }
 
-        int32_t n_tokens = ubatch.n_tokens;
-        int32_t n_frames = n_tokens / 7;
-        if (n_tokens % 7 != 0) {
-            LLAMA_LOG_INFO("build_codebook_embd: n_tokens (%d) not a multiple of 7, truncating\n", n_tokens);
-            n_frames = n_tokens / 7;
+        ggml_set_name(idx1, "snac_indices_L1");
+        ggml_set_name(idx2, "snac_indices_L2");
+        ggml_set_name(idx3, "snac_indices_L3");
+
+        // mark as inputs
+        ggml_set_input(idx1);
+        ggml_set_input(idx2);
+        ggml_set_input(idx3);
+
+        // add to res for future access via llama_context
+        res->add_input(std::make_unique<llm_graph_input_snac>(idx1, 0, this->hparams));
+        res->add_input(std::make_unique<llm_graph_input_snac>(idx2, 1, this->hparams));
+        res->add_input(std::make_unique<llm_graph_input_snac>(idx3, 2, this->hparams));
+
+        // lookup
+        *emb_layer_1_out = ggml_get_rows(ctx0, model.codebook[0], idx1);
+        *emb_layer_2_out = ggml_get_rows(ctx0, model.codebook[1], idx2);
+        *emb_layer_3_out = ggml_get_rows(ctx0, model.codebook[2], idx3);
+
+        if (!*emb_layer_1_out || !*emb_layer_2_out || !*emb_layer_3_out) {
+            LLAMA_LOG_ERROR("%s: Failed to create ggml_get_rows nodes.\n", __func__);
+            *emb_layer_1_out = *emb_layer_2_out = *emb_layer_3_out = nullptr; // Ensure outputs are null on failure
+            return false;
         }
 
-        // TODO: read from vq_strides
-        int32_t n_layer_1 = n_frames;
-        int32_t n_layer_2 = n_frames * 2;
-        int32_t n_layer_3 = n_frames * 4;
+        ggml_set_name(*emb_layer_1_out, "snac_embd_L1");
+        ggml_set_name(*emb_layer_2_out, "snac_embd_L2");
+        ggml_set_name(*emb_layer_3_out, "snac_embd_L3");
 
-        LLAMA_LOG_INFO("build_codebook_embd: n_frames = %d, n_layer_1 = %d, n_layer_2 = %d, n_layer_3 = %d\n",
-                       n_frames, n_layer_1, n_layer_2, n_layer_3);
-
-        std::vector<int32_t> idx_1_data(n_layer_1);
-        std::vector<int32_t> idx_2_data(n_layer_2);
-        std::vector<int32_t> idx_3_data(n_layer_3);
-
-        // map codes to respective codebook
-        for (int32_t i = 0; i < n_frames; ++i) {
-            int32_t base_idx = i * 7;
-            idx_1_data[i]          = ubatch.token[base_idx + 0];
-            idx_2_data[i * 2]      = ubatch.token[base_idx + 1];
-            idx_2_data[i * 2 + 1]  = ubatch.token[base_idx + 4];
-            idx_3_data[i * 4]      = ubatch.token[base_idx + 2];
-            idx_3_data[i * 4 + 1]  = ubatch.token[base_idx + 3];
-            idx_3_data[i * 4 + 2]  = ubatch.token[base_idx + 5];
-            idx_3_data[i * 4 + 3]  = ubatch.token[base_idx + 6];
-        }
-
-        // Tensors used for codebook lookups
-        ggml_tensor * idx_layer_1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_1);
-        ggml_tensor * idx_layer_2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_2);
-        ggml_tensor * idx_layer_3 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_layer_3);
-
-        if (!idx_layer_1 || !idx_layer_2 || !idx_layer_3) {
-            LLAMA_LOG_INFO("build_codebook_embd: Failed to allocate index tensors\n");
-            return;
-        }
-
-        // ggml is lazy, so explicitly create buffers for codes to be placed in idx_layer_N
-        ggml_backend_buffer_type_t cpu_buft = ggml_backend_cpu_buffer_type();
-        if (!cpu_buft) {
-            LLAMA_LOG_ERROR("build_codebook_embd: Failed to get CPU buffer type\n");
-            return;
-        }
-
-        ggml_backend_buffer_t buffer_1 = ggml_backend_buft_alloc_buffer(cpu_buft, n_layer_1 * sizeof(int32_t));
-        ggml_backend_buffer_t buffer_2 = ggml_backend_buft_alloc_buffer(cpu_buft, n_layer_2 * sizeof(int32_t));
-        ggml_backend_buffer_t buffer_3 = ggml_backend_buft_alloc_buffer(cpu_buft, n_layer_3 * sizeof(int32_t));
-
-        if (!buffer_1 || !buffer_2 || !buffer_3) {
-            LLAMA_LOG_ERROR("build_codebook_embd: Failed to allocate backend buffers\n");
-            if (buffer_1) ggml_backend_buffer_free(buffer_1);
-            if (buffer_2) ggml_backend_buffer_free(buffer_2);
-            if (buffer_3) ggml_backend_buffer_free(buffer_3);
-            return;
-        }
-
-        // move codes to idx_layer_N
-        idx_layer_1->buffer = buffer_1;
-        idx_layer_2->buffer = buffer_2;
-        idx_layer_3->buffer = buffer_3;
-
-        idx_layer_1->data = ggml_backend_buffer_get_base(buffer_1);
-        idx_layer_2->data = ggml_backend_buffer_get_base(buffer_2);
-        idx_layer_3->data = ggml_backend_buffer_get_base(buffer_3);
-
-        ggml_backend_tensor_set(idx_layer_1, idx_1_data.data(), 0, n_layer_1 * sizeof(int32_t));
-        ggml_backend_tensor_set(idx_layer_2, idx_2_data.data(), 0, n_layer_2 * sizeof(int32_t));
-        ggml_backend_tensor_set(idx_layer_3, idx_3_data.data(), 0, n_layer_3 * sizeof(int32_t));
-
-        *emb_layer_1 = ggml_get_rows(ctx0, model.codebook[0], idx_layer_1);
-        *emb_layer_2 = ggml_get_rows(ctx0, model.codebook[1], idx_layer_2);
-        *emb_layer_3 = ggml_get_rows(ctx0, model.codebook[2], idx_layer_3);
+        return true;
     }
 };
 
