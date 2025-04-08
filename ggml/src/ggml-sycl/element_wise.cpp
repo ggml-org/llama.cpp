@@ -71,7 +71,7 @@ static void tanh(const T *x, T *dst, int k,
     if (i >= k) {
         return;
     }
-    dst[i] = sycl::tanh((T)(x[i]));
+    dst[i] = sycl::tanh((x[i]));
 }
 
 template<typename T>
