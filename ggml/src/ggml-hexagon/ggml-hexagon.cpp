@@ -322,7 +322,6 @@ struct hexagon_appcfg_t {
     int hwaccel_approach;       // 0: HWACCEL_QNN 1: HWACCEL_QNN_SINGLEGRAPH 2: HWACCEL_CDSP
     int hexagon_backend;        // 0: HEXAGON_BACKEND_QNNCPU 1: HEXAGON_BACKEND_QNNGPU 2: HEXAGON_BACKEND_QNNNPU / HEXAGON_BACKEND_CDSP
     int enable_rpc_ion_mempool; // enable/disable rpc ion memory pool
-    int enable_rpc_dma_mempool; // enable/disable rpc dma memory pool
     int enable_all_q_mulmat;    // enable/disable offload all quantized type mulmat to cDSP
     int profiler_duration;      // threshold of duration in profiler, per seconds
     int profiler_counts;        // threshold of counts in profiler
@@ -346,7 +345,6 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .hwaccel_approach       = HWACCEL_CDSP,
         .hexagon_backend        = HEXAGON_BACKEND_CDSP,
         .enable_rpc_ion_mempool = 0,
-        .enable_rpc_dma_mempool = 0,
         .enable_all_q_mulmat    = 0,
         .profiler_duration      = 5,
         .profiler_counts        = 100,
@@ -1783,7 +1781,6 @@ static void ggmlhexagon_load_cfg() {
     hexagoncfg_instance.get_intvalue("qnn", "print_qnn_internal_log", g_hexagon_appcfg.print_qnn_internal_log, 0);
 
     hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 0);
-    hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_dma_mempool", g_hexagon_appcfg.enable_rpc_dma_mempool, 0);
     hexagoncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
 
     GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
@@ -1835,16 +1832,6 @@ static bool ggmlhexagon_check_valid_appcfg() {
             is_valid_appcfg = false;
         }
 
-        if ((1 == g_hexagon_appcfg.enable_rpc_ion_mempool) && (1 == g_hexagon_appcfg.enable_rpc_dma_mempool)) {
-            GGMLHEXAGON_LOG_INFO("rpc ion mempool and rpc dma mempool cannot be enabled at the same time");
-            is_valid_appcfg = false;
-        }
-
-        if (1 == g_hexagon_appcfg.enable_rpc_dma_mempool) {
-            GGMLHEXAGON_LOG_INFO("rpc dma mempool not supported");
-            is_valid_appcfg = false;
-        }
-
         if (1 == g_hexagon_appcfg.enable_all_q_mulmat) {
             if (0 == g_hexagon_appcfg.enable_q_mulmat) {
                 GGMLHEXAGON_LOG_INFO("ensure set enable_q_mulmat to 1 firstly when set enable_all_q_mulmat to 1");
@@ -1874,7 +1861,6 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
         GGMLHEXAGON_LOG_INFO("using rpc ion memory pool:        %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
-        GGMLHEXAGON_LOG_INFO("using rpc dma memory pool:        %s", g_hexagon_appcfg.enable_rpc_dma_mempool ? "YES" : "NO");
         ggmlhexagon_probe_dspinfo(ctx);
     } else {
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
@@ -5107,7 +5093,7 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
             GGMLHEXAGON_LOG_WARN("rpc mempool is too big");
             return;
         }
-        //FIXME: it seems there is unknown issue with DMA memory pool
+        //FIXME: it seems there is unknown issue with another ION memory pool
         ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
                                         ctx->rpc_mempool_len);
         if (nullptr == ctx->rpc_mempool) {
@@ -5121,10 +5107,6 @@ static void ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         ctx->rpc_mempool_handle = rpcmem_to_fd(ctx->rpc_mempool);
         GGMLHEXAGON_LOG_DEBUG("rpc mempool handle %d", ctx->rpc_mempool_handle);
         remote_register_buf(ctx->rpc_mempool, ctx->rpc_mempool_len, ctx->rpc_mempool_handle);
-    }
-
-    if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_dma_mempool)) {
-        //TODO
     }
 
     return;
@@ -5833,9 +5815,7 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
     if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
         return "hexagon-ion-buffer";
     }
-    if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_dma_mempool)) {
-        return "hexagon-dma-buffer";
-    }
+
     return "hexagon-normal-buffer";
 }
 
