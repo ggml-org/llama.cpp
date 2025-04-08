@@ -77,6 +77,7 @@ CLIP_API struct clip_image_size * clip_image_size_init();
 CLIP_API struct clip_image_u8  * clip_image_u8_init ();
 CLIP_API struct clip_image_f32 * clip_image_f32_init();
 
+CLIP_API void clip_image_size_free (struct clip_image_size * img_size);
 CLIP_API void clip_image_u8_free (struct clip_image_u8  * img);
 CLIP_API void clip_image_f32_free(struct clip_image_f32 * img);
 CLIP_API void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
