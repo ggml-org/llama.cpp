@@ -4525,6 +4525,7 @@ int main(int argc, char ** argv) {
 
     // run the HTTP server in a thread
     std::thread t([&]() { svr->listen_after_bind(); });
+    t.detach();
     svr->wait_until_ready();
 
     LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__, params.hostname.c_str(), params.port, params.n_threads_http);
@@ -4534,9 +4535,8 @@ int main(int argc, char ** argv) {
 
     if (!ctx_server.load_model(params)) {
         clean_up();
-        // t.join(); // FIXME: see below
         LOG_ERR("%s: exiting due to model loading error\n", __func__);
-        return 1;
+        exit(1);
     }
 
     ctx_server.init();
@@ -4582,7 +4582,6 @@ int main(int argc, char ** argv) {
     ctx_server.queue_tasks.start_loop();
 
     clean_up();
-    // t.join(); // FIXME: http thread may stuck if there is an on-going request. we don't need to care about this for now as the HTTP connection will already be closed at this point, but it's better to fix this
-
-    return 0;
+    
+    exit(0);
 }
