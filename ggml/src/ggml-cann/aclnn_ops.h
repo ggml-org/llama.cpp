@@ -725,7 +725,6 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @tparam unary_op A callable with the signature:
  *         void(ggml_backend_cann_context&, aclTensor*, aclTensor*)
  *         where the first aclTensor is the source and the second is the destination.
- * @param unary_op function unary_op.
  * @param ctx The CANN backend context for managing resources and execution.
  * @param dst The destination tensor. Its src[0] is treated as the input tensor.
  */
