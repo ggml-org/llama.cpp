@@ -741,29 +741,39 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
 }
 
 /**
- * @brief Helper macro to invoke a unary ACL operation using ggml_cann_unary_op.
+ * @brief Launches a unary aclnn operator on a destination tensor.
  *
- * This macro defines an inline lambda wrapping a specific ACL operation name,
- * and passes it to the templated ggml_cann_unary_op function. It simplifies
- * calling unary ops by hiding the lambda boilerplate.
+ * This macro prepares the source and destination tensors from the given
+ * ggml_tensor `dst`, then invokes the specified aclnn operator using
+ * the provided parameters.
  *
- * Internally, the lambda will call:
- * @code
- * GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);
- * @endcode
+ * It automatically handles tensor conversion to `aclTensor` format, memory
+ * allocation, and resource destruction. The aclnn operator will be launched
+ * asynchronously on the specified stream using the workspace allocator, and
+ * will follow the stream's execution order.
  *
- * @param OP_NAME The name of the ACL unary operator to invoke via GGML_CANN_CALL_ACLNN_OP.
+ * @param OP_NAME The name of the aclnn operator (e.g., Gelu, Relu, etc.).
+ * @param __VA_ARGS__ Optional additional arguments to pass between the source
+ *        and destination tensors (e.g., scalar parameters for the operator).
  *
- * @see ggml_cann_unary_op
- * @see GGML_CANN_CALL_ACLNN_OP
+ * @note
+ * This macro assumes that `dst` is a unary operation output tensor,
+ * i.e., `dst->src[0]` is its input tensor.
+ *
+ * The macro handles the conversion from `ggml_tensor` to `aclTensor` and ensures
+ * proper destruction after the operator is launched. It should be used in
+ * contexts where `ctx` (of type `ggml_backend_cann_context&`) and `dst`
+ * (of type `ggml_tensor*`) are available.
  */
-#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                         \
-    do {                                                         \
-        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) { \
-            GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
-        };                                                       \
-        ggml_cann_unary_op<lambda>(ctx, dst);                    \
-    }                                                            \
-    while (0)
-
+#define GGML_CANN_CALL_UNARY_OP(OP_NAME, ...)                              \
+    do {                                                                   \
+        ggml_tensor* src = dst->src[0];                                    \
+        aclTensor* acl_src = ggml_cann_create_tensor(src);                 \
+        aclTensor* acl_dst = ggml_cann_create_tensor(dst);                 \
+                                                                           \
+        GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, ##__VA_ARGS__, acl_dst); \
+                                                                           \
+        ACL_CHECK(aclDestroyTensor(acl_src));                              \
+        ACL_CHECK(aclDestroyTensor(acl_dst));                              \
+    } while (0)
 #endif  // CANN_ACLNN_OPS
