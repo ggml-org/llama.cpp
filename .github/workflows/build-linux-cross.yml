@@ -19,7 +19,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu
+                  g++-14-riscv64-linux-gnu \
+                  libcurl4-openssl-dev:riscv64
 
       - name: Build
         run: |
@@ -59,7 +60,8 @@ jobs:
                   glslc \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
-                  libvulkan-dev:riscv64
+                  libvulkan-dev:riscv64 \
+                  libcurl4-openssl-dev:riscv64
 
       - name: Build
         run: |
@@ -99,7 +101,8 @@ jobs:
                   build-essential \
                   glslc \
                   crossbuild-essential-arm64 \
-                  libvulkan-dev:arm64
+                  libvulkan-dev:arm64 \
+                  libcurl4-openssl-dev:arm64
 
       - name: Build
         run: |
