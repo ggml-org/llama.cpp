@@ -9,12 +9,6 @@ T neg_infinity() {
     return -std::numeric_limits<T>::infinity();
 }
 
-template <typename T>
-constexpr T to_T(float value) {
-    return static_cast<T>(value);
-}
-
-
 static __dpct_inline__ float op_repeat(const float a, const float b) {
     return b;
     GGML_UNUSED(a);

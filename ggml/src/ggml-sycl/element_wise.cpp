@@ -24,8 +24,8 @@ static void acc_f32(const float * x, const float * y, float * dst, const int ne,
 template<typename T>
 static void gelu(const T * x, T * dst, const int k,
                      const sycl::nd_item<3> &item_ct1) {
-    const T GELU_COEF_A    = to_T<T>(0.044715f);
-    const T SQRT_2_OVER_PI = to_T<T>(0.79788456080286535587989211986876f);
+    const T GELU_COEF_A    = static_cast<T>(0.044715f);
+    const T SQRT_2_OVER_PI = static_cast<T>(0.79788456080286535587989211986876f);
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
 
@@ -34,9 +34,9 @@ static void gelu(const T * x, T * dst, const int k,
     }
 
     float xi = x[i];
-    dst[i] = to_T<T>(0.5f) * xi *
-             (to_T<T>(1.0f) +
-              sycl::tanh(SQRT_2_OVER_PI * xi * (to_T<T>(1.0f) + GELU_COEF_A * xi * xi)));
+    dst[i] = static_cast<T>(0.5f) * xi *
+             (static_cast<T>(1.0f) +
+              sycl::tanh(SQRT_2_OVER_PI * xi * (static_cast<T>(1.0f) + GELU_COEF_A * xi * xi)));
 }
 
 template<typename T>
@@ -48,7 +48,7 @@ static void silu(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = x[i] / (to_T<T>(1.0f) + sycl::native::exp(-x[i]));
+    dst[i] = x[i] / (static_cast<T>(1.0f) + sycl::native::exp(-x[i]));
 }
 
 template<typename T>
@@ -60,7 +60,7 @@ static void gelu_quick(const T *x, T *dst, int k,
     if (i >= k) {
         return;
     }
-    dst[i] = x[i] * (to_T<T>(1.0f) / (to_T<T>(1.0f) + sycl::native::exp(GELU_QUICK_COEF * x[i])));
+    dst[i] = x[i] * (static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::native::exp(GELU_QUICK_COEF * x[i])));
 }
 
 template<typename T>
@@ -95,7 +95,7 @@ static void sigmoid(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = 1.0f / (to_T<T>(1.0f) + sycl::native::exp(-x[i]));
+    dst[i] = 1.0f / (static_cast<T>(1.0f) + sycl::native::exp(-x[i]));
 }
 
 template<typename T>
@@ -143,7 +143,7 @@ static void hardsigmoid(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = sycl::fmin(to_T<T>(1.0f), sycl::fmax(to_T<T>(0.0f), (x[i] + to_T<T>(3.0f)) / to_T<T>(6.0f)));
+    dst[i] = sycl::fmin(static_cast<T>(1.0f), sycl::fmax(static_cast<T>(0.0f), (x[i] + static_cast<T>(3.0f)) / static_cast<T>(6.0f)));
 }
 
 template<typename T>
@@ -155,7 +155,7 @@ static void hardswish(const T * x, T * dst, const int k,
     if (i >= k) {
         return;
     }
-    dst[i] = x[i] * sycl::fmin(to_T<T>(1.0f), sycl::fmax(to_T<T>(0.0f), (x[i] + to_T<T>(3.0f)) / to_T<T>(6.0f)));
+    dst[i] = x[i] * sycl::fmin(static_cast<T>(1.0f), sycl::fmax(static_cast<T>(0.0f), (x[i] + static_cast<T>(3.0f)) / static_cast<T>(6.0f)));
 }
 
 template<typename T>
@@ -276,7 +276,7 @@ static void pad(const T  *x, T *dst, const int ne0, const int ne00, const int ne
                          item_ct1.get_group(0) * ne00 * ne01;
             dst[offset_dst] = x[offset_src];
     } else {
-        dst[offset_dst] = to_T<T>(0.0f);
+        dst[offset_dst] = static_cast<T>(0.0f);
     }
 }
 
