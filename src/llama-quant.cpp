@@ -201,7 +201,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             (name.find("blk.3.ffn_gate_exps.weight") != std::string::npos) ||
             (name.find("blk.3.ffn_down_exps.weight") != std::string::npos) ||
             (name.find("blk.3.ffn_up_exps.weight")   != std::string::npos) ||            (name.find("blk.1.ffn_gate_exps.weight") != std::string::npos) ||
-            (name.find("blk.45.ffn_down_exps.weight") != std::string::npos) ||
+            (name.find("blk.45.ffn_gate_exps.weight") != std::string::npos) ||
             (name.find("blk.45.ffn_up_exps.weight")   != std::string::npos) ||
             (name.find("blk.45.ffn_down_exps.weight") != std::string::npos) ) {
             new_type = GGML_TYPE_Q4_K;
