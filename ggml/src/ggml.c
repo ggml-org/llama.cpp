@@ -17444,13 +17444,11 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     float *mul_mat_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
 
-#if PIM_DEBUG_PERF_PRINT
     static bool offset_printed = false;
     if( !offset_printed) {
-    printf("%s: offset = %d  ", __FUNCTION__, output_offset);
-    offset_printed = true;
+      printf("%s: offset = %d  ", __FUNCTION__, output_offset);
+      offset_printed = true;
     }
-#endif
 
     dpu_set = *(res->dpu_set);
     int nr_dpus;
