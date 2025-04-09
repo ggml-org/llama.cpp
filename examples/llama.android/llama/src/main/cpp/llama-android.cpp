@@ -33,8 +33,8 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
 /**
  * LLama resources: context, model, batch and sampler
  */
-constexpr int   N_THREADS_MIN           = 1;
-constexpr int   N_THREADS_MAX           = 8;
+constexpr int   N_THREADS_MIN           = 2;
+constexpr int   N_THREADS_MAX           = 4;
 constexpr int   N_THREADS_HEADROOM      = 2;
 
 constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
@@ -70,38 +70,27 @@ static void log_callback(ggml_log_level level, const char *fmt, void *data) {
     __android_log_print(priority, TAG, fmt, data);
 }
 
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
-    JNIEnv *env;
-    if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
-        return JNI_ERR;
-    }
-
+extern "C"
+JNIEXPORT void JNICALL
+Java_android_llama_cpp_LLamaAndroid_init(JNIEnv *env, jobject /*unused*/) {
     // Set llama log handler to Android
     llama_log_set(log_callback, nullptr);
 
     // Initialize backends
     llama_backend_init();
-    LOGi("Backend initiated.");
-
-    return JNI_VERSION_1_6;
-}
-
-extern "C"
-JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_LLamaAndroid_systemInfo(JNIEnv *env, jobject /*unused*/) {
-    return env->NewStringUTF(llama_print_system_info());
+    LOGi("Backend initiated; Log handler set.");
 }
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_loadModel(JNIEnv *env, jobject, jstring filename) {
+Java_android_llama_cpp_LLamaAndroid_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
 
-    const auto *path_to_model = env->GetStringUTFChars(filename, 0);
-    LOGd("%s: Loading model from: \n%s\n", __func__, path_to_model);
+    const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
+    LOGd("%s: Loading model from: \n%s\n", __func__, model_path);
 
-    auto *model = llama_model_load_from_file(path_to_model, model_params);
-    env->ReleaseStringUTFChars(filename, path_to_model);
+    auto *model = llama_model_load_from_file(model_path, model_params);
+    env->ReleaseStringUTFChars(jmodel_path, model_path);
     if (!model) {
         return 1;
     }
@@ -148,7 +137,7 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_initContext(JNIEnv * /*env*/, jobject /*unused*/) {
+Java_android_llama_cpp_LLamaAndroid_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
     auto *context = init_context(g_model);
     if (!context) { return 1; }
     g_context = context;
@@ -156,17 +145,6 @@ Java_android_llama_cpp_LLamaAndroid_initContext(JNIEnv * /*env*/, jobject /*unus
     g_chat_templates = common_chat_templates_init(g_model, "");
     g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
     return 0;
-}
-
-extern "C"
-JNIEXPORT void JNICALL
-Java_android_llama_cpp_LLamaAndroid_cleanUp(JNIEnv * /*unused*/, jobject /*unused*/) {
-    common_sampler_free(g_sampler);
-    g_chat_templates.reset();
-    llama_batch_free(g_batch);
-    llama_free(g_context);
-    llama_model_free(g_model);
-    llama_backend_free();
 }
 
 static std::string get_backend() {
@@ -179,6 +157,12 @@ static std::string get_backend() {
         }
     }
     return backends.empty() ? "CPU" : join(backends, ",");
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_android_llama_cpp_LLamaAndroid_systemInfo(JNIEnv *env, jobject /*unused*/) {
+    return env->NewStringUTF(llama_print_system_info());
 }
 
 extern "C"
@@ -269,7 +253,7 @@ Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, 
 
     const auto backend = get_backend();
     std::stringstream result;
-    result << std::setprecision(2);
+    result << std::setprecision(3);
     result << "| model | size | params | backend | test | t/s |\n";
     result << "| --- | --- | --- | --- | --- | --- |\n";
     result << "| " << model_desc << " | " << model_size << "GiB | " << model_n_params << "B | "
@@ -348,7 +332,7 @@ static void reset_short_term_states() {
 
 static int decode_tokens_in_batches(
         llama_context *context,
-        llama_batch batch,
+        llama_batch &batch,
         const llama_tokens &tokens,
         const llama_pos start_pos,
         const bool compute_last_logit = false) {
@@ -573,4 +557,26 @@ Java_android_llama_cpp_LLamaAndroid_generateNextToken(
         result = env->NewStringUTF("");
     }
     return result;
+}
+
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_android_llama_cpp_LLamaAndroid_unload(JNIEnv * /*unused*/, jobject /*unused*/) {
+    // Reset long-term & short-term states
+    reset_long_term_states();
+    reset_short_term_states();
+
+    // Free up resources
+    common_sampler_free(g_sampler);
+    g_chat_templates.reset();
+    llama_batch_free(g_batch);
+    llama_free(g_context);
+    llama_model_free(g_model);
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_android_llama_cpp_LLamaAndroid_shutdown(JNIEnv *env, jobject /*unused*/) {
+    llama_backend_free();
 }

@@ -29,7 +29,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
 
         viewModelScope.launch {
             try {
-                llamaAndroid.unload()
+                llamaAndroid.destroy()
             } catch (exc: IllegalStateException) {
                 messages += exc.message!!
             }
@@ -83,7 +83,7 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     fun load(pathToModel: String) {
         viewModelScope.launch {
             try {
-                llamaAndroid.load(pathToModel)
+                llamaAndroid.loadModel(pathToModel)
                 messages += "Loaded $pathToModel"
             } catch (exc: IllegalStateException) {
                 Log.e(tag, "load() failed", exc)
@@ -103,4 +103,14 @@ class MainViewModel(private val llamaAndroid: LLamaAndroid = LLamaAndroid.instan
     fun log(message: String) {
         messages += message
     }
+
+    fun unload() =
+        viewModelScope.launch {
+            try {
+                llamaAndroid.unloadModel()
+            } catch (exc: IllegalStateException) {
+                Log.e(tag, "unload() failed", exc)
+                messages += exc.message!!
+            }
+        }
 }
