@@ -19,6 +19,7 @@ void fp_table_init(void) {
             }
 }
 
+#ifdef PIM_KERNEL
 int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct ggml_tensor * in_q, struct ggml_tensor * res) {
   uint32_t pim_offset = 0;
   struct dpu_set_t dpu;
@@ -116,6 +117,7 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   return 0;
 }
+#endif
 
 
 void gemv_cpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct ggml_tensor * in_q, struct ggml_tensor * res_comp) {
@@ -164,6 +166,7 @@ int main(int argc, char** argv) {
   // init fp table for fp16 dump
   fp_table_init();
 
+#ifdef PIM_KERNEL
   // WQ-PIM allocate dpu
   struct pim_context *pqcontext = (struct pim_context *)malloc(sizeof(struct pim_context));
   memset(pqcontext,0,sizeof(struct pim_context));
@@ -213,6 +216,6 @@ int main(int argc, char** argv) {
   // float first_res = mul_add_q4_0_q8_0(ts_a, ts_bq);
   // std::cout<<"first element: "<<std::fixed << std::setprecision(6)<<first_res<<std::endl;
 
-  
+#endif
   return 0;
 }
