@@ -1784,7 +1784,7 @@ jobs:
       - name: Dependencies
         run: |
           yum update -y
-          yum install -y git gcc gcc-c++ make cmake
+          yum install -y git gcc gcc-c++ make cmake libcurl-devel
 
       - name: Build
         run: |
