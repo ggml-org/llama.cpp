@@ -1358,6 +1358,12 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                 case GGML_UNARY_OP_ELU:
                     ggml_cann_elu(ctx, dst);
                     break;
+                case GGML_UNARY_OP_SGN:
+                    GGML_CANN_CALL_UNARY_OP(Sign);
+                    break;
+                case GGML_UNARY_OP_STEP:
+                    ggml_cann_step(ctx, dst);
+                    break;
                 default:
                     return false;
             }
@@ -1464,6 +1470,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             break;
         case GGML_OP_PAD_REFLECT_1D:
             ggml_cann_pad_reflect_1d(ctx, dst);
+            break;
+        case GGML_OP_COUNT_EQUAL:
+            ggml_cann_count_equal(ctx, dst);
             break;
         default:
             return false;
@@ -1727,6 +1736,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_STEP:
                     return true;
                 default:
                     return false;
@@ -1863,6 +1874,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_LOG:
         case GGML_OP_MEAN:
         case GGML_OP_PAD_REFLECT_1D:
+        case GGML_OP_COUNT_EQUAL:
             return true;
         default:
             return false;

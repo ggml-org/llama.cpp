@@ -62,6 +62,8 @@
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_mean.h>
 #include <aclnnop/aclnn_reflection_pad1d.h>
+#include <aclnnop/aclnn_eq_tensor.h>
+#include <aclnnop/aclnn_gt_scalar.h>
 #include <float.h>
 
 #include <cmath>
@@ -2696,4 +2698,36 @@ void ggml_cann_pad_reflect_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             ACL_CHECK(aclDestroyTensor(acl_dst));
     }
     ACL_CHECK(aclDestroyIntArray(paddings));
+}
+
+void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+    ggml_tensor * src1 = dst->src[1];
+
+    aclTensor* acl_self = ggml_cann_create_tensor(src0);
+    aclTensor* acl_other = ggml_cann_create_tensor(src1);
+    
+    GGML_CANN_CALL_ACLNN_OP(InplaceEqTensor, acl_self, acl_other);
+
+    ggml_cann_sum(ctx, dst);
+
+    ACL_CHECK(aclDestroyTensor(acl_self));
+    ACL_CHECK(aclDestroyTensor(acl_other));
+}
+
+void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+
+    float alphaValue = 0.0f;
+    aclScalar* alpha = nullptr;
+    alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
+    
+    GGML_CANN_CALL_ACLNN_OP(GtScalar, acl_src, alpha, acl_dst);
+
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyScalar(alpha));
 }
