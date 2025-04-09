@@ -32,6 +32,8 @@
 #include "HAP_vtcm_mgr.h"
 #include "HAP_compute_res.h"
 
+#include "qurt.h"
+
 #include "AEEStdErr.h"
 #include "hexagon_types.h"
 #include "hexagon_protos.h"
@@ -885,6 +887,19 @@ int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
     assert(*handle);
 
     ggml_init();
+
+    unsigned int api_version = qurt_api_version();
+    GGMLHEXAGON_LOG_DEBUG("api_version = 0x%x", api_version);
+    GGMLHEXAGON_LOG_DEBUG("hvx units = 0x%d", qurt_hvx_get_units());
+    qurt_arch_version_t  vers;
+    qurt_sysenv_get_arch_version(&vers);
+    GGMLHEXAGON_LOG_DEBUG("arch_version=0x%x", vers.arch_version);
+    qurt_sysenv_app_heap_t aheap;
+    qurt_sysenv_get_app_heap(&aheap);
+    GGMLHEXAGON_LOG_DEBUG("aheap.heap_base=0x%x, aheap.heap_limit=0x%x", aheap.heap_base, aheap.heap_limit);
+    qurt_sysenv_max_hthreads_t mhwt;
+    qurt_sysenv_get_max_hw_threads(&mhwt);
+    GGMLHEXAGON_LOG_DEBUG("max hardware threads=%d", mhwt.max_hthreads);
 
     return 0;
 }
