@@ -331,7 +331,6 @@ struct clip_ctx {
     float image_std[3];
     bool use_gelu = false;
     bool use_silu = false;
-    int32_t ftype = 1;
 
     struct gguf_context * ctx_gguf = nullptr;
     struct ggml_context * ctx_data = nullptr;
@@ -1142,9 +1141,6 @@ struct clip_model_loader {
 
         // print gguf info
         {
-            int ftype = -1;
-            get_u32(KEY_FTYPE, ftype, false);
-            const std::string ftype_str = ggml_type_name(static_cast<ggml_type>(ftype));
             std::string name;
             get_string(KEY_NAME, name, false);
             std::string description;
@@ -1155,7 +1151,6 @@ struct clip_model_loader {
             LOG_INF("%s: alignment:    %zu\n", __func__, gguf_get_alignment(ctx_gguf.get()));
             LOG_INF("%s: n_tensors:    %d\n",  __func__, n_tensors);
             LOG_INF("%s: n_kv:         %d\n",  __func__, (int)gguf_get_n_kv(ctx_gguf.get()));
-            LOG_INF("%s: ftype:        %s\n",  __func__, ftype_str.c_str());
             LOG_INF("\n");
         }
 
