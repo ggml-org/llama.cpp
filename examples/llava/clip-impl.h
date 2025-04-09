@@ -22,6 +22,8 @@
 #define KEY_HAS_QWEN2VL_MERGER  "clip.has_qwen2vl_merger"
 #define KEY_USE_GELU            "clip.use_gelu"
 #define KEY_USE_SILU            "clip.use_silu"
+#define KEY_USE_GLU_MLP         "clip.use_glu_mlp"
+#define KEY_USE_RMS_NORM        "clip.use_rms_norm"
 #define KEY_N_EMBD              "clip.%s.embedding_length"
 #define KEY_N_FF                "clip.%s.feed_forward_length"
 #define KEY_N_BLOCK             "clip.%s.block_count"
@@ -40,6 +42,8 @@
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
 #define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
+#define KEY_FULLATTN_BLK_IDX      "clip.vision.fullatt_block_indexes"
+#define KEY_ATTN_WINDOW_SIZE      "clip.vision.window_size"
 
 
 //
@@ -58,6 +62,7 @@
 #define TN_ATTN_OUTPUT     "%s.blk.%d.attn_out.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
+#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s"
 #define TN_LN_2            "%s.blk.%d.ln2.%s"
 #define TN_LN_PRE          "%s.pre_ln.%s"
