@@ -471,18 +471,67 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_COUNT
 };
 
-struct ggml_backend_metal_heap {
+// TODO: use MTLHeapTypePlacement and reset offset after every node
+struct ggml_metal_heap {
     int n;
+    int fail;
+
+    size_t need;
 
     id<MTLHeap>   obj;
     id<MTLBuffer> bufs[GGML_METAL_MAX_HEAP_BUFFERS];
 };
 
+static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
+    heap->n = 0;
+    heap->fail = 0;
+    heap->need = 0;
+
+    for (int i = 0; i < GGML_METAL_MAX_HEAP_BUFFERS; i++) {
+        if (heap->bufs[i]) {
+            [heap->bufs[i] release];
+            heap->bufs[i] = nil;
+            continue;
+        }
+
+        break;
+    }
+}
+
+static id<MTLBuffer> ggml_metal_heap_alloc(struct ggml_metal_heap * heap, size_t size, size_t alignment) {
+    const size_t size_aligned = GGML_PAD(size, alignment);
+
+    heap->need += size_aligned;
+
+    if (!heap->fail && heap->need > [heap->obj maxAvailableSizeWithAlignment:alignment]) {
+        heap->fail = 1;
+    }
+
+    if (!heap->fail && heap->n >= GGML_METAL_MAX_HEAP_BUFFERS) {
+        heap->fail = 2;
+    }
+
+    if (heap->fail) {
+        return nil;
+    }
+
+    id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
+    if (!buf) {
+        heap->fail = 3;
+        return nil;
+    }
+
+    heap->bufs[heap->n++] = buf;
+
+    return buf;
+}
+
 struct ggml_backend_metal_context {
+    id<MTLDevice>       device;
     id<MTLCommandQueue> queue;
 
     // TODO: create heap per command buffer
-    struct ggml_backend_metal_heap heap;
+    struct ggml_metal_heap heap;
 
     dispatch_queue_t d_queue;
 
@@ -696,9 +745,11 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     struct ggml_backend_metal_device_context * ctx_dev = dev->context;
 
     id<MTLDevice> device = ggml_backend_metal_device_acq(ctx_dev);
+
     GGML_LOG_INFO("%s: picking default device: %s\n", __func__, [[device name] UTF8String]);
 
-    ctx->queue  = [device newCommandQueue];
+    ctx->device = device;
+    ctx->queue = [device newCommandQueue];
     if (ctx->queue == nil) {
         GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
         return NULL;
@@ -707,21 +758,22 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     ctx->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
     // allocate tmp heap with fixed size for testing
-    // TODO: figure out how to dynamically resize it
+    // TODO: factor into a function
     {
-        MTLHeapDescriptor *heapDescriptor = [[MTLHeapDescriptor alloc] init];
-        heapDescriptor.storageMode  = MTLStorageModePrivate;
-        heapDescriptor.cpuCacheMode = MTLCPUCacheModeDefaultCache;
-        heapDescriptor.size         = 32*1024*1024;
+        MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
+        desc.storageMode  = MTLStorageModePrivate;
+        desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
+        desc.type         = MTLHeapTypeAutomatic; // TODO: use MTLHeapTypePlacement
+        desc.size         = 1024*1024;
 
         ctx->heap.n = 0;
 
-        ctx->heap.obj = [device newHeapWithDescriptor:heapDescriptor];
+        ctx->heap.obj = [device newHeapWithDescriptor:desc];
         for (int i = 0; i < GGML_METAL_MAX_HEAP_BUFFERS; ++i) {
             ctx->heap.bufs[i] = nil;
         }
 
-        [heapDescriptor release];
+        [desc release];
     }
 
     // load library
@@ -1472,7 +1524,7 @@ static void ggml_metal_encode_node(
                         ggml_backend_t   backend,
                                    int   idx,
           id<MTLComputeCommandEncoder>   encoder,
-        struct ggml_backend_metal_heap * heap) {
+                struct ggml_metal_heap * heap) {
     struct ggml_backend_metal_context        * ctx     = backend->context;
     struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
@@ -2165,11 +2217,16 @@ static void ggml_metal_encode_node(
                     /*.nb3  =*/ nb03,
                 };
 
-                id<MTLBuffer> id_src0h = [heap->obj newBufferWithLength:ggml_nbytes(src0) options:MTLResourceStorageModePrivate];
+                //id<MTLBuffer> id_src0h = [heap->obj newBufferWithLength:ggml_nbytes(src0) options:MTLResourceStorageModePrivate];
 
-                // save a reference to the heap-allocated buffer
-                // TODO: simplify and check for available resources
-                heap->bufs[heap->n++] = id_src0h;
+                //// save a reference to the heap-allocated buffer
+                //// TODO: simplify and check for available resources
+                //heap->bufs[heap->n++] = id_src0h;
+
+                id<MTLBuffer> id_src0h = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), 32);
+                if (!id_src0h) {
+                    break;
+                }
 
                 if (src0->type == GGML_TYPE_F16) {
                     [encoder setComputePipelineState:ctx->kernels[GGML_METAL_KERNEL_TYPE_CPY_F16_F16].pipeline];
@@ -4659,21 +4716,8 @@ static enum ggml_status ggml_metal_graph_compute(
             id<MTLCommandBuffer> command_buffer = ctx->command_buffers[i];
             [command_buffer waitUntilCompleted];
 
-            // free buffers from the heap
-            {
-                size_t size_allocated = [ctx->heap.obj currentAllocatedSize];
-                size_t size_used      = [ctx->heap.obj usedSize];
-                GGML_LOG_INFO("%s: command buffer %d, allocated = %zu, used = %zu, n = %d\n", __func__, i, size_allocated, size_used, ctx->heap.n);
-
-                for (int j = 0; j < ctx->heap.n; ++j) {
-                    id<MTLBuffer> buf = ctx->heap.bufs[j];
-                    [buf release];
-
-                    ctx->heap.bufs[j] = nil;
-                }
-
-                ctx->heap.n = 0;
-            }
+            // TODO: per command buffer heap
+            ggml_metal_heap_reset(&ctx->heap);
 
             MTLCommandBufferStatus status = [command_buffer status];
             if (status != MTLCommandBufferStatusCompleted) {
@@ -5069,31 +5113,59 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         const int n_nodes_per_cb = ctx->n_nodes_per_cb;
 
         id<MTLCommandBuffer> command_buffer  = ctx->command_buffers[cb_idx];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
 
-        int node_start = 0;
-        int node_end   = n_nodes_0;
+        int n_try = 3;
 
-        if (cb_idx < n_cb_l) {
-            node_start = n_nodes_0 + (                                         (cb_idx + 0) * n_nodes_per_cb);
-            node_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
-        }
+        while (n_try-- > 0) {
+            id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
 
-        const bool should_capture = ctx->capture_next_compute;
+            int node_start = 0;
+            int node_end   = n_nodes_0;
 
-        for (int idx = node_start; idx < node_end; ++idx) {
-            if (should_capture) {
-                [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
+            if (cb_idx < n_cb_l) {
+                node_start = n_nodes_0 + (                                         (cb_idx + 0) * n_nodes_per_cb);
+                node_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
             }
 
-            ggml_metal_encode_node(backend, idx, encoder, &ctx->heap);
+            const bool should_capture = ctx->capture_next_compute;
 
-            if (should_capture) {
-                [encoder popDebugGroup];
+            for (int idx = node_start; idx < node_end; ++idx) {
+                if (should_capture) {
+                    [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
+                }
+
+                ggml_metal_encode_node(backend, idx, encoder, &ctx->heap);
+
+                if (should_capture) {
+                    [encoder popDebugGroup];
+                }
             }
-        }
 
-        [encoder endEncoding];
+            [encoder endEncoding];
+
+            if (ctx->heap.fail == 0) {
+                break;
+            }
+
+            // increase heap size
+            [ctx->heap.obj release];
+
+            {
+                MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
+                desc.storageMode  = MTLStorageModePrivate;
+                desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
+                desc.type         = MTLHeapTypeAutomatic; // TODO: use MTLHeapTypePlacement
+                desc.size         = ctx->heap.need;
+
+                GGML_LOG_INFO("%s: increasing heap size to %zu\n", __func__, ctx->heap.need);
+
+                ctx->heap.obj = [ctx->device newHeapWithDescriptor:desc];
+
+                [desc release];
+            }
+
+            ggml_metal_heap_reset(&ctx->heap);
+        }
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [command_buffer commit];
