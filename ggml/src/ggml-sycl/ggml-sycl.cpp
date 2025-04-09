@@ -2957,12 +2957,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
+    const bool reorder = static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra) &&
+                         static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra)->optimized_feature.reorder;
+
     // mmvq path is faster in the CUDA backend.
     if (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
         // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
         // is enabled takes precedence over DMMV, the current if-else implementation
         // requires disabling DMMV if both conditions are met
-        || (ctx.opt_feature.reorder && ggml_sycl_supports_reorder_mmvq(src0->type))) {
+        || (reorder && ggml_sycl_supports_reorder_mmvq(src0->type))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
 
