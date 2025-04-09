@@ -714,6 +714,9 @@ class Model:
         if chkhsh == "96a5f08be6259352137b512d4157e333e21df7edd3fcd152990608735a65b224":
             # ref: https://huggingface.co/inclusionAI/Ling-lite
             res = "bailingmoe"
+        if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
+            # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
+            res = "llama4"
 
         if res is None:
             logger.warning("\n")
@@ -1608,6 +1611,7 @@ class StableLMModel(Model):
 @Model.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM")
 class LlamaModel(Model):
     model_arch = gguf.MODEL_ARCH.LLAMA
+    undo_permute = True
 
     def set_vocab(self):
         try:
@@ -1672,10 +1676,11 @@ class LlamaModel(Model):
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
 
-        if name.endswith(("q_proj.weight", "q_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-        if name.endswith(("k_proj.weight", "k_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
+        if self.undo_permute:
+            if name.endswith(("q_proj.weight", "q_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_head)
+            if name.endswith(("k_proj.weight", "k_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
         # process the experts separately
         if name.find("block_sparse_moe.experts") != -1:
@@ -1750,6 +1755,61 @@ class LlamaModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("Llama4ForConditionalGeneration")
+class Llama4Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA4
+    has_vision: bool = False
+    undo_permute = False
+
+    # TODO @ngxson : avoid duplicate this code everywhere by at least support "text_config"
+    # same with llama, but we need to merge the text_config into the root level of hparams
+    def __init__(self, *args, **kwargs):
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
+        if "text_config" in hparams:
+            hparams = {**hparams, **hparams["text_config"]}
+            kwargs["hparams"] = hparams
+        super().__init__(*args, **kwargs)
+        if "vision_config" in hparams:
+            logger.info("Has vision encoder, but it will be ignored")
+            self.has_vision = True
+        # IMPORTANT: the normal "intermediate_size" is renamed to "intermediate_size_mlp", we need to undo this
+        self.hparams["intermediate_size_moe"] = self.hparams["intermediate_size"]
+        self.hparams["intermediate_size"] = self.hparams["intermediate_size_mlp"]
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+        self.gguf_writer.add_add_bos_token(True)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_interleave_moe_layer_step(self.hparams["interleave_moe_layer_step"])
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        name = name.replace("language_model.", "")
+        name = name.replace("feed_forward.", "mlp.") # a bit hacky for now
+        name = name.replace(".router.weight", ".gate.weight") # a bit hacky for now
+
+        # split the gate_up into gate and up
+        if "gate_up_proj" in name:
+            name_up = name.replace("gate_up_proj", "up_proj.weight")
+            name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+            dim_half = data_torch.shape[-1] // 2
+            gate_proj_weight, up_proj_weight = data_torch.transpose(-1, -2).split(dim_half, dim=-2)
+            return [
+                (self.map_tensor_name(name_gate), gate_proj_weight),
+                (self.map_tensor_name(name_up), up_proj_weight)
+            ]
+
+        if name.endswith("down_proj"):
+            name += ".weight"
+            data_torch = data_torch.transpose(-1, -2)
+
+        if "multi_modal_projector" in name or "vision_model" in name:
+            return []
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @Model.register("Mistral3ForConditionalGeneration")

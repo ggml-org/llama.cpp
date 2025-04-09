@@ -380,6 +380,7 @@ struct clip_ctx {
         if (backend_cpu != backend) {
             ggml_backend_free(backend_cpu);
         }
+        clip_image_size_free(load_image_size);
     }
 };
 
@@ -1618,6 +1619,12 @@ struct clip_image_f32 * clip_image_f32_init() {
     return new clip_image_f32();
 }
 
+void clip_image_size_free(struct clip_image_size * load_image_size) {
+    if (load_image_size == nullptr) {
+        return;
+    }
+    delete load_image_size;
+}
 void clip_image_u8_free(struct clip_image_u8  * img) { delete img; }
 void clip_image_f32_free(struct clip_image_f32 * img) { delete img; }
 void clip_image_u8_batch_free(struct clip_image_u8_batch  * batch) {
@@ -2270,6 +2277,9 @@ ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx) {
 }
 
 void clip_free(clip_ctx * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
     delete ctx;
 }
 
@@ -2840,8 +2850,17 @@ int clip_is_minicpmv(const struct clip_ctx * ctx) {
 bool clip_is_glm(const struct clip_ctx * ctx) {
     return ctx->has_glm_projector;
 }
+
 bool clip_is_qwen2vl(const struct clip_ctx * ctx) {
     return ctx->has_qwen2vl_merger;
+}
+
+bool clip_is_llava(const struct clip_ctx * ctx) {
+    return ctx->has_llava_projector;
+}
+
+bool clip_is_gemma3(const struct clip_ctx * ctx) {
+    return ctx->proj_type == PROJECTOR_TYPE_GEMMA3;
 }
 
 // Determine the number of encoder layers to iterate over

@@ -77,6 +77,7 @@ CLIP_API struct clip_image_size * clip_image_size_init();
 CLIP_API struct clip_image_u8  * clip_image_u8_init ();
 CLIP_API struct clip_image_f32 * clip_image_f32_init();
 
+CLIP_API void clip_image_size_free (struct clip_image_size * img_size);
 CLIP_API void clip_image_u8_free (struct clip_image_u8  * img);
 CLIP_API void clip_image_f32_free(struct clip_image_f32 * img);
 CLIP_API void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
@@ -106,6 +107,8 @@ CLIP_API bool clip_model_quantize(const char * fname_inp, const char * fname_out
 CLIP_API int clip_is_minicpmv(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_glm(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_qwen2vl(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_llava(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_gemma3(const struct clip_ctx * ctx);
 
 CLIP_API int get_deepest_feature_layer(const struct clip_ctx * ctx);
 
