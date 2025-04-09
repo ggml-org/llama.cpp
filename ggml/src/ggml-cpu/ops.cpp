@@ -8268,152 +8268,6 @@ void ggml_compute_forward_rwkv_wkv7(
     }
 }
 
-// ggml_compute_forward_map_unary
-
-static void ggml_compute_forward_map_unary_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_unary_op_f32_t fun) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    if (params->ith != 0) {
-        return;
-    }
-
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, dst));
-
-    const int n  = ggml_nrows(src0);
-    const int nc = src0->ne[0];
-
-    for (int i = 0; i < n; i++) {
-        fun(nc,
-                (float *) ((char *) dst->data  + i*( dst->nb[1])),
-                (float *) ((char *) src0->data + i*(src0->nb[1])));
-    }
-}
-
-void ggml_compute_forward_map_unary(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_unary_op_f32_t fun) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-            {
-                ggml_compute_forward_map_unary_f32(params, dst, fun);
-            } break;
-        default:
-            {
-                GGML_ABORT("fatal error");
-            }
-    }
-}
-
-// ggml_compute_forward_map_binary
-
-static void ggml_compute_forward_map_binary_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_binary_op_f32_t fun) {
-
-    const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1];
-
-    if (params->ith != 0) {
-        return;
-    }
-
-    assert(ggml_is_contiguous_1(src0));
-    assert(ggml_is_contiguous_1(src1));
-    assert(ggml_is_contiguous_1(dst));
-    assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
-
-    const int n  = ggml_nrows(src0);
-    const int nc = src0->ne[0];
-
-    for (int i = 0; i < n; i++) {
-        fun(nc,
-                (float *) ((char *) dst->data  + i*( dst->nb[1])),
-                (float *) ((char *) src0->data + i*(src0->nb[1])),
-                (float *) ((char *) src1->data + i*(src1->nb[1])));
-    }
-}
-
-void ggml_compute_forward_map_binary(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_binary_op_f32_t fun) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-            {
-                ggml_compute_forward_map_binary_f32(params, dst, fun);
-            } break;
-        default:
-            {
-                GGML_ABORT("fatal error");
-            }
-    }
-}
-
-// ggml_compute_forward_map_custom1
-
-void ggml_compute_forward_map_custom1_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_custom1_op_f32_t fun) {
-
-    const ggml_tensor * a = dst->src[0];
-
-    if (params->ith != 0) {
-        return;
-    }
-
-    fun(dst, a);
-}
-
-// ggml_compute_forward_map_custom2
-
-void ggml_compute_forward_map_custom2_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_custom2_op_f32_t fun) {
-
-    const ggml_tensor * a = dst->src[0];
-    const ggml_tensor * b = dst->src[1];
-
-    if (params->ith != 0) {
-        return;
-    }
-
-    fun(dst, a, b);
-}
-
-// ggml_compute_forward_map_custom3
-
-void ggml_compute_forward_map_custom3_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const ggml_custom3_op_f32_t fun) {
-
-    const ggml_tensor * a = dst->src[0];
-    const ggml_tensor * b = dst->src[1];
-    const ggml_tensor * c = dst->src[1];
-
-    if (params->ith != 0) {
-        return;
-    }
-
-    fun(dst, a, b, c);
-}
-
 // ggml_compute_forward_map_custom1
 
 void ggml_compute_forward_map_custom1(
@@ -8457,6 +8311,18 @@ void ggml_compute_forward_map_custom3(
     memcpy(&p, dst->op_params, sizeof(p));
 
     p.fun(dst, a, b, c, params->ith, params->nth, p.userdata);
+}
+
+// ggml_compute_forward_custom
+
+void ggml_compute_forward_custom(
+    const struct ggml_compute_params * params,
+          struct ggml_tensor * dst) {
+
+    struct ggml_custom_op_params p;
+    memcpy(&p, dst->op_params, sizeof(p));
+
+    p.fun(dst, params->ith, params->nth, p.userdata);
 }
 
 // ggml_compute_forward_cross_entropy_loss

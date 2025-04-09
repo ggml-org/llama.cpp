@@ -140,8 +140,14 @@ struct ggml_map_custom2_op_params {
 
 struct ggml_map_custom3_op_params {
     ggml_custom3_op_t fun;
-    int n_tasks;
-    void * userdata;
+    int               n_tasks;
+    void            * userdata;
+};
+
+struct ggml_custom_op_params {
+    ggml_custom_op_t fun;
+    int              n_tasks;
+    void           * userdata;
 };
 
 // bitset
