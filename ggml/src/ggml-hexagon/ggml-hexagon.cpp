@@ -1872,8 +1872,10 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
         GGMLHEXAGON_LOG_INFO("using rpc ion memory pool:        %s", g_hexagon_appcfg.enable_rpc_ion_mempool ? "YES" : "NO");
+        GGMLHEXAGON_LOG_INFO("thread_counts with HWACCEL_CDSP: %d", g_hexagon_appcfg.thread_counts);
         ggmlhexagon_probe_dspinfo(ctx);
     } else {
+        GGMLHEXAGON_LOG_INFO("thread_counts with HWACCEL_QNN: %d", g_hexagon_appcfg.hvx_threads);
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
     }
     GGMLHEXAGON_LOG_INFO("running timestamp:%s", timestamp);
