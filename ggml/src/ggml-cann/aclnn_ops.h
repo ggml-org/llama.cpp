@@ -684,14 +684,14 @@ void ggml_cann_pad_reflect_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief   Counts the number of equal elements in two ggml tensors using the CANN backend.
- * 
+ *
  * @details This function performs an element-wise comparison between two input tensors,
- *          and counts the number of positions where the elements are equal. The result is 
+ *          and counts the number of positions where the elements are equal. The result is
  *          stored in the destination tensor `dst` as a scalar.
- * 
+ *
  *          The operation is optimized using the CANN backend, making it suitable for
  *          high-performance inference or training scenarios.
- * 
+ *
  * @param ctx The CANN context used for operations.
  * @param dst The destination tensor where the result will be stored.
  *            dst->op is expected to be `GGML_OP_COUNT_EQUAL`.
@@ -700,13 +700,13 @@ void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief   Applies the Step activation function to a ggml tensor using the CANN backend.
- * 
+ *
  * @details This function applies a step function element-wise to the input tensor, where
  *          each element is transformed to 1.0 if it is greater than 0, and 0.0 otherwise.
  *          The result is stored in the destination tensor `dst`.
- * 
+ *
  *          This operation is accelerated using the CANN backend to improve runtime performance.
- * 
+ *
  * @param ctx The CANN context used for operations.
  * @param dst The destination tensor where the result will be stored.
  *            dst->op is expected to be `GGML_OP_STEP`.

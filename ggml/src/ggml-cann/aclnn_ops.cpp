@@ -2706,7 +2706,7 @@ void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
     aclTensor* acl_self = ggml_cann_create_tensor(src0);
     aclTensor* acl_other = ggml_cann_create_tensor(src1);
-    
+
     GGML_CANN_CALL_ACLNN_OP(InplaceEqTensor, acl_self, acl_other);
 
     ggml_cann_sum(ctx, dst);
@@ -2724,7 +2724,7 @@ void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst){
     float alphaValue = 0.0f;
     aclScalar* alpha = nullptr;
     alpha = aclCreateScalar(&alphaValue, aclDataType::ACL_FLOAT);
-    
+
     GGML_CANN_CALL_ACLNN_OP(GtScalar, acl_src, alpha, acl_dst);
 
     ACL_CHECK(aclDestroyTensor(acl_src));
