@@ -16,6 +16,7 @@ GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
+QNN_SDK_VERSION=2.33.0.250327
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
 #5.5.3.0 should be also ok
@@ -27,6 +28,10 @@ HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #v75 --- Snapdragon 8 Gen3
 #v79 --- Snapdragon 8 Elite(aka Gen4)
 HTP_ARCH_VERSION=v75
+HTP_ARCH_VERSION_a=V75
+
+HTP_ARCH_VERSION=v79
+HTP_ARCH_VERSION_a=V79
 
 #running_params=" -mg 2 -ngl 99 "
 #running_params=" -mg 2 -ngl 99 -t 8 -fa 1 "
@@ -176,8 +181,8 @@ function update_qnn_libs()
     adb push ${QNN_SDK_PATH}/lib/aarch64-android/libQnnHtp.so                 ${REMOTE_PATH}/
     adb push ${QNN_SDK_PATH}/lib/aarch64-android/libQnnHtpNetRunExtensions.so ${REMOTE_PATH}/
     adb push ${QNN_SDK_PATH}/lib/aarch64-android/libQnnHtpPrepare.so          ${REMOTE_PATH}/
-    adb push ${QNN_SDK_PATH}/lib/aarch64-android/libQnnHtpV75Stub.so          ${REMOTE_PATH}/
-    adb push ${QNN_SDK_PATH}/lib/hexagon-v75/unsigned/libQnnHtpV75Skel.so     ${REMOTE_PATH}/
+    adb push ${QNN_SDK_PATH}/lib/aarch64-android/libQnnHtp${HTP_ARCH_VERSION_a}Stub.so          ${REMOTE_PATH}/
+    adb push ${QNN_SDK_PATH}/lib/hexagon-${HTP_ARCH_VERSION}/unsigned/libQnnHtp${HTP_ARCH_VERSION_a}Skel.so     ${REMOTE_PATH}/
 }
 
 
@@ -225,7 +230,6 @@ function prepare_run_on_phone()
     fi
     adb push ./out/android/bin/${program} ${REMOTE_PATH}/
     adb shell chmod +x ${REMOTE_PATH}/${program}
-    adb push ggml/src/ggml-hexagon/kernels/libggmlop_skel${HTP_ARCH_VERSION}.so  ${REMOTE_PATH}/libggmlop_skel.so
 }
 
 function run_llamacli()
