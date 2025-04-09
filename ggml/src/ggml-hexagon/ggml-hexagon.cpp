@@ -1002,7 +1002,6 @@ public:
 
         if (0 == elapse_time) {
             //filter invalid profiler data
-            GGMLHEXAGON_LOG_DEBUG("_enable_profiler %d", _enable_profiler);
             return;
         }
 
@@ -1197,10 +1196,10 @@ public:
 
         _end_time = ggml_time_us();
         _duration = (_end_time - _begin_time);
-        //I think add following judgement will useful for other developers and AI experts although:
+        //add following judgement will useful for other developers and AI experts although:
         // it breaks the original logic
         // it's not mandatory
-        // I had to expose two public function in hexagon_profiler class
+        // had to expose two public function in hexagon_profiler class
         if (g_hexagon_profiler.profiler_get_frame_index() <= g_hexagon_profiler.profiler_get_threshold_count()) {
             GGMLHEXAGON_LOG_VERBOSE("inference duration of %s through %s: %lld microseconds",
                                     _perf_name.c_str(), ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach), _duration);
@@ -1774,7 +1773,7 @@ static void ggmlhexagon_load_cfg() {
     });
     std::string precision_mode;
     std::string ggml_hexagon_version;
-    hexagoncfg_instance.get_stringvalue("general", "ggml_hexagon_version", ggml_hexagon_version, "1.00");
+    hexagoncfg_instance.get_stringvalue("general", "ggml_hexagon_version", ggml_hexagon_version, "1.03");
     hexagoncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
     hexagoncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
     hexagoncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
@@ -1888,7 +1887,7 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
 // =================================================================================================
 //  section-5: QNN helper function/class
 // =================================================================================================
-//ensure every QNN tensor/opcfg name is unique, threadsafe is not required at the moment
+//make sure every QNN tensor/opcfg name is unique, threadsafe is not required at the moment
 static void ggmlqnn_reset_idx() {
     g_qnntensor_idx = 0;
     g_qnnopcfg_idx = 0;
@@ -5341,7 +5340,7 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         goto bail;
     }
 
-    //ensure test-backend-ops get the correct backend name when hwaccel approach is 2(HWACCEL_CDSP)
+    //make sure test-backend-ops get the correct backend name when hwaccel approach is 2(HWACCEL_CDSP)
     memcpy(g_hexagon_mgr[ctx->device].name, "Hexagon-cDSP", strlen("Hexagon-cDSP"));
 
     return 0;
@@ -5740,7 +5739,7 @@ struct ggml_backend_hexagon_buffer_context {
     ~ggml_backend_hexagon_buffer_context() {
         if (buffer) {
             if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
-                //do nonthing here because rpc mempool was used for HWACCEL_CDSP
+                //do nothing here because rpc mempool was used for HWACCEL_CDSP
             } else {
                 ggml_aligned_free(buffer, 0);
             }
@@ -6272,6 +6271,9 @@ static void ggml_backend_hexagon_set_n_threads(ggml_backend_t backend, int n_thr
 int ggml_backend_hexagon_get_device_count() {
     if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
         GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
+        //here is the trick:
+        //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
+        //so return 1
         return 1;
     } else {
         return GGML_HEXAGON_MAX_DEVICES;
@@ -6516,7 +6518,7 @@ ggml_backend_t ggml_backend_hexagon_init(size_t device, const char * runtime_lib
             return nullptr;
         }
     } else {
-        //got fully description of SoC when hwaccel approach is HWACCEL_QNN and backend is HEXAGON_BACKEND_QNNNPU
+        //get fully description of SoC when hwaccel approach is HWACCEL_QNN and backend is HEXAGON_BACKEND_QNNNPU
         GGMLHEXAGON_LOG_INFO("device name %s", ggml_backend_hexagon_device_get_description(hexagon_backend->device));
     }
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__);
