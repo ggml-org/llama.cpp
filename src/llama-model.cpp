@@ -4586,6 +4586,7 @@ struct llm_build_deci : public llm_graph_context {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
+            if (n_head == 0 && n_ff == 0) continue;
 
             // For Granite architecture
             if (hparams.f_residual_scale) {
@@ -4600,7 +4601,7 @@ struct llm_build_deci : public llm_graph_context {
             }
 
             // feed-forward network
-            if (n_ff > 0 && model.layers[il].ffn_gate_inp == nullptr) {
+            if (model.layers[il].ffn_gate_inp == nullptr) {
                 cur = build_norm(ffn_inp,
                         model.layers[il].ffn_norm, NULL,
                         LLM_NORM_RMS, il);
