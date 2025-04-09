@@ -35,6 +35,7 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
         if tensor.tensor_type not in (
             gguf.GGMLQuantizationType.F32,
             gguf.GGMLQuantizationType.F16,
+            gguf.GGMLQuantizationType.Q4_0,
             gguf.GGMLQuantizationType.Q8_0,
             gguf.GGMLQuantizationType.Q4_K,
             gguf.GGMLQuantizationType.Q6_K,
@@ -72,10 +73,47 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
             part.byteswap(inplace=True)
 
         # Byte-swap tensor data if necessary
-        if tensor.tensor_type == gguf.GGMLQuantizationType.Q8_0:
+        if tensor.tensor_type == gguf.GGMLQuantizationType.Q4_0:
+            # Handle Q4_0 tensor blocks (block_q4_0)
+            # Specific handling of block_q4_0 is required.
+            # Each block_q4_0 consists of an f16 delta (scaling factor) followed by 16 int8 quantizations.
+
+            # first flatten structure
+            oldshape = tensor.data.shape
+            newshape = 1
+            for i in tensor.data.shape:
+                newshape *= i
+
+            tensor.data.resize(newshape)
+
+            block_size = 18 # 18 bytes = <f16 delta scaling factor> + 16 * <int8 quant>
+
+            n_blocks = len(tensor.data) // block_size
+            for block_num in (inner_pbar := tqdm(range(n_blocks), desc="Byte-swapping Blocks", leave=False)):
+                block_offs = block_num * block_size
+
+                # Byte-Swap f16 sized delta field
+                delta = tensor.data[block_offs:block_offs + 2].view(dtype=np.uint16)
+                delta.byteswap(inplace=True)
+
+                # Byte-Swap Q8 weights
+                if block_num % 100000 == 0:
+                    inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
+
+            # restore old shape in case it's ever used
+            tensor.data.resize(oldshape)
+        elif tensor.tensor_type == gguf.GGMLQuantizationType.Q8_0:
             # Handle Q8_0 tensor blocks (block_q8_0)
             # Specific handling of block_q8_0 is required.
             # Each block_q8_0 consists of an f16 delta (scaling factor) followed by 32 int8 quantizations.
+
+            # first flatten structure
+            oldshape = tensor.data.shape
+            newshape = 1
+            for i in tensor.data.shape:
+                newshape *= i
+
+            tensor.data.resize(newshape)
 
             block_size = 34 # 34 bytes = <f16 delta scaling factor> + 32 * <int8 quant>
 
@@ -91,12 +129,15 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
                 if block_num % 100000 == 0:
                     inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
 
+            # restore old shape in case it's ever used
+            tensor.data.resize(oldshape)
         elif tensor.tensor_type == gguf.GGMLQuantizationType.Q4_K:
             # Handle Q4_K tensor blocks (block_q4_k)
             # Specific handling of block_q4_k is required.
             # Each block_q4_k consists of 2 f16 values followed by 140 int8 values.
 
             # first flatten structure
+            oldshape = tensor.data.shape
             newshape = 1
             for i in tensor.data.shape:
                 newshape *= i
@@ -119,12 +160,15 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
                 if block_num % 100000 == 0:
                     inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
 
+            # restore old shape in case it's ever used
+            tensor.data.resize(oldshape)
         elif tensor.tensor_type == gguf.GGMLQuantizationType.Q6_K:
             # Handle Q6_K tensor blocks (block_q6_k)
             # Specific handling of block_q6_k is required.
             # Each block_q6_k consists of 208 int8 values followed by 1 f16 value.
 
             # first flatten structure
+            oldshape = tensor.data.shape
             newshape = 1
             for i in tensor.data.shape:
                 newshape *= i
@@ -144,6 +188,8 @@ def convert_byteorder(reader: gguf.GGUFReader, args: argparse.Namespace) -> None
                 if block_num % 100000 == 0:
                     inner_pbar.set_description(f"Byte-swapping Blocks [{(n_blocks - block_num) // n_blocks}]")
 
+            # restore old shape in case it's ever used
+            tensor.data.resize(oldshape)
         else:
             # Handle other tensor types
             tensor.data.byteswap(inplace=True)
