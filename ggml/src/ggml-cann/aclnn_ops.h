@@ -756,19 +756,9 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
  * @param dst The destination tensor where the result will be stored.
  *            The source tensor is retrieved from `dst->src[0]`.
  */
-static void ggml_cann_unary_op_func(
+void ggml_cann_unary_op(
     std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
-    ggml_backend_cann_context& ctx, ggml_tensor* dst) {
-    ggml_tensor* src = dst->src[0];
-
-    aclTensor* acl_src = ggml_cann_create_tensor(src);
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
-
-    unary_op(ctx, acl_src, acl_dst);
-
-    ACL_CHECK(aclDestroyTensor(acl_src));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
-}
+    ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief Helper macro to invoke a unary ACL operation using ggml_cann_unary_op.
@@ -794,7 +784,7 @@ static void ggml_cann_unary_op_func(
             aclTensor* acl_dst) {                                \
             GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
         };                                                       \
-        ggml_cann_unary_op_func(lambda, ctx, dst);               \
+        ggml_cann_unary_op(lambda, ctx, dst);                    \
     }                                                            \
     while (0)
 #endif  // CANN_ACLNN_OPS

@@ -88,6 +88,20 @@ void bcast_shape(ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst, aclT
     }
 }
 
+void ggml_cann_unary_op(
+    std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
+    ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    ggml_tensor* src = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+
+    unary_op(ctx, acl_src, acl_dst);
+
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+}
+
 /**
  * @brief Repeats elements of a tensor along each dimension according to the
  * specified repeat array.
