@@ -64,24 +64,30 @@ enum ADRENO_GPU_GEN {
     X1E,
 };
 
+enum ADRENO_CL_COMPILER_TYPE {
+    E031,
+    DX,
+};
+
 struct ggml_cl_version {
     cl_uint major = 0;
     cl_uint minor = 0;
 };
 
 struct ggml_cl_compiler_version {
+    ADRENO_CL_COMPILER_TYPE type;
     int major = -1;
     int minor = -1;
     int patch = -1;
 
-    bool same(int x, int y, int z) const {
-        return major == x && minor == y && patch == z;
+    bool same(ADRENO_CL_COMPILER_TYPE t, int x, int y, int z) const {
+        return major == x && minor == y && patch == z && type == t;
     }
-    bool newer_than(int x, int y, int z) const {
-        return major*10000 + minor*100 + patch > x*10000 + y*100 + z;
+    bool newer_than(ADRENO_CL_COMPILER_TYPE t, int x, int y, int z) const {
+        return major*10000 + minor*100 + patch > x*10000 + y*100 + z && type == t;
     }
-    bool newer_than_or_same(int x, int y, int z) const {
-        return same(x, y, z) || newer_than(x, y, z);
+    bool newer_than_or_same(ADRENO_CL_COMPILER_TYPE t, int x, int y, int z) const {
+        return same(t, x, y, z) || newer_than(t, x, y, z);
     }
 };
 
@@ -191,6 +197,7 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
 
 static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *driver_version) {
     std::string driver_ver_str(driver_version);
+    ADRENO_CL_COMPILER_TYPE type = ADRENO_CL_COMPILER_TYPE::E031;
     size_t compiler_ver_pos = driver_ver_str.find("E031");
     size_t compiler_ver_len = 13;
     size_t compiler_major_offset = 5;
@@ -202,6 +209,7 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
         if (compiler_ver_pos == std::string::npos) {
             return {};
         }
+        type = ADRENO_CL_COMPILER_TYPE::DX;
         compiler_ver_len = 11;
         compiler_major_offset = 3;
     }
@@ -210,7 +218,7 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
     int major = std::atoi(compiler_ver_str.substr(compiler_major_offset, 2).c_str());
     int minor = std::atoi(compiler_ver_str.substr(compiler_minor_offset, 2).c_str());
     int patch = std::atoi(compiler_ver_str.substr(compiler_patch_offset, 2).c_str());
-    return { major, minor, patch };
+    return { type, major, minor, patch };
 }
 
 // backend device context
@@ -643,7 +651,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     // mul_mv_q4_0_f32_1d_8x_flat
     // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
     // those compiler versions since it is anyway not used for Adreno.
-    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
+    if (backend_ctx->gpu_family != ADRENO ||
+        backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) ||
+        backend_ctx->adreno_cl_compiler_version.type == DX) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_8x_flat.cl.h"
@@ -661,7 +671,9 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     // mul_mv_q4_0_f32_1d_16x_flat
     // This kernel does not compiler on Adreno cl compiler 38.01. Skip it for
     // those compiler versions since it is anyway not used for Adreno.
-    if (backend_ctx->gpu_family != ADRENO || backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
+    if (backend_ctx->gpu_family != ADRENO ||
+        backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) ||
+    backend_ctx->adreno_cl_compiler_version.type == DX) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "mul_mv_q4_0_f32_1d_16x_flat.cl.h"
@@ -1983,7 +1995,8 @@ static enum ggml_status ggml_backend_opencl_buffer_init_tensor(ggml_backend_buff
 inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     int64_t threshold_ne0 = 512;
     int64_t threshold_ne1 = 512;
-    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(38, 11, 0)) {
+    if (!backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) &&
+         backend_ctx->adreno_cl_compiler_version.type != DX) {
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
