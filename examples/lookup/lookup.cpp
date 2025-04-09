@@ -36,6 +36,8 @@ int main(int argc, char ** argv){
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     // tokenize the prompt
     std::vector<llama_token> inp;
     inp = common_tokenize(ctx, params.prompt, true, true);
@@ -136,7 +138,7 @@ int main(int argc, char ** argv){
                 LOG("%s", token_str.c_str());
             }
 
-            if (llama_token_is_eog(model, id)) {
+            if (llama_vocab_is_eog(vocab, id)) {
                 has_eos = true;
             }
 
@@ -190,7 +192,7 @@ int main(int argc, char ** argv){
 
         // KV cache management
         // clean the cache of draft tokens that weren't accepted
-        llama_kv_cache_seq_rm(ctx, 0, n_past, -1);
+        llama_kv_self_seq_rm(ctx, 0, n_past, -1);
 
         common_batch_clear(batch_tgt);
         common_batch_add(batch_tgt, draft[0], n_past, { 0 }, true);

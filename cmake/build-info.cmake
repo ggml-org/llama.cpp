@@ -44,7 +44,7 @@ if(MSVC)
     set(BUILD_TARGET ${CMAKE_VS_PLATFORM_NAME})
 else()
     execute_process(
-        COMMAND sh -c "$@ --version | head -1" _ ${CMAKE_C_COMPILER}
+        COMMAND sh -c "\"$@\" --version | head -1" _ ${CMAKE_C_COMPILER}
         OUTPUT_VARIABLE OUT
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )

@@ -26,6 +26,12 @@ from re import RegexFlag
 import wget
 
 
+DEFAULT_HTTP_TIMEOUT = 12
+
+if "LLAMA_SANITIZE" in os.environ or "GITHUB_ACTION" in os.environ:
+    DEFAULT_HTTP_TIMEOUT = 30
+
+
 class ServerResponse:
     headers: dict
     status_code: int
@@ -38,7 +44,7 @@ class ServerProcess:
     server_port: int = 8080
     server_host: str = "127.0.0.1"
     model_hf_repo: str = "ggml-org/models"
-    model_hf_file: str = "tinyllamas/stories260K.gguf"
+    model_hf_file: str | None = "tinyllamas/stories260K.gguf"
     model_alias: str = "tinyllama-2"
     temperature: float = 0.8
     seed: int = 42
@@ -61,6 +67,9 @@ class ServerProcess:
     id_slot: int | None = None
     cache_prompt: bool | None = None
     n_slots: int | None = None
+    ctk: str | None = None
+    ctv: str | None = None
+    fa: bool | None = None
     server_continuous_batching: bool | None = False
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
@@ -69,13 +78,16 @@ class ServerProcess:
     pooling: str | None = None
     draft: int | None = None
     api_key: str | None = None
-    response_format: str | None = None
     lora_files: List[str] | None = None
     disable_ctx_shift: int | None = False
     draft_min: int | None = None
     draft_max: int | None = None
     no_webui: bool | None = None
+    jinja: bool | None = None
+    reasoning_format: Literal['deepseek', 'none'] | None = None
     chat_template: str | None = None
+    chat_template_file: str | None = None
+    server_path: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -88,8 +100,10 @@ class ServerProcess:
         if "PORT" in os.environ:
             self.server_port = int(os.environ["PORT"])
 
-    def start(self, timeout_seconds: int = 10) -> None:
-        if "LLAMA_SERVER_BIN_PATH" in os.environ:
+    def start(self, timeout_seconds: int | None = DEFAULT_HTTP_TIMEOUT) -> None:
+        if self.server_path is not None:
+            server_path = self.server_path
+        elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
             server_path = "../../../build/bin/Release/llama-server.exe"
@@ -143,6 +157,12 @@ class ServerProcess:
             server_args.extend(["--ctx-size", self.n_ctx])
         if self.n_slots:
             server_args.extend(["--parallel", self.n_slots])
+        if self.ctk:
+            server_args.extend(["-ctk", self.ctk])
+        if self.ctv:
+            server_args.extend(["-ctv", self.ctv])
+        if self.fa is not None:
+            server_args.append("-fa")
         if self.n_predict:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
@@ -166,11 +186,17 @@ class ServerProcess:
             server_args.extend(["--draft-min", self.draft_min])
         if self.no_webui:
             server_args.append("--no-webui")
+        if self.jinja:
+            server_args.append("--jinja")
+        if self.reasoning_format is not None:
+            server_args.extend(("--reasoning-format", self.reasoning_format))
         if self.chat_template:
             server_args.extend(["--chat-template", self.chat_template])
+        if self.chat_template_file:
+            server_args.extend(["--chat-template-file", self.chat_template_file])
 
         args = [str(arg) for arg in [server_path, *server_args]]
-        print(f"bench: starting server with: {' '.join(args)}")
+        print(f"tests: starting server with: {' '.join(args)}")
 
         flags = 0
         if "nt" == os.name:
@@ -183,7 +209,7 @@ class ServerProcess:
             creationflags=flags,
             stdout=sys.stdout,
             stderr=sys.stdout,
-            env={**os.environ, "LLAMA_CACHE": "tmp"},
+            env={**os.environ, "LLAMA_CACHE": "tmp"} if "LLAMA_CACHE" not in os.environ else None,
         )
         server_instances.add(self)
 
@@ -201,6 +227,10 @@ class ServerProcess:
                     return  # server is ready
             except Exception as e:
                 pass
+            # Check if process died
+            if self.process.poll() is not None:
+                raise RuntimeError(f"Server process died with return code {self.process.returncode}")
+
             print(f"Waiting for server to start...")
             time.sleep(0.5)
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
@@ -219,17 +249,18 @@ class ServerProcess:
         path: str,
         data: dict | Any | None = None,
         headers: dict | None = None,
+        timeout: float | None = None,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
         if method == "GET":
-            response = requests.get(url, headers=headers)
+            response = requests.get(url, headers=headers, timeout=timeout)
             parse_body = True
         elif method == "POST":
-            response = requests.post(url, headers=headers, json=data)
+            response = requests.post(url, headers=headers, json=data, timeout=timeout)
             parse_body = True
         elif method == "OPTIONS":
-            response = requests.options(url, headers=headers)
+            response = requests.options(url, headers=headers, timeout=timeout)
         else:
             raise ValueError(f"Unimplemented method: {method}")
         result = ServerResponse()
@@ -271,7 +302,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/models"
         server.model_hf_file = "tinyllamas/stories260K.gguf"
         server.model_alias = "tinyllama-2"
-        server.n_ctx = 256
+        server.n_ctx = 512
         server.n_batch = 32
         server.n_slots = 2
         server.n_predict = 64
@@ -288,6 +319,21 @@ class ServerPreset:
         server.n_batch = 128
         server.n_ubatch = 128
         server.n_slots = 2
+        server.seed = 42
+        server.server_embeddings = True
+        return server
+
+    @staticmethod
+    def bert_bge_small_with_fa() -> ServerProcess:
+        server = ServerProcess()
+        server.model_hf_repo = "ggml-org/models"
+        server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
+        server.model_alias = "bert-bge-small"
+        server.n_ctx = 1024
+        server.n_batch = 300
+        server.n_ubatch = 300
+        server.n_slots = 2
+        server.fa = True
         server.seed = 42
         server.server_embeddings = True
         return server

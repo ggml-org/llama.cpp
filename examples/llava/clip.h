@@ -1,6 +1,7 @@
 #ifndef CLIP_H
 #define CLIP_H
 
+#include "ggml.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -39,8 +40,15 @@ struct clip_image_f32_batch {
     size_t size;
 };
 
-CLIP_API struct clip_ctx * clip_model_load    (const char * fname, int verbosity);
-CLIP_API struct clip_ctx * clip_model_load_cpu(const char * fname, int verbosity);
+struct clip_context_params {
+    bool use_gpu;
+    ggml_log_level verbosity;
+};
+
+// deprecated, use clip_init
+CLIP_API struct clip_ctx * clip_model_load(const char * fname, int verbosity);
+
+CLIP_API struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_params);
 
 CLIP_API void clip_free(struct clip_ctx * ctx);
 
@@ -55,6 +63,7 @@ CLIP_API int32_t clip_hidden_size(const struct clip_ctx * ctx);
 CLIP_API const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 
 CLIP_API const int32_t * clip_image_grid(const struct clip_ctx * ctx);
+CLIP_API size_t get_clip_image_grid_size(const struct clip_ctx * ctx);
 
 CLIP_API int clip_n_patches        (const struct clip_ctx * ctx);
 CLIP_API int clip_n_patches_by_img (const struct clip_ctx * ctx, struct clip_image_f32 * img);
@@ -68,10 +77,17 @@ CLIP_API struct clip_image_size * clip_image_size_init();
 CLIP_API struct clip_image_u8  * clip_image_u8_init ();
 CLIP_API struct clip_image_f32 * clip_image_f32_init();
 
+CLIP_API void clip_image_size_free (struct clip_image_size * img_size);
 CLIP_API void clip_image_u8_free (struct clip_image_u8  * img);
 CLIP_API void clip_image_f32_free(struct clip_image_f32 * img);
 CLIP_API void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
 CLIP_API void clip_image_f32_batch_free(struct clip_image_f32_batch * batch);
+
+/**
+ * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
+ * The memory layout is RGBRGBRGB..., input buffer length must be 3*nx*ny bytes
+ */
+CLIP_API void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny, struct clip_image_u8 * img);
 
 CLIP_API bool clip_image_load_from_file(const char * fname, struct clip_image_u8 * img);
 
@@ -89,9 +105,15 @@ CLIP_API bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, cons
 CLIP_API bool clip_model_quantize(const char * fname_inp, const char * fname_out, int itype);
 
 CLIP_API int clip_is_minicpmv(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_glm(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_qwen2vl(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_llava(const struct clip_ctx * ctx);
+CLIP_API bool clip_is_gemma3(const struct clip_ctx * ctx);
+
+CLIP_API int get_deepest_feature_layer(const struct clip_ctx * ctx);
 
 CLIP_API bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
+
 
 #ifdef __cplusplus
 }

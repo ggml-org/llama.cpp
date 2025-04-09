@@ -344,8 +344,10 @@ int main(int raw_argc, char ** raw_argv) {
         return 1;
     }
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     llama_context_params ctx_params = llama_context_default_params();
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
         fprintf(stderr, "Error: could not create context.\n");
         return 1;
@@ -365,7 +367,7 @@ int main(int raw_argc, char ** raw_argv) {
         prompt = stdin_buffer.str();
     }
 
-    const bool model_wants_add_bos = llama_add_bos_token(model);
+    const bool model_wants_add_bos = llama_vocab_get_add_bos(vocab);
     const bool add_bos = model_wants_add_bos && !no_bos;
     const bool parse_special = !no_parse_special;
     const bool escape = !no_escape;
@@ -375,7 +377,7 @@ int main(int raw_argc, char ** raw_argv) {
     }
 
     std::vector<llama_token> tokens;
-    tokens = common_tokenize(model, prompt, add_bos, parse_special);
+    tokens = common_tokenize(vocab, prompt, add_bos, parse_special);
 
     if (printing_ids) {
         printf("[");

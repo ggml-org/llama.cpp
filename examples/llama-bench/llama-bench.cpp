@@ -683,7 +683,7 @@ struct cmd_params_instance {
     bool               cpu_strict;
     int                poll;
     int                n_gpu_layers;
-    std::string        rpc_servers;
+    std::string        rpc_servers_str;
     llama_split_mode   split_mode;
     int                main_gpu;
     bool               no_kv_offload;
@@ -696,8 +696,37 @@ struct cmd_params_instance {
         llama_model_params mparams = llama_model_default_params();
 
         mparams.n_gpu_layers = n_gpu_layers;
-        if (!rpc_servers.empty()) {
-            mparams.rpc_servers = rpc_servers.c_str();
+        if (!rpc_servers_str.empty()) {
+            auto rpc_servers = string_split<std::string>(rpc_servers_str, ',');
+
+            // add RPC devices
+            if (!rpc_servers.empty()) {
+                ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+                if (!rpc_reg) {
+                    fprintf(stderr, "%s: failed to find RPC backend\n", __func__);
+                    exit(1);
+                }
+
+                typedef ggml_backend_dev_t (*ggml_backend_rpc_add_device_t)(const char * endpoint);
+                ggml_backend_rpc_add_device_t ggml_backend_rpc_add_device_fn = (ggml_backend_rpc_add_device_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_device");
+                if (!ggml_backend_rpc_add_device_fn) {
+                    fprintf(stderr, "%s: failed to find RPC device add function\n", __func__);
+                    exit(1);
+                }
+                static std::vector<ggml_backend_dev_t> devices;
+                devices.clear();
+                for (const std::string & server : rpc_servers) {
+                    ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
+                    if (dev) {
+                        devices.push_back(dev);
+                    } else {
+                        fprintf(stderr, "%s: failed to add RPC device for server '%s'\n", __func__, server.c_str());
+                        exit(1);
+                    }
+                }
+                devices.push_back(nullptr);
+                mparams.devices = devices.data();
+            }
         }
         mparams.split_mode   = split_mode;
         mparams.main_gpu     = main_gpu;
@@ -708,7 +737,7 @@ struct cmd_params_instance {
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers == other.rpc_servers &&
+        return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
                split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
                tensor_split == other.tensor_split;
     }
@@ -847,8 +876,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
 struct test {
     static const std::string build_commit;
     static const int         build_number;
-    static const std::string cpu_info;
-    static const std::string gpu_info;
+    const std::string        cpu_info;
+    const std::string        gpu_info;
     std::string              model_filename;
     std::string              model_type;
     uint64_t                 model_size;
@@ -874,7 +903,10 @@ struct test {
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
 
-    test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) {
+    test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
+        cpu_info(get_cpu_info()),
+        gpu_info(get_gpu_info()) {
+
         model_filename = inst.model;
         char buf[128];
         llama_model_desc(lmodel, buf, sizeof(buf));
@@ -1029,8 +1061,6 @@ struct test {
 
 const std::string test::build_commit = LLAMA_COMMIT;
 const int         test::build_number = LLAMA_BUILD_NUMBER;
-const std::string test::cpu_info     = get_cpu_info();
-const std::string test::gpu_info     = get_gpu_info();
 
 struct printer {
     virtual ~printer() {}
@@ -1401,7 +1431,8 @@ static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
-    const int32_t       n_vocab = llama_n_vocab(model);
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
     std::vector<llama_token> tokens(n_batch);
 
@@ -1409,7 +1440,7 @@ static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
 
     while (n_processed < n_prompt) {
         int n_tokens = std::min(n_prompt - n_processed, n_batch);
-        tokens[0]    = n_processed == 0 && llama_add_bos_token(model) ? llama_token_bos(model) : std::rand() % n_vocab;
+        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
         for (int i = 1; i < n_tokens; i++) {
             tokens[i] = std::rand() % n_vocab;
         }
@@ -1424,9 +1455,10 @@ static void test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
-    const int32_t       n_vocab = llama_n_vocab(model);
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
-    llama_token token = llama_add_bos_token(model) ? llama_token_bos(model) : std::rand() % n_vocab;
+    llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
 
     for (int i = 0; i < n_gen; i++) {
         llama_decode(ctx, llama_batch_get_one(&token, 1));
@@ -1537,7 +1569,7 @@ int main(int argc, char ** argv) {
             prev_inst = &inst;
         }
 
-        llama_context * ctx = llama_new_context_with_model(lmodel, inst.to_llama_cparams());
+        llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
@@ -1546,7 +1578,7 @@ int main(int argc, char ** argv) {
 
         test t(inst, lmodel, ctx);
 
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         // cool off before the test
         if (params.delay) {
@@ -1586,7 +1618,7 @@ int main(int argc, char ** argv) {
         }
 
         for (int i = 0; i < params.reps; i++) {
-            llama_kv_cache_clear(ctx);
+            llama_kv_self_clear(ctx);
 
             uint64_t t_start = get_time_ns();
 

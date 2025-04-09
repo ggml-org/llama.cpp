@@ -8,7 +8,6 @@
 #include <map>
 #include <vector>
 #include <string>
-#include <thread>
 #include <fstream>
 
 static bool g_verbose = false;
@@ -130,7 +129,7 @@ struct lora_merge_ctx {
 
     lora_merge_ctx(
             std::string & base_fname,
-            std::vector<common_lora_adapter_info> & lora_files,
+            std::vector<common_adapter_lora_info> & lora_files,
             std::string & outfile,
             int n_threads) : base_model(base_fname, 0), n_threads(n_threads), fout(outfile, std::ios::binary) {
         fout.exceptions(std::ofstream::failbit); // fail fast on write errors
@@ -346,8 +345,18 @@ struct lora_merge_ctx {
             gf = ggml_new_graph(ctx0);
             struct ggml_tensor * cur = inp_base;
             for (size_t i = 0; i < adapters.size(); ++i) {
-                struct ggml_tensor * a_T = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32)));
-                struct ggml_tensor * delta = ggml_mul_mat(ctx0, a_T, ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32));
+                struct ggml_tensor * delta;
+                bool is_tok_embd = string_starts_with(name_base, "token_embd");
+                if (is_tok_embd) {
+                    printf("%s :     detected token embeddings tensor\n", __func__);
+                    delta = ggml_mul_mat(ctx0,
+                        ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32),
+                        ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32));
+                } else {
+                    delta = ggml_mul_mat(ctx0,
+                        ggml_cont(ctx0, ggml_transpose(ctx0, ggml_cast(ctx0, inp_a[i], GGML_TYPE_F32))),
+                        ggml_cast(ctx0, inp_b[i], GGML_TYPE_F32));
+                }
                 // scale
                 const float alpha = adapters[i]->alpha;
                 const float rank  = (float) inp_b[i]->ne[0];
@@ -404,20 +413,22 @@ static void print_usage(int, char ** argv) {
 int main(int argc, char ** argv) {
     common_params params;
 
+    params.out_file = "ggml-lora-merged-f16.gguf";
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EXPORT_LORA, print_usage)) {
         return 1;
     }
 
     g_verbose = (params.verbosity > 1);
     try {
-        lora_merge_ctx ctx(params.model, params.lora_adapters, params.lora_outfile, params.cpuparams.n_threads);
+        lora_merge_ctx ctx(params.model.path, params.lora_adapters, params.out_file, params.cpuparams.n_threads);
         ctx.run_merge();
     } catch (const std::exception & err) {
         fprintf(stderr, "%s\n", err.what());
         exit(EXIT_FAILURE);
     }
 
-    printf("done, output file is %s\n", params.lora_outfile.c_str());
+    printf("done, output file is %s\n", params.out_file.c_str());
 
     return 0;
 }

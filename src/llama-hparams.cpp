@@ -52,7 +52,7 @@ uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
 uint32_t llama_hparams::n_embd_k_s() const {
     if (wkv_head_size != 0) {
         // for RWKV models
-        return 2 * n_embd;
+        return token_shift_count * n_embd;
     }
 
     // TODO: maybe support other convolution strides than 1
@@ -68,4 +68,12 @@ uint32_t llama_hparams::n_embd_v_s() const {
 
     // corresponds to Mamba's ssm_states size
     return ssm_d_state * ssm_d_inner;
+}
+
+bool llama_hparams::is_swa(uint32_t il) const {
+    if (il < n_layer) {
+        return n_swa > 0 && n_swa_pattern > 0 && il % n_swa_pattern < (n_swa_pattern - 1);
+    }
+
+    GGML_ABORT("fatal error");
 }

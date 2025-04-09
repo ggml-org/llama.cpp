@@ -1,10 +1,10 @@
 prefix=@CMAKE_INSTALL_PREFIX@
-exec_prefix=${prefix}
-libdir=${exec_prefix}/lib
-includedir=${prefix}/include
+exec_prefix=@CMAKE_INSTALL_PREFIX@
+libdir=@CMAKE_INSTALL_FULL_LIBDIR@
+includedir=@CMAKE_INSTALL_FULL_INCLUDEDIR@
 
 Name: llama
 Description: Port of Facebook's LLaMA model in C/C++
-Version: @PROJECT_VERSION@
-Libs: -L${libdir} -lggml  -lggml-base -lllama
+Version: @LLAMA_INSTALL_VERSION@
+Libs: -L${libdir} -lggml -lggml-base -lllama
 Cflags: -I${includedir}

@@ -83,7 +83,7 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
 
 static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd) {
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_cache_clear(ctx);
+    llama_kv_self_clear(ctx);
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
@@ -159,7 +159,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
 
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
@@ -192,8 +194,8 @@ int main(int argc, char ** argv) {
             return 1;
         }
         // add eos if not present
-        if (llama_token_eos(model) >= 0 && (inp.empty() || inp.back() != llama_token_eos(model))) {
-            inp.push_back(llama_token_eos(model));
+        if (llama_vocab_eos(vocab) >= 0 && (inp.empty() || inp.back() != llama_vocab_eos(vocab))) {
+            inp.push_back(llama_vocab_eos(vocab));
         }
         chunk.tokens = inp;
     }
@@ -215,7 +217,7 @@ int main(int argc, char ** argv) {
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
     // allocate output
-    const int n_embd = llama_n_embd(model);
+    const int n_embd = llama_model_n_embd(model);
     std::vector<float> embeddings(n_chunks * n_embd, 0);
     float * emb = embeddings.data();
 

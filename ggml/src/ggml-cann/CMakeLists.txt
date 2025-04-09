@@ -51,13 +51,11 @@ if (CANN_INSTALL_DIR)
         ${CANN_INSTALL_DIR}/acllib/include
     )
 
-    add_subdirectory(kernels)
     list(APPEND CANN_LIBRARIES
         ascendcl
         nnopbase
         opapi
         acl_op_compiler
-        ascendc_kernels
     )
 
     file(GLOB GGML_SOURCES_CANN "*.cpp")

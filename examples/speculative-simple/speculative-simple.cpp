@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.empty()) {
+    if (params.speculative.model.path.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -44,6 +44,8 @@ int main(int argc, char ** argv) {
 
     model_tgt = llama_init_tgt.model.get();
     ctx_tgt   = llama_init_tgt.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
     // load the draft model
     params.devices      = params.speculative.devices;
@@ -196,7 +198,7 @@ int main(int argc, char ** argv) {
 
             id_last = ids[i];
 
-            if (llama_token_is_eog(model_tgt, id_last)) {
+            if (llama_vocab_is_eog(vocab, id_last)) {
                 has_eos = true;
                 break;
             }
@@ -215,7 +217,7 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_kv_cache_seq_rm(ctx_tgt, 0, n_past, -1);
+            llama_kv_self_seq_rm(ctx_tgt, 0, n_past, -1);
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {

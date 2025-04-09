@@ -13,8 +13,8 @@ from pathlib import Path
 from tqdm import tqdm
 
 # Necessary to load the local gguf package
-if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent / 'gguf-py').exists():
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from gguf import GGUFReader  # noqa: E402
 

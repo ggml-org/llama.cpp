@@ -1,6 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
-#include "llama-context.h"
+#include "llama-model.h"
 #include "common.h"
 
 #include <algorithm>
@@ -319,7 +319,7 @@ int main(int argc, char ** argv) {
         auto cparams = llama_context_default_params();
         cparams.n_ctx = 256;
 
-        ctx = llama_new_context_with_model(model, cparams);
+        ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
@@ -328,7 +328,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    const auto & tensors = llama_internal_get_tensor_map(ctx);
+    const auto & tensors = llama_internal_get_tensor_map(model);
 
     // check layer tensors
     int included_layers = 0;

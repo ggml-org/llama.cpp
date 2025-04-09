@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
         grammar_str = buffer.str();
     }
 
-    llama_grammar * grammar = llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root");
+    llama_grammar * grammar = llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0);
     if (grammar == nullptr) {
         fprintf(stdout, "Failed to initialize llama_grammar\n");
         return 1;

@@ -98,7 +98,7 @@ This guide provides a brief overview. Check out the GBNF files in this directory
 
 ## Troubleshooting
 
-Grammars currently have performance gotchas (see https://github.com/ggerganov/llama.cpp/issues/4218).
+Grammars currently have performance gotchas (see https://github.com/ggml-org/llama.cpp/issues/4218).
 
 ### Efficient optional repetitions
 
@@ -126,7 +126,7 @@ You can use GBNF grammars:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
     - in JavaScript with [json-schema-to-grammar.mjs](../examples/server/public_legacy/json-schema-to-grammar.mjs) (this is used by the [server](../examples/server)'s Web UI)
 
-Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggerganov/llama.cpp/pull/5978, https://github.com/ggerganov/llama.cpp/pull/6659 & https://github.com/ggerganov/llama.cpp/pull/6555).
+Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggml-org/llama.cpp/pull/5978, https://github.com/ggml-org/llama.cpp/pull/6659 & https://github.com/ggml-org/llama.cpp/pull/6555).
 
 ```bash
 llama-cli \
@@ -185,10 +185,10 @@ Here is also a list of known limitations (contributions welcome):
 - `additionalProperties` defaults to `false` (produces faster grammars + reduces hallucinations).
 - `"additionalProperties": true` may produce keys that contain unescaped newlines.
 - Unsupported features are skipped silently. It is currently advised to use the command-line Python converter (see above) to see any warnings, and to inspect the resulting grammar / test it w/ [llama-gbnf-validator](../examples/gbnf-validator/gbnf-validator.cpp).
-- Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggerganov/llama.cpp/issues/7703)
+- Can't mix `properties` w/ `anyOf` / `oneOf` in the same type (https://github.com/ggml-org/llama.cpp/issues/7703)
 - [prefixItems](https://json-schema.org/draft/2020-12/json-schema-core#name-prefixitems) is broken (but [items](https://json-schema.org/draft/2020-12/json-schema-core#name-items) works)
 - `minimum`, `exclusiveMinimum`, `maximum`, `exclusiveMaximum`: only supported for `"type": "integer"` for now, not `number`
-- Nested `$ref`s are broken (https://github.com/ggerganov/llama.cpp/issues/8073)
+- Nested `$ref`s are broken (https://github.com/ggml-org/llama.cpp/issues/8073)
 - [pattern](https://json-schema.org/draft/2020-12/json-schema-validation#name-pattern)s must start with `^` and end with `$`
 - Remote `$ref`s not supported in the C++ version (Python & JavaScript versions fetch https refs)
 - `string` [formats](https://json-schema.org/draft/2020-12/json-schema-validation#name-defined-formats) lack `uri`, `email`

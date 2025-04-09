@@ -911,7 +911,7 @@ int main(int argc, char ** argv) {
     load_vocab(params.fn_vocab_model, &config, &vocab);
 
     struct my_llama_model model;
-    model.hparams.n_vocab   = config.vocab_size; //llama_n_vocab(lctx);
+    model.hparams.n_vocab   = config.vocab_size; //llama_vocab_n_vocab(lctx);
     model.hparams.n_ctx     = params.n_ctx;
     model.hparams.n_embd    = config.dim; //params.n_embd;
     model.hparams.n_ff      = config.hidden_dim;

@@ -48,7 +48,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
 
-std::string handcrafted_file_type_name(const enum handcrafted_file_type hft) {
+static std::string handcrafted_file_type_name(const enum handcrafted_file_type hft) {
     switch (hft) {
         case HANDCRAFTED_HEADER_BAD_MAGIC:           return "HEADER_BAD_MAGIC";
         case HANDCRAFTED_HEADER_BAD_VERSION_1:       return "HEADER_BAD_VERSION_1";
@@ -99,7 +99,7 @@ static bool expect_context_not_null(const enum handcrafted_file_type hft) {
 
 typedef std::pair<enum ggml_type, std::array<int64_t, GGML_MAX_DIMS>> tensor_config_t;
 
-std::vector<tensor_config_t> get_tensor_configs(std::mt19937 & rng) {
+static std::vector<tensor_config_t> get_tensor_configs(std::mt19937 & rng) {
     std::vector<tensor_config_t> tensor_configs;
     tensor_configs.reserve(100);
 
@@ -122,7 +122,7 @@ std::vector<tensor_config_t> get_tensor_configs(std::mt19937 & rng) {
     return tensor_configs;
 }
 
-std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::mt19937 rng) {
+static std::vector<std::pair<enum gguf_type, enum gguf_type>> get_kv_types(std::mt19937 rng) {
     std::vector<std::pair<enum gguf_type, enum gguf_type>> kv_types;
     kv_types.reserve(100);
 
@@ -626,8 +626,6 @@ static bool handcrafted_check_tensor_data(const gguf_context * gguf_ctx, const u
 
     bool ok = true;
 
-    const uint32_t alignment = GGUF_DEFAULT_ALIGNMENT;
-
     for (int i = 0; i < int(tensor_configs.size()); ++i) {
         const ggml_type                          type  = tensor_configs[i].first;
         const std::array<int64_t, GGML_MAX_DIMS> shape = tensor_configs[i].second;
@@ -699,8 +697,8 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
 
 #ifdef _WIN32
         if (!file) {
-            printf("%s: failed to create tmpfile(), needs elevated privileges on Windows");
-            printf("%s: skipping tests");
+            printf("failed to create tmpfile(), needs elevated privileges on Windows");
+            printf("skipping tests");
             continue;
         }
 #else
@@ -866,13 +864,13 @@ static struct random_gguf_context_result get_random_gguf_context(ggml_backend_t 
                     case GGUF_TYPE_COUNT:
                     default: {
                         GGML_ABORT("fatal error");
-                    } break;
+                    }
                 }
             } break;
             case GGUF_TYPE_COUNT:
             default: {
                 GGML_ABORT("fatal error");
-            } break;
+            }
         }
     }
 
@@ -938,7 +936,7 @@ static bool all_kv_in_other(const gguf_context * ctx, const gguf_context * other
         }
 
         if (type == GGUF_TYPE_ARRAY) {
-            const int arr_n = gguf_get_arr_n(ctx, id);
+            const size_t arr_n = gguf_get_arr_n(ctx, id);
             if (arr_n != gguf_get_arr_n(other, idx_other)) {
                 ok = false;
                 continue;
@@ -953,7 +951,7 @@ static bool all_kv_in_other(const gguf_context * ctx, const gguf_context * other
             if (type_arr == GGUF_TYPE_BOOL) {
                 const int8_t * data       = reinterpret_cast<const int8_t *>(gguf_get_arr_data(ctx,   id));
                 const int8_t * data_other = reinterpret_cast<const int8_t *>(gguf_get_arr_data(other, idx_other));
-                for (int arr_i = 0; arr_i < arr_n; ++arr_i) {
+                for (size_t arr_i = 0; arr_i < arr_n; ++arr_i) {
                     if (bool(data[arr_i]) != bool(data_other[arr_i])) {
                         ok = false;
                     }
@@ -962,7 +960,7 @@ static bool all_kv_in_other(const gguf_context * ctx, const gguf_context * other
             }
 
             if (type_arr == GGUF_TYPE_STRING) {
-                for (int arr_i = 0; arr_i < arr_n; ++arr_i) {
+                for (size_t arr_i = 0; arr_i < arr_n; ++arr_i) {
                     const std::string str       = gguf_get_arr_str(ctx,   id,       arr_i);
                     const std::string str_other = gguf_get_arr_str(other, idx_other, arr_i);
                     if (str != str_other) {
@@ -1033,6 +1031,12 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
 
     struct ggml_tensor * t_orig = ggml_get_first_tensor(orig);
     struct ggml_tensor * t_read = ggml_get_first_tensor(read);
+
+    if (std::string(t_read->name) != "GGUF tensor data binary blob") {
+        return false;
+    }
+    t_read = ggml_get_next_tensor(read, t_read);
+
     while (t_orig) {
         if (!t_read) {
             ok = false;
@@ -1051,13 +1055,13 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
         }
 
         t_orig = ggml_get_next_tensor(orig, t_orig);
-        t_read = ggml_get_next_tensor(orig, t_read);
+        t_read = ggml_get_next_tensor(read, t_read);
     }
     if (t_read) {
         ok = false;
     }
 
-    return true;
+    return ok;
 }
 
 static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta) {
@@ -1082,8 +1086,8 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
 
 #ifdef _WIN32
     if (!file) {
-        printf("%s: failed to create tmpfile(), needs elevated privileges on Windows");
-        printf("%s: skipping tests");
+        printf("failed to create tmpfile(), needs elevated privileges on Windows");
+        printf("skipping tests");
         return std::make_pair(0, 0);
     }
 #else

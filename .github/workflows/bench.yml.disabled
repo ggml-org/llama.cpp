@@ -1,5 +1,5 @@
 # TODO: there have been some issues with the workflow, so disabling for now
-#       https://github.com/ggerganov/llama.cpp/issues/7893
+#       https://github.com/ggml-org/llama.cpp/issues/7893
 #
 # Benchmark
 name: Benchmark
@@ -57,17 +57,7 @@ jobs:
 
     if: |
       inputs.gpu-series == 'Standard_NC4as_T4_v3'
-      || (
-        github.event_name == 'schedule'
-        && github.ref_name == 'master'
-        && github.repository_owner == 'ggerganov'
-      )
       || github.event_name == 'pull_request_target'
-      || (
-        github.event_name == 'push'
-        && github.event.ref == 'refs/heads/master'
-        && github.repository_owner == 'ggerganov'
-      )
     steps:
       - name: Clone
         id: checkout
@@ -114,7 +104,6 @@ jobs:
           cmake -B build \
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
               -DLLAMA_CUBLAS=ON \
               -DCUDAToolkit_ROOT=/usr/local/cuda \
               -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \

@@ -139,7 +139,9 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const int n_ctx_train = llama_n_ctx_train(model);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
     LOG_DBG("n_ctx: %d\n", n_ctx);
 
@@ -152,28 +154,28 @@ int main(int argc, char ** argv) {
         LOG_INF("\n");
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
-    const bool add_bos = llama_add_bos_token(model);
-    GGML_ASSERT(!llama_add_eos_token(model));
+    const bool add_bos = llama_vocab_get_add_bos(vocab);
+    GGML_ASSERT(!llama_vocab_get_add_eos(vocab));
 
     std::vector<llama_token> embd_inp;
     std::vector<llama_token> embd_end;
     std::vector<llama_token> inp_pfx = common_tokenize(ctx, params.input_prefix, false);
     std::vector<llama_token> inp_sfx = common_tokenize(ctx, params.input_suffix, false);
 
-    GGML_ASSERT(llama_token_fim_pre(model) >= 0);
-    GGML_ASSERT(llama_token_fim_suf(model) >= 0);
+    GGML_ASSERT(llama_vocab_fim_pre(vocab) >= 0);
+    GGML_ASSERT(llama_vocab_fim_suf(vocab) >= 0);
 
-    inp_pfx.insert(inp_pfx.begin(), llama_token_fim_pre(model));
-    inp_sfx.insert(inp_sfx.begin(), llama_token_fim_suf(model));
+    inp_pfx.insert(inp_pfx.begin(), llama_vocab_fim_pre(vocab));
+    inp_sfx.insert(inp_sfx.begin(), llama_vocab_fim_suf(vocab));
 
     embd_inp = params.spm_infill ? inp_sfx : inp_pfx;
     embd_end = params.spm_infill ? inp_pfx : inp_sfx;
     if (add_bos) {
-        embd_inp.insert(embd_inp.begin(), llama_token_bos(model));
+        embd_inp.insert(embd_inp.begin(), llama_vocab_bos(vocab));
     }
     embd_inp.insert(embd_inp.end(), embd_end.begin(), embd_end.end());
 
-    const llama_token middle_token = llama_token_fim_mid(model);
+    const llama_token middle_token = llama_vocab_fim_mid(vocab);
     if (middle_token >= 0) {
         embd_inp.push_back(middle_token);
     }
@@ -185,7 +187,7 @@ int main(int argc, char ** argv) {
 
     // Should not run without any tokens
     if (embd_inp.empty()) {
-        embd_inp.push_back(llama_token_bos(model));
+        embd_inp.push_back(llama_vocab_bos(vocab));
         LOG_WRN("embd_inp was considered empty and bos was added: %s\n", string_from(ctx, embd_inp).c_str());
     }
 
@@ -330,8 +332,8 @@ int main(int argc, char ** argv) {
                 LOG_DBG("context full, swapping: n_past = %d, n_left = %d, n_ctx = %d, n_keep = %d, n_discard = %d\n",
                     n_past, n_left, n_ctx, params.n_keep, n_discard);
 
-                llama_kv_cache_seq_rm (ctx, 0, params.n_keep + 1            , params.n_keep + n_discard + 1);
-                llama_kv_cache_seq_add(ctx, 0, params.n_keep + 1 + n_discard, n_past, -n_discard);
+                llama_kv_self_seq_rm (ctx, 0, params.n_keep + 1            , params.n_keep + n_discard + 1);
+                llama_kv_self_seq_add(ctx, 0, params.n_keep + 1 + n_discard, n_past, -n_discard);
 
                 n_past -= n_discard;
 
@@ -420,10 +422,10 @@ int main(int argc, char ** argv) {
         // if not currently processing queued inputs;
         if ((int) embd_inp.size() <= n_consumed) {
             // deal with eot token in infill mode
-            if ((common_sampler_last(smpl) == llama_token_eot(model) || is_interacting) && params.interactive){
+            if ((common_sampler_last(smpl) == llama_vocab_eot(vocab) || is_interacting) && params.interactive){
                 if (is_interacting && !params.interactive_first) {
                     // print an eot token
-                    LOG("%s", common_token_to_piece(ctx, llama_token_eot(model)).c_str());
+                    LOG("%s", common_token_to_piece(ctx, llama_vocab_eot(vocab)).c_str());
                 }
                 LOG("\n");
                 console::set_display(console::user_input);
@@ -463,13 +465,13 @@ int main(int argc, char ** argv) {
                 std::vector<llama_token> inp_pfx = common_tokenize(ctx, params.input_prefix, false);
                 std::vector<llama_token> inp_sfx = common_tokenize(ctx, params.input_suffix, false);
 
-                inp_pfx.insert(inp_pfx.begin(), llama_token_fim_pre(model));
-                inp_sfx.insert(inp_sfx.begin(), llama_token_fim_suf(model));
+                inp_pfx.insert(inp_pfx.begin(), llama_vocab_fim_pre(vocab));
+                inp_sfx.insert(inp_sfx.begin(), llama_vocab_fim_suf(vocab));
 
                 embd_inp = params.spm_infill ? inp_sfx : inp_pfx;
                 embd_end = params.spm_infill ? inp_pfx : inp_sfx;
                 if (add_bos) {
-                    embd_inp.insert(embd_inp.begin(), llama_token_bos(model));
+                    embd_inp.insert(embd_inp.begin(), llama_vocab_bos(vocab));
                 }
                 embd_inp.insert(embd_inp.end(), embd_end.begin(), embd_end.end());
 
@@ -484,7 +486,7 @@ int main(int argc, char ** argv) {
                 is_interacting = false;
             }
             // deal with end of generation tokens in interactive mode
-            else if (llama_token_is_eog(model, common_sampler_last(smpl))) {
+            else if (llama_vocab_is_eog(vocab, common_sampler_last(smpl))) {
                 LOG_DBG("found EOS token\n");
 
                 if (params.interactive) {
@@ -500,7 +502,7 @@ int main(int argc, char ** argv) {
 
                 if (params.input_prefix_bos) {
                     LOG_DBG("adding input prefix BOS token\n");
-                    embd_inp.push_back(llama_token_bos(model));
+                    embd_inp.push_back(llama_vocab_bos(vocab));
                 }
 
                 std::string buffer;
@@ -563,7 +565,7 @@ int main(int argc, char ** argv) {
         }
 
         // end of generation
-        if (!embd.empty() && llama_token_is_eog(model, embd.back()) && !params.interactive) {
+        if (!embd.empty() && llama_vocab_is_eog(vocab, embd.back()) && !params.interactive) {
             break;
         }
 
@@ -575,7 +577,7 @@ int main(int argc, char ** argv) {
         }
     }
     if (!params.interactive && n_remain <= 0) {
-        LOG("%s", common_token_to_piece(ctx, llama_token_eot(model)).c_str());
+        LOG("%s", common_token_to_piece(ctx, llama_vocab_eot(vocab)).c_str());
     }
 
     LOG("\n");

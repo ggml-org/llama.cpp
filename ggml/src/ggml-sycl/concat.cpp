@@ -158,8 +158,9 @@ static void concat_f32_sycl_non_cont(
       });
 }
 
-void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-                                const ggml_tensor *src1, ggml_tensor *dst) {
+void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+  const ggml_tensor *src0 = dst->src[0];
+  const ggml_tensor *src1 = dst->src[1];
   queue_ptr stream = ctx.stream();
 
   const int32_t dim = ((int32_t *)dst->op_params)[0];
