@@ -359,7 +359,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.81"},
+        .ggml_hexagon_version   = {"1.03"},
         .ggml_dsp_version       = {"0.61"},
 };
 
