@@ -1,6 +1,70 @@
 #ifndef GGML_METAL_IMPL
 #define GGML_METAL_IMPL
 
+// kernel parameters for mat-vec threadgroups
+//
+// N_R0: number of src0 rows to process per simdgroup
+// N_SG: number of simdgroups per threadgroup
+//
+// TODO: for optimal performance, become function of the device and work size
+
+#define N_R0_Q4_0 4
+#define N_SG_Q4_0 2
+
+#define N_R0_Q4_1 4
+#define N_SG_Q4_1 2
+
+#define N_R0_Q5_0 4
+#define N_SG_Q5_0 2
+
+#define N_R0_Q5_1 4
+#define N_SG_Q5_1 2
+
+#define N_R0_Q8_0 4
+#define N_SG_Q8_0 2
+
+#define N_R0_Q2_K 4
+#define N_SG_Q2_K 2
+
+#define N_R0_Q3_K 2
+#define N_SG_Q3_K 2
+
+#define N_R0_Q4_K 4
+#define N_SG_Q4_K 2
+
+#define N_R0_Q5_K 2
+#define N_SG_Q5_K 2
+
+#define N_R0_Q6_K 1
+#define N_SG_Q6_K 2
+
+#define N_R0_IQ1_S 4
+#define N_SG_IQ1_S 2
+
+#define N_R0_IQ1_M 4
+#define N_SG_IQ1_M 2
+
+#define N_R0_IQ2_XXS 4
+#define N_SG_IQ2_XXS 2
+
+#define N_R0_IQ2_XS 4
+#define N_SG_IQ2_XS 2
+
+#define N_R0_IQ2_S 4
+#define N_SG_IQ2_S 2
+
+#define N_R0_IQ3_XXS 4
+#define N_SG_IQ3_XXS 2
+
+#define N_R0_IQ3_S 4
+#define N_SG_IQ3_S 2
+
+#define N_R0_IQ4_NL 2
+#define N_SG_IQ4_NL 2
+
+#define N_R0_IQ4_XS 2
+#define N_SG_IQ4_XS 2
+
 // kernel argument structs
 //
 // - element counters (e.g. ne00) typically use int32_t to reduce register usage
@@ -155,9 +219,12 @@ typedef struct {
     int32_t  ne11;
     int32_t  ne_12_2; // assume K and V are same shape
     int32_t  ne_12_3;
-    uint64_t nb_12_1;
-    uint64_t nb_12_2;
-    uint64_t nb_12_3;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb21;
+    uint64_t nb22;
+    uint64_t nb23;
     uint64_t nb31;
     int32_t  ne1;
     int32_t  ne2;

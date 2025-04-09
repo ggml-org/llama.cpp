@@ -421,7 +421,7 @@ int main(int argc, char ** argv) {
 
     g_verbose = (params.verbosity > 1);
     try {
-        lora_merge_ctx ctx(params.model, params.lora_adapters, params.out_file, params.cpuparams.n_threads);
+        lora_merge_ctx ctx(params.model.path, params.lora_adapters, params.out_file, params.cpuparams.n_threads);
         ctx.run_merge();
     } catch (const std::exception & err) {
         fprintf(stderr, "%s\n", err.what());

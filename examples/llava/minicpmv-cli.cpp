@@ -31,7 +31,7 @@ static struct llama_model * llava_init(common_params * params) {
 
     llama_model_params model_params = common_model_params_to_llama(*params);
 
-    llama_model * model = llama_model_load_from_file(params->model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params->model.path.c_str(), model_params);
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return NULL;
@@ -80,7 +80,7 @@ static void llava_free(struct llava_context * ctx_llava) {
 }
 
 static struct clip_ctx * clip_init_context(common_params * params) {
-    const char * clip_path = params->mmproj.c_str();
+    const char * clip_path = params->mmproj.path.c_str();
 
     auto prompt = params->prompt;
     if (prompt.empty()) {
@@ -88,7 +88,7 @@ static struct clip_ctx * clip_init_context(common_params * params) {
     }
     struct clip_context_params clip_params = {
         /* use_gpu */   params->n_gpu_layers != 0,
-        /* verbosity */ params->verbosity,
+        /* verbosity */ GGML_LOG_LEVEL_INFO, // TODO: make this configurable
     };
     auto * ctx_clip = clip_init(clip_path, clip_params);
     return ctx_clip;
@@ -290,7 +290,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.mmproj.empty() || (params.image.empty())) {
+    if (params.mmproj.path.empty() || (params.image.empty())) {
         show_additional_info(argc, argv);
         return 1;
     }

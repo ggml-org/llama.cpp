@@ -108,6 +108,9 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_DEEPSEEK3_LLM  = 28,
         LLAMA_VOCAB_PRE_TYPE_GPT4O          = 29,
         LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
+        LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
+        LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
+        LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
     };
 
     enum llama_rope_type {
@@ -278,9 +281,17 @@ extern "C" {
         };
     };
 
+    struct llama_model_tensor_buft_override {
+        const char * pattern;
+        ggml_backend_buffer_type_t buft;
+    };
+
     struct llama_model_params {
         // NULL-terminated list of devices to use for offloading (if NULL, all available devices are used)
         ggml_backend_dev_t * devices;
+
+        // NULL-terminated list of buffer types to use for tensors that match a pattern
+        const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
         int32_t n_gpu_layers; // number of layers to store in VRAM
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
@@ -1265,6 +1276,10 @@ extern "C" {
                                float   tau,
                                float   eta);
 
+    /// @details Intializes a GBNF grammar, see grammars/README.md for details.
+    /// @param vocab The vocabulary that this grammar will be used with.
+    /// @param grammar_str The production rules for the grammar, encoded as a string. Returns an empty grammar if empty. Returns NULL if parsing of grammar_str fails.
+    /// @param grammar_root The name of the start symbol for the grammar.
     LLAMA_API struct llama_sampler * llama_sampler_init_grammar(
             const struct llama_vocab * vocab,
                           const char * grammar_str,

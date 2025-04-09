@@ -116,6 +116,7 @@ class Keys:
         RESIDUAL_SCALE                    = "{arch}.residual_scale"
         EMBEDDING_SCALE                   = "{arch}.embedding_scale"
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
+        INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -227,6 +228,7 @@ class GGUFType:
 
 class MODEL_ARCH(IntEnum):
     LLAMA            = auto()
+    LLAMA4           = auto()
     DECI             = auto()
     FALCON           = auto()
     BAICHUAN         = auto()
@@ -286,6 +288,8 @@ class MODEL_ARCH(IntEnum):
     GRANITE_MOE      = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
+    PLM              = auto()
+    BAILINGMOE       = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -429,6 +433,7 @@ class MODEL_TENSOR(IntEnum):
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA:            "llama",
+    MODEL_ARCH.LLAMA4:           "llama4",
     MODEL_ARCH.DECI:             "deci",
     MODEL_ARCH.FALCON:           "falcon",
     MODEL_ARCH.BAICHUAN:         "baichuan",
@@ -488,6 +493,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
+    MODEL_ARCH.PLM:              "plm",
+    MODEL_ARCH.BAILINGMOE:       "bailingmoe",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -649,6 +656,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.LLAMA4: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.DECI: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1464,6 +1494,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.PLM: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+    ],
     MODEL_ARCH.CHATGLM : [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.ROPE_FREQS,
@@ -1651,6 +1695,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.POSNET_ATTN_V,
         MODEL_TENSOR.POSNET_ATTN_OUT,
     ],
+    MODEL_ARCH.BAILINGMOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
     # TODO
 }
 
@@ -1702,6 +1765,9 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.NEMOTRON: [
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_ROT_EMBD,
+    ],
+    MODEL_ARCH.BAILINGMOE: [
+        MODEL_TENSOR.ROPE_FREQS,
     ],
 }
 

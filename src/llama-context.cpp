@@ -255,7 +255,8 @@ llama_context::llama_context(
             model.n_devices() > 1 &&
             model.params.n_gpu_layers > (int) model.hparams.n_layer &&
             model.params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
-            cparams.offload_kqv;
+            cparams.offload_kqv &&
+            !model.has_tensor_overrides();
 
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
@@ -1201,33 +1202,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     const int64_t n_tokens_all = batch.n_tokens;
     const int64_t n_embd       = hparams.n_embd;
 
-    // TODO: remove this stuff
-    class batch_guard {
-    public:
-        batch_guard(llama_kv_cache_unified & kv_self) : kv_slot_restorer(kv_self) {
-        }
-
-        ~batch_guard() {
-            if (!is_done) {
-                kv_slot_restorer.restore();
-            }
-        }
-
-        void done() {
-            is_done = true;
-        }
-
-        void save(const llama_kv_cache_slot_info & slot_info) {
-            kv_slot_restorer.save(slot_info);
-        }
-
-    private:
-        bool is_done = false;
-
-        llama_kv_slot_restorer kv_slot_restorer;
-    };
-
-    batch_guard bg(*kv_self);
+    llama_kv_cache_guard kv_guard(kv_self.get());
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
@@ -1280,6 +1255,9 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -2;
     };
 
+    // handle any pending defrags/shifts
+    kv_self_update();
+
     int64_t n_outputs_prev = 0;
 
     while (sbatch.n_tokens > 0) {
@@ -1317,23 +1295,13 @@ int llama_context::decode(llama_batch & inp_batch) {
             n_outputs = n_outputs_new;
         }
 
-        // non-causal masks do not use the KV cache
-        if (hparams.causal_attn) {
-            kv_self_update();
+        // find KV slot
+        {
+            if (!kv_self->find_slot(ubatch)) {
+                LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
 
-            // if we have enough unused cells before the current head ->
-            //   better to start searching from the beginning of the cache, hoping to fill it
-            if (kv_self->head > kv_self->used + 2*ubatch.n_tokens) {
-                kv_self->head = 0;
+                return 1;
             }
-
-            const auto slot_info = kv_self->find_slot(ubatch);
-            if (!slot_info) {
-                LLAMA_LOG_ERROR("%s: failed to prepare ubatch\n", __func__);
-                return -3;
-            }
-
-            bg.save(slot_info);
 
             if (!kv_self->recurrent) {
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
@@ -1368,16 +1336,6 @@ int llama_context::decode(llama_batch & inp_batch) {
                 case GGML_STATUS_FAILED:
                 default:
                     return -3;
-            }
-        }
-
-        // update the kv ring buffer
-        {
-            kv_self->head += ubatch.n_tokens;
-
-            // Ensure kv cache head points to a valid index.
-            if (kv_self->head >= kv_self->size) {
-                kv_self->head = 0;
             }
         }
 
@@ -1467,7 +1425,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     }
 
     // finalize the batch processing
-    bg.done();
+    kv_guard.commit();
 
     // set output mappings
     {
@@ -2316,11 +2274,6 @@ llama_context * llama_init_from_model(
         params.flash_attn = false;
     }
 
-    if (params.flash_attn && model->hparams.n_embd_head_k != model->hparams.n_embd_head_v) {
-        LLAMA_LOG_WARN("%s: flash_attn requires n_embd_head_k == n_embd_head_v - forcing off\n", __func__);
-        params.flash_attn = false;
-    }
-
     if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
@@ -2521,7 +2474,12 @@ int32_t llama_get_kv_cache_token_count(const llama_context * ctx) {
 }
 
 int32_t llama_kv_self_n_tokens(const llama_context * ctx) {
-    return llama_kv_cache_n_tokens(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->get_n_tokens();
 }
 
 // deprecated
@@ -2530,7 +2488,12 @@ int32_t llama_get_kv_cache_used_cells(const llama_context * ctx) {
 }
 
 int32_t llama_kv_self_used_cells(const llama_context * ctx) {
-    return llama_kv_cache_used_cells(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->get_used_cells();
 }
 
 // deprecated
@@ -2539,7 +2502,12 @@ void llama_kv_cache_clear(llama_context * ctx) {
 }
 
 void llama_kv_self_clear(llama_context * ctx) {
-    llama_kv_cache_clear(ctx->get_kv_self());
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    kv->clear();
 }
 
 // deprecated
@@ -2556,7 +2524,12 @@ bool llama_kv_self_seq_rm(
          llama_seq_id   seq_id,
             llama_pos   p0,
             llama_pos   p1) {
-    return llama_kv_cache_seq_rm(ctx->get_kv_self(), seq_id, p0, p1);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return true;
+    }
+
+    return kv->seq_rm(seq_id, p0, p1);
 }
 
 // deprecated
@@ -2575,7 +2548,12 @@ void llama_kv_self_seq_cp(
          llama_seq_id   seq_id_dst,
             llama_pos   p0,
             llama_pos   p1) {
-    return llama_kv_cache_seq_cp(ctx->get_kv_self(), seq_id_src, seq_id_dst, p0, p1);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 // deprecated
@@ -2586,7 +2564,12 @@ void llama_kv_cache_seq_keep(
 }
 
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_kv_cache_seq_keep(ctx->get_kv_self(), seq_id);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_keep(seq_id);
 }
 
 // deprecated
@@ -2605,7 +2588,12 @@ void llama_kv_self_seq_add(
             llama_pos   p0,
             llama_pos   p1,
             llama_pos   delta) {
-    return llama_kv_cache_seq_add(ctx->get_kv_self(), seq_id, p0, p1, delta);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_add(seq_id, p0, p1, delta);
 }
 
 // deprecated
@@ -2624,7 +2612,12 @@ void llama_kv_self_seq_div(
             llama_pos   p0,
             llama_pos   p1,
                   int   d) {
-    return llama_kv_cache_seq_div(ctx->get_kv_self(), seq_id, p0, p1, d);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_div(seq_id, p0, p1, d);
 }
 
 // deprecated
@@ -2633,7 +2626,12 @@ llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 }
 
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_kv_cache_seq_pos_max(ctx->get_kv_self(), seq_id);
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->seq_pos_max(seq_id);
 }
 
 // deprecated
@@ -2642,7 +2640,12 @@ void llama_kv_cache_defrag(llama_context * ctx) {
 }
 
 void llama_kv_self_defrag(llama_context * ctx) {
-    llama_kv_cache_defrag(ctx->get_kv_self());
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->defrag();
 }
 
 // deprecated
@@ -2651,7 +2654,12 @@ bool llama_kv_cache_can_shift(const llama_context * ctx) {
 }
 
 bool llama_kv_self_can_shift(const llama_context * ctx) {
-    return llama_kv_cache_can_shift(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return false;
+    }
+
+    return kv->get_can_shift();
 }
 
 // deprecated

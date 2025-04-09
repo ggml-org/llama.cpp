@@ -367,7 +367,7 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
                 sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims,
                     block_dims),
                 [=](sycl::nd_item<3> item_ct1)
-                [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     l2_norm_f32(x, dst, ncols, eps, item_ct1,
                         nullptr, WARP_SIZE);
                 });
@@ -389,7 +389,7 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
                 sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims,
                     block_dims),
                 [=](sycl::nd_item<3> item_ct1)
-                [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+                [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     l2_norm_f32(x, dst, ncols, eps, item_ct1,
                         get_pointer(s_sum_acc_ct1), work_group_size);
                 });
@@ -397,90 +397,78 @@ static void l2_norm_f32_sycl(const float* x, float* dst, const int ncols,
     }
 }
 
-void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0, const ggml_tensor* src1,
-    ggml_tensor* dst, const float* src0_dd,
-    const float* src1_dd, float* dst_dd,
-    const queue_ptr& main_stream) {
+void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    const int64_t ne00 = src0->ne[0];
-    const int64_t nrows = ggml_nrows(src0);
+    const int64_t ne00 = dst->src[0]->ne[0];
+    const int64_t nrows = ggml_nrows(dst->src[0]);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
     norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
-
-    (void)src1;
-    (void)dst;
-    (void)src1_dd;
 }
 
-void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst,
-    const float* src0_dd, const float* src1_dd,
-    float* dst_dd,
-    const queue_ptr& main_stream) {
+void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     int num_groups = dst->op_params[0];
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     float eps;
     memcpy(&eps, dst->op_params + 1, sizeof(float));
 
-    int group_size = src0->ne[0] * src0->ne[1] * ((src0->ne[2] + num_groups - 1) / num_groups);
-    group_norm_f32_sycl(src0_dd, dst_dd, num_groups, eps, group_size, src0->ne[0] * src0->ne[1] * src0->ne[2], main_stream, ctx.device);
-
-    (void)src1;
-    (void)dst;
-    (void)src1_dd;
-    GGML_UNUSED(ctx);
+    int group_size = dst->src[0]->ne[0] * dst->src[0]->ne[1] * ((dst->src[0]->ne[2] + num_groups - 1) / num_groups);
+    group_norm_f32_sycl(src0_dd, dst_dd, num_groups, eps, group_size, dst->src[0]->ne[0] * dst->src[0]->ne[1] * dst->src[0]->ne[2], main_stream, ctx.device);
 }
 
-void ggml_sycl_op_rms_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst,
-    const float* src0_dd, const float* src1_dd,
-    float* dst_dd,
-    const queue_ptr& main_stream) {
+void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    const int64_t ne00 = src0->ne[0];
-    const int64_t nrows = ggml_nrows(src0);
+    const int64_t ne00 = dst->src[0]->ne[0];
+    const int64_t nrows = ggml_nrows(dst->src[0]);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float *       dst_dd  = static_cast<float *>(dst->data);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
     rms_norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
-
-    (void)src1;
-    (void)dst;
-    (void)src1_dd;
 }
 
-void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst,
-    const float* src0_dd, const float* src1_dd,
-    float* dst_dd,
-    const queue_ptr& main_stream) {
+void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    const int64_t ne00 = src0->ne[0];
-    const int64_t nrows = ggml_nrows(src0);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const int64_t ne00 = dst->src[0]->ne[0];
+    const int64_t nrows = ggml_nrows(dst->src[0]);
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    float * dst_dd = static_cast<float *>(dst->data);
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
 
     l2_norm_f32_sycl(src0_dd, dst_dd, ne00, nrows, eps, main_stream, ctx.device);
 
-    (void)src1;
-    (void)dst;
-    (void)src1_dd;
 }
