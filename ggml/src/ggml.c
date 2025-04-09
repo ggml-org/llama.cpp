@@ -4174,13 +4174,16 @@ static struct ggml_tensor * ggml_upscale_impl(
         int                   ne0,
         int                   ne1,
         int                   ne2,
-        int                   ne3) {
+        int                   ne3,
+        enum ggml_scale_mode  mode) {
     GGML_ASSERT(a->ne[0] <= ne0);
     GGML_ASSERT(a->ne[1] <= ne1);
     GGML_ASSERT(a->ne[2] <= ne2);
     GGML_ASSERT(a->ne[3] <= ne3);
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
+
+    ggml_set_op_params_i32(result, 0, mode);
 
     result->op     = GGML_OP_UPSCALE;
     result->src[0] = a;
@@ -4191,8 +4194,9 @@ static struct ggml_tensor * ggml_upscale_impl(
 struct ggml_tensor * ggml_upscale(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        int                   scale_factor) {
-    return ggml_upscale_impl(ctx, a, a->ne[0] * scale_factor, a->ne[1] * scale_factor, a->ne[2], a->ne[3]);
+        int                   scale_factor,
+        enum ggml_scale_mode  mode) {
+    return ggml_upscale_impl(ctx, a, a->ne[0] * scale_factor, a->ne[1] * scale_factor, a->ne[2], a->ne[3], mode);
 }
 
 struct ggml_tensor * ggml_upscale_ext(
@@ -4201,8 +4205,9 @@ struct ggml_tensor * ggml_upscale_ext(
         int                   ne0,
         int                   ne1,
         int                   ne2,
-        int                   ne3) {
-    return ggml_upscale_impl(ctx, a, ne0, ne1, ne2, ne3);
+        int                   ne3,
+        enum ggml_scale_mode  mode) {
+    return ggml_upscale_impl(ctx, a, ne0, ne1, ne2, ne3, mode);
 }
 
 // ggml_pad

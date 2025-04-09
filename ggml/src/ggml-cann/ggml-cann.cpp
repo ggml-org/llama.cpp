@@ -1824,6 +1824,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (op->src[0]->ne[2] * op->ne[3] != op->src[0]->ne[3] * op->ne[2]) {
                 return false;
             }
+            if (op->op_params[0] != GGML_SCALE_MODE_NEAREST) {
+                return false;
+            }
             return true;
         }
         case GGML_OP_POOL_2D: {

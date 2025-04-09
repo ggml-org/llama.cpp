@@ -271,6 +271,14 @@ static std::string var_to_str(ggml_op_pool pool) {
     }
 }
 
+static std::string var_to_str(ggml_scale_mode mode) {
+    switch (mode) {
+        case GGML_SCALE_MODE_NEAREST:  return "nearest";
+        case GGML_SCALE_MODE_BILINEAR: return "bilinear";
+        default:                      return std::to_string(mode);
+    }
+}
+
 #define VAR_TO_STR(x) (#x "=" + var_to_str(x))
 
 #define VARS_TO_STR1(a) VAR_TO_STR(a)
@@ -2948,15 +2956,16 @@ struct test_upscale : public test_case {
     const std::array<int64_t, 4> ne;
     const int32_t scale_factor;
     const bool transpose;
+    const ggml_scale_mode mode;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, scale_factor, transpose);
+        return VARS_TO_STR5(type, ne, scale_factor, mode, transpose);
     }
 
     test_upscale(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {512, 512, 3, 1},
-            int32_t scale_factor = 2, bool transpose = false)
-        : type(type), ne(ne), scale_factor(scale_factor), transpose(transpose) {}
+            int32_t scale_factor = 2, ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST, bool transpose = false)
+        : type(type), ne(ne), scale_factor(scale_factor), mode(mode), transpose(transpose) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
@@ -2967,7 +2976,7 @@ struct test_upscale : public test_case {
             ggml_set_name(a, "a_transposed");
         }
 
-        ggml_tensor * out = ggml_upscale(ctx, a, scale_factor);
+        ggml_tensor * out = ggml_upscale(ctx, a, scale_factor, mode);
         ggml_set_name(out, "out");
 
         return out;
@@ -2979,21 +2988,23 @@ struct test_upscale_ext : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const std::array<int64_t, 4> ne_tgt;
+    const ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, ne_tgt);
+        return VARS_TO_STR4(type, ne, ne_tgt, mode);
     }
 
     test_upscale_ext(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne     = {2, 5,  7, 11},
-            std::array<int64_t, 4> ne_tgt = {5, 7, 11, 13})
-        : type(type), ne(ne), ne_tgt(ne_tgt) {}
+            std::array<int64_t, 4> ne_tgt = {5, 7, 11, 13},
+            ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST)
+        : type(type), ne(ne), ne_tgt(ne_tgt), mode(mode) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_upscale_ext(ctx, a, ne_tgt[0], ne_tgt[1],ne_tgt[2], ne_tgt[3]);
+        ggml_tensor * out = ggml_upscale_ext(ctx, a, ne_tgt[0], ne_tgt[1],ne_tgt[2], ne_tgt[3], mode);
         ggml_set_name(out, "out");
 
         return out;
@@ -4399,12 +4410,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {60, 10, 10, 10}, order)); // qwen
     }
 
+    for (ggml_scale_mode mode : {GGML_SCALE_MODE_NEAREST, GGML_SCALE_MODE_BILINEAR}) {
+        test_cases.emplace_back(new test_upscale(GGML_TYPE_F32, {512, 512, 3, 2}, 2, mode));
+        test_cases.emplace_back(new test_upscale(GGML_TYPE_F32, {512, 512, 3, 2}, 2, mode, true));
+        test_cases.emplace_back(new test_upscale_ext(GGML_TYPE_F32, {2, 5,  7, 11}, {5, 7, 11, 13}, mode));
+    }
+
     test_cases.emplace_back(new test_sum());
     test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_mean());
-    test_cases.emplace_back(new test_upscale());
-    test_cases.emplace_back(new test_upscale(GGML_TYPE_F32, { 512, 512, 3, 1 }, 2, true));
-    test_cases.emplace_back(new test_upscale_ext());
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
