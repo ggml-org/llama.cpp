@@ -59,6 +59,9 @@
 #include <aclnnop/aclnn_div.h>
 #include <aclnnop/aclnn_convolution.h>
 #include <aclnnop/aclnn_elu.h>
+#include <aclnnop/aclnn_log.h>
+#include <aclnnop/aclnn_mean.h>
+#include <aclnnop/aclnn_reflection_pad1d.h>
 #include <float.h>
 
 #include <cmath>
@@ -2598,6 +2601,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3);
 
     GGML_CANN_CALL_ACLNN_OP(ArgMax, acl_src, 3, false, acl_dst);
+
     ACL_CHECK(aclDestroyTensor(acl_src));
     ACL_CHECK(aclDestroyTensor(acl_dst));
 }
@@ -2629,6 +2633,9 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
 
     ACL_CHECK(aclDestroyTensor(acl_weight));
     ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyIntArray(stride));
+    ACL_CHECK(aclDestroyIntArray(padding));
+    ACL_CHECK(aclDestroyIntArray(dilation));
 }
 
 void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst){
@@ -2646,4 +2653,47 @@ void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
     ACL_CHECK(aclDestroyTensor(acl_input));
     ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyScalar(alpha));
+}
+
+void ggml_cann_mean(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+
+    aclTensor* acl_src = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+
+    int64_t reduceDimValue[] = {3};
+    aclIntArray* reduceDim = aclCreateIntArray(reduceDimValue, 1);
+    bool keepDim = true;
+
+    GGML_CANN_CALL_ACLNN_OP(Mean, acl_src, reduceDim, keepDim, ACL_FLOAT, acl_dst);
+
+    ACL_CHECK(aclDestroyTensor(acl_src));
+    ACL_CHECK(aclDestroyTensor(acl_dst));
+    ACL_CHECK(aclDestroyIntArray(reduceDim));
+}
+
+void ggml_cann_pad_reflect_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    ggml_tensor * src0 = dst->src[0];
+    int32_t *opts = (int32_t *) dst->op_params;
+    int64_t paddingsArray[2] = {opts[0], opts[1]};
+    aclIntArray* paddings = aclCreateIntArray(paddingsArray, 2);
+
+    for (int64_t i = 0; i < src0->ne[3]; i++) {
+        aclTensor* acl_src = ggml_cann_create_tensor(
+            (char*)src0->data + i * src0->ne[3],
+            ggml_cann_type_mapping(src0->type), ggml_element_size(src0),
+            src0->ne, src0->nb, 3);
+
+        aclTensor* acl_dst = ggml_cann_create_tensor(
+            (char*)dst->data + i * src0->ne[3],
+            ggml_cann_type_mapping(dst->type), ggml_element_size(dst),
+            dst->ne, dst->nb, 3);
+
+            GGML_CANN_CALL_ACLNN_OP(ReflectionPad1d, acl_src, paddings, acl_dst);
+
+            ACL_CHECK(aclDestroyTensor(acl_src));
+            ACL_CHECK(aclDestroyTensor(acl_dst));
+    }
+    ACL_CHECK(aclDestroyIntArray(paddings));
 }

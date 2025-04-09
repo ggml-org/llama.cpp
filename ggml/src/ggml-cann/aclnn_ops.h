@@ -42,6 +42,7 @@
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_sin.h>
 #include <aclnnop/aclnn_cos.h>
+#include <aclnnop/aclnn_log.h>
 #include "acl_tensor.h"
 #include "common.h"
 
@@ -649,6 +650,36 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
  *            dst->op is expected to be `GGML_OP_ELU`.
  */
 void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Computes the mean of a ggml tensor element-wise using the CANN backend.
+ *
+ * @details This function calculates the element-wise mean of the input tensor.
+ *          The result is written to the destination tensor `dst`.
+ *          The mean is computed by averaging the values across the entire tensor.
+ *
+ *          This operation is optimized using the CANN backend for high-performance inference or training.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the mean result will be stored.
+ *            dst->op is expected to be `GGML_OP_MEAN`.
+ */
+void ggml_cann_mean(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Applies 1D reflect padding to a ggml tensor using the CANN backend.
+ *
+ * @details This function performs 1D reflect padding on the input tensor.
+ *          The amount of padding on each side is specified by parameters stored in `dst->op_params`.
+ *          The operation reflects the values at the borders of the tensor to generate the padded output.
+ *
+ *          This operation is optimized using the CANN backend for high-performance inference or training.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the padded result will be stored.
+ *            dst->op is expected to be `GGML_OP_PAD_REFLECT_1D`.
+ */
+void ggml_cann_pad_reflect_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief Applies a element-wise operation to two input tensors using the CANN

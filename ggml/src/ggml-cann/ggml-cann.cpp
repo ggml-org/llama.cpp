@@ -1456,6 +1456,15 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_cann_conv_transpose_1d(ctx, dst);
             break;
+        case GGML_OP_LOG:
+            GGML_CANN_CALL_UNARY_OP(Log);
+            break;
+        case GGML_OP_MEAN:
+            ggml_cann_mean(ctx, dst);
+            break;
+        case GGML_OP_PAD_REFLECT_1D:
+            ggml_cann_pad_reflect_1d(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -1851,6 +1860,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_COS:
         case GGML_OP_SIN:
         case GGML_OP_CONV_TRANSPOSE_1D:
+        case GGML_OP_LOG:
+        case GGML_OP_MEAN:
+        case GGML_OP_PAD_REFLECT_1D:
             return true;
         default:
             return false;
