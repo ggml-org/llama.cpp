@@ -12624,10 +12624,14 @@ UseGgmlGemm1:;
         }
 
 #ifdef PIM_KERNEL
-	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
+        if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
 #if PIM_DEBUG_PERF_PRINT
-        uint64_t t_start = get_time_us();
+          uint64_t t_start = get_time_us();
 #endif
+          if (ith > 0) {
+            // for non-master thread, exit directly
+            return;
+          }
           dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
 #if PIM_DEBUG_PERF_PRINT
@@ -12649,7 +12653,8 @@ UseGgmlGemm1:;
           pim_res->data = malloc(ggml_nbytes(pim_res));
           GGML_ASSERT(pim_res->data != NULL);
           dpu_get_gemv_res(src1, src0, pim_res);
-#endif
+
+#endif // TENSOR_EXPORT
 #if PIM_DEBUG_PERF_PRINT
           uint64_t tt_start = get_time_us();
 #endif
@@ -12664,7 +12669,7 @@ UseGgmlGemm1:;
           }
 #else
           return;
-#endif
+#endif // TENSOR_EXPORT
         }
 #if TENSOR_EXPORT
         if (to_export && !exported) {
