@@ -19,8 +19,26 @@
 
 namespace ggml_sycl_reordered {
 
+
+// The reordered block moves quants (qs) and  scales(d) to two
+// uniform regions of memory that is contiguous in the same tensor.
+// What this means is that instead of having:
+// [d0, qs0] [d1, qs1] [d2, qs2] ... [dN, qsN]
+// We have:
+// [qs0, qs1, qs2, ..., qsN]  [d0, d1, d2, ..., dN]
+//
+// Notes: out-of-bounds qs will run into d values
+// Aligment relies on the allocated size of qs
+
 template <ggml_type type> struct block_q_t;
 
+
+// qk number of weights / quants in a block
+// qr number of weights in a byte (described as 'before dequantization')
+//    for quantization types that has low and high bits split, qr is calculated with
+//    using the lower bits, e.g for Q6 quants QR6 is 2
+// qi size of a block in 32 bit integers
+// See ggml-common.h to see how these are calculated
 template <> struct block_q_t<GGML_TYPE_Q4_0> {
     struct traits {
         static constexpr uint32_t qk       = QK4_0;
@@ -28,11 +46,6 @@ template <> struct block_q_t<GGML_TYPE_Q4_0> {
         static constexpr uint32_t qr       = QR4_0;
         static constexpr uint32_t vdr_mmvq = 2;
     };
-
-    // qs and d are expected to be contiguous in memory
-    // out-of-bounds qs will access d values
-    // Aligment relies on the allocated size of qs, so other block types
-    // may require padding
 
     static constexpr int get_block_offset(const int block_index) { return block_index * (traits::qk / traits::qr); }
 
