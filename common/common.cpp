@@ -1027,6 +1027,16 @@ struct common_init_result common_init_from_params(common_params & params) {
     return iparams;
 }
 
+std::string get_model_endpoint() {
+    std::string model_endpoint = "https://huggingface.co/";
+    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
+    if (model_endpoint_env) {
+        model_endpoint = model_endpoint_env;
+        if (model_endpoint.back() != '/') model_endpoint += '/';
+    }
+    return model_endpoint;
+}
+
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
     llama_clear_adapter_lora(ctx);
     for (auto & la : lora) {

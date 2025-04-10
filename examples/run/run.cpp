@@ -697,12 +697,7 @@ class LlamaData {
         std::vector<std::string> headers = { "User-Agent: llama-cpp", "Accept: application/json" };
         std::string              url;
 
-        std::string model_endpoint = "https://huggingface.co/";
-        const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-        if (model_endpoint_env) {
-            model_endpoint = model_endpoint_env;
-            if (model_endpoint.back() != '/') model_endpoint += '/';
-        }
+        std::string model_endpoint = get_model_endpoint();
 
         if (pos == std::string::npos) {
             auto [model_name, manifest_url] = extract_model_and_tag(model, model_endpoint + "v2/");

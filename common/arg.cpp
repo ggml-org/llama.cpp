@@ -228,6 +228,7 @@ static bool common_download_file_single(const std::string & url, const std::stri
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
     // Check if hf-token or bearer-token was specified
     if (!bearer_token.empty()) {
         std::string auth_header = "Authorization: Bearer " + bearer_token;
@@ -374,7 +375,6 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
         //  display download progress
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "llama.cpp/1.0");
 
 
         // helper function to hide password in URL
@@ -547,12 +547,7 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     curl_slist_ptr http_headers;
     std::string res_str;
 
-    std::string model_endpoint = "https://huggingface.co/";
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    if (model_endpoint_env) {
-        model_endpoint = model_endpoint_env;
-        if (model_endpoint.back() != '/') model_endpoint += '/';
-    }
+    std::string model_endpoint = get_model_endpoint();
 
     std::string url = model_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
@@ -669,12 +664,7 @@ static void common_params_handle_model(
                 }
             }
 
-            std::string model_endpoint = "https://huggingface.co/";
-            const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-            if (model_endpoint_env) {
-                model_endpoint = model_endpoint_env;
-                if (model_endpoint.back() != '/') model_endpoint += '/';
-            }
+            std::string model_endpoint = get_model_endpoint();
             model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
