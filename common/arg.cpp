@@ -2377,7 +2377,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             ? std::string("model path from which to load base model")
             : string_format(
                 "model path (default: `models/$filename` with filename from `--hf-file` "
-                "or `--model-url` if set, otherwise %s), or with a protocol: hf://model-id, ms://model-id", DEFAULT_MODEL_PATH
+                "or `--model-url` if set, otherwise %s), or with a protocol prefix: hf://model-id, ms://model-id", DEFAULT_MODEL_PATH
             ),
         [](common_params & params, const std::string & value) {
             params.model.path = value;

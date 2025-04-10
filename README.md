@@ -265,13 +265,9 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
-You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from Hugging Face by using this CLI argument: `-hf <user>/<model>[:quant]`
-
-Altenatively, model can be fetched from [ModelScope](https://www.modelscope.cn) with CLI argument of `-ms <user>/<model>[:quant]`, for example, `llama-cli -ms Qwen/QwQ-32B-GGUF`. You may find models on ModelScope compatible with `llama.cpp` through:
-
-- [Trending] https://www.modelscope.cn/models?libraries=GGUF
-
-> You can change the download endpoint of ModelScope by using `MODELSCOPE_DOMAIN=xxx`(like MODELSCOPE_DOMAIN=www.modelscope.ai).
+LLAMA.CPP has supported a environment variable `HF_ENDPOINT`, you can set this to change the downloading url:
+- By default, HF_ENDPOINT=https://huggingface.co/
+- To use ModelScope, you can change to HF_ENDPOINT=https://www.modelscope.cn/
 
 After downloading a model, use the CLI tools to run it locally - see below.
 
