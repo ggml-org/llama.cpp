@@ -883,7 +883,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
 
         // create 1MB heaps per command buffer
         // these can be resized during compute when necessary
-        ctx->cmd_bufs[i].heap = ggml_metal_heap_init(device, 1024*1024);
+        ctx->cmd_bufs[i].heap = ggml_metal_heap_init(device, 32);
     }
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
@@ -1274,9 +1274,9 @@ static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
 
     [ctx->queue release];
 
-    //ggml_metal_heap_free(ctx->heap);
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
-        [ctx->cmd_bufs[i].obj release];
+        // ctx->cmd_bufs[i].obj is auto released
+
         ggml_metal_heap_free(ctx->cmd_bufs[i].heap);
     }
 
@@ -5167,7 +5167,7 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
         struct ggml_metal_heap * heap = ctx->cmd_bufs[cb_idx].heap;
 
-        int n_try = 3;
+        int n_try = 2;
 
         while (n_try-- > 0) {
             id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
@@ -5197,6 +5197,21 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
             [encoder endEncoding];
 
             if (heap->fail == 0) {
+                break;
+            }
+
+            if (heap->fail == 2) {
+                GGML_LOG_ERROR("%s: MTLHeap ran out of buffers, max = %d\n", __func__, heap->n);
+                break;
+            }
+
+            if (heap->fail == 3) {
+                GGML_LOG_ERROR("%s: MTLHeap failed to allocate buffer\n", __func__);
+                break;
+            }
+
+            if (n_try == 0) {
+                GGML_LOG_ERROR("%s: failed to allocate heap memory\n", __func__);
                 break;
             }
 
