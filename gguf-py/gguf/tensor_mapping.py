@@ -233,7 +233,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2
+            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
         ),
 
         # Rotary embeddings
@@ -269,6 +270,7 @@ class TensorNameMap:
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
+            "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (

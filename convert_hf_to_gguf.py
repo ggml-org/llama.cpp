@@ -4900,27 +4900,6 @@ class Glm4Model(Model):
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[Tuple[str, Tensor]]:
-        if "gate_up_proj" in name:
-            match = re.match(r"model\.layers\.(\d+)\.gate_up_proj\.weight", name)
-            if match:
-                bid = int(match.group(1))
-                return [(f"blk.{bid}.ffn_up.weight", data_torch)]
-
-        if "post_self_attn_layernorm" in name:
-            match = re.match(r"model\.layers\.(\d+)\.post_self_attn_layernorm\.weight", name)
-            if match:
-                bid = int(match.group(1))
-                return [(f"blk.{bid}.post_attn_norm.weight", data_torch)]
-
-        if "post_mlp_layernorm" in name:
-            match = re.match(r"model\.layers\.(\d+)\.post_mlp_layernorm\.weight", name)
-            if match:
-                bid = int(match.group(1))
-                return [(f"blk.{bid}.post_mlp_norm.weight", data_torch)]
-
-        return super().modify_tensors(data_torch, name, bid)
-
 @Model.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(Model):
     model_arch = gguf.MODEL_ARCH.CHATGLM
