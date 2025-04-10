@@ -30,6 +30,8 @@ layout (constant_id = 4) const bool enable_smaller_matrices = false;
 const uint BNover2 = enable_smaller_matrices ? (BN / 2) : BN;
 const uint BNover4 = enable_smaller_matrices ? (BN / 4) : BN;
 
+layout (constant_id = 5) const bool aligned = false;
+
 layout (push_constant) uniform parameter
 {
     uint M;
@@ -198,12 +200,12 @@ void main() {
 
     // Hint to the compiler that values are aligned (want 16B alignment).
     // Quants are always block-aligned, no alignment needed.
-#if ALIGNED
+    if (aligned) {
 #if QUANT_K == 1
-    stride_a &= ~7;
+        stride_a &= ~7;
 #endif
-    stride_b &= ~7;
-#endif
+        stride_b &= ~7;
+    }
 
     // Create layouts for both clamped and unclamped accesses
     tensorLayoutNV<2> tensorLayoutA = createTensorLayoutNV(2);
