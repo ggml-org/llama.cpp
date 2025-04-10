@@ -2965,7 +2965,7 @@ struct test_upscale : public test_case {
     test_upscale(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {512, 512, 3, 1},
             int32_t scale_factor = 2, ggml_scale_mode mode = GGML_SCALE_MODE_NEAREST, bool transpose = false)
-        : type(type), ne(ne), scale_factor(scale_factor), mode(mode), transpose(transpose) {}
+        : type(type), ne(ne), scale_factor(scale_factor), transpose(transpose), mode(mode) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
