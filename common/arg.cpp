@@ -233,8 +233,8 @@ static bool common_download_file_single(const std::string & url, const std::stri
     if (!bearer_token.empty()) {
         std::string auth_header = "Authorization: Bearer " + bearer_token;
         http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
-        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
     }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
 
 #if defined(_WIN32)
     // CURLSSLOPT_NATIVE_CA tells libcurl to use standard certificate store of
@@ -375,7 +375,7 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
         //  display download progress
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
-        
+
         // helper function to hide password in URL
         auto llama_download_hide_password_in_url = [](const std::string & url) -> std::string {
             std::size_t protocol_pos = url.find("://");
