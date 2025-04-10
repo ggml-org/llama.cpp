@@ -5,10 +5,12 @@ import os
 import shutil
 import struct
 import tempfile
+import threading
 from dataclasses import dataclass
 from enum import Enum, auto
 from math import prod
 from pathlib import Path
+from queue import Empty, Queue
 from io import BufferedWriter
 from typing import IO, Any, Sequence, Mapping
 from string import ascii_letters, digits
@@ -60,8 +62,34 @@ class WriterState(Enum):
     WEIGHTS = auto()
 
 
+@dataclass
+class ThreadedTensorWriteInfo:
+    filename: Path
+    offset: int
+    post_pad: int
+    tensor: np.ndarray
+    bar: Any | None  # optional tqdm progress bar
+
+    def write_chunk(self, open_files: dict[Path, BufferedWriter]):
+        # This is called from a thread pool,
+        # and each thread should have its own file handle per output file
+        # so that they can have different seek locations.
+        if self.filename not in open_files:
+            open_files[self.filename] = open(self.filename, "r+b")
+        f = open_files[self.filename]
+
+        f.seek(self.offset)
+        f.write(self.tensor.data)
+        if self.post_pad > 0:
+            f.write(bytes([0] * self.post_pad))
+        if self.bar is not None:
+            self.bar.update(self.tensor.nbytes)
+
+
 class GGUFWriter:
     fout: list[BufferedWriter] | None
+    filenames: list[Path] | None
+    thread_count: int
     path: Path | None
     temp_file: tempfile.SpooledTemporaryFile[bytes] | None
     tensors: list[dict[str, TensorInfo]]
@@ -83,7 +111,8 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        thread_count: int = 2,
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -98,6 +127,7 @@ class GGUFWriter:
         self.split_max_size = split_max_size
         self.dry_run = dry_run
         self.small_first_shard = small_first_shard
+        self.thread_count = thread_count
         logger.info("gguf: This GGUF file is for {0} Endian only".format(
             "Big" if self.endianess == GGUFEndian.BIG else "Little",
         ))
@@ -173,6 +203,7 @@ class GGUFWriter:
 
         if self.path is not None:
             filenames = self.print_plan()
+            self.filenames = filenames
             self.fout = [open(filename, "wb") for filename in filenames]
             self.state = WriterState.EMPTY
 
@@ -424,40 +455,81 @@ class GGUFWriter:
         self.write_ti_data_to_file()
 
         assert self.fout is not None
+        assert self.filenames is not None
 
         for fout in self.fout:
             self.write_padding(fout, fout.tell())
 
         if self.temp_file is None:
-            shard_bar = None
             bar = None
+            # Distribute writing the tensors between multiple threads
+            tensor_queue: Queue[ThreadedTensorWriteInfo] = Queue()
+
+            # Initial file offsets before writing the tensor data
+            offsets: list[int] = [fout.tell() for fout in self.fout]
 
             if progress:
+                # TODO: add back the shard bar to show which shard is being written when single-threaded
                 from tqdm import tqdm
 
                 total_bytes = sum(ti.nbytes for t in self.tensors for ti in t.values())
 
-                if len(self.fout) > 1:
-                    shard_bar = tqdm(desc=f"Shard (0/{len(self.fout)})", total=None, unit="byte", unit_scale=True)
                 bar = tqdm(desc="Writing", total=total_bytes, unit="byte", unit_scale=True)
 
-            for i, (fout, tensors) in enumerate(zip(self.fout, self.tensors)):
-                if shard_bar is not None:
-                    shard_bar.set_description(f"Shard ({i + 1}/{len(self.fout)})")
-                    total = sum(ti.nbytes for ti in tensors.values())
-                    shard_bar.reset(total=(total if total > 0 else None))
+            # Fill the tensor queue with all the pending tensor writes
+            for i, (filename, tensors) in enumerate(zip(self.filenames, self.tensors)):
+                offset = offsets[i]
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
                 for ti in tensors.values():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
-                    ti.tensor.tofile(fout)
-                    if shard_bar is not None:
-                        shard_bar.update(ti.nbytes)
-                    if bar is not None:
-                        bar.update(ti.nbytes)
-                    self.write_padding(fout, ti.nbytes)
-                    ti.tensor = None
+                    start_offset = offset
+                    nbytes = ti.tensor.nbytes
+                    offset = self.ggml_pad(start_offset + nbytes, self.data_alignment)
+                    padding = offset - (start_offset + nbytes)
+                    tensor_queue.put(
+                        ThreadedTensorWriteInfo(
+                            filename=filename,
+                            offset=start_offset,
+                            post_pad=padding,
+                            tensor=ti.tensor,
+                            bar=bar,
+                        )
+                    )
+                    ti.tensor = None  # avoid keeping a reference to written tensors
+
+            # Write tensors in parallel
+            # TODO: total tensor size limit for the running threads
+            def write_tensors_from_thread(queue: Queue[ThreadedTensorWriteInfo]):
+                # Opening the files only once per thread
+                open_files: dict[Path, BufferedWriter] = {}
+                try:
+                    while tensor := queue.get_nowait():
+                        tensor.write_chunk(open_files)
+                        del tensor
+                        queue.task_done()
+                except Empty:
+                    pass
+
+                for f in open_files.values():
+                    f.close()
+
+            threads = [
+                threading.Thread(target=write_tensors_from_thread, args=(tensor_queue,))
+                for _ in range(self.thread_count)
+            ]
+
+            for t in threads:
+                t.start()
+
+            # NOTE: thread joining has weird interactions with KeyboardInterrupt,
+            #       so waiting for the queue to be "done" first.
+            tensor_queue.join()
+
+            for t in threads:
+                t.join()
+
         else:
             self.temp_file.seek(0)
 
