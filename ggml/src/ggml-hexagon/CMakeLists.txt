@@ -32,8 +32,18 @@ endif()
 #v75 --- Snapdragon 8 Gen3
 #v79 --- Snapdragon 8 Elite(aka Gen4)
 if(NOT DEFINED HTP_ARCH_VERSION)
-    #set default HTP_ARCH_VERSION to v75
-    set(HTP_ARCH_VERSION v75)
+    message(FATAL_ERROR "HTP_ARCH_VERSION not defined, valid htp arch: v68,v69,v73,v75,v79")
+endif()
+
+#check whether user's specified htp arch is valid
+set(CHECK_HTP_ARCH "WRONG")
+foreach (feat v68 v69 v73 v75 v79)
+    if (${feat} STREQUAL ${HTP_ARCH_VERSION})
+        set(CHECK_HTP_ARCH "GOOD")
+    endif()
+endforeach()
+if (${CHECK_HTP_ARCH} STREQUAL "WRONG")
+    message(FATAL_ERROR "ggml-hexagon backend only support htp arch v68,v69,v73,v75,v79")
 endif()
 
 #cross compiling for hexagon kernels on cDSP side
@@ -71,14 +81,14 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Android")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
     set(QNN_DEFAULT_LIB_SEARCH_PATH "C:\\" CACHE STRING "customized library search path for QNN backend")
 else()
-    message(FATAL_ERROR "QNN now only available on Android and Windows(Windows on ARM)")
+    message(FATAL_ERROR "ggml-hexagon now only available on Android and Windows(Windows on ARM)")
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGGML_USE_HEXAGON ${DEBUG_FLAG}")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 
-file(GLOB QNN_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/kernels/ggmlop_ap_skel.c")
-ggml_add_backend_library(ggml-hexagon ${QNN_SOURCES})
+file(GLOB HEXAGON_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/kernels/ggmlop_ap_skel.c")
+ggml_add_backend_library(ggml-hexagon ${HEXAGON_SOURCES})
 
 target_include_directories(ggml-hexagon PRIVATE ${QNN_SDK_PATH}/include/QNN ${HEXAGON_SDK_PATH} ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(ggml-hexagon PRIVATE ${QNN_LINK_LIBRARIES})
@@ -87,7 +97,7 @@ string(REGEX REPLACE "/$" "" QNN_DEFAULT_LIB_SEARCH_PATH "${QNN_DEFAULT_LIB_SEAR
 target_compile_definitions(ggml-hexagon PRIVATE QNN_DEFAULT_LIB_SEARCH_PATH="${QNN_DEFAULT_LIB_SEARCH_PATH}/")
 
 function(ggml_hexagon_build_kernel KNAME)
-    message(STATUS "ggml_hexagon: build kernel ${KNAME}")
+    message(STATUS "ggml_hexagon: build hexagon-kernel ${KNAME}")
 
     add_custom_command(
         TARGET ${PROJECT_NAME}
