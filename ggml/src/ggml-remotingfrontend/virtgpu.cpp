@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <cassert>
 #include <cerrno>
+#include <unistd.h>
 
 #include "virtgpu.h"
 
@@ -30,23 +31,42 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
    gpu->shmem_blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
 }
 
+void breakpoint() {
+  // break here
+  INFO("BREAKPOINT HERE");
+}
+
 void
 create_virtgpu() {
   struct virtgpu *gpu = new struct virtgpu();
 
+  util_sparse_array_init(&gpu->shmem_array, sizeof(struct virtgpu_shmem),
+			 1024);
+
   VkResult result = virtgpu_open(gpu);
-  GGML_ASSERT(result == VK_SUCCESS);
+  assert(result == VK_SUCCESS);
 
   result = virtgpu_init_params(gpu);
-  GGML_ASSERT(result == VK_SUCCESS);
+  assert(result == VK_SUCCESS);
 
   result = virtgpu_init_capset(gpu);
-  GGML_ASSERT(result == VK_SUCCESS);
+  assert(result == VK_SUCCESS);
 
   result = virtgpu_init_context(gpu);
-  GGML_ASSERT(result == VK_SUCCESS);
+  assert(result == VK_SUCCESS);
 
   virtgpu_init_shmem_blob_mem(gpu);
+
+  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, 16384);
+
+  if (!shmem) {
+    INFO("failed to enumerate DRM devices");
+    assert(false);
+  } else {
+    INFO("Created shm at %p", shmem);
+  }
+
+  breakpoint();
 }
 
 static VkResult
@@ -260,13 +280,6 @@ virtgpu_init_params(struct virtgpu *gpu)
    gpu->max_timeline_count = 64;
 
    return VK_SUCCESS;
-}
-
-
-static int
-virtgpu_ioctl(struct virtgpu *gpu, unsigned long request, void *args)
-{
-   return drmIoctl(gpu->fd, request, args);
 }
 
 static int

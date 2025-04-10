@@ -3,14 +3,17 @@
 #include <xf86drm.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <unistd.h>
 #include <stdbool.h>
 #include <threads.h>
 #include <cstring>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
-#include "ggml-remoting-frontend.h"
+void breakpoint();
+
+#include "virtgpu-shm.h"
+#include "virtgpu-utils.h"
+
 #define VIRGL_RENDERER_UNSTABLE_APIS 1
 #include "drm-uapi/virtgpu_drm.h"
 #include "virglrenderer_hw.h"
@@ -107,10 +110,7 @@ INFO(const char *format, ...) {
   va_end(argptr);
 }
 
-
 struct virtgpu {
-   //struct vn_renderer base;
-
    struct remoting_dev_instance *instance;
 
    int fd;
@@ -139,16 +139,22 @@ struct virtgpu {
     * res_id is monotonically increasing by default (see
     * virtio_gpu_resource_id_get)
     */
-  //struct util_sparse_array shmem_array;
+  struct util_sparse_array shmem_array;
   // struct util_sparse_array bo_array;
 
    mtx_t dma_buf_import_mutex;
 
-//   struct vn_renderer_shmem_cache shmem_cache;
+  //   struct virtgpu_shmem_cache shmem_cache;
 
    bool supports_cross_device;
 };
 
+
+static inline int
+virtgpu_ioctl(struct virtgpu *gpu, unsigned long request, void *args)
+{
+   return drmIoctl(gpu->fd, request, args);
+}
 
 void create_virtgpu();
 static VkResult virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev);
