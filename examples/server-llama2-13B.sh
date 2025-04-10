@@ -16,7 +16,7 @@ GEN_OPTIONS="${GEN_OPTIONS:---ctx_size 4096 --batch-size 1024}"
 
 
 # shellcheck disable=SC2086 # Intended splitting of GEN_OPTIONS
-./server $GEN_OPTIONS \
+./llama-server $GEN_OPTIONS \
   --model "$MODEL" \
   --threads "$N_THREAD" \
   --rope-freq-scale 1.0 \

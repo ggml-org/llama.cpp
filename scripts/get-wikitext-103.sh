@@ -4,7 +4,7 @@ wget https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-103-raw-v1.
 
 echo "Usage:"
 echo ""
-echo "  ./perplexity -m model.gguf -f wiki.test.raw [other params]"
+echo "  ./llama-perplexity -m model.gguf -f wiki.test.raw [other params]"
 echo ""
 
 exit 0

@@ -26,5 +26,5 @@ set -e
 mkdir -p ${out}
 
 for q in ${qnt[@]}; do
-    time ./bin/quantize ../models/${model}/ggml-model-f16.gguf ../models/${model}/ggml-model-${q}.gguf ${q} 2>&1 ${args} | tee ${out}/qnt-${q}.txt
+    time ./bin/llama-quantize ../models/${model}/ggml-model-f16.gguf ../models/${model}/ggml-model-${q}.gguf ${q} 2>&1 ${args} | tee ${out}/qnt-${q}.txt
 done

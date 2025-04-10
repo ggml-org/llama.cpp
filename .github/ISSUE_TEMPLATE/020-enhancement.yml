@@ -1,0 +1,51 @@
+name: Enhancement
+description: Used to request enhancements for llama.cpp.
+title: "Feature Request: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        [Please post your idea first in Discussion if there is not yet a consensus for this enhancement request. This will help to keep this issue tracker focused on enhancements that the community has agreed needs to be implemented.](https://github.com/ggml-org/llama.cpp/discussions/categories/ideas)
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      description: Please confirm the following before submitting your enhancement request.
+      options:
+        - label: I am running the latest code. Mention the version if possible as well.
+          required: true
+        - label: I carefully followed the [README.md](https://github.com/ggml-org/llama.cpp/blob/master/README.md).
+          required: true
+        - label: I searched using keywords relevant to my issue to make sure that I am creating a new issue that is not already open (or closed).
+          required: true
+        - label: I reviewed the [Discussions](https://github.com/ggml-org/llama.cpp/discussions), and have a new and useful enhancement to share.
+          required: true
+
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Feature Description
+      description: Please provide a detailed written description of what you were trying to do, and what you expected `llama.cpp` to do as an enhancement.
+      placeholder: Detailed description of the enhancement
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Please provide a detailed written description of reasons why this feature is necessary and how it is useful to `llama.cpp` users.
+      placeholder: Explanation of why this feature is needed and its benefits
+    validations:
+      required: true
+
+  - type: textarea
+    id: possible-implementation
+    attributes:
+      label: Possible Implementation
+      description: If you have an idea as to how it can be implemented, please write a detailed description. Feel free to give links to external sources or share visuals that might be helpful to understand the details better.
+      placeholder: Detailed description of potential implementation
+    validations:
+      required: false

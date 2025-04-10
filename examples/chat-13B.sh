@@ -30,7 +30,7 @@ sed -e "s/\[\[USER_NAME\]\]/$USER_NAME/g" \
      $PROMPT_TEMPLATE > $PROMPT_FILE
 
 # shellcheck disable=SC2086 # Intended splitting of GEN_OPTIONS
-./main $GEN_OPTIONS \
+./llama-cli $GEN_OPTIONS \
   --model "$MODEL" \
   --threads "$N_THREAD" \
   --n_predict "$N_PREDICTS" \

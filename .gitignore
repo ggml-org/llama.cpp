@@ -1,126 +1,148 @@
-*.o
+# Extensions
+
 *.a
-*.so
+*.bat
+*.bin
+*.d
+*.dll
+*.dot
+*.etag
+*.exe
+*.gcda
+*.gcno
+*.gcov
 *.gguf
 *.gguf.json
-*.bin
-*.exe
-*.dll
-*.log
-*.gcov
-*.gcno
-*.gcda
-*.dot
-*.bat
-*.tmp
-*.metallib
-*.etag
 *.lastModified
-.DS_Store
-.build/
+*.log
+*.metallib
+*.o
+*.so
+*.swp
+*.tmp
+
+# IDE / OS
+
 .cache/
 .ccls-cache/
 .direnv/
+.DS_Store
 .envrc
+.idea/
 .swiftpm
-.venv
-.clang-tidy
 .vs/
 .vscode/
-.idea/
+nppBackup
 
-ggml-metal-embed.metal
 
-lcov-report/
+# Coverage
+
 gcovr-report/
+lcov-report/
 
+# Build Artifacts
+
+tags
+.build/
 build*
+release
+debug
+!build-info.cmake
+!build-info.cpp.in
+!build-info.sh
 !build.zig
+!docs/build.md
+/libllama.so
+/llama-*
+/vulkan-shaders-gen
+android-ndk-*
+arm_neon.h
 cmake-build-*
+CMakeSettings.json
+compile_commands.json
+ggml-metal-embed.metal
+llama-batched-swift
+/rpc-server
 out/
 tmp/
+autogen-*.md
+
+# Deprecated
+
+/main
+/server
+
+# CI
+
+!.github/workflows/*.yml
+
+# Models
 
 models/*
 models-mnt
+!models/.editorconfig
+!models/ggml-vocab-*.gguf*
 
-/Pipfile
-/baby-llama
-/beam-search
-/benchmark-matmult
-/convert-llama2c-to-ggml
-/embd-input-test
-/embedding
-/eval-callback
-/gguf
-/gguf-llama-simple
-/gguf-split
-/gritlm
-/imatrix
-/infill
-/libllama.so
-/llama-bench
-/llava-cli
-/lookahead
-/lookup
-/lookup-create
-/lookup-merge
-/lookup-stats
-/main
-/metal
-/passkey
-/perplexity
-/q8dot
-/quantize
-/quantize-stats
-/result
-/save-load-state
-/server
-/simple
-/batched
-/batched-bench
-/export-lora
-/finetune
-/retrieval
-/speculative
-/parallel
-/train-text-from-scratch
-/tokenize
-/vdot
-/common/build-info.cpp
-arm_neon.h
-compile_commands.json
-CMakeSettings.json
-
-__pycache__
-dist
-
+# Zig
 zig-out/
 zig-cache/
+
+# Logs
 
 ppl-*.txt
 qnt-*.txt
 perf-*.txt
 
+# Examples
+
 examples/jeopardy/results.txt
+examples/server/*.css.hpp
 examples/server/*.html.hpp
 examples/server/*.js.hpp
 examples/server/*.mjs.hpp
+examples/server/*.gz.hpp
+!build_64.sh
+!examples/*.bat
+!examples/*/*.kts
+!examples/*/*/*.kts
+!examples/sycl/*.bat
+!examples/sycl/*.sh
 
-poetry.lock
+# Server Web UI temporary files
+node_modules
+examples/server/webui/dist
+
+# Python
+
+/.venv
+__pycache__/
+*/poetry.lock
 poetry.toml
-nppBackup
+
+# Nix
+/result
 
 # Test binaries
-/tests/test-grammar-parser
-/tests/test-llama-grammar
+/tests/test-backend-ops
 /tests/test-double-float
 /tests/test-grad0
+/tests/test-grammar-parser
+/tests/test-llama-grammar
 /tests/test-opt
 /tests/test-quantize-fns
 /tests/test-quantize-perf
+/tests/test-rope
 /tests/test-sampling
 /tests/test-tokenizer-0
-/tests/test-tokenizer-1-spm
 /tests/test-tokenizer-1-bpe
-/tests/test-rope
-/tests/test-backend-ops
+/tests/test-tokenizer-1-spm
+
+# Scripts
+!/scripts/install-oneapi.bat
+
+# Test models for lora adapters
+/lora-tests
+
+# Local scripts
+/run-vim.sh
+/run-chat.sh

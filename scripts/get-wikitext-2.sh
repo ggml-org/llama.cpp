@@ -5,7 +5,7 @@ unzip wikitext-2-raw-v1.zip
 
 echo "Usage:"
 echo ""
-echo "  ./perplexity -m model.gguf -f wikitext-2-raw/wiki.test.raw [other params]"
+echo "  ./llama-perplexity -m model.gguf -f wikitext-2-raw/wiki.test.raw [other params]"
 echo ""
 
 exit 0

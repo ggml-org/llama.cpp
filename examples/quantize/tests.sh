@@ -18,9 +18,9 @@ fi
 
 set -x
 
-SPLIT=$1/gguf-split
-QUANTIZE=$1/quantize
-MAIN=$1/main
+SPLIT=$1/llama-gguf-split
+QUANTIZE=$1/llama-quantize
+MAIN=$1/llama-cli
 WORK_PATH=$TMP_DIR/quantize
 ROOT_DIR=$(realpath $(dirname $0)/../../)
 
@@ -41,23 +41,23 @@ $SPLIT --split-max-tensors 28  $WORK_PATH/gemma-1.1-2b-it.Q8_0.gguf $WORK_PATH/g
 echo PASS
 echo
 
-# 3. Requant model with '--keep_split'
-$QUANTIZE --allow-requantize --keep_split $WORK_PATH/ggml-model-split-00001-of-00006.gguf $WORK_PATH/ggml-model-requant.gguf Q4_K
+# 3. Requant model with '--keep-split'
+$QUANTIZE --allow-requantize --keep-split $WORK_PATH/ggml-model-split-00001-of-00006.gguf $WORK_PATH/ggml-model-requant.gguf Q4_K
 echo PASS
 echo
 
 # 3a. Test the requanted model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-requant-00001-of-00006.gguf --random-prompt --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-requant-00001-of-00006.gguf --n-predict 32
 echo PASS
 echo
 
-# 4. Requant mode without '--keep_split'
+# 4. Requant mode without '--keep-split'
 $QUANTIZE --allow-requantize $WORK_PATH/ggml-model-split-00001-of-00006.gguf $WORK_PATH/ggml-model-requant-merge.gguf Q4_K
 echo PASS
 echo
 
 # 4b. Test the requanted model is loading properly
-$MAIN --model $WORK_PATH/ggml-model-requant-merge.gguf --random-prompt --n-predict 32
+$MAIN -no-cnv --model $WORK_PATH/ggml-model-requant-merge.gguf --n-predict 32
 echo PASS
 echo
 

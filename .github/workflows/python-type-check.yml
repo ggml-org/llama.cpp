@@ -1,0 +1,40 @@
+name: Python Type-Check
+
+on:
+  push:
+    paths:
+      - '.github/workflows/python-type-check.yml'
+      - 'pyrightconfig.json'
+      - '**.py'
+      - '**/requirements*.txt'
+  pull_request:
+    paths:
+      - '.github/workflows/python-type-check.yml'
+      - 'pyrightconfig.json'
+      - '**.py'
+      - '**/requirements*.txt'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  python-type-check:
+    runs-on: ubuntu-latest
+    name: pyright type-check
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@v4
+      - name: Set up Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Python dependencies
+        # TODO: use a venv
+        run: pip install -r requirements/requirements-all.txt
+      - name: Type-check with Pyright
+        uses: jakebailey/pyright-action@v2
+        with:
+          version: 1.1.382
+          level: warning
+          warnings: true

@@ -23,8 +23,9 @@ CUR_PROMPT_CACHE="${CHAT_SAVE_DIR}/current-cache.bin"
 NEXT_PROMPT_FILE="${CHAT_SAVE_DIR}/next-prompt.txt"
 NEXT_PROMPT_CACHE="${CHAT_SAVE_DIR}/next-cache.bin"
 
-SESSION_SIZE_MSG_PATTERN='main: session file matches [[:digit:]]+ / [[:digit:]]+'
-SAMPLE_TIME_MSG_PATTERN='sample time =[[:space:]]+[[:digit:]]+.[[:digit:]]+ ms /[[:space:]]+[[:digit:]]+'
+SESSION_AND_SAMPLE_PATTERN='main: session file matches [[:digit:]]+ / [[:digit:]]+'\
+'|'\
+'sampling time =[[:space:]]+[[:digit:]]+.[[:digit:]]+ ms /[[:space:]]+[[:digit:]]+'
 SED_DELETE_MESSAGES="/^(${USER_NAME}:|${AI_NAME}:|\\.\\.\\.)/,\$d"
 
 CTX_SIZE=2048
@@ -62,7 +63,7 @@ fi
 if [[ ! -e "$PROMPT_CACHE_FILE" ]]; then
     echo 'Prompt cache does not exist, building...'
     # Default batch_size to 64 here for better user feedback during initial prompt processing
-    ./main 2>>"$LOG" \
+    ./llama-cli 2>>"$LOG" \
         --batch_size 64 \
         "${OPTS[@]}" \
         --prompt-cache "$PROMPT_CACHE_FILE" \
@@ -109,13 +110,13 @@ while read -e line; do
 
     printf '%s: ' "$AI_NAME" >>"$CUR_PROMPT_FILE"
 
-    ./main 2>>"$LOG" "${OPTS[@]}" \
+    ./llama-cli 2>>"$LOG" "${OPTS[@]}" \
             --prompt-cache "$CUR_PROMPT_CACHE" \
             --prompt-cache-all \
             --file "$CUR_PROMPT_FILE" \
             --reverse-prompt "${USER_NAME}:" \
             --n_predict "$n_predict" |
-        skip_bytes 1 |                  # skip BOS token added by ./main
+        skip_bytes 1 |                  # skip BOS token added by ./llama-cli
         tee "$CUR_PROMPT_FILE.tmp" |    # save prompt + generation to tmp file
         skip_bytes "$n_prompt_len_pre"  # print generation
 
@@ -129,22 +130,19 @@ while read -e line; do
 
     printf ' '
 
-    # HACK get num tokens from debug message
-    # TODO get both messages in one go
-    if  ! session_size_msg="$(tail -n30 "$LOG" | grep -oE "$SESSION_SIZE_MSG_PATTERN")" ||
-        ! sample_time_msg="$(tail -n10 "$LOG" | grep -oE "$SAMPLE_TIME_MSG_PATTERN")"; then
-        echo >&2 "Couldn't get number of tokens from ./main output!"
+    if ! session_and_sample_msg=$(tail -n30 "$LOG" | grep -oE "$SESSION_AND_SAMPLE_PATTERN"); then
+        echo >&2 "Couldn't get number of tokens from ./llama-cli output!"
         exit 1
     fi
 
-    n_tokens=$(($(cut -d/ -f2 <<<"$session_size_msg") + $(cut -d/ -f2 <<<"$sample_time_msg")))
+    n_tokens=$(awk '{sum+=$1} END {print sum}' <<< "$(cut -d/ -f2 <<< "$session_and_sample_msg")")
 
     if ((n_tokens > CTX_ROTATE_POINT)); then
         tail -c+$((n_prompt_len_pre + 1)) "$CUR_PROMPT_FILE" >>"$NEXT_PROMPT_FILE"
     fi
 
     # Update cache for next prompt in background, ideally during user input
-    ./main >>"$LOG_BG" 2>&1 "${OPTS[@]}" \
+    ./llama-cli >>"$LOG_BG" 2>&1 "${OPTS[@]}" \
           --prompt-cache "$NEXT_PROMPT_CACHE" \
           --file "$NEXT_PROMPT_FILE" \
           --n_predict 1 &

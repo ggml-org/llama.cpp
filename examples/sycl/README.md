@@ -6,15 +6,15 @@ This example program provides the tools for llama.cpp for SYCL on Intel GPU.
 
 |Tool Name| Function|Status|
 |-|-|-|
-|ls-sycl-device| List all SYCL devices with ID, compute capability, max work group size, ect.|Support|
+|llama-ls-sycl-device| List all SYCL devices with ID, compute capability, max work group size, ect.|Support|
 
-### ls-sycl-device
+### llama-ls-sycl-device
 
 List all SYCL devices with ID, compute capability, max work group size, ect.
 
-1. Build the llama.cpp for SYCL for all targets.
+1. Build the llama.cpp for SYCL for the specified target *(using GGML_SYCL_TARGET)*.
 
-2. Enable oneAPI running environment
+2. Enable oneAPI running environment *(if GGML_SYCL_TARGET is set to INTEL -default-)*
 
 ```
 source /opt/intel/oneapi/setvars.sh
@@ -23,25 +23,19 @@ source /opt/intel/oneapi/setvars.sh
 3. Execute
 
 ```
-./build/bin/ls-sycl-device
+./build/bin/llama-ls-sycl-device
 ```
 
 Check the ID in startup log, like:
 
 ```
-found 4 SYCL devices:
-  Device 0: Intel(R) Arc(TM) A770 Graphics,	compute capability 1.3,
-    max compute_units 512,	max work group size 1024,	max sub group size 32,	global mem size 16225243136
-  Device 1: Intel(R) FPGA Emulation Device,	compute capability 1.2,
-    max compute_units 24,	max work group size 67108864,	max sub group size 64,	global mem size 67065057280
-  Device 2: 13th Gen Intel(R) Core(TM) i7-13700K,	compute capability 3.0,
-    max compute_units 24,	max work group size 8192,	max sub group size 64,	global mem size 67065057280
-  Device 3: Intel(R) Arc(TM) A770 Graphics,	compute capability 3.0,
-    max compute_units 512,	max work group size 1024,	max sub group size 32,	global mem size 16225243136
+found 2 SYCL devices:
+|  |                   |                                       |       |Max    |        |Max  |Global |                     |
+|  |                   |                                       |       |compute|Max work|sub  |mem    |                     |
+|ID|        Device Type|                                   Name|Version|units  |group   |group|size   |       Driver version|
+|--|-------------------|---------------------------------------|-------|-------|--------|-----|-------|---------------------|
+| 0| [level_zero:gpu:0]|                Intel Arc A770 Graphics|    1.3|    512|    1024|   32| 16225M|            1.3.29138|
+| 1| [level_zero:gpu:1]|                 Intel UHD Graphics 750|    1.3|     32|     512|   32| 62631M|            1.3.29138|
 
 ```
 
-|Attribute|Note|
-|-|-|
-|compute capability 1.3|Level-zero running time, recommended |
-|compute capability 3.0|OpenCL running time, slower than level-zero in most cases|

@@ -42,10 +42,13 @@ In addition to the KL divergence the following statistics are calculated with `-
 
 Results were generated using the CUDA backend and are sorted by Kullback-Leibler divergence relative to FP16.
 The "WT" importance matrices were created using varying numbers of Wikitext tokens and can be found [here](https://huggingface.co/JohannesGaessler/llama.cpp_importance_matrices/blob/main/imatrix-llama_3-8b-f16-2.7m_tokens.dat).
+Note: the FP16 logits used for the calculation of all metrics other than perplexity are stored in a binary file between runs.
+In order to save space this file does **not** contain the exact same FP32 logits but instead casts them to 16 bit unsigned integers (with some scaling).
+So the "f16" results are to be understood as the difference resulting only from this downcast.
 
 | Quantization | imatrix | Model size [GiB] | PPL                    | ΔPPL                   | KLD                   | Mean Δp           | RMS Δp           |
 |--------------|---------|------------------|------------------------|------------------------|-----------------------|-------------------|------------------|
-| f16          | None    |            14.97 | 6.233160 ±   0.037828  | -                      | -                     | -                 | -                |
+| f16          | None    |            14.97 | 6.233160 ±   0.037828  | 0.001524 ±   0.000755  | 0.000551 ±   0.000002 |  0.001 ± 0.002 %  | 0.787 ± 0.004 %  |
 | q8_0         | None    |             7.96 | 6.234284 ±   0.037878  | 0.002650 ±   0.001006  | 0.001355 ±   0.000006 | -0.019 ± 0.003 %  | 1.198 ± 0.007 %  |
 | q6_K         | None    |             6.14 | 6.253382 ±   0.038078  | 0.021748 ±   0.001852  | 0.005452 ±   0.000035 | -0.007 ± 0.006 %  | 2.295 ± 0.019 %  |
 | q5_K_M       | None    |             5.33 | 6.288607 ±   0.038338  | 0.056974 ±   0.002598  | 0.010762 ±   0.000079 | -0.114 ± 0.008 %  | 3.160 ± 0.031 %  |

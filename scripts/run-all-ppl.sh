@@ -26,5 +26,5 @@ out="../tmp/results-${model}"
 mkdir -p ${out}
 
 for q in ${qnt[@]}; do
-    time ./bin/perplexity -m ../models/${model}/ggml-model-f16.gguf -f ./wiki.test.raw ${args} 2>&1 | tee ${out}/ppl-${q}.txt
+    time ./bin/llama-perplexity -m ../models/${model}/ggml-model-f16.gguf -f ./wiki.test.raw ${args} 2>&1 | tee ${out}/ppl-${q}.txt
 done

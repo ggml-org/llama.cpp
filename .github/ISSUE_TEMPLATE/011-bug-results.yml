@@ -1,0 +1,101 @@
+name: Bug (model use)
+description: Something goes wrong when using a model (in general, not specific to a single llama.cpp module).
+title: "Eval bug: "
+labels: ["bug-unconfirmed", "model evaluation"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for taking the time to fill out this bug report!
+        This issue template is intended for bug reports where the model evaluation results
+        (i.e. the generated text) are incorrect or llama.cpp crashes during model evaluation.
+        If you encountered the issue while using an external UI (e.g. ollama),
+        please reproduce your issue using one of the examples/binaries in this repository.
+        The `llama-cli` binary can be used for simple and reproducible model inference.
+  - type: textarea
+    id: version
+    attributes:
+      label: Name and Version
+      description: Which version of our software are you running? (use `--version` to get a version string)
+      placeholder: |
+        $./llama-cli --version
+        version: 2999 (42b4109e)
+        built with cc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 for x86_64-linux-gnu
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating systems
+      description: Which operating systems do you know to be affected?
+      multiple: true
+      options:
+        - Linux
+        - Mac
+        - Windows
+        - BSD
+        - Other? (Please let us know in description)
+    validations:
+      required: true
+  - type: dropdown
+    id: backends
+    attributes:
+        label: GGML backends
+        description: Which GGML backends do you know to be affected?
+        options: [AMX, BLAS, CPU, CUDA, HIP, Kompute, Metal, Musa, RPC, SYCL, Vulkan]
+        multiple: true
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: Which CPUs/GPUs are you using?
+      placeholder: >
+        e.g. Ryzen 5950X + 2x RTX 4090
+    validations:
+      required: true
+  - type: textarea
+    id: model
+    attributes:
+      label: Models
+      description: >
+        Which model(s) at which quantization were you using when encountering the bug?
+        If you downloaded a GGUF file off of Huggingface, please provide a link.
+      placeholder: >
+        e.g. Meta LLaMA 3.1 Instruct 8b q4_K_M
+    validations:
+      required: false
+  - type: textarea
+    id: info
+    attributes:
+      label: Problem description & steps to reproduce
+      description: >
+        Please give us a summary of the problem and tell us how to reproduce it.
+        If you can narrow down the bug to specific hardware, compile flags, or command line arguments,
+        that information would be very much appreciated by us.
+      placeholder: >
+        e.g. when I run llama-cli with -ngl 99 I get garbled outputs.
+        When I use -ngl 0 it works correctly.
+        Here are the exact commands that I used: ...
+    validations:
+      required: true
+  - type: textarea
+    id: first_bad_commit
+    attributes:
+      label: First Bad Commit
+      description: >
+        If the bug was not present on an earlier version: when did it start appearing?
+        If possible, please do a git bisect and identify the exact commit that introduced the bug.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+          Please copy and paste any relevant log output, including the command that you entered and any generated text.
+          This will be automatically formatted into code, so no need for backticks.
+      render: shell
+    validations:
+      required: true

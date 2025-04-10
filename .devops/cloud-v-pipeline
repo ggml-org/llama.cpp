@@ -15,7 +15,7 @@ node('x86_runner1'){            // Running on x86 runner containing latest vecto
     stage('Running llama.cpp'){
         sh'''#!/bin/bash
             module load gnu-bin2/0.1            # loading latest versions of vector qemu and vector gcc
-            qemu-riscv64 -L /softwares/gnu-bin2/sysroot  -cpu rv64,v=true,vlen=256,elen=64,vext_spec=v1.0 ./main -m /home/alitariq/codellama-7b.Q4_K_M.gguf -p "Anything" -n 9 > llama_log.txt            # Running llama.cpp on vector qemu-riscv64
+            qemu-riscv64 -L /softwares/gnu-bin2/sysroot  -cpu rv64,v=true,vlen=256,elen=64,vext_spec=v1.0 ./llama-cli -m /home/alitariq/codellama-7b.Q4_K_M.gguf -p "Anything" -n 9 > llama_log.txt            # Running llama.cpp on vector qemu-riscv64
             cat llama_log.txt                   # Printing results
         '''
     }

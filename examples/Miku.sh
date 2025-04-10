@@ -22,7 +22,7 @@ if [ -n "$N_THREAD" ]; then
     GEN_OPTIONS+=(--threads "$N_THREAD")
 fi
 
-./main "${GEN_OPTIONS[@]}" \
+./llama-cli "${GEN_OPTIONS[@]}" \
     --model "$MODEL" \
     --in-prefix " " \
     --in-suffix "${AI_NAME}:" \

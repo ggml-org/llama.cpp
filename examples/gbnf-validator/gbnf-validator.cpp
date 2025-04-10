@@ -1,33 +1,31 @@
-#define LLAMA_API_INTERNAL
-
-#include "grammar-parser.h"
-#include "ggml.h"
-#include "llama.h"
 #include "unicode.h"
+#include "llama-grammar.h"
 
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
+#include <fstream>
 #include <string>
 #include <vector>
 
-static bool llama_sample_grammar_string(struct llama_grammar * grammar, const std::string & input_str, size_t & error_pos, std::string & error_msg) {
-    auto decoded = decode_utf8(input_str, {});
-    const auto & code_points = decoded.first;
+static bool llama_grammar_validate(struct llama_grammar * grammar, const std::string & input_str, size_t & error_pos, std::string & error_msg) {
+    const auto cpts = unicode_cpts_from_utf8(input_str);
+
+    auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
     size_t pos = 0;
-    for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
-        auto prev_stacks = grammar->stacks;
-        llama_grammar_accept(grammar->rules, prev_stacks, *it, grammar->stacks);
-        if (grammar->stacks.empty()) {
+    for (const auto & cpt : cpts) {
+        llama_grammar_accept(grammar, cpt);
+
+        if (stacks_cur.empty()) {
             error_pos = pos;
-            error_msg = "Unexpected character '" + unicode_cpt_to_utf8(*it) + "'";
-            grammar->stacks = prev_stacks;
+            error_msg = "Unexpected character '" + unicode_cpt_to_utf8(cpt) + "'";
             return false;
         }
         ++pos;
     }
 
-    for (const auto & stack : grammar->stacks) {
+    for (const auto & stack : stacks_cur) {
         if (stack.empty()) {
             return true;
         }
@@ -69,55 +67,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    fseek(grammar_file, 0, SEEK_END);
-    size_t grammar_size = ftell(grammar_file);
-    fseek(grammar_file, 0, SEEK_SET);
-
-    std::string grammar_str(grammar_size, ' ');
-    fread(&grammar_str[0], 1, grammar_size, grammar_file);
-    fclose(grammar_file);
-
-    // Parse the GBNF grammar
-    auto parsed_grammar = grammar_parser::parse(grammar_str.c_str());
-
-    // will be empty (default) if there are parse errors
-    if (parsed_grammar.rules.empty()) {
-        fprintf(stdout, "%s: failed to parse grammar\n", __func__);
-        return 1;
+    std::string grammar_str;
+    {
+        std::ifstream grammar_file(grammar_filename);
+        GGML_ASSERT(grammar_file.is_open() && "Failed to open grammar file");
+        std::stringstream buffer;
+        buffer << grammar_file.rdbuf();
+        grammar_str = buffer.str();
     }
 
-    // Ensure that there is a "root" node.
-    if (parsed_grammar.symbol_ids.find("root") == parsed_grammar.symbol_ids.end()) {
-        fprintf(stdout, "%s: grammar does not contain a 'root' symbol\n", __func__);
+    llama_grammar * grammar = llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0);
+    if (grammar == nullptr) {
+        fprintf(stdout, "Failed to initialize llama_grammar\n");
         return 1;
     }
-
-    std::vector<const llama_grammar_element *> grammar_rules(parsed_grammar.c_rules());
-
-    // Create the LLAMA grammar
-    auto grammar = llama_grammar_init(
-            grammar_rules.data(),
-            grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
-
     // Read the input file
-    FILE* input_file = fopen(input_filename.c_str(), "r");
-    if (!input_file) {
-        fprintf(stdout, "Failed to open input file: %s\n", input_filename.c_str());
-        return 1;
+    std::string input_str;
+    {
+        std::ifstream input_file(input_filename);
+        GGML_ASSERT(input_file.is_open() && "Failed to open input file");
+        std::stringstream buffer;
+        buffer << input_file.rdbuf();
+        input_str = buffer.str();
     }
-
-    fseek(input_file, 0, SEEK_END);
-    size_t input_size = ftell(input_file);
-    fseek(input_file, 0, SEEK_SET);
-
-    std::string input_str(input_size, ' ');
-    fread(&input_str[0], 1, input_size, input_file);
-    fclose(input_file);
 
     // Validate the input string against the grammar
     size_t error_pos;
     std::string error_msg;
-    bool is_valid = llama_sample_grammar_string(grammar, input_str, error_pos, error_msg);
+    bool is_valid = llama_grammar_validate(grammar, input_str, error_pos, error_msg);
 
     if (is_valid) {
         fprintf(stdout, "Input string is valid according to the grammar.\n");
@@ -126,7 +103,7 @@ int main(int argc, char** argv) {
     }
 
     // Clean up
-    llama_grammar_free(grammar);
+    llama_grammar_free_impl(grammar);
 
     return 0;
 }

@@ -1,7 +1,10 @@
 // A basic application simulating a server with multiple clients.
 // The clients submit requests to the server and they are processed in parallel.
 
+#include "arg.h"
 #include "common.h"
+#include "sampling.h"
+#include "log.h"
 #include "llama.h"
 
 #include <cmath>
@@ -9,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <algorithm>
 
 // trim whitespace from the beginning and end of a string
 static std::string trim(const std::string & str) {
@@ -50,8 +54,8 @@ static std::vector<std::string> k_prompts = {
 
 struct client {
     ~client() {
-        if (ctx_sampling) {
-            llama_sampling_free(ctx_sampling);
+        if (smpl) {
+            common_sampler_free(smpl);
         }
     }
 
@@ -72,7 +76,7 @@ struct client {
     std::string prompt;
     std::string response;
 
-    struct llama_sampling_context * ctx_sampling = nullptr;
+    struct common_sampler * smpl = nullptr;
 };
 
 static void print_date_time() {
@@ -81,7 +85,9 @@ static void print_date_time() {
     char buffer[80];
     strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", local_time);
 
-    printf("\n\033[35mrun parameters as at %s\033[0m\n", buffer);
+    LOG_INF("\n");
+    LOG_INF("\033[35mrun parameters as of %s\033[0m\n", buffer);
+    LOG_INF("\n");
 }
 
 // Define a split string function to ...
@@ -98,11 +104,15 @@ static std::vector<std::string> split_string(const std::string& input, char deli
 int main(int argc, char ** argv) {
     srand(1234);
 
-    gpt_params params;
+    common_params params;
 
-    if (gpt_params_parse(argc, argv, params) == false) {
+    params.n_predict = 128;
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
     }
+
+    common_init();
 
     // number of simultaneous "clients" to simulate
     const int32_t n_clients = params.n_parallel;
@@ -118,41 +128,36 @@ int main(int argc, char ** argv) {
 
     const bool dump_kv_cache = params.dump_kv_cache;
 
-#ifndef LOG_DISABLE_LOGS
-    log_set_target(log_filename_generator("parallel", "log"));
-    LOG_TEE("Log start\n");
-    log_dump_cmdline(argc, argv);
-#endif // LOG_DISABLE_LOGS
-
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    llama_model * model = NULL;
-    llama_context * ctx = NULL;
-
     // load the target model
-    std::tie(model, ctx) = llama_init_from_gpt_params(params);
+    common_init_result llama_init = common_init_from_params(params);
+
+    llama_model * model = llama_init.model.get();
+    llama_context * ctx = llama_init.context.get();
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
-        printf("\n\033[32mNo new questions so proceed with build-in defaults.\033[0m\n");
+        LOG_INF("\033[32mNo new questions so proceed with build-in defaults.\033[0m\n");
     } else {
         // Output each line of the input params.prompts vector and copy to k_prompts
         int index = 0;
-        printf("\n\033[32mNow printing the external prompt file %s\033[0m\n\n", params.prompt_file.c_str());
+        LOG_INF("\033[32mNow printing the external prompt file %s\033[0m\n\n", params.prompt_file.c_str());
 
         std::vector<std::string> prompts = split_string(params.prompt, '\n');
         for (const auto& prompt : prompts) {
             k_prompts.resize(index + 1);
             k_prompts[index] = prompt;
             index++;
-            printf("%3d prompt: %s\n", index, prompt.c_str());
+            LOG_INF("%3d prompt: %s\n", index, prompt.c_str());
         }
     }
 
-    fprintf(stderr, "\n\n");
-    fflush(stderr);
+    LOG_INF("\n\n");
 
     const int n_ctx = llama_n_ctx(ctx);
 
@@ -160,11 +165,11 @@ int main(int argc, char ** argv) {
     for (size_t i = 0; i < clients.size(); ++i) {
         auto & client = clients[i];
         client.id = i;
-        client.ctx_sampling = llama_sampling_init(params.sparams);
+        client.smpl = common_sampler_init(model, params.sampling);
     }
 
     std::vector<llama_token> tokens_system;
-    tokens_system = ::llama_tokenize(ctx, k_system, true);
+    tokens_system = common_tokenize(ctx, k_system, true);
     const int32_t n_tokens_system = tokens_system.size();
 
     llama_seq_id g_seq_id = 0;
@@ -181,39 +186,39 @@ int main(int argc, char ** argv) {
 
     const auto t_main_start = ggml_time_us();
 
-    LOG_TEE("%s: Simulating parallel requests from clients:\n", __func__);
-    LOG_TEE("%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
-    LOG_TEE("\n");
+    LOG_INF("%s: Simulating parallel requests from clients:\n", __func__);
+    LOG_INF("%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
+    LOG_INF("\n");
 
     {
-        LOG_TEE("%s: Evaluating the system prompt ...\n", __func__);
+        LOG_INF("%s: Evaluating the system prompt ...\n", __func__);
 
         for (int32_t i = 0; i < n_tokens_system; ++i) {
-            llama_batch_add(batch, tokens_system[i], i, { 0 }, false);
+            common_batch_add(batch, tokens_system[i], i, { 0 }, false);
         }
 
         if (llama_decode(ctx, batch) != 0) {
-            LOG_TEE("%s: llama_decode() failed\n", __func__);
+            LOG_ERR("%s: llama_decode() failed\n", __func__);
             return 1;
         }
 
         // assign the system KV cache to all parallel sequences
         for (int32_t i = 1; i <= n_clients; ++i) {
-            llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+            llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
         }
 
-        LOG_TEE("\n");
+        LOG_INF("\n");
     }
 
-    LOG_TEE("Processing requests ...\n\n");
+    LOG_INF("Processing requests ...\n\n");
 
     while (true) {
         if (dump_kv_cache) {
             llama_kv_cache_view_update(ctx, &kvc_view);
-            dump_kv_cache_view_seqs(kvc_view, 40);
+            common_kv_cache_dump_view_seqs(kvc_view, 40);
         }
 
-        llama_batch_clear(batch);
+        common_batch_clear(batch);
 
         // decode any currently ongoing sequences
         for (auto & client : clients) {
@@ -223,7 +228,7 @@ int main(int argc, char ** argv) {
 
             client.i_batch = batch.n_tokens;
 
-            llama_batch_add(batch, client.sampled, n_tokens_system + client.n_prompt + client.n_decoded, { client.id + 1 }, true);
+            common_batch_add(batch, client.sampled, n_tokens_system + client.n_prompt + client.n_decoded, { client.id + 1 }, true);
 
             client.n_decoded += 1;
         }
@@ -231,12 +236,12 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens == 0) {
             // all sequences have ended - clear the entire KV cache
             for (int i = 1; i <= n_clients; ++i) {
-                llama_kv_cache_seq_rm(ctx, i, -1, -1);
+                llama_kv_self_seq_rm(ctx, i, -1, -1);
                 // but keep the system prompt
-                llama_kv_cache_seq_cp(ctx, 0, i, -1, -1);
+                llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
             }
 
-            LOG_TEE("%s: clearing the KV cache\n", __func__);
+            LOG_INF("%s: clearing the KV cache\n", __func__);
         }
 
         // insert new sequences for decoding
@@ -252,14 +257,14 @@ int main(int argc, char ** argv) {
                     client.prompt   = client.input + "\nAssistant:";
                     client.response = "";
 
-                    llama_sampling_reset(client.ctx_sampling);
+                    common_sampler_reset(client.smpl);
 
                     // do not prepend BOS because we have a system prompt!
                     std::vector<llama_token> tokens_prompt;
-                    tokens_prompt = ::llama_tokenize(ctx, client.prompt, false);
+                    tokens_prompt = common_tokenize(ctx, client.prompt, false);
 
                     for (size_t i = 0; i < tokens_prompt.size(); ++i) {
-                        llama_batch_add(batch, tokens_prompt[i], i + n_tokens_system, { client.id + 1 }, false);
+                        common_batch_add(batch, tokens_prompt[i], i + n_tokens_system, { client.id + 1 }, false);
                     }
 
                     // extract the logits only for the last token
@@ -271,7 +276,7 @@ int main(int argc, char ** argv) {
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
-                    LOG_TEE("\033[31mClient %3d, seq %4d, started decoding ...\033[0m\n", client.id, client.seq_id);
+                    LOG_INF("\033[31mClient %3d, seq %4d, started decoding ...\033[0m\n", client.id, client.seq_id);
 
                     g_seq_id += 1;
 
@@ -308,18 +313,17 @@ int main(int argc, char ** argv) {
                 batch.n_seq_id + i,
                 batch.seq_id   + i,
                 batch.logits   + i,
-                0, 0, 0, // unused
             };
 
             const int ret = llama_decode(ctx, batch_view);
             if (ret != 0) {
                 if (n_batch == 1 || ret < 0) {
                     // if you get here, it means the KV cache is full - try increasing it via the context size
-                    LOG_TEE("%s : failed to decode the batch, n_batch = %d, ret = %d\n", __func__, n_batch, ret);
+                    LOG_ERR("%s : failed to decode the batch, n_batch = %d, ret = %d\n", __func__, n_batch, ret);
                     return 1;
                 }
 
-                LOG("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
+                LOG_ERR("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
 
                 n_cache_miss += 1;
 
@@ -330,7 +334,7 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            LOG("%s : decoded batch of %d tokens\n", __func__, n_tokens);
+            LOG_DBG("%s : decoded batch of %d tokens\n", __func__, n_tokens);
 
             for (auto & client : clients) {
                 if (client.i_batch < (int) i || client.i_batch >= (int) (i + n_tokens)) {
@@ -340,9 +344,9 @@ int main(int argc, char ** argv) {
                 //printf("client %d, seq %d, token %d, pos %d, batch %d\n",
                 //        client.id, client.seq_id, client.sampled, client.n_decoded, client.i_batch);
 
-                const llama_token id = llama_sampling_sample(client.ctx_sampling, ctx, NULL, client.i_batch - i);
+                const llama_token id = common_sampler_sample(client.smpl, ctx, client.i_batch - i);
 
-                llama_sampling_accept(client.ctx_sampling, ctx, id, true);
+                common_sampler_accept(client.smpl, id, true);
 
                 if (client.n_decoded == 1) {
                     // start measuring generation time after the first token to make sure all concurrent clients
@@ -350,7 +354,7 @@ int main(int argc, char ** argv) {
                     client.t_start_gen = ggml_time_us();
                 }
 
-                const std::string token_str = llama_token_to_piece(ctx, id);
+                const std::string token_str = common_token_to_piece(ctx, id);
 
                 client.response += token_str;
                 client.sampled = id;
@@ -359,7 +363,7 @@ int main(int argc, char ** argv) {
                 //        client.id, client.seq_id, id, client.n_decoded, client.i_batch, token_str.c_str());
 
                 if (client.n_decoded > 2 &&
-                        (llama_token_is_eog(model, id) ||
+                        (llama_vocab_is_eog(vocab, id) ||
                          (params.n_predict > 0 && client.n_decoded + client.n_prompt >= params.n_predict) ||
                          client.response.find("User:") != std::string::npos ||
                          client.response.find('\n') != std::string::npos)) {
@@ -370,12 +374,12 @@ int main(int argc, char ** argv) {
                     }
 
                     // delete only the generated part of the sequence, i.e. keep the system prompt in the cache
-                    llama_kv_cache_seq_rm(ctx, client.id + 1, -1, -1);
-                    llama_kv_cache_seq_cp(ctx, 0, client.id + 1, -1, -1);
+                    llama_kv_self_seq_rm(ctx,    client.id + 1, -1, -1);
+                    llama_kv_self_seq_cp(ctx, 0, client.id + 1, -1, -1);
 
                     const auto t_main_end = ggml_time_us();
 
-                    LOG_TEE("\033[31mClient %3d, seq %3d/%3d, prompt %4d t, response %4d t, time %5.2f s, speed %5.2f t/s, cache miss %d \033[0m \nInput:    %s\n\033[35mResponse: %s\033[0m\n\n",
+                    LOG_INF("\033[31mClient %3d, seq %3d/%3d, prompt %4d t, response %4d t, time %5.2f s, speed %5.2f t/s, cache miss %d \033[0m \n\nInput:    %s\n\033[35mResponse: %s\033[0m\n\n",
                             client.id, client.seq_id, n_seq, client.n_prompt, client.n_decoded,
                             (t_main_end - client.t_start_prompt) / 1e6,
                             (double) (client.n_prompt + client.n_decoded) / (t_main_end - client.t_start_prompt) * 1e6,
@@ -398,30 +402,28 @@ int main(int argc, char ** argv) {
 
     print_date_time();
 
-    LOG_TEE("\n%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
+    LOG_INF("%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
     if (params.prompt_file.empty()) {
         params.prompt_file = "used built-in defaults";
     }
-    LOG_TEE("External prompt file: \033[32m%s\033[0m\n", params.prompt_file.c_str());
-    LOG_TEE("Model and path used:  \033[32m%s\033[0m\n\n", params.model.c_str());
+    LOG_INF("External prompt file: \033[32m%s\033[0m\n", params.prompt_file.c_str());
+    LOG_INF("Model and path used:  \033[32m%s\033[0m\n\n", params.model.path.c_str());
 
-    LOG_TEE("Total prompt tokens: %6d, speed: %5.2f t/s\n", n_total_prompt, (double) (n_total_prompt              ) / (t_main_end - t_main_start) * 1e6);
-    LOG_TEE("Total gen tokens:    %6d, speed: %5.2f t/s\n", n_total_gen,    (double) (n_total_gen                 ) / (t_main_end - t_main_start) * 1e6);
-    LOG_TEE("Total speed (AVG):   %6s  speed: %5.2f t/s\n", "",             (double) (n_total_prompt + n_total_gen) / (t_main_end - t_main_start) * 1e6);
-    LOG_TEE("Cache misses:        %6d\n", n_cache_miss);
+    LOG_INF("Total prompt tokens: %6d, speed: %5.2f t/s\n", n_total_prompt, (double) (n_total_prompt              ) / (t_main_end - t_main_start) * 1e6);
+    LOG_INF("Total gen tokens:    %6d, speed: %5.2f t/s\n", n_total_gen,    (double) (n_total_gen                 ) / (t_main_end - t_main_start) * 1e6);
+    LOG_INF("Total speed (AVG):   %6s  speed: %5.2f t/s\n", "",             (double) (n_total_prompt + n_total_gen) / (t_main_end - t_main_start) * 1e6);
+    LOG_INF("Cache misses:        %6d\n", n_cache_miss);
 
-    LOG_TEE("\n");
+    LOG_INF("\n");
 
-    llama_print_timings(ctx);
+    // TODO: print sampling/grammar timings for all clients
+    llama_perf_context_print(ctx);
 
     llama_batch_free(batch);
 
-    llama_free(ctx);
-    llama_free_model(model);
-
     llama_backend_free();
 
-    fprintf(stderr, "\n\n");
+    LOG("\n\n");
 
     return 0;
 }

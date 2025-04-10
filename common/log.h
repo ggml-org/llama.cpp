@@ -1,210 +1,53 @@
 #pragma once
 
-#include <chrono>
-#include <cstring>
-#include <sstream>
-#include <iostream>
-#include <thread>
-#include <vector>
-#include <algorithm>
-#include <cinttypes>
+#include "ggml.h" // for ggml_log_level
 
-// --------------------------------
-//
-// Basic usage:
-//
-// --------
-//
-//  The LOG() and LOG_TEE() macros are ready to go by default
-//   they do not require any initialization.
-//
-//  LOGLN() and LOG_TEELN() are variants which automatically
-//   include \n character at the end of the log string.
-//
-//  LOG() behaves exactly like printf, by default writing to a logfile.
-//  LOG_TEE() additionally, prints to the screen too ( mimics Unix tee command ).
-//
-//  Default logfile is named
-//   "llama.<threadID>.log"
-//  Default LOG_TEE() secondary output target is
-//   stderr
-//
-//  Logs can be dynamically disabled or enabled using functions:
-//   log_disable()
-//  and
-//   log_enable()
-//
-//  A log target can be changed with:
-//   log_set_target( string )
-//    creating and opening, or re-opening a file by string filename
-//  or
-//   log_set_target( FILE* )
-//    allowing to point at stderr, stdout, or any valid FILE* file handler.
-//
-// --------
-//
-// End of Basic usage.
-//
-// --------------------------------
+#define LOG_CLR_TO_EOL  "\033[K\r"
+#define LOG_COL_DEFAULT "\033[0m"
+#define LOG_COL_BOLD    "\033[1m"
+#define LOG_COL_RED     "\033[31m"
+#define LOG_COL_GREEN   "\033[32m"
+#define LOG_COL_YELLOW  "\033[33m"
+#define LOG_COL_BLUE    "\033[34m"
+#define LOG_COL_MAGENTA "\033[35m"
+#define LOG_COL_CYAN    "\033[36m"
+#define LOG_COL_WHITE   "\033[37m"
 
-// Specifies a log target.
-//  default uses log_handler() with "llama.log" log file
-//  this can be changed, by defining LOG_TARGET
-//  like so:
-//
-//  #define LOG_TARGET (a valid FILE*)
-//  #include "log.h"
-//
-//  or it can be simply redirected to stdout or stderr
-//  like so:
-//
-//  #define LOG_TARGET stderr
-//  #include "log.h"
-//
-//  The log target can also be redirected to a different function
-//  like so:
-//
-//  #define LOG_TARGET log_handler_different()
-//  #include "log.h"
-//
-//  FILE* log_handler_different()
-//  {
-//      return stderr;
-//  }
-//
-//  or:
-//
-//  #define LOG_TARGET log_handler_another_one("somelog.log")
-//  #include "log.h"
-//
-//  FILE* log_handler_another_one(char*filename)
-//  {
-//      static FILE* logfile = nullptr;
-//      (...)
-//      if( !logfile )
-//      {
-//          fopen(...)
-//      }
-//      (...)
-//      return logfile
-//  }
-//
-#ifndef LOG_TARGET
-    #define LOG_TARGET log_handler()
-#endif
-
-#ifndef LOG_TEE_TARGET
-    #define LOG_TEE_TARGET stderr
-#endif
-
-// Utility for synchronizing log configuration state
-//  since std::optional was introduced only in c++17
-enum LogTriState
-{
-    LogTriStateSame,
-    LogTriStateFalse,
-    LogTriStateTrue
-};
-
-// Utility to obtain "pid" like unique process id and use it when creating log files.
-inline std::string log_get_pid()
-{
-   static std::string pid;
-   if (pid.empty())
-   {
-       // std::this_thread::get_id() is the most portable way of obtaining a "process id"
-       //  it's not the same as "pid" but is unique enough to solve multiple instances
-       //  trying to write to the same log.
-       std::stringstream ss;
-       ss << std::this_thread::get_id();
-       pid = ss.str();
-   }
-
-   return pid;
-}
-
-// Utility function for generating log file names with unique id based on thread id.
-//  invocation with log_filename_generator( "llama", "log" ) creates a string "llama.<number>.log"
-//  where the number is a runtime id of the current thread.
-
-#define log_filename_generator(log_file_basename, log_file_extension) log_filename_generator_impl(LogTriStateSame, log_file_basename, log_file_extension)
-
-// INTERNAL, DO NOT USE
-inline std::string log_filename_generator_impl(LogTriState multilog, const std::string & log_file_basename, const std::string & log_file_extension)
-{
-    static bool _multilog = false;
-
-    if (multilog != LogTriStateSame)
-    {
-        _multilog = multilog == LogTriStateTrue;
-    }
-
-    std::stringstream buf;
-
-    buf << log_file_basename;
-    if (_multilog)
-    {
-        buf << ".";
-        buf << log_get_pid();
-    }
-    buf << ".";
-    buf << log_file_extension;
-
-    return buf.str();
-}
-
-#ifndef LOG_DEFAULT_FILE_NAME
-    #define LOG_DEFAULT_FILE_NAME log_filename_generator("llama", "log")
-#endif
-
-// Utility for turning #define values into string literals
-//  so we can have a define for stderr and
-//  we can print "stderr" instead of literal stderr, etc.
-#define LOG_STRINGIZE1(s) #s
-#define LOG_STRINGIZE(s) LOG_STRINGIZE1(s)
-
-#define LOG_TEE_TARGET_STRING LOG_STRINGIZE(LOG_TEE_TARGET)
-
-// Allows disabling timestamps.
-//  in order to disable, define LOG_NO_TIMESTAMPS
-//  like so:
-//
-//  #define LOG_NO_TIMESTAMPS
-//  #include "log.h"
-//
-#ifndef LOG_NO_TIMESTAMPS
-    #ifndef _MSC_VER
-        #define LOG_TIMESTAMP_FMT "[%" PRIu64 "] "
-        #define LOG_TIMESTAMP_VAL , (std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(std::chrono::system_clock::now().time_since_epoch())).count()
-    #else
-        #define LOG_TIMESTAMP_FMT "[%" PRIu64 "] "
-        #define LOG_TIMESTAMP_VAL , (std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(std::chrono::system_clock::now().time_since_epoch())).count()
-    #endif
+#ifndef __GNUC__
+#    define LOG_ATTRIBUTE_FORMAT(...)
+#elif defined(__MINGW32__) && !defined(__clang__)
+#    define LOG_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
 #else
-    #define LOG_TIMESTAMP_FMT "%s"
-    #define LOG_TIMESTAMP_VAL ,""
+#    define LOG_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
 #endif
 
-#ifdef LOG_TEE_TIMESTAMPS
-    #ifndef _MSC_VER
-        #define LOG_TEE_TIMESTAMP_FMT "[%" PRIu64 "] "
-        #define LOG_TEE_TIMESTAMP_VAL , (std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(std::chrono::system_clock::now().time_since_epoch())).count()
-    #else
-        #define LOG_TEE_TIMESTAMP_FMT "[%" PRIu64 "] "
-        #define LOG_TEE_TIMESTAMP_VAL , (std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(std::chrono::system_clock::now().time_since_epoch())).count()
-    #endif
-#else
-    #define LOG_TEE_TIMESTAMP_FMT "%s"
-    #define LOG_TEE_TIMESTAMP_VAL ,""
-#endif
+#define LOG_DEFAULT_DEBUG 1
+#define LOG_DEFAULT_LLAMA 0
 
-// Allows disabling file/line/function prefix
-//  in order to disable, define LOG_NO_FILE_LINE_FUNCTION
-//  like so:
+// needed by the LOG_TMPL macro to avoid computing log arguments if the verbosity lower
+// set via common_log_set_verbosity()
+extern int common_log_verbosity_thold;
+
+void common_log_set_verbosity_thold(int verbosity); // not thread-safe
+
+// the common_log uses an internal worker thread to print/write log messages
+// when the worker thread is paused, incoming log messages are discarded
+struct common_log;
+
+struct common_log * common_log_init();
+struct common_log * common_log_main(); // singleton, automatically destroys itself on exit
+void                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe
+void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
+void                common_log_free  (struct common_log * log);
+
+LOG_ATTRIBUTE_FORMAT(3, 4)
+void common_log_add(struct common_log * log, enum ggml_log_level level, const char * fmt, ...);
+
+// defaults: file = NULL, colors = false, prefix = false, timestamps = false
 //
-//  #define LOG_NO_FILE_LINE_FUNCTION
-//  #include "log.h"
+// regular log output:
 //
+<<<<<<< HEAD
 #ifndef LOG_NO_FILE_LINE_FUNCTION
     #ifndef _MSC_VER
         #define LOG_FLF_FMT "[%24s:%5d][%24s] "
@@ -233,64 +76,58 @@ inline std::string log_filename_generator_impl(LogTriState multilog, const std::
 
 // INTERNAL, DO NOT USE
 //  USE LOG() INSTEAD
+=======
+//   ggml_backend_metal_log_allocated_size: allocated buffer, size =  6695.84 MiB, ( 6695.91 / 21845.34)
+//   llm_load_tensors: ggml ctx size =    0.27 MiB
+//   llm_load_tensors: offloading 32 repeating layers to GPU
+//   llm_load_tensors: offloading non-repeating layers to GPU
+>>>>>>> master
 //
-#if !defined(_MSC_VER) || defined(__INTEL_LLVM_COMPILER) || defined(__clang__)
-    #define LOG_IMPL(str, ...)                                                                                      \
-    do {                                                                                                            \
-        if (LOG_TARGET != nullptr)                                                                                  \
-        {                                                                                                           \
-            fprintf(LOG_TARGET, LOG_TIMESTAMP_FMT LOG_FLF_FMT str "%s" LOG_TIMESTAMP_VAL LOG_FLF_VAL, __VA_ARGS__); \
-            fflush(LOG_TARGET);                                                                                     \
-        }                                                                                                           \
-    } while (0)
-#else
-    #define LOG_IMPL(str, ...)                                                                                           \
-    do {                                                                                                                 \
-        if (LOG_TARGET != nullptr)                                                                                       \
-        {                                                                                                                \
-            fprintf(LOG_TARGET, LOG_TIMESTAMP_FMT LOG_FLF_FMT str "%s" LOG_TIMESTAMP_VAL LOG_FLF_VAL "", ##__VA_ARGS__); \
-            fflush(LOG_TARGET);                                                                                          \
-        }                                                                                                                \
-    } while (0)
-#endif
-
-// INTERNAL, DO NOT USE
-//  USE LOG_TEE() INSTEAD
+// with prefix = true, timestamps = true, the log output will look like this:
 //
-#if !defined(_MSC_VER) || defined(__INTEL_LLVM_COMPILER) || defined(__clang__)
-    #define LOG_TEE_IMPL(str, ...)                                                                                                      \
-    do {                                                                                                                                \
-        if (LOG_TARGET != nullptr)                                                                                                      \
-        {                                                                                                                               \
-            fprintf(LOG_TARGET, LOG_TIMESTAMP_FMT LOG_FLF_FMT str "%s" LOG_TIMESTAMP_VAL LOG_FLF_VAL, __VA_ARGS__);                     \
-            fflush(LOG_TARGET);                                                                                                         \
-        }                                                                                                                               \
-        if (LOG_TARGET != nullptr && LOG_TARGET != stdout && LOG_TARGET != stderr && LOG_TEE_TARGET != nullptr)                         \
-        {                                                                                                                               \
-            fprintf(LOG_TEE_TARGET, LOG_TEE_TIMESTAMP_FMT LOG_TEE_FLF_FMT str "%s" LOG_TEE_TIMESTAMP_VAL LOG_TEE_FLF_VAL, __VA_ARGS__); \
-            fflush(LOG_TEE_TARGET);                                                                                                     \
-        }                                                                                                                               \
-    } while (0)
-#else
-    #define LOG_TEE_IMPL(str, ...)                                                                                                           \
-    do {                                                                                                                                     \
-        if (LOG_TARGET != nullptr)                                                                                                           \
-        {                                                                                                                                    \
-            fprintf(LOG_TARGET, LOG_TIMESTAMP_FMT LOG_FLF_FMT str "%s" LOG_TIMESTAMP_VAL LOG_FLF_VAL "", ##__VA_ARGS__);                     \
-            fflush(LOG_TARGET);                                                                                                              \
-        }                                                                                                                                    \
-        if (LOG_TARGET != nullptr && LOG_TARGET != stdout && LOG_TARGET != stderr && LOG_TEE_TARGET != nullptr)                              \
-        {                                                                                                                                    \
-            fprintf(LOG_TEE_TARGET, LOG_TEE_TIMESTAMP_FMT LOG_TEE_FLF_FMT str "%s" LOG_TEE_TIMESTAMP_VAL LOG_TEE_FLF_VAL "", ##__VA_ARGS__); \
-            fflush(LOG_TEE_TARGET);                                                                                                          \
-        }                                                                                                                                    \
-    } while (0)
-#endif
+//   0.00.035.060 D ggml_backend_metal_log_allocated_size: allocated buffer, size =  6695.84 MiB, ( 6695.91 / 21845.34)
+//   0.00.035.064 I llm_load_tensors: ggml ctx size =    0.27 MiB
+//   0.00.090.578 I llm_load_tensors: offloading 32 repeating layers to GPU
+//   0.00.090.579 I llm_load_tensors: offloading non-repeating layers to GPU
+//
+// I - info    (stdout, V = 0)
+// W - warning (stderr, V = 0)
+// E - error   (stderr, V = 0)
+// D - debug   (stderr, V = LOG_DEFAULT_DEBUG)
+//
 
-// The '\0' as a last argument, is a trick to bypass the silly
-//  "warning: ISO C++11 requires at least one argument for the "..." in a variadic macro"
-//  so we can have a single macro which can be called just like printf.
+void common_log_set_file      (struct common_log * log, const char * file);       // not thread-safe
+void common_log_set_colors    (struct common_log * log,       bool   colors);     // not thread-safe
+void common_log_set_prefix    (struct common_log * log,       bool   prefix);     // whether to output prefix to each log
+void common_log_set_timestamps(struct common_log * log,       bool   timestamps); // whether to output timestamps in the prefix
 
+// helper macros for logging
+// use these to avoid computing log arguments if the verbosity of the log is higher than the threshold
+//
+// for example:
+//
+//   LOG_DBG("this is a debug message: %d\n", expensive_function());
+//
+// this will avoid calling expensive_function() if LOG_DEFAULT_DEBUG > common_log_verbosity_thold
+//
+
+#define LOG_TMPL(level, verbosity, ...) \
+    do { \
+        if ((verbosity) <= common_log_verbosity_thold) { \
+            common_log_add(common_log_main(), (level), __VA_ARGS__); \
+        } \
+    } while (0)
+
+#define LOG(...)             LOG_TMPL(GGML_LOG_LEVEL_NONE, 0,         __VA_ARGS__)
+#define LOGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_NONE, verbosity, __VA_ARGS__)
+
+#define LOG_INF(...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  0,                 __VA_ARGS__)
+#define LOG_WRN(...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  0,                 __VA_ARGS__)
+#define LOG_ERR(...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, 0,                 __VA_ARGS__)
+#define LOG_DBG(...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, LOG_DEFAULT_DEBUG, __VA_ARGS__)
+#define LOG_CNT(...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  0,                 __VA_ARGS__)
+
+<<<<<<< HEAD
 // Main LOG macro.
 //  behaves like printf, and supports arguments the exact same way.
 //
@@ -722,3 +559,10 @@ inline std::string LOG_BATCH_TOSTR_PRETTY(const C & ctx, const B & batch)
 #define LOG_DUMP_CMDLINE(...) // dummy stub
 
 #endif // LOG_DISABLE_LOGS
+=======
+#define LOG_INFV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  verbosity, __VA_ARGS__)
+#define LOG_WRNV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  verbosity, __VA_ARGS__)
+#define LOG_ERRV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, verbosity, __VA_ARGS__)
+#define LOG_DBGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, verbosity, __VA_ARGS__)
+#define LOG_CNTV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  verbosity, __VA_ARGS__)
+>>>>>>> master

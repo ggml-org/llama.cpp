@@ -10,16 +10,16 @@ There are 2 modes of operation:
 - `prompt is shared` - there is a common prompt of size `PP` used by all batches (i.e. `N_KV = PP + B*TG`)
 
 ```bash
-./batched-bench MODEL_PATH [N_KV_MAX] [N_BATCH] [N_UBATCH] [IS_PP_SHARED] [NGL] [MMQ] <PP> <TG> <PL>
+./llama-batched-bench -m model.gguf -c 2048 -b 2048 -ub 512 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32 [-pps]
 
 # LLaMA 7B, F16, N_KV_MAX = 16384 (8GB), prompt not shared
-./batched-bench ./models/llama-7b/ggml-model-f16.gguf 16384 2048 512 0 99
+./llama-batched-bench -m ./models/llama-7b/ggml-model-f16.gguf -c 16384 -b 2048 -ub 512 -ngl 99
 
 # LLaMA 7B, Q8_0, N_KV_MAX = 16384 (8GB), prompt is shared
-./batched-bench ./models/llama-7b/ggml-model-q8_0.gguf 16384 2048 512 1 99
+./llama-batched-bench -m ./models/llama-7b/ggml-model-q8_0.gguf -c 16384 -b 2048 -ub 512 -ngl 99 -pps
 
 # custom set of batches
-./batched-bench ./models/llama-7b/ggml-model-q8_0.gguf 2048 512 512 0 999 0 128,256,512 128,256 1,2,4,8,16,32
+./llama-batched-bench -m ./models/llama-7b/ggml-model-q8_0.gguf -c 2048 -b 512 -ub 512 -ngl 999 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32
 ```
 
 ## Sample results
@@ -49,3 +49,12 @@ There are 2 modes of operation:
 |   128 |    256 |    8 |   3072 |    0.751 |  1363.92 |   15.110 |   135.54 |   15.861 |   193.69 |
 |   128 |    256 |   16 |   6144 |    1.569 |  1304.93 |   18.073 |   226.64 |   19.642 |   312.80 |
 |   128 |    256 |   32 |  12288 |    3.409 |  1201.35 |   19.223 |   426.15 |   22.633 |   542.93 |
+
+### JSONL output
+
+Pass `--output-format jsonl` to output JSONL instead of Markdown, á la
+
+```json lines
+{"n_kv_max": 2048, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 0, "is_pp_shared": 0, "n_gpu_layers": 99, "n_threads": 8, "n_threads_batch": 8, "pp": 128, "tg": 128, "pl": 1, "n_kv": 256, "t_pp": 0.233810, "speed_pp": 547.453064, "t_tg": 3.503684, "speed_tg": 36.532974, "t": 3.737494, "speed": 68.495094}
+{"n_kv_max": 2048, "n_batch": 2048, "n_ubatch": 512, "flash_attn": 0, "is_pp_shared": 0, "n_gpu_layers": 99, "n_threads": 8, "n_threads_batch": 8, "pp": 128, "tg": 128, "pl": 2, "n_kv": 512, "t_pp": 0.422602, "speed_pp": 605.770935, "t_tg": 11.106112, "speed_tg": 23.050371, "t": 11.528713, "speed": 44.410854}
+```

@@ -1,6 +1,9 @@
-cmake_minimum_required(VERSION 3.14)  # for add_link_options and implicit target directories.
+cmake_minimum_required(VERSION 3.14) # for add_link_options and implicit target directories.
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
+
+#set(CMAKE_WARN_DEPRECATED YES)
+set(CMAKE_WARN_UNUSED_CLI YES)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -9,16 +12,24 @@ if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
 endif()
 
+# Add path to modules
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
+
+    include(git-vars)
 
     # configure project version
     # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
+
+option(LLAMA_USE_SYSTEM_GGML "Use system libggml" OFF)
 
 if (EMSCRIPTEN)
     set(BUILD_SHARED_LIBS_DEFAULT OFF)
@@ -32,265 +43,114 @@ else()
     endif()
 endif()
 
-
-#
-# Option list
-#
-
-if (APPLE)
-    set(LLAMA_METAL_DEFAULT ON)
-else()
-    set(LLAMA_METAL_DEFAULT OFF)
-endif()
-
-set(LLAMA_LLAMAFILE_DEFAULT ON)
-
-# general
-option(BUILD_SHARED_LIBS                "build shared libraries"                                OFF)
-option(LLAMA_STATIC                     "llama: static link libraries"                          OFF)
-option(LLAMA_NATIVE                     "llama: enable -march=native flag"                      ON)
-option(LLAMA_LTO                        "llama: enable link time optimization"                  OFF)
-option(LLAMA_CCACHE                     "llama: use ccache if available"                        ON)
-
-# debug
-option(LLAMA_ALL_WARNINGS               "llama: enable all compiler warnings"                   ON)
-option(LLAMA_ALL_WARNINGS_3RD_PARTY     "llama: enable all compiler warnings in 3rd party libs" OFF)
-option(LLAMA_GPROF                      "llama: enable gprof"                                   OFF)
-
-# build
-option(LLAMA_FATAL_WARNINGS             "llama: enable -Werror flag"                            OFF)
-
-# sanitizers
-option(LLAMA_SANITIZE_THREAD            "llama: enable thread sanitizer"                        OFF)
-option(LLAMA_SANITIZE_ADDRESS           "llama: enable address sanitizer"                       OFF)
-option(LLAMA_SANITIZE_UNDEFINED         "llama: enable undefined sanitizer"                     OFF)
-
-# instruction set specific
-if (LLAMA_NATIVE)
-    set(INS_ENB OFF)
-else()
-    set(INS_ENB ON)
-endif()
-
-option(LLAMA_AVX                             "llama: enable AVX"                                ${INS_ENB})
-option(LLAMA_AVX2                            "llama: enable AVX2"                               ${INS_ENB})
-option(LLAMA_AVX512                          "llama: enable AVX512"                             OFF)
-option(LLAMA_AVX512_VBMI                     "llama: enable AVX512-VBMI"                        OFF)
-option(LLAMA_AVX512_VNNI                     "llama: enable AVX512-VNNI"                        OFF)
-option(LLAMA_FMA                             "llama: enable FMA"                                ${INS_ENB})
-# in MSVC F16C is implied with AVX2/AVX512
-if (NOT MSVC)
-    option(LLAMA_F16C                        "llama: enable F16C"                               ${INS_ENB})
-endif()
+option(BUILD_SHARED_LIBS "build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
 
 if (WIN32)
-    set(LLAMA_WIN_VER "0x602" CACHE STRING "llama: Windows Version")
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 endif()
+
+if (MSVC)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/utf-8>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:C>:/bigobj>")
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
+endif()
+
+#
+# option list
+#
+
+# debug
+option(LLAMA_ALL_WARNINGS           "llama: enable all compiler warnings"                   ON)
+option(LLAMA_ALL_WARNINGS_3RD_PARTY "llama: enable all compiler warnings in 3rd party libs" OFF)
+
+# build
+option(LLAMA_FATAL_WARNINGS "llama: enable -Werror flag" OFF)
+
+# sanitizers
+option(LLAMA_SANITIZE_THREAD    "llama: enable thread sanitizer"    OFF)
+option(LLAMA_SANITIZE_ADDRESS   "llama: enable address sanitizer"   OFF)
+option(LLAMA_SANITIZE_UNDEFINED "llama: enable undefined sanitizer" OFF)
+
+# utils
+option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE})
+
+# extra artifacts
+option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
 # 3rd party libs
-option(LLAMA_ACCELERATE                      "llama: enable Accelerate framework"               ON)
-option(LLAMA_BLAS                            "llama: use BLAS"                                  OFF)
-option(LLAMA_LLAMAFILE                       "llama: use llamafile SGEMM"                       ${LLAMA_LLAMAFILE_DEFAULT})
-set(LLAMA_BLAS_VENDOR "Generic" CACHE STRING "llama: BLAS library vendor")
-option(LLAMA_CUDA                            "llama: use CUDA"                                  OFF)
-option(LLAMA_CUBLAS                          "llama: use CUDA (deprecated, use LLAMA_CUDA)"     OFF)
-option(LLAMA_CUDA_FORCE_DMMV                 "llama: use dmmv instead of mmvq CUDA kernels"     OFF)
-option(LLAMA_CUDA_FORCE_MMQ                  "llama: use mmq kernels instead of cuBLAS"         OFF)
-set(LLAMA_CUDA_DMMV_X      "32" CACHE STRING "llama: x stride for dmmv CUDA kernels")
-set(LLAMA_CUDA_MMV_Y        "1" CACHE STRING "llama: y block size for mmv CUDA kernels")
-option(LLAMA_CUDA_F16                        "llama: use 16 bit floats for some calculations"   OFF)
-set(LLAMA_CUDA_KQUANTS_ITER "2" CACHE STRING "llama: iters./thread per block for Q2_K/Q6_K")
-set(LLAMA_CUDA_PEER_MAX_BATCH_SIZE "128" CACHE STRING
-                                             "llama: max. batch size for using peer access")
-option(LLAMA_CUDA_NO_PEER_COPY               "llama: do not use peer to peer copies"            OFF)
-option(LLAMA_CUDA_NO_VMM                     "llama: do not try to use CUDA VMM"                OFF)
-
-option(LLAMA_CURL                            "llama: use libcurl to download model from an URL" OFF)
-option(LLAMA_HIPBLAS                         "llama: use hipBLAS"                               OFF)
-option(LLAMA_HIP_UMA                         "llama: use HIP unified memory architecture"       OFF)
-option(LLAMA_CLBLAST                         "llama: use CLBlast"                               OFF)
-option(LLAMA_VULKAN                          "llama: use Vulkan"                                OFF)
-option(LLAMA_VULKAN_CHECK_RESULTS            "llama: run Vulkan op checks"                      OFF)
-option(LLAMA_VULKAN_DEBUG                    "llama: enable Vulkan debug output"                OFF)
-option(LLAMA_VULKAN_VALIDATE                 "llama: enable Vulkan validation"                  OFF)
-option(LLAMA_VULKAN_RUN_TESTS                "llama: run Vulkan tests"                          OFF)
-option(LLAMA_METAL                           "llama: use Metal"                                 ${LLAMA_METAL_DEFAULT})
-option(LLAMA_METAL_NDEBUG                    "llama: disable Metal debugging"                   OFF)
-option(LLAMA_METAL_SHADER_DEBUG              "llama: compile Metal with -fno-fast-math"         OFF)
-option(LLAMA_METAL_EMBED_LIBRARY             "llama: embed Metal library"                       OFF)
-set(LLAMA_METAL_MACOSX_VERSION_MIN "" CACHE STRING
-                                             "llama: metal minimum macOS version")
-set(LLAMA_METAL_STD "" CACHE STRING          "llama: metal standard version (-std flag)")
-option(LLAMA_KOMPUTE                         "llama: use Kompute"                               OFF)
-option(LLAMA_MPI                             "llama: use MPI"                                   OFF)
-option(LLAMA_RPC                             "llama: use RPC"                                   OFF)
-option(LLAMA_QKK_64                          "llama: use super-block size of 64 for k-quants"   OFF)
-option(LLAMA_SYCL                            "llama: use SYCL"                                  OFF)
-option(LLAMA_SYCL_F16                        "llama: use 16 bit floats for sycl calculations"   OFF)
-set(LLAMA_SYCL_TARGET   "INTEL" CACHE STRING "llama: sycl target device")
-option(LLAMA_CPU_HBM                         "llama: use memkind for CPU HBM"                   OFF)
-set(LLAMA_SCHED_MAX_COPIES  "4" CACHE STRING "llama: max input copies for pipeline parallelism")
-
-option(LLAMA_BUILD_TESTS                     "llama: build tests"    ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_EXAMPLES                  "llama: build examples" ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_SERVER                    "llama: build server example"                      ON)
-
-# add perf arguments
-option(LLAMA_PERF                            "llama: enable perf"                               OFF)
+option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
+option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 # Required for relocatable CMake package
-include(${CMAKE_CURRENT_SOURCE_DIR}/scripts/build-info.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
 
-#
-# Compile flags
-#
+# override ggml options
+set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
+set(GGML_FATAL_WARNINGS ${LLAMA_FATAL_WARNINGS})
 
-if (LLAMA_SYCL)
-    set(CMAKE_CXX_STANDARD 17)
-else()
-    set(CMAKE_CXX_STANDARD 11)
+# change the default for these ggml options
+if (NOT DEFINED GGML_LLAMAFILE)
+    set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
 
-set(CMAKE_CXX_STANDARD_REQUIRED true)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED true)
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-
-find_package(Threads REQUIRED)
-include(CheckCXXCompilerFlag)
-
-add_compile_definitions(GGML_SCHED_MAX_COPIES=${LLAMA_SCHED_MAX_COPIES})
-
-# enable libstdc++ assertions for debug builds
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_ASSERTIONS>)
+if (NOT DEFINED GGML_CUDA_GRAPHS)
+    set(GGML_CUDA_GRAPHS_DEFAULT ON)
 endif()
+
+# transition helpers
+function (llama_option_depr TYPE OLD NEW)
+    if (${OLD})
+        message(${TYPE} "${OLD} is deprecated and will be removed in the future.\nUse ${NEW} instead\n")
+        set(${NEW} ON PARENT_SCOPE)
+    endif()
+endfunction()
+
+llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
+llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
+llama_option_depr(WARNING     LLAMA_KOMPUTE             GGML_KOMPUTE)
+llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
+llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
+llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
+llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
+llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
+llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
+llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 
 if (NOT MSVC)
     if (LLAMA_SANITIZE_THREAD)
+        message(STATUS "Using -fsanitize=thread")
+
         add_compile_options(-fsanitize=thread)
         link_libraries     (-fsanitize=thread)
     endif()
 
     if (LLAMA_SANITIZE_ADDRESS)
+        message(STATUS "Using -fsanitize=address")
+
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
         link_libraries     (-fsanitize=address)
     endif()
 
     if (LLAMA_SANITIZE_UNDEFINED)
+        message(STATUS "Using -fsanitize=undefined")
+
         add_compile_options(-fsanitize=undefined)
         link_libraries     (-fsanitize=undefined)
     endif()
 endif()
 
-if (APPLE AND LLAMA_ACCELERATE)
-    find_library(ACCELERATE_FRAMEWORK Accelerate)
-    if (ACCELERATE_FRAMEWORK)
-        message(STATUS "Accelerate framework found")
+#
+# 3rd-party
+#
 
-        add_compile_definitions(GGML_USE_ACCELERATE)
-        add_compile_definitions(ACCELERATE_NEW_LAPACK)
-        add_compile_definitions(ACCELERATE_LAPACK_ILP64)
-        set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS} ${ACCELERATE_FRAMEWORK})
-    else()
-        message(WARNING "Accelerate framework not found")
-    endif()
-endif()
-
-if (LLAMA_METAL)
-    find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
-    find_library(METAL_FRAMEWORK    Metal      REQUIRED)
-    find_library(METALKIT_FRAMEWORK MetalKit   REQUIRED)
-
-    message(STATUS "Metal framework found")
-    set(GGML_HEADERS_METAL ggml-metal.h)
-    set(GGML_SOURCES_METAL ggml-metal.m)
-
-    add_compile_definitions(GGML_USE_METAL)
-    if (LLAMA_METAL_NDEBUG)
-        add_compile_definitions(GGML_METAL_NDEBUG)
-    endif()
-
-    # copy ggml-common.h and ggml-metal.metal to bin directory
-    configure_file(ggml-common.h    ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h    COPYONLY)
-    configure_file(ggml-metal.metal ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.metal COPYONLY)
-
-    if (LLAMA_METAL_EMBED_LIBRARY)
-        enable_language(ASM)
-        add_compile_definitions(GGML_METAL_EMBED_LIBRARY)
-
-        set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/ggml-common.h")
-        set(METALLIB_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ggml-metal.metal")
-
-        file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/autogenerated")
-
-        # merge ggml-common.h and ggml-metal.metal into a single file
-        set(METALLIB_EMBED_ASM    "${CMAKE_BINARY_DIR}/autogenerated/ggml-metal-embed.s")
-        set(METALLIB_SOURCE_EMBED "${CMAKE_BINARY_DIR}/autogenerated/ggml-metal-embed.metal")
-
-        add_custom_command(
-            OUTPUT ${METALLIB_EMBED_ASM}
-            COMMAND echo "Embedding Metal library"
-            COMMAND sed -e '/\#include \"ggml-common.h\"/r ${METALLIB_COMMON}' -e '/\#include \"ggml-common.h\"/d' < ${METALLIB_SOURCE} > ${METALLIB_SOURCE_EMBED}
-            COMMAND echo ".section __DATA,__ggml_metallib"          >  ${METALLIB_EMBED_ASM}
-            COMMAND echo ".globl _ggml_metallib_start"              >> ${METALLIB_EMBED_ASM}
-            COMMAND echo "_ggml_metallib_start:"                    >> ${METALLIB_EMBED_ASM}
-            COMMAND echo ".incbin \\\"${METALLIB_SOURCE_EMBED}\\\"" >> ${METALLIB_EMBED_ASM}
-            COMMAND echo ".globl _ggml_metallib_end"                >> ${METALLIB_EMBED_ASM}
-            COMMAND echo "_ggml_metallib_end:"                      >> ${METALLIB_EMBED_ASM}
-            DEPENDS ggml-metal.metal ggml-common.h
-            COMMENT "Generate assembly for embedded Metal library"
-        )
-
-        set(GGML_SOURCES_METAL ${GGML_SOURCES_METAL} ${METALLIB_EMBED_ASM})
-    else()
-        if (LLAMA_METAL_SHADER_DEBUG)
-            # custom command to do the following:
-            #   xcrun -sdk macosx metal    -fno-fast-math -c ggml-metal.metal -o ggml-metal.air
-            #   xcrun -sdk macosx metallib                   ggml-metal.air   -o default.metallib
-            #
-            # note: this is the only way I found to disable fast-math in Metal. it's ugly, but at least it works
-            #       disabling fast math is needed in order to pass tests/test-backend-ops
-            # note: adding -fno-inline fixes the tests when using MTL_SHADER_VALIDATION=1
-            # note: unfortunately, we have to call it default.metallib instead of ggml.metallib
-            #       ref: https://github.com/ggerganov/whisper.cpp/issues/1720
-            set(XC_FLAGS -fno-fast-math -fno-inline -g)
-        else()
-            set(XC_FLAGS -O3)
-        endif()
-
-        # Append macOS metal versioning flags
-        if (LLAMA_METAL_MACOSX_VERSION_MIN)
-            message(STATUS "Adding -mmacosx-version-min=${LLAMA_METAL_MACOSX_VERSION_MIN} flag to metal compilation")
-            list(APPEND XC_FLAGS -mmacosx-version-min=${LLAMA_METAL_MACOSX_VERSION_MIN})
-        endif()
-        if (LLAMA_METAL_STD)
-            message(STATUS "Adding -std=${LLAMA_METAL_STD} flag to metal compilation")
-            list(APPEND XC_FLAGS -std=${LLAMA_METAL_STD})
-        endif()
-
-        add_custom_command(
-            OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-            COMMAND xcrun -sdk macosx metal    ${XC_FLAGS} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.metal -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.air
-            COMMAND xcrun -sdk macosx metallib                ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.air   -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-            COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.air
-            COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
-            COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal.metal
-            DEPENDS ggml-metal.metal ggml-common.h
-            COMMENT "Compiling Metal kernels"
-            )
-
-        add_custom_target(
-            ggml-metal ALL
-            DEPENDS ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-            )
-    endif() # LLAMA_METAL_EMBED_LIBRARY
-
-    set(LLAMA_EXTRA_LIBS ${LLAMA_EXTRA_LIBS}
-        ${FOUNDATION_LIBRARY}
-        ${METAL_FRAMEWORK}
-        ${METALKIT_FRAMEWORK}
-        )
+if (LLAMA_USE_SYSTEM_GGML)
+    message(STATUS "Using system-provided libggml, skipping ggml build")
+    find_package(ggml REQUIRED)
+    add_library(ggml ALIAS ggml::ggml)
 endif()
 
 if (LLAMA_BLAS)
@@ -1007,11 +867,6 @@ if (CMAKE_OSX_ARCHITECTURES STREQUAL "arm64" OR CMAKE_GENERATOR_PLATFORM_LWR STR
         if (GGML_COMPILER_SUPPORT_DOTPROD)
             add_compile_definitions(__ARM_FEATURE_DOTPROD)
         endif ()
-        check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmlaq_f32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
-        if (GGML_COMPILER_SUPPORT_MATMUL_INT8)
-            add_compile_definitions(__ARM_FEATURE_MATMUL_INT8)
-        endif ()
-
         check_cxx_source_compiles("#include <arm_neon.h>\nint main() { float16_t _a; float16x8_t _s = vdupq_n_f16(_a); return 0; }" GGML_COMPILER_SUPPORT_FP16_VECTOR_ARITHMETIC)
         if (GGML_COMPILER_SUPPORT_FP16_VECTOR_ARITHMETIC)
             add_compile_definitions(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
@@ -1126,122 +981,33 @@ if (MINGW)
 endif()
 
 #
-# POSIX conformance
+# build the library
 #
 
-# clock_gettime came in POSIX.1b (1993)
-# CLOCK_MONOTONIC came in POSIX.1-2001 / SUSv3 as optional
-# posix_memalign came in POSIX.1-2001 / SUSv3
-# M_PI is an XSI extension since POSIX.1-2001 / SUSv3, came in XPG1 (1985)
-add_compile_definitions(_XOPEN_SOURCE=600)
-
-# Somehow in OpenBSD whenever POSIX conformance is specified
-# some string functions rely on locale_t availability,
-# which was introduced in POSIX.1-2008, forcing us to go higher
-if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
-    remove_definitions(-D_XOPEN_SOURCE=600)
-    add_compile_definitions(_XOPEN_SOURCE=700)
-endif()
-
-# Data types, macros and functions related to controlling CPU affinity and
-# some memory allocation are available on Linux through GNU extensions in libc
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-    add_compile_definitions(_GNU_SOURCE)
-endif()
-
-# RLIMIT_MEMLOCK came in BSD, is not specified in POSIX.1,
-# and on macOS its availability depends on enabling Darwin extensions
-# similarly on DragonFly, enabling BSD extensions is necessary
-if (
-    CMAKE_SYSTEM_NAME MATCHES "Darwin" OR
-    CMAKE_SYSTEM_NAME MATCHES "iOS" OR
-    CMAKE_SYSTEM_NAME MATCHES "tvOS" OR
-    CMAKE_SYSTEM_NAME MATCHES "DragonFly"
-)
-    add_compile_definitions(_DARWIN_C_SOURCE)
-endif()
-
-# alloca is a non-standard interface that is not visible on BSDs when
-# POSIX conformance is specified, but not all of them provide a clean way
-# to enable it in such cases
-if (CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
-    add_compile_definitions(__BSD_VISIBLE)
-endif()
-if (CMAKE_SYSTEM_NAME MATCHES "NetBSD")
-    add_compile_definitions(_NETBSD_SOURCE)
-endif()
-if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
-    add_compile_definitions(_BSD_SOURCE)
-endif()
+add_subdirectory(src)
 
 #
-# libraries
+# utils, programs, examples and tests
 #
 
-# ggml
-
-add_library(ggml OBJECT
-            ggml.c
-            ggml.h
-            ggml-alloc.c
-            ggml-alloc.h
-            ggml-backend.c
-            ggml-backend.h
-            ggml-quants.c
-            ggml-quants.h
-            ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
-            ${GGML_SOURCES_OPENCL}    ${GGML_HEADERS_OPENCL}
-            ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
-            ${GGML_SOURCES_MPI}       ${GGML_HEADERS_MPI}
-            ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
-            ${GGML_SOURCES_EXTRA}     ${GGML_HEADERS_EXTRA}
-            ${GGML_SOURCES_SYCL}      ${GGML_HEADERS_SYCL}
-            ${GGML_SOURCES_KOMPUTE}   ${GGML_HEADERS_KOMPUTE}
-            ${GGML_SOURCES_VULKAN}    ${GGML_HEADERS_VULKAN}
-            ${GGML_SOURCES_ROCM}      ${GGML_HEADERS_ROCM}
-            ${GGML_SOURCES_LLAMAFILE} ${GGML_HEADERS_LLAMAFILE}
-            )
-
-target_include_directories(ggml PUBLIC . ${LLAMA_EXTRA_INCLUDES})
-target_compile_features   (ggml PUBLIC c_std_11) # don't bump
-
-target_link_libraries(ggml PUBLIC Threads::Threads ${LLAMA_EXTRA_LIBS})
-
-add_library(ggml_static STATIC $<TARGET_OBJECTS:ggml>)
-
-if (BUILD_SHARED_LIBS)
-    set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    add_library(ggml_shared SHARED $<TARGET_OBJECTS:ggml>)
-    target_link_libraries(ggml_shared PUBLIC Threads::Threads ${LLAMA_EXTRA_LIBS})
-    install(TARGETS ggml_shared LIBRARY)
+if (NOT LLAMA_BUILD_COMMON)
+    message(STATUS "LLAMA_BUILD_COMMON is OFF, disabling LLAMA_CURL")
+    set(LLAMA_CURL OFF)
 endif()
 
-# llama
-
-add_library(llama
-            llama.cpp
-            llama.h
-            unicode.h
-            unicode.cpp
-            unicode-data.cpp
-            )
-
-target_include_directories(llama PUBLIC .)
-target_compile_features   (llama PUBLIC cxx_std_11) # don't bump
-
-target_link_libraries(llama PRIVATE
-    ggml
-    ${LLAMA_EXTRA_LIBS}
-    )
-
-if (BUILD_SHARED_LIBS)
-    set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(llama PRIVATE LLAMA_SHARED LLAMA_BUILD)
-    if (LLAMA_METAL)
-        set_target_properties(llama PROPERTIES RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ggml-metal.metal")
-    endif()
+if (LLAMA_BUILD_COMMON)
+    add_subdirectory(common)
 endif()
 
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
+    include(CTest)
+    add_subdirectory(tests)
+endif()
+
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+    add_subdirectory(pocs)
+endif()
 
 #
 # install
@@ -1250,46 +1016,43 @@ endif()
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
-set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR}
-    CACHE PATH "Location of header files")
-set(LLAMA_LIB_INSTALL_DIR ${CMAKE_INSTALL_LIBDIR}
-    CACHE PATH "Location of library files")
-set(LLAMA_BIN_INSTALL_DIR ${CMAKE_INSTALL_BINDIR}
-    CACHE PATH "Location of binary files")
-set(LLAMA_BUILD_NUMBER ${BUILD_NUMBER})
-set(LLAMA_BUILD_COMMIT ${BUILD_COMMIT})
+set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
+set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
 set(LLAMA_INSTALL_VERSION 0.0.${BUILD_NUMBER})
-get_directory_property(LLAMA_TRANSIENT_DEFINES COMPILE_DEFINITIONS)
+
+set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
+set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
+set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location of binary  files")
+
+set(LLAMA_PUBLIC_HEADERS
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
+
+set_target_properties(llama
+    PROPERTIES
+        PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
+
+install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
 configure_package_config_file(
-        ${CMAKE_CURRENT_SOURCE_DIR}/scripts/LlamaConfig.cmake.in
-        ${CMAKE_CURRENT_BINARY_DIR}/LlamaConfig.cmake
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Llama
+        ${CMAKE_CURRENT_SOURCE_DIR}/cmake/llama-config.cmake.in
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama
     PATH_VARS LLAMA_INCLUDE_INSTALL_DIR
               LLAMA_LIB_INSTALL_DIR
               LLAMA_BIN_INSTALL_DIR )
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/LlamaConfigVersion.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
     VERSION ${LLAMA_INSTALL_VERSION}
     COMPATIBILITY SameMajorVersion)
 
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/LlamaConfig.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/LlamaConfigVersion.cmake
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Llama)
-
-set(GGML_PUBLIC_HEADERS "ggml.h" "ggml-alloc.h" "ggml-backend.h"
-        "${GGML_HEADERS_CUDA}"  "${GGML_HEADERS_OPENCL}"
-        "${GGML_HEADERS_METAL}" "${GGML_HEADERS_MPI}" "${GGML_HEADERS_EXTRA}")
-
-set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
-install(TARGETS ggml PUBLIC_HEADER)
-
-set_target_properties(llama PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/llama.h)
-install(TARGETS llama LIBRARY PUBLIC_HEADER)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 install(
-    FILES convert.py
+    FILES convert_hf_to_gguf.py
     PERMISSIONS
         OWNER_READ
         OWNER_WRITE
@@ -1299,35 +1062,27 @@ install(
         WORLD_READ
         WORLD_EXECUTE
     DESTINATION ${CMAKE_INSTALL_BINDIR})
-if (LLAMA_METAL)
-    install(
-        FILES ggml-metal.metal
-        PERMISSIONS
-            OWNER_READ
-            OWNER_WRITE
-            GROUP_READ
-            WORLD_READ
-        DESTINATION ${CMAKE_INSTALL_BINDIR})
-    if (NOT LLAMA_METAL_EMBED_LIBRARY)
-        install(
-            FILES ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/default.metallib
-            DESTINATION ${CMAKE_INSTALL_BINDIR}
-        )
-    endif()
-endif()
+
+configure_file(cmake/llama.pc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        @ONLY)
+
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
 #
-# programs, examples and tests
+# copy the license files
 #
 
-add_subdirectory(common)
+# Check if running in GitHub Actions
+if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+    message(STATUS "Running inside GitHub Actions - copying license files")
 
-if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
-    include(CTest)
-    add_subdirectory(tests)
-endif ()
-
-if (LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
+    # Copy all files from licenses/ to build/bin/
+    file(GLOB LICENSE_FILES "${CMAKE_SOURCE_DIR}/licenses/*")
+    foreach(LICENSE_FILE ${LICENSE_FILES})
+        get_filename_component(FILENAME ${LICENSE_FILE} NAME)
+        configure_file(${LICENSE_FILE} "${CMAKE_BINARY_DIR}/bin/${FILENAME}" COPYONLY)
+    endforeach()
 endif()
+

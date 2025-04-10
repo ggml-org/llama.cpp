@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -59,10 +61,11 @@ def main(args_in: list[str] | None = None) -> None:
         sys.exit(1)
 
     # start the benchmark
+    iterations = 0
+    data = {}
     try:
         start_benchmark(args)
 
-        iterations = 0
         with open("results.github.env", 'w') as github_env:
             # parse output
             with open('k6-results.json', 'r') as bench_results:
@@ -129,7 +132,7 @@ def main(args_in: list[str] | None = None) -> None:
                 timestamps, metric_values = zip(*values)
                 metric_values = [float(value) for value in metric_values]
                 prometheus_metrics[metric] = metric_values
-                timestamps_dt = [datetime.fromtimestamp(int(ts)) for ts in timestamps]
+                timestamps_dt = [str(datetime.fromtimestamp(int(ts))) for ts in timestamps]
                 plt.figure(figsize=(16, 10), dpi=80)
                 plt.plot(timestamps_dt, metric_values, label=metric)
                 plt.xticks(rotation=0, fontsize=14, horizontalalignment='center', alpha=.7)
@@ -156,7 +159,7 @@ def main(args_in: list[str] | None = None) -> None:
                 plt.close()
 
                 # Mermaid format in case images upload failed
-                with (open(f"{metric}.mermaid", 'w') as mermaid_f):
+                with open(f"{metric}.mermaid", 'w') as mermaid_f:
                     mermaid = (
                     f"""---
 config:
@@ -186,12 +189,12 @@ xychart-beta
         "pp": {
             "p95": round(data['metrics']["llamacpp_prompt_processing_second"]["p(95)"], 2),
             "avg": round(data['metrics']["llamacpp_prompt_processing_second"]["avg"], 2),
-            "0": round(mean(prometheus_metrics['prompt_tokens_seconds']), 2),
+            "0": round(mean(prometheus_metrics['prompt_tokens_seconds']), 2) if 'prompt_tokens_seconds' in prometheus_metrics else 0,
         },
         "tg": {
             "p95": round(data['metrics']["llamacpp_tokens_second"]["p(95)"], 2),
             "avg": round(data['metrics']["llamacpp_tokens_second"]["avg"], 2),
-            "0": round(mean(prometheus_metrics['predicted_tokens_seconds']), 2),
+            "0": round(mean(prometheus_metrics['predicted_tokens_seconds']), 2) if 'predicted_tokens_seconds' in prometheus_metrics else 0,
         },
     }
     with open("results.github.env", 'a') as github_env:
@@ -211,11 +214,14 @@ def start_benchmark(args):
     k6_args = [
         'run', args.scenario,
         '--no-color',
+        '--no-connection-reuse',
+        '--no-vu-connection-reuse',
     ]
     k6_args.extend(['--duration', args.duration])
     k6_args.extend(['--iterations', args.n_prompts])
     k6_args.extend(['--vus', args.parallel])
     k6_args.extend(['--summary-export', 'k6-results.json'])
+    k6_args.extend(['--out', 'csv=k6-results.csv'])
     args = f"SERVER_BENCH_N_PROMPTS={args.n_prompts} SERVER_BENCH_MAX_PROMPT_TOKENS={args.max_prompt_tokens} SERVER_BENCH_MAX_CONTEXT={args.max_tokens} "
     args = args + ' '.join([str(arg) for arg in [k6_path, *k6_args]])
     print(f"bench: starting k6 with: {args}")
@@ -228,7 +234,7 @@ def start_server(args):
     server_process = start_server_background(args)
 
     attempts = 0
-    max_attempts = 20
+    max_attempts = 600
     if 'GITHUB_ACTIONS' in os.environ:
         max_attempts *= 2
 
@@ -239,24 +245,27 @@ def start_server(args):
         print(f"bench:     waiting for server to start ...")
         time.sleep(0.5)
 
-    print("bench: server started.")
+    attempts = 0
+    while not is_server_ready(args.host, args.port):
+        attempts += 1
+        if attempts > max_attempts:
+            assert False, "server not ready"
+        print(f"bench:     waiting for server to be ready ...")
+        time.sleep(0.5)
+
+    print("bench: server started and ready.")
     return server_process
 
 
 def start_server_background(args):
     # Start the server
-    server_path = '../../../build/bin/server'
+    server_path = '../../../build/bin/llama-server'
     if 'LLAMA_SERVER_BIN_PATH' in os.environ:
         server_path = os.environ['LLAMA_SERVER_BIN_PATH']
     server_args = [
         '--host', args.host,
         '--port', args.port,
     ]
-    model_file = args.model_path_prefix + os.path.sep + args.hf_file
-    model_dir  = os.path.dirname(model_file)
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    server_args.extend(['--model', model_file])
     server_args.extend(['--hf-repo', args.hf_repo])
     server_args.extend(['--hf-file', args.hf_file])
     server_args.extend(['--n-gpu-layers', args.n_gpu_layers])
@@ -269,7 +278,6 @@ def start_server_background(args):
     server_args.append('--cont-batching')
     server_args.append('--metrics')
     server_args.append('--flash-attn')
-    server_args.extend(['--log-format', "text"])
     args = [str(arg) for arg in [server_path, *server_args]]
     print(f"bench: starting server with: {' '.join(args)}")
     pkwargs = {
@@ -278,7 +286,7 @@ def start_server_background(args):
     }
     server_process = subprocess.Popen(
         args,
-        **pkwargs)
+        **pkwargs)  # pyright: ignore[reportArgumentType, reportCallIssue]
 
     def server_log(in_stream, out_stream):
         for line in iter(in_stream.readline, b''):
@@ -299,6 +307,12 @@ def is_server_listening(server_fqdn, server_port):
         if _is_server_listening:
             print(f"server is listening on {server_fqdn}:{server_port}...")
         return _is_server_listening
+
+
+def is_server_ready(server_fqdn, server_port):
+    url = f"http://{server_fqdn}:{server_port}/health"
+    response = requests.get(url)
+    return response.status_code == 200
 
 
 def escape_metric_name(metric_name):

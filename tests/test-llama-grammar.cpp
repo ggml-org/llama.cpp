@@ -2,14 +2,15 @@
 #undef NDEBUG
 #endif
 
-#include "llama.cpp" // TODO: not great
-#include "grammar-parser.h"
+#include "llama.h"
+#include "llama-grammar.h"
 
 #include <cassert>
+#include <stdexcept>
 
 int main()
 {
-    grammar_parser::parse_state parsed_grammar;
+    llama_grammar_parser parsed_grammar;
 
     std::vector<std::pair<std::string, uint32_t>> expected = {
         {"expr", 2},
@@ -112,10 +113,12 @@ int main()
         }
     }
 
-    llama_grammar *grammar = NULL;
     std::vector<const llama_grammar_element *> grammar_rules(parsed_grammar.c_rules());
-    grammar = llama_grammar_init(
-        grammar_rules.data(), grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
+
+    llama_grammar * grammar = llama_grammar_init_impl(nullptr, grammar_rules.data(), grammar_rules.size(), parsed_grammar.symbol_ids.at("root"));
+    if (grammar == nullptr) {
+        throw std::runtime_error("Failed to initialize llama_grammar");
+    }
 
     std::vector<std::vector<llama_grammar_element>> expected_stacks = {
         {
@@ -168,13 +171,13 @@ int main()
         }};
 
     auto index = 0;
-    for (auto stack : grammar->stacks)
+    for (const llama_grammar_stack & stack : llama_grammar_get_stacks(grammar))
     {
         // compare stack to expected_stack
         for (uint32_t i = 0; i < stack.size(); i++)
         {
-            auto element = stack[i];
-            auto expected_element = expected_stacks[index][i];
+            const llama_grammar_element * element = stack[i];
+            const llama_grammar_element & expected_element = expected_stacks[index][i];
 
             // pretty print error message before asserting
             if (expected_element.type != element->type || expected_element.value != element->value)
@@ -370,13 +373,13 @@ int main()
         },
     };
 
-    std::vector<llama_grammar_candidate> rejects = llama_grammar_reject_candidates_for_stack(grammar->rules, grammar->stacks[0], next_candidates);
+    std::vector<llama_grammar_candidate> rejects = llama_grammar_reject_candidates_for_stack(llama_grammar_get_rules(grammar), llama_grammar_get_stacks(grammar)[0], next_candidates);
 
     std::vector<std::vector<llama_grammar_candidate>> all_rejects;
 
-    for (std::size_t count = 0; count < grammar->stacks.size(); ++count)
+    for (std::size_t count = 0; count < llama_grammar_get_stacks(grammar).size(); ++count)
     {
-        rejects = llama_grammar_reject_candidates_for_stack(grammar->rules, grammar->stacks[count], next_candidates);
+        rejects = llama_grammar_reject_candidates_for_stack(llama_grammar_get_rules(grammar), llama_grammar_get_stacks(grammar)[count], next_candidates);
         all_rejects.push_back(rejects);
     }
 
@@ -397,6 +400,8 @@ int main()
         delete[] candidate.code_points;
         candidate.code_points = nullptr;
     }
-    delete grammar;
+
+    llama_grammar_free_impl(grammar);
+
     return 0;
 }

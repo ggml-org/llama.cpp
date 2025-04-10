@@ -6,7 +6,7 @@ It simply prints to the console all operations and tensor data.
 Usage:
 
 ```shell
-eval-callback \
+llama-eval-callback \
   --hf-repo ggml-org/models \
   --hf-file phi-2/ggml-model-q4_0.gguf \
   --model phi-2-q4_0.gguf \

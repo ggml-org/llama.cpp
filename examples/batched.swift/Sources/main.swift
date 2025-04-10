@@ -23,13 +23,17 @@ defer {
 }
 
 let model_params = llama_model_default_params()
-guard let model = llama_load_model_from_file(modelPath.cString(using: .utf8), model_params) else {
+guard let model = llama_model_load_from_file(modelPath.cString(using: .utf8), model_params) else {
     print("Failed to load model")
     exit(1)
 }
-
 defer {
-    llama_free_model(model)
+    llama_model_free(model)
+}
+
+guard let vocab = llama_model_get_vocab(model) else {
+    print("Failed to get vocab")
+    exit(1)
 }
 
 var tokens = tokenize(text: prompt, add_bos: true)
@@ -37,21 +41,35 @@ var tokens = tokenize(text: prompt, add_bos: true)
 let n_kv_req = UInt32(tokens.count) + UInt32((n_len - Int(tokens.count)) * n_parallel)
 
 var context_params = llama_context_default_params()
-context_params.seed = 1234
 context_params.n_ctx = n_kv_req
 context_params.n_batch = UInt32(max(n_len, n_parallel))
 context_params.n_threads = 8
 context_params.n_threads_batch = 8
 
-let context = llama_new_context_with_model(model, context_params)
+let context = llama_init_from_model(model, context_params)
 guard context != nil else {
     print("Failed to initialize context")
     exit(1)
 }
-
 defer {
     llama_free(context)
 }
+
+var sparams = llama_sampler_chain_default_params()
+
+let smpl = llama_sampler_chain_init(sparams)
+guard smpl != nil else {
+    print("Failed to initialize sampling")
+    exit(1)
+}
+defer {
+    llama_sampler_free(smpl)
+}
+
+llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
+llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.9, 1));
+llama_sampler_chain_add(smpl, llama_sampler_init_temp (0.4));
+llama_sampler_chain_add(smpl, llama_sampler_init_dist (1234));
 
 let n_ctx = llama_n_ctx(context)
 
@@ -98,7 +116,7 @@ if llama_decode(context, batch) != 0 {
 }
 
 for i in 1 ..< n_parallel {
-    llama_kv_cache_seq_cp(context, 0, Int32(i), 0, batch.n_tokens)
+    llama_kv_self_seq_cp(context, 0, Int32(i), 0, batch.n_tokens)
 }
 
 if n_parallel > 1 {
@@ -125,35 +143,10 @@ while n_cur <= n_len {
             continue
         }
 
-        var n_vocab = llama_n_vocab(model)
-        var logits = llama_get_logits_ith(context, i_batch[i])
-
-        var candidates: [llama_token_data] = .init(repeating: llama_token_data(), count: Int(n_vocab))
-
-        for token_id in 0 ..< n_vocab {
-            candidates.append(llama_token_data(id: token_id, logit: logits![Int(token_id)], p: 0.0))
-        }
-
-        var candidates_p: llama_token_data_array = .init(
-            data: &candidates,
-            size: candidates.count,
-            sorted: false
-        )
-
-        let top_k: Int32 = 40
-        let top_p: Float = 0.9
-        let temp: Float = 0.4
-
-        llama_sample_top_k(context, &candidates_p, top_k, 1)
-        llama_sample_top_p(context, &candidates_p, top_p, 1)
-        llama_sample_temp(context, &candidates_p, temp)
-
-        let new_token_id = llama_sample_token(context, &candidates_p)
-
-        // const llama_token new_token_id = llama_sample_token_greedy(ctx, &candidates_p);
+        let new_token_id = llama_sampler_sample(smpl, context, i_batch[i])
 
         // is it an end of stream? -> mark the stream as finished
-        if llama_token_is_eog(model, new_token_id) || n_cur == n_len {
+        if llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len {
             i_batch[i] = -1
             // print("")
             if n_parallel > 1 {
@@ -210,15 +203,16 @@ if n_parallel > 1 {
 
 let t_main_end = ggml_time_us()
 
-print("decoded \(n_decode) tokens in \(String(format: "%.2f", Double(t_main_end - t_main_start) / 1_000_000.0)) s, speed: \(String(format: "%.2f", Double(n_decode) / (Double(t_main_end - t_main_start) / 1_000_000.0))) t/s\n")
+print("decoded \(n_decode) tokens in \(String(format: "%.2f", Double(t_main_end - t_main_start) / 1_000_000.0)) s, speed: \(String(format: "%.2f", Double(n_decode) / (Double(t_main_end - t_main_start) / 1_000_000.0))) t/s\n\n")
 
-llama_print_timings(context)
+llama_perf_sampler_print(smpl)
+llama_perf_context_print(context)
 
 private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
     let utf8Count = text.utf8.count
     let n_tokens = utf8Count + (add_bos ? 1 : 0)
     let tokens = UnsafeMutablePointer<llama_token>.allocate(capacity: n_tokens)
-    let tokenCount = llama_tokenize(model, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, /*special tokens*/ false)
+    let tokenCount = llama_tokenize(vocab, text, Int32(utf8Count), tokens, Int32(n_tokens), add_bos, /*special tokens*/ false)
     var swiftTokens: [llama_token] = []
     for i in 0 ..< tokenCount {
         swiftTokens.append(tokens[Int(i)])
@@ -229,15 +223,16 @@ private func tokenize(text: String, add_bos: Bool) -> [llama_token] {
 
 private func token_to_piece(token: llama_token, buffer: inout [CChar]) -> String? {
     var result = [CChar](repeating: 0, count: 8)
-    let nTokens = llama_token_to_piece(model, token, &result, Int32(result.count), false)
+    let nTokens = llama_token_to_piece(vocab, token, &result, Int32(result.count), 0, false)
     if nTokens < 0 {
         let actualTokensCount = -Int(nTokens)
         result = .init(repeating: 0, count: actualTokensCount)
         let check = llama_token_to_piece(
-            model,
+            vocab,
             token,
             &result,
             Int32(result.count),
+            0,
             false
         )
         assert(check == actualTokensCount)

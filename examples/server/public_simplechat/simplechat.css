@@ -1,0 +1,79 @@
+/**
+ * the styling of the simplechat web frontend
+ * by Humans for All
+ */
+
+#fullbody {
+    height: 98vh;
+}
+
+.heading {
+    background-color: lightgray;
+}
+
+.session-selected {
+    background-color: lightblue;
+}
+
+.role-system {
+    background-color: lightblue;
+}
+.role-user {
+    background-color: lightgray;
+}
+.role-trim {
+    background-color: lightpink;
+}
+
+.gridx2 {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    border-bottom-style: dotted;
+    border-bottom-width: thin;
+    border-bottom-color: lightblue;
+}
+
+.flex-grow {
+    flex-grow: 1;
+}
+.float-right {
+    float: right;
+}
+
+#chat-div {
+    overflow: scroll;
+    flex-grow: 1;
+    flex-shrink: 1;
+    min-height: 40vh;
+}
+button {
+    min-width: 8vw;
+}
+
+.sameline {
+    display: flex;
+    flex-direction: row;
+}
+.samecolumn {
+    display: flex;
+    flex-direction: column;
+}
+
+.ul1 {
+    padding-inline-start: 2vw;
+}
+.ul2 {
+    padding-inline-start: 2vw;
+}
+
+* {
+    margin: 0.6vmin;
+}
+
+@media print {
+
+    #fullbody {
+        height: auto;
+    }
+
+}

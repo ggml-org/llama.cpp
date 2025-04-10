@@ -10,19 +10,27 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/**', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m']
+    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m']
+    paths: ['.github/workflows/build.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
 
+# Fine-grant permission
+# https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
+permissions:
+  contents: write # for creating release
+
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
 
 jobs:
   macOS-latest-cmake-arm64:
@@ -35,20 +43,30 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
         run: |
           brew update
+          brew install curl
 
       - name: Build
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL_EMBED_LIBRARY=ON -DLLAMA_CURL=ON ..
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -84,7 +102,7 @@ jobs:
           name: llama-bin-macos-arm64.zip
 
   macOS-latest-cmake-x64:
-    runs-on: macos-latest
+    runs-on: macos-13
 
     steps:
       - name: Clone
@@ -93,22 +111,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-x64
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         continue-on-error: true
         run: |
           brew update
+          brew install curl
 
       - name: Build
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
-          # https://github.com/ggerganov/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL=OFF -DLLAMA_CURL=ON ..
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+          # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_METAL=OFF \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Test
         id: cmake_test
@@ -143,68 +170,16 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip
           name: llama-bin-macos-x64.zip
 
-  ubuntu-focal-make:
-    runs-on: ubuntu-20.04
-    env:
-      LLAMA_NODE_AVAILABLE: true
-      LLAMA_PYTHON_AVAILABLE: true
+  ubuntu-cpu-cmake:
+    strategy:
+      matrix:
+        include:
+          - build: 'x64'
+            os: ubuntu-22.04
+          - build: 'arm64'
+            os: ubuntu-22.04-arm
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential gcc-8
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Build
-        id: make_build
-        env:
-            LLAMA_FATAL_WARNINGS: 1
-        run: |
-          CC=gcc-8 make -j $(nproc)
-
-      - name: Test
-        id: make_test
-        run: |
-          CC=gcc-8 make tests -j $(nproc)
-          make test -j $(nproc)
-
-  ubuntu-focal-make-curl:
-    runs-on: ubuntu-20.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install build-essential gcc-8 libcurl4-openssl-dev
-
-      - name: Build
-        id: make_build
-        env:
-          LLAMA_FATAL_WARNINGS: 1
-          LLAMA_CURL: 1
-        run: |
-          CC=gcc-8 make -j $(nproc)
-
-  ubuntu-latest-cmake:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Clone
@@ -212,6 +187,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-cpu-cmake
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -222,10 +203,10 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_CURL=ON
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -241,8 +222,8 @@ jobs:
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
           echo "Fetch llama2c model"
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
-          ./bin/convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/main -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
+          ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
       - name: Determine tag name
         id: tag
@@ -262,58 +243,71 @@ jobs:
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           cp LICENSE ./build/bin/
-          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.zip ./build/bin/*
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-x64.zip
-          name: llama-bin-ubuntu-x64.zip
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip
+          name: llama-bin-ubuntu-${{ matrix.build }}.zip
 
-#  ubuntu-latest-cmake-sanitizer:
-#    runs-on: ubuntu-latest
-#
-#    continue-on-error: true
-#
-#    strategy:
-#      matrix:
-#        sanitizer: [ADDRESS, THREAD, UNDEFINED]
-#        build_type: [Debug, Release]
-#
-#    steps:
-#      - name: Clone
-#        id: checkout
-#        uses: actions/checkout@v4
-#
-#      - name: Dependencies
-#        id: depends
-#        run: |
-#          sudo apt-get update
-#          sudo apt-get install build-essential
-#
-#      - name: Build
-#        id: cmake_build
-#        run: |
-#          mkdir build
-#          cd build
-#          cmake .. -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-#          cmake --build . --config ${{ matrix.build_type }} -j $(nproc)
-#
-#      - name: Test
-#        id: cmake_test
-#        run: |
-#          cd build
-#          ctest -L main --verbose --timeout 900
-
-  ubuntu-latest-cmake-mpi:
+  ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
 
     continue-on-error: true
 
     strategy:
       matrix:
-        mpi_library: [mpich, libopenmpi-dev]
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        build_type: [Debug]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential libcurl4-openssl-dev
+
+      - name: Build
+        id: cmake_build
+        if: ${{ matrix.sanitizer != 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Build (no OpenMP)
+        id: cmake_build_no_openmp
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=OFF
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+  ubuntu-latest-llguidance:
+    runs-on: ubuntu-latest
 
     steps:
       - name: Clone
@@ -324,21 +318,23 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential ${{ matrix.mpi_library }}
+          sudo apt-get install build-essential libcurl4-openssl-dev
 
       - name: Build
         id: cmake_build
         run: |
           mkdir build
           cd build
-          cmake -DLLAMA_MPI=ON ..
+          cmake .. \
+            -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_LLGUIDANCE=ON
           cmake --build . --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose
+          ctest -L main --verbose --timeout 900
 
   ubuntu-latest-cmake-rpc:
     runs-on: ubuntu-latest
@@ -350,19 +346,24 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-cmake-rpc
+          evict-old-files: 1d
+
       - name: Dependencies
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential
+          sudo apt-get install build-essential libcurl4-openssl-dev
 
       - name: Build
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake -DLLAMA_RPC=ON ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_RPC=ON
+          cmake --build build --config Release -j $(nproc)
 
       - name: Test
         id: cmake_test
@@ -377,20 +378,131 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-vulkan
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DGGML_VULKAN=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 2700
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          cp LICENSE ./build/bin/
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip
+          name: llama-bin-ubuntu-vulkan-x64.zip
+
+  ubuntu-22-cmake-hip:
+    runs-on: ubuntu-22.04
+    container: rocm/dev-ubuntu-22.04:6.0.2
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
 
       - name: Dependencies
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libvulkan-dev
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
 
-      - name: Build
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-hip
+          evict-old-files: 1d
+
+      - name: Build with native CMake HIP support
         id: cmake_build
         run: |
-          mkdir build
-          cd build
-          cmake -DLLAMA_VULKAN=ON ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGGML_HIP=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Build with legacy HIP support
+        id: cmake_build_legacy_hip
+        run: |
+          cmake -B build2 -S . \
+            -DCMAKE_C_COMPILER=hipcc \
+            -DCMAKE_CXX_COMPILER=hipcc \
+            -DGGML_HIP_ROCWMMA_FATTN=ON \
+            -DGGML_HIP=ON
+          cmake --build build2 --config Release -j $(nproc)
+
+  ubuntu-22-cmake-musa:
+    runs-on: ubuntu-22.04
+    container: mthreads/musa:rc3.1.1-devel-ubuntu22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        id: depends
+        run: |
+          apt-get update
+          apt-get install -y build-essential git cmake libcurl4-openssl-dev
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-musa
+          evict-old-files: 1d
+
+      - name: Build with native CMake MUSA support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DGGML_MUSA=ON
+          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl:
     runs-on: ubuntu-22.04
@@ -398,7 +510,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: add oneAPI to apt
         shell: bash
@@ -413,7 +525,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libcurl4-openssl-dev
 
       - name: install oneAPI MKL library
         shell: bash
@@ -424,14 +536,21 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-sycl
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
           source /opt/intel/oneapi/setvars.sh
-          mkdir build
-          cd build
-          cmake -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx
+          cmake --build build --config Release -j $(nproc)
 
   ubuntu-22-cmake-sycl-fp16:
     runs-on: ubuntu-22.04
@@ -439,7 +558,7 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: add oneAPI to apt
         shell: bash
@@ -454,7 +573,7 @@ jobs:
         shell: bash
         run: |
           sudo apt update
-          sudo apt install intel-oneapi-compiler-dpcpp-cpp
+          sudo apt install intel-oneapi-compiler-dpcpp-cpp libcurl4-openssl-dev
 
       - name: install oneAPI MKL library
         shell: bash
@@ -465,77 +584,25 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-sycl-fp16
+          evict-old-files: 1d
+
       - name: Build
         id: cmake_build
         run: |
           source /opt/intel/oneapi/setvars.sh
-          mkdir build
-          cd build
-          cmake -DLLAMA_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_SYCL_F16=ON ..
-          cmake --build . --config Release -j $(nproc)
+          cmake -B build \
+            -DGGML_SYCL=ON \
+            -DCMAKE_C_COMPILER=icx \
+            -DCMAKE_CXX_COMPILER=icpx \
+            -DGGML_SYCL_F16=ON
+          cmake --build build --config Release -j $(nproc)
 
-  # TODO: build with LLAMA_NO_METAL because test-backend-ops fail on "Apple Paravirtual device" and I don't know
-  #       how to debug it.
-  #       ref: https://github.com/ggerganov/llama.cpp/actions/runs/7131777249/job/19420981052#step:5:1124
-  macOS-latest-make:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-
-      - name: Build
-        id: make_build
-        env:
-            LLAMA_FATAL_WARNINGS: 1
-        run: |
-          LLAMA_NO_METAL=1 make -j $(sysctl -n hw.logicalcpu)
-
-      - name: Test
-        id: make_test
-        run: |
-          LLAMA_NO_METAL=1 make tests -j $(sysctl -n hw.logicalcpu)
-          LLAMA_NO_METAL=1 make test  -j $(sysctl -n hw.logicalcpu)
-
-  # TODO: build with LLAMA_METAL=OFF because test-backend-ops fail on "Apple Paravirtual device" and I don't know
-  #       how to debug it.
-  #       ref: https://github.com/ggerganov/llama.cpp/actions/runs/7132125951/job/19422043567?pr=4359#step:5:6584
-  #       would be great if we fix these
-  macOS-latest-cmake:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          mkdir build
-          cd build
-          cmake -DLLAMA_FATAL_WARNINGS=ON -DLLAMA_METAL=OFF ..
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: Test
-        id: cmake_test
-        run: |
-          cd build
-          ctest -L main --verbose --timeout 900
+  build-linux-cross:
+    uses: ./.github/workflows/build-linux-cross.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest
@@ -543,7 +610,13 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-ios
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -555,16 +628,17 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
-            -DLLAMA_METAL_EMBED_LIBRARY=ON \
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-cmake-tvos:
     runs-on: macos-latest
@@ -572,7 +646,13 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-tvos
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -584,16 +664,47 @@ jobs:
         id: cmake_build
         run: |
           sysctl -a
-          mkdir build
-          cd build
-          cmake -G Xcode .. \
-            -DLLAMA_METAL_EMBED_LIBRARY=ON \
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=tvOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0
-          cmake --build . --config Release -j $(sysctl -n hw.logicalcpu)
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
+  macOS-latest-cmake-visionos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_COMMON=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=visionOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=1.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
   macOS-latest-swift:
     runs-on: macos-latest
@@ -605,7 +716,13 @@ jobs:
     steps:
       - name: Clone
         id: checkout
-        uses: actions/checkout@v1
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-swift
+          evict-old-files: 1d
 
       - name: Dependencies
         id: depends
@@ -613,15 +730,24 @@ jobs:
         run: |
           brew update
 
+      - name: Build llama.cpp with CMake
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
       - name: xcodebuild for swift package
         id: xcodebuild
         run: |
-          xcodebuild -scheme llama -destination "${{ matrix.destination }}"
-
-      - name: Build Swift Example
-        id: make_build_swift_example
-        run: |
-            make swift
+          ./build-xcframework.sh
 
   windows-msys2:
     runs-on: windows-latest
@@ -637,6 +763,13 @@ jobs:
       - name: Clone
         uses: actions/checkout@v4
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-msys2
+          variant: sccache
+          evict-old-files: 1d
+
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
         with:
@@ -644,24 +777,10 @@ jobs:
           msystem: ${{matrix.sys}}
           install: >-
             base-devel
+            git
             mingw-w64-${{matrix.env}}-toolchain
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-openblas
-
-      - name: Build using make
-        shell: msys2 {0}
-        run: |
-            make -j $(nproc)
-
-      - name: Clean after building using make
-        shell: msys2 {0}
-        run: |
-            make clean
-
-      - name: Build using make w/ OpenBLAS
-        shell: msys2 {0}
-        run: |
-            make LLAMA_OPENBLAS=1 -j $(nproc)
 
       - name: Build using CMake
         shell: msys2 {0}
@@ -677,7 +796,7 @@ jobs:
       - name: Build using CMake w/ OpenBLAS
         shell: msys2 {0}
         run: |
-            cmake -B build -DLLAMA_BLAS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS
+            cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS
             cmake --build build --config ${{ matrix.build }} -j $(nproc)
 
   windows-latest-cmake:
@@ -685,36 +804,32 @@ jobs:
 
     env:
       OPENBLAS_VERSION: 0.3.23
-      OPENCL_VERSION: 2023.04.17
-      CLBLAST_VERSION: 1.6.0
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.3.261.1
+      VULKAN_VERSION: 1.4.309.0
 
     strategy:
       matrix:
         include:
-          - build: 'rpc-x64'
+          - build: 'rpc'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_RPC=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'noavx-x64'
+          - build: 'noavx'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX=OFF -DLLAMA_AVX2=OFF -DLLAMA_FMA=OFF -DBUILD_SHARED_LIBS=ON'
-          - build: 'avx2-x64'
+          - build: 'avx2'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'avx-x64'
+          - build: 'avx'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX2=OFF -DBUILD_SHARED_LIBS=ON'
-          - build: 'avx512-x64'
+          - build: 'avx512'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_AVX512=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'clblast-x64'
+          - build: 'clblast'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_CLBLAST=ON -DBUILD_SHARED_LIBS=ON -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/clblast"'
-          - build: 'openblas-x64'
+          - build: 'openblas'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_BLAS=ON -DBUILD_SHARED_LIBS=ON -DLLAMA_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
-          - build: 'kompute-x64'
+          - build: 'kompute'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'vulkan-x64'
+          - build: 'vulkan'
             defines: '-DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_VULKAN=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'llvm-arm64'
-            defines: '-G Ninja -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
-          - build: 'msvc-arm64'
-            defines: '-G Ninja -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc.cmake -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
+          - build: 'arm64'
+            defines: '-A ARM64 -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DBUILD_SHARED_LIBS=ON'
 
     steps:
       - name: Clone
@@ -722,6 +837,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-${{ matrix.build }}
+          variant: sccache
+          evict-old-files: 1d
 
       - name: Clone Kompute submodule
         id: clone_kompute
@@ -731,7 +853,7 @@ jobs:
 
       - name: Download OpenCL SDK
         id: get_opencl
-        if: ${{ matrix.build == 'clblast-x64' }}
+        if: ${{ matrix.build == 'clblast' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/opencl.zip -L "https://github.com/KhronosGroup/OpenCL-SDK/releases/download/v${env:OPENCL_VERSION}/OpenCL-SDK-v${env:OPENCL_VERSION}-Win-x64.zip"
           mkdir $env:RUNNER_TEMP/opencl
@@ -739,7 +861,7 @@ jobs:
 
       - name: Download CLBlast
         id: get_clblast
-        if: ${{ matrix.build == 'clblast-x64' }}
+        if: ${{ matrix.build == 'clblast' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/clblast.7z -L "https://github.com/CNugteren/CLBlast/releases/download/${env:CLBLAST_VERSION}/CLBlast-${env:CLBLAST_VERSION}-windows-x64.7z"
           curl.exe -o $env:RUNNER_TEMP/CLBlast.LICENSE.txt -L "https://github.com/CNugteren/CLBlast/raw/${env:CLBLAST_VERSION}/LICENSE"
@@ -772,23 +894,46 @@ jobs:
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
-      - name: Install Ninja
-        id: install_ninja
-        run: |
-          choco install ninja
-
       - name: Build
         id: cmake_build
         run: |
-          cmake -S . -B build ${{ matrix.defines }}
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+          mkdir build
+          cd build
+          cmake .. ${{ matrix.defines }}
+          cmake --build . --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Add clblast.dll
         id: add_clblast_dll
-        if: ${{ matrix.build == 'clblast-x64' }}
+        if: ${{ matrix.build == 'clblast' }}
         run: |
-          cp $env:RUNNER_TEMP/clblast/lib/clblast.dll ./build/bin/Release
-          cp $env:RUNNER_TEMP/CLBlast.LICENSE.txt ./build/bin/Release/CLBlast-${env:CLBLAST_VERSION}.txt
+          git clone https://github.com/KhronosGroup/OpenCL-Headers
+          cd OpenCL-Headers
+          cmake -B build `
+            -DBUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+            -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build --target install
+          git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader
+          cd OpenCL-ICD-Loader
+          cmake -B build-arm64-release `
+            -A arm64 `
+            -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
+          cmake --build build-arm64-release --target install --config release
+
+      - name: libCURL
+        id: get_libcurl
+        uses: ./.github/actions/windows-setup-curl
+
+      - name: Build
+        id: cmake_build
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          cmake -S . -B build ${{ matrix.defines }} `
+            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
@@ -813,7 +958,7 @@ jobs:
       - name: Test
         id: cmake_test
         # not all machines have native AVX-512
-        if: ${{ matrix.build != 'msvc-arm64' && matrix.build != 'llvm-arm64' && matrix.build != 'clblast-x64' && matrix.build != 'kompute-x64' && matrix.build != 'vulkan-x64' && (matrix.build != 'avx512-x64' || env.HAS_AVX512F == '1') }}
+        if: ${{ matrix.build != 'arm64' && matrix.build != 'clblast' && matrix.build != 'kompute' && matrix.build != 'vulkan' && (matrix.build != 'avx512' || env.HAS_AVX512F == '1') }}
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
@@ -828,6 +973,7 @@ jobs:
           7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
           $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
           cd build
+          $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
           & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
       - name: Determine tag name
@@ -846,23 +992,25 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           Copy-Item LICENSE .\build\bin\Release\llama.cpp.txt
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}.zip .\build\bin\Release\*
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}.zip
-          name: llama-bin-win-${{ matrix.build }}.zip
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-x64.zip
+          name: llama-bin-win-${{ matrix.build }}-x64.zip
 
   windows-latest-cmake-cuda:
     runs-on: windows-latest
 
     strategy:
       matrix:
-        cuda: ['12.2.0', '11.7.1']
+        cuda: ['12.4', '11.7']
         build: ['cuda']
 
     steps:
@@ -870,22 +1018,96 @@ jobs:
         id: checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+            fetch-depth: 0
 
-      - uses: Jimver/cuda-toolkit@v0.2.11
-        id: cuda-toolkit
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          cuda: ${{ matrix.cuda }}
-          method: 'network'
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "thrust", "visual_studio_integration"]'
+          key: ${{ github.job }}-${{ matrix.cuda }}-${{ matrix.build }}
+          variant: sccache
+          evict-old-files: 1d
+
+      - name: Install Cuda Toolkit 11.7
+        if: ${{ matrix.cuda == '11.7' }}
+        run: |
+          mkdir -p "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7"
+          choco install unzip -y
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-11.7.99-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-11.7.99-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-11.7.99-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-11.7.4.6-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-11.7.91-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-11.7.91-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvprof/windows-x86_64/cuda_nvprof-windows-x86_64-11.7.101-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-11.7.91-archive.zip"
+          unzip '*.zip' -d "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7"
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_cudart-windows-x86_64-11.7.99-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_nvcc-windows-x86_64-11.7.99-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_nvrtc-windows-x86_64-11.7.99-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\libcublas-windows-x86_64-11.7.4.6-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_nvtx-windows-x86_64-11.7.91-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\visual_studio_integration-windows-x86_64-11.7.91-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_nvprof-windows-x86_64-11.7.101-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\cuda_cccl-windows-x86_64-11.7.91-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" /E /I /H /Y
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V11_7=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.7" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Cuda Toolkit 12.4
+        if: ${{ matrix.cuda == '12.4' }}
+        run: |
+          mkdir -p "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
+          choco install unzip -y
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.4.131-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.4.5.8-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvprof/windows-x86_64/cuda_nvprof-windows-x86_64-12.4.127-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.4.127-archive.zip"
+          unzip '*.zip' -d "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4"
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_cudart-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_nvcc-windows-x86_64-12.4.131-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_nvrtc-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\libcublas-windows-x86_64-12.4.5.8-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_nvtx-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_profiler_api-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\visual_studio_integration-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_nvprof-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\cuda_cccl-windows-x86_64-12.4.127-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" /E /I /H /Y
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V12_4=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.4" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: libCURL
+        id: get_libcurl
+        uses: ./.github/actions/windows-setup-curl
 
       - name: Build
         id: cmake_build
+        shell: cmd
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          mkdir build
-          cd build
-          cmake .. -DLLAMA_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_CUDA=ON -DBUILD_SHARED_LIBS=ON
-          cmake --build . --config Release -j ${env:NUMBER_OF_PROCESSORS}
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_RPC=ON ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+          cmake --build build --config Release
 
       - name: Determine tag name
         id: tag
@@ -903,7 +1125,10 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
+          cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\libcurl-x64.dll
           7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-cu${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -914,10 +1139,12 @@ jobs:
           name: llama-bin-win-cu${{ matrix.cuda }}-x64.zip
 
       - name: Copy and pack Cuda runtime
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
-          echo "Cuda install location: ${{steps.cuda-toolkit.outputs.CUDA_PATH}}"
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
           $dst='.\build\bin\cudart\'
-          robocopy "${{steps.cuda-toolkit.outputs.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           7z a cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
@@ -935,8 +1162,8 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7dff44ba-e3af-4448-841c-0d616c8da6e7/w_BaseKit_p_2024.1.0.595_offline.exe
-      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b380d914-366b-4b77-a74a-05e3c38b3514/intel-oneapi-base-toolkit-2025.0.0.882_offline.exe
+      WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
     steps:
       - name: Clone
@@ -945,8 +1172,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-sycl
+          variant: sccache
+          evict-old-files: 1d
+
       - name: Install
-        run:  scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+        run:  |
+          scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
+
+      # TODO: add libcurl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
 
       - name: Build
         id: cmake_build
@@ -965,29 +1202,191 @@ jobs:
             echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Pack artifacts
+      - name: Build the release package
         id: pack_artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         run: |
           echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.4.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_sycl_blas.5.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_core.2.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.2.dll" ./build/bin
 
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/pi_win_proxy_loader.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/pi_level_zero.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl7.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_opencl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_loader.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_win_proxy_loader.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/sycl8.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/svml_dispmd.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libmmd.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/libiomp5md.dll" ./build/bin
+
+          cp "${{ env.ONEAPI_ROOT }}/dnnl/latest/bin/dnnl.dll" ./build/bin
+          cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
+
           echo "cp oneAPI running time dll files to ./build/bin done"
           7z a llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip ./build/bin/*
 
-      - name: Upload artifacts
+      - name: Upload the release package
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
+
+  windows-latest-cmake-hip:
+    if: ${{ github.event.inputs.create_release != 'true' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Clone rocWMMA repository
+        id: clone_rocwmma
+        run: |
+          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+
+      - name: Install
+        id: depends
+        run: |
+          $ErrorActionPreference = "Stop"
+          write-host "Downloading AMD HIP SDK Installer"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          write-host "Installing AMD HIP SDK"
+          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          write-host "Completed AMD HIP SDK installation"
+
+      - name: Verify ROCm
+        id: verify
+        run: |
+          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ${{ github.job }}
+          evict-old-files: 1d
+
+      - name: libCURL
+        id: get_libcurl
+        uses: ./.github/actions/windows-setup-curl
+
+      - name: Build
+        id: cmake_build
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
+          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DGGML_HIP=ON `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGGML_RPC=ON `
+            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+
+  # TODO: reuse windows-latest-cmake-hip instead of duplicating this job
+  windows-latest-cmake-hip-release:
+    if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        gpu_target: [gfx1100, gfx1101, gfx1030]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+
+      - name: Clone rocWMMA repository
+        id: clone_rocwmma
+        run: |
+          git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-hip-release
+          evict-old-files: 1d
+
+      - name: Install
+        id: depends
+        run: |
+          $ErrorActionPreference = "Stop"
+          write-host "Downloading AMD HIP SDK Installer"
+          Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
+          write-host "Installing AMD HIP SDK"
+          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          write-host "Completed AMD HIP SDK installation"
+
+      - name: Verify ROCm
+        id: verify
+        run: |
+          & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
+
+      - name: libCURL
+        id: get_libcurl
+        uses: ./.github/actions/windows-setup-curl
+
+      - name: Build
+        id: cmake_build
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
+          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DAMDGPU_TARGETS=${{ matrix.gpu_target }} `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGGML_HIP=ON `
+            -DGGML_RPC=ON `
+            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
+          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+          md "build\bin\rocblas\library\"
+          cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
+          cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\libcurl-x64.dll
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-hip-x64-${{ matrix.gpu_target }}.zip .\build\bin\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
+          name: llama-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
 
   ios-xcode-build:
     runs-on: macos-latest
@@ -995,9 +1394,58 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        id: cmake_build
+        run: |
+          sysctl -a
+          cmake -B build -G Xcode \
+            -DGGML_METAL_USE_BF16=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_SERVER=OFF \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
+
+      - name: xcodebuild for swift package
+        id: xcodebuild
+        run: |
+          ./build-xcframework.sh
 
       - name: Build Xcode project
-        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' build
+        run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+          name: llama-${{ steps.tag.outputs.name }}-xcframework
 
   android-build:
     runs-on: ubuntu-latest
@@ -1005,6 +1453,12 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: android-build
+          evict-old-files: 1d
 
       - name: Set up JDK
         uses: actions/setup-java@v3
@@ -1023,35 +1477,18 @@ jobs:
 
           ./gradlew build --no-daemon
 
-#  freeBSD-latest:
-#    runs-on: macos-12
-#    steps:
-#    - name: Clone
-#      uses: actions/checkout@v4
-#
-#    - name: Build
-#      uses: cross-platform-actions/action@v0.19.0
-#      with:
-#        operating_system: freebsd
-#        version: '13.2'
-#        hypervisor: 'qemu'
-#        run: |
-#            sudo pkg update
-#            sudo pkg install -y gmake automake autoconf pkgconf llvm15 clinfo clover opencl clblast openblas
-#            gmake CC=/usr/local/bin/clang15 CXX=/usr/local/bin/clang++15 -j `sysctl -n hw.ncpu`
-
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
 
     runs-on: ubuntu-latest
 
     needs:
-      - ubuntu-focal-make
-      - ubuntu-latest-cmake
-      - macOS-latest-make
-      - macOS-latest-cmake
+      - ubuntu-cpu-cmake
+      - ubuntu-22-cmake-vulkan
       - windows-latest-cmake
-      - windows-latest-cmake-cuda
+      - windows-2019-cmake-cuda
+      - windows-latest-cmake-sycl
+      - windows-latest-cmake-hip-release
       - macOS-latest-cmake-arm64
       - macOS-latest-cmake-x64
 
@@ -1061,6 +1498,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: release
+          evict-old-files: 1d
 
       - name: Determine tag name
         id: tag
@@ -1087,7 +1530,7 @@ jobs:
 
       - name: Create release
         id: create_release
-        uses: anzz1/action-create-release@v1
+        uses: ggml-org/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -1307,3 +1750,37 @@ jobs:
 #          popd
 #          emcmake cmake . -DCMAKE_BUILD_TYPE=${{ matrix.build }}
 #          make
+
+  openEuler-latest-cmake-cann:
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
+    defaults:
+      run:
+       shell: bash -el {0}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      matrix:
+        cann:
+          - '8.1.RC1.alpha001-910b-openeuler22.03-py3.10'
+        device:
+          - 'ascend910b3'
+        build:
+          - 'Release'
+    container: ascendai/cann:${{ matrix.cann }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependencies
+        run: |
+          yum update -y
+          yum install -y git gcc gcc-c++ make cmake libcurl-devel
+
+      - name: Build
+        run: |
+          export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+
+          cmake -S . -B build \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
+              -DGGML_CANN=on \
+              -DSOC_TYPE=${{ matrix.device }}
+          cmake --build build -j $(nproc)

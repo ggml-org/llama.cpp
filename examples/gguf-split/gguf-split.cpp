@@ -1,17 +1,18 @@
+#include "ggml.h"
+#include "gguf.h"
 #include "llama.h"
 #include "common.h"
 
 #include <algorithm>
-#include <cmath>
+#include <cinttypes>
+#include <climits>
+#include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
+#include <cstring>
 #include <fstream>
 #include <string>
 #include <vector>
-
-#include <stdio.h>
-#include <string.h>
-#include <climits>
-#include <stdexcept>
 
 #if defined(_WIN32)
     #include <windows.h>
@@ -22,12 +23,20 @@
 #endif
 
 enum split_operation : uint8_t {
-    SPLIT_OP_SPLIT,
-    SPLIT_OP_MERGE,
+    OP_NONE,
+    OP_SPLIT,
+    OP_MERGE,
+};
+
+enum split_mode : uint8_t {
+    MODE_NONE,
+    MODE_TENSOR,
+    MODE_SIZE,
 };
 
 struct split_params {
-    split_operation operation = SPLIT_OP_SPLIT;
+    split_operation operation = OP_NONE;
+    split_mode mode = MODE_NONE;
     size_t n_bytes_split = 0;
     int n_split_tensors = 128;
     std::string input;
@@ -61,10 +70,10 @@ static size_t split_str_to_n_bytes(std::string str) {
     int n;
     if (str.back() == 'M') {
         sscanf(str.c_str(), "%d", &n);
-        n_bytes = (size_t)n * 1024 * 1024; // megabytes
+        n_bytes = (size_t)n * 1000 * 1000; // megabytes
     } else if (str.back() == 'G') {
         sscanf(str.c_str(), "%d", &n);
-        n_bytes = (size_t)n * 1024 * 1024 * 1024; // gigabytes
+        n_bytes = (size_t)n * 1000 * 1000 * 1000; // gigabytes
     } else {
         throw std::invalid_argument("error: supported units are M (megabytes) or G (gigabytes), but got: " + std::string(1, str.back()));
     }
@@ -87,59 +96,52 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         }
 
         bool arg_found = false;
-        bool is_op_set = false;
-        bool is_mode_set = false;
         if (arg == "-h" || arg == "--help") {
             split_print_usage(argv[0]);
             exit(0);
-        }
-        if (arg == "--version") {
+        } else if (arg == "--version") {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
             exit(0);
-        }
-        if (arg == "--dry-run") {
+        } else if (arg == "--dry-run") {
             arg_found = true;
             params.dry_run = true;
-        }
-        if (arg == "--no-tensor-first-split") {
+        } else if (arg == "--no-tensor-first-split") {
             arg_found = true;
             params.no_tensor_first_split = true;
-        }
-
-        if (is_op_set) {
-            throw std::invalid_argument("error: either --split or --merge can be specified, but not both");
-        }
-        if (arg == "--merge") {
+        } else if (arg == "--merge") {
             arg_found = true;
-            is_op_set = true;
-            params.operation = SPLIT_OP_MERGE;
-        }
-        if (arg == "--split") {
+            if (params.operation != OP_NONE && params.operation != OP_MERGE) {
+                throw std::invalid_argument("error: either --split or --merge can be specified, but not both");
+            }
+            params.operation = OP_MERGE;
+        } else if (arg == "--split") {
             arg_found = true;
-            is_op_set = true;
-            params.operation = SPLIT_OP_SPLIT;
-        }
-
-        if (is_mode_set) {
-            throw std::invalid_argument("error: either --split-max-tensors or --split-max-size can be specified, but not both");
-        }
-        if (arg == "--split-max-tensors") {
+            if (params.operation != OP_NONE && params.operation != OP_SPLIT) {
+                throw std::invalid_argument("error: either --split or --merge can be specified, but not both");
+            }
+            params.operation = OP_SPLIT;
+        } else if (arg == "--split-max-tensors") {
             if (++arg_idx >= argc) {
                 invalid_param = true;
                 break;
             }
             arg_found = true;
-            is_mode_set = true;
+            if (params.mode != MODE_NONE && params.mode != MODE_TENSOR) {
+                throw std::invalid_argument("error: either --split-max-tensors or --split-max-size can be specified, but not both");
+            }
+            params.mode = MODE_TENSOR;
             params.n_split_tensors = atoi(argv[arg_idx]);
-        }
-        if (arg == "--split-max-size") {
+        } else if (arg == "--split-max-size") {
             if (++arg_idx >= argc) {
                 invalid_param = true;
                 break;
             }
             arg_found = true;
-            is_mode_set = true;
+            if (params.mode != MODE_NONE && params.mode != MODE_SIZE) {
+                throw std::invalid_argument("error: either --split-max-tensors or --split-max-size can be specified, but not both");
+            }
+            params.mode = MODE_SIZE;
             params.n_bytes_split = split_str_to_n_bytes(argv[arg_idx]);
         }
 
@@ -148,11 +150,20 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
         }
     }
 
+    // the operation is split if not specified
+    if (params.operation == OP_NONE) {
+        params.operation = OP_SPLIT;
+    }
+    // the split mode is by tensor if not specified
+    if (params.mode == MODE_NONE) {
+        params.mode = MODE_TENSOR;
+    }
+
     if (invalid_param) {
         throw std::invalid_argument("error: invalid parameter for argument: " + arg);
     }
 
-    if (argc - arg_idx < 2) {
+    if (argc - arg_idx != 2) {
         throw std::invalid_argument("error: bad arguments");
     }
 
@@ -265,17 +276,19 @@ struct split_strategy {
     }
 
     bool should_split(int i_tensor, size_t next_size) {
-        if (params.n_bytes_split > 0) {
+        if (params.mode == MODE_SIZE) {
             // split by max size per file
             return next_size > params.n_bytes_split;
-        } else {
+        } else if (params.mode == MODE_TENSOR) {
             // split by number of tensors per file
             return i_tensor > 0 && i_tensor < n_tensors && i_tensor % params.n_split_tensors == 0;
         }
+        // should never happen
+        GGML_ABORT("invalid mode");
     }
 
     void print_info() {
-        printf("n_split: %ld\n", ctx_outs.size());
+        printf("n_split: %zu\n", ctx_outs.size());
         int i_split = 0;
         for (auto & ctx_out : ctx_outs) {
             // re-calculate the real gguf size for each split (= metadata size + total size of all tensors)
@@ -284,8 +297,8 @@ struct split_strategy {
                 struct ggml_tensor * t = ggml_get_tensor(ctx_meta, gguf_get_tensor_name(ctx_out, i));
                 total_size += ggml_nbytes(t);
             }
-            total_size = total_size / 1024 / 1024; // convert to megabytes
-            printf("split %05d: n_tensors = %d, total_size = %ldM\n", i_split + 1, gguf_get_n_tensors(ctx_out), total_size);
+            total_size = total_size / 1000 / 1000; // convert to megabytes
+            printf("split %05d: n_tensors = %" PRIi64 ", total_size = %zuM\n", i_split + 1, gguf_get_n_tensors(ctx_out), total_size);
             i_split++;
         }
     }
@@ -389,9 +402,14 @@ static void gguf_merge(const split_params & split_params) {
     int n_split = 1;
     int total_tensors = 0;
 
+    // avoid overwriting existing output file
+    if (std::ifstream(split_params.output.c_str())) {
+        fprintf(stderr, "%s: output file %s already exists\n", __func__, split_params.output.c_str());
+        exit(EXIT_FAILURE);
+    }
+
+
     auto * ctx_out = gguf_init_empty();
-    std::ofstream fout(split_params.output.c_str(), std::ios::binary);
-    fout.exceptions(std::ofstream::failbit); // fail fast on write errors
 
     std::vector<uint8_t> read_data;
     std::vector<ggml_context *> ctx_metas;
@@ -433,7 +451,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -446,7 +463,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -459,7 +475,6 @@ static void gguf_merge(const split_params & split_params) {
                 gguf_free(ctx_gguf);
                 ggml_free(ctx_meta);
                 gguf_free(ctx_out);
-                fout.close();
                 exit(EXIT_FAILURE);
             }
 
@@ -480,9 +495,11 @@ static void gguf_merge(const split_params & split_params) {
 
         fprintf(stderr, "\033[3Ddone\n");
     }
-
-    // placeholder for the meta data
-    {
+    std::ofstream fout;
+    if (!split_params.dry_run) {
+        fout.open(split_params.output.c_str(), std::ios::binary);
+        fout.exceptions(std::ofstream::failbit); // fail fast on write errors
+        // placeholder for the meta data
         auto meta_size = gguf_get_meta_size(ctx_out);
         ::zeros(fout, meta_size);
     }
@@ -498,7 +515,9 @@ static void gguf_merge(const split_params & split_params) {
                 ggml_free(ctx_metas[i]);
             }
             gguf_free(ctx_out);
-            fout.close();
+            if (!split_params.dry_run) {
+                fout.close();
+            }
             exit(EXIT_FAILURE);
         }
         fprintf(stderr, "%s: writing tensors %s ...", __func__, split_path);
@@ -520,10 +539,11 @@ static void gguf_merge(const split_params & split_params) {
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
             f_input.read((char *)read_data.data(), n_bytes);
-
-            // write tensor data + padding
-            fout.write((const char *)read_data.data(), n_bytes);
-            zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+            if (!split_params.dry_run) {
+                // write tensor data + padding
+                fout.write((const char *)read_data.data(), n_bytes);
+                zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
+            }
         }
 
         gguf_free(ctx_gguf);
@@ -532,16 +552,15 @@ static void gguf_merge(const split_params & split_params) {
         fprintf(stderr, "\033[3Ddone\n");
     }
 
-    {
+    if (!split_params.dry_run) {
         // go back to beginning of file and write the updated metadata
         fout.seekp(0);
         std::vector<uint8_t> data(gguf_get_meta_size(ctx_out));
         gguf_get_meta_data(ctx_out, data.data());
         fout.write((const char *)data.data(), data.size());
-
         fout.close();
-        gguf_free(ctx_out);
     }
+    gguf_free(ctx_out);
 
     fprintf(stderr, "%s: %s merged from %d split with %d tensors.\n",
             __func__, split_params.output.c_str(), n_split, total_tensors);
@@ -552,9 +571,9 @@ int main(int argc, const char ** argv) {
     split_params_parse(argc, argv, params);
 
     switch (params.operation) {
-        case SPLIT_OP_SPLIT: gguf_split(params);
+        case OP_SPLIT: gguf_split(params);
             break;
-        case SPLIT_OP_MERGE: gguf_merge(params);
+        case OP_MERGE: gguf_merge(params);
             break;
         default: split_print_usage(argv[0]);
             exit(EXIT_FAILURE);
