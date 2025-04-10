@@ -375,8 +375,7 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
         //  display download progress
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
-
-
+        
         // helper function to hide password in URL
         auto llama_download_hide_password_in_url = [](const std::string & url) -> std::string {
             std::size_t protocol_pos = url.find("://");
