@@ -888,8 +888,7 @@ int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
 
     ggml_init();
 
-    unsigned int api_version = qurt_api_version();
-    GGMLHEXAGON_LOG_DEBUG("api_version = 0x%x", api_version);
+    GGMLHEXAGON_LOG_DEBUG("api_version = 0x%x", qurt_api_version());
     GGMLHEXAGON_LOG_DEBUG("hvx units = 0x%d", qurt_hvx_get_units());
     qurt_arch_version_t  vers;
     qurt_sysenv_get_arch_version(&vers);

@@ -359,7 +359,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.03"},
+        .ggml_hexagon_version   = {"1.04"},
         .ggml_dsp_version       = {"0.61"},
 };
 
@@ -5107,9 +5107,8 @@ static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         GGML_ASSERT(ctx->rpc_mempool_capacity > (8 * SIZE_IN_MB));
         ctx->rpc_mempool_len = ctx->rpc_mempool_capacity - (8 * SIZE_IN_MB);
 
-        //FIXME: it seems there is unknown issue with another ION memory pool
-        ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS,
-                                        ctx->rpc_mempool_len);
+        //FIXME: it seems there is unknown issue with 2+ GiB memory pool
+        ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_TRY_MAP_STATIC, ctx->rpc_mempool_len);
         if (nullptr == ctx->rpc_mempool) {
             GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %d failed", ctx->rpc_mempool_len);
             return 2;
