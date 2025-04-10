@@ -16,6 +16,14 @@
 #include <arm_sve.h>
 #endif // __ARM_FEATURE_SVE
 
+#if defined(__ARM_NEON) && !defined(__CUDACC__) && !defined(__MUSACC__)
+// if YCM cannot find <arm_neon.h>, make a symbolic link to it, for example:
+//
+//   $ ln -sfn /Library/Developer/CommandLineTools/usr/lib/clang/13.1.6/include/arm_neon.h ./src/
+//
+#include <arm_neon.h>
+#endif
+
 #if defined(__F16C__)
 #include <immintrin.h>
 #endif
@@ -317,13 +325,6 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
 // for     MUSA compilers        , we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/11843
 //
 #if defined(__ARM_NEON) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
-
-    // if YCM cannot find <arm_neon.h>, make a symbolic link to it, for example:
-    //
-    //   $ ln -sfn /Library/Developer/CommandLineTools/usr/lib/clang/13.1.6/include/arm_neon.h ./src/
-    //
-    #include <arm_neon.h>
-
     #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
     #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
 
