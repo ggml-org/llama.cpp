@@ -568,7 +568,7 @@ static id<MTLBuffer> ggml_metal_heap_alloc(struct ggml_metal_heap * heap, size_t
 
     heap->need += size_aligned;
 
-    if (!heap->fail && heap->need > [heap->obj maxAvailableSizeWithAlignment:alignment]) {
+    if (!heap->fail && size_aligned > [heap->obj maxAvailableSizeWithAlignment:alignment]) {
         heap->fail = 1;
     }
 
@@ -2278,11 +2278,13 @@ static bool ggml_metal_encode_node(
                     /*.nb3  =*/ nb03,
                 };
 
-                id<MTLBuffer> id_src0h = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), 32);
+                id<MTLBuffer> id_src0h = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), 64*1024);
                 if (!id_src0h) {
-                    //GGML_LOG_ERROR("%s: failed to allocate buffer for cpy, size = %zu, need = %zu, max available = %zu\n",
-                    //        __func__, ggml_nbytes(src0), heap->need, [heap->obj maxAvailableSizeWithAlignment:32]);
-                    return false;
+                    //GGML_LOG_ERROR("%s: failed to allocate buffer, idx = %4d, size = %8zu, need = %8zu, max available = %9zu, heap size = %9zu, heap used = %zu\n",
+                    //        __func__, idx, ggml_nbytes(src0), heap->need, [heap->obj maxAvailableSizeWithAlignment:0], [heap->obj size], [heap->obj usedSize]);
+                    return true;
+                } else {
+                    //GGML_LOG_ERROR("%s: allocated %zu\n", __func__, ggml_nbytes(src0));
                 }
 
                 if (src0->type == GGML_TYPE_F16) {
@@ -4689,7 +4691,7 @@ static enum ggml_status ggml_metal_graph_compute(
     // number of threads in addition to the main thread
     const int n_cb = ctx->n_cb;
 
-    int n_try = 64;
+    int n_try = 2;
 
     // submit the ggml compute graph to the GPU by creating command buffers and encoding the ops in them
     // the first n_nodes_0 are encoded and submitted for processing directly by the calling thread
@@ -4816,7 +4818,7 @@ static enum ggml_status ggml_metal_graph_compute(
     for (int i = 0; i <= n_cb; ++i) {
         struct ggml_metal_heap * heap = ctx->cmd_bufs[i].heap;
 
-        const size_t need = 4*heap->need;
+        const size_t need = heap->need;
 
         //printf("\nXXXXXXXXXXXXXXXXX cb %d, need = %zu, fail = %d, size = %zu\n", i, need, heap->fail, [heap->obj currentAllocatedSize]);
 
