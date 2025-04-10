@@ -323,8 +323,6 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #else
 #ifdef __POWER9_VECTOR__
 #include <altivec.h>
-#undef bool
-#define bool _Bool
 #else
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <intrin.h>

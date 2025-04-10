@@ -355,8 +355,8 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
     #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
     static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
-        register float f;
-        register double d;
+        float f;
+        double d;
         __asm__(
             "mtfprd %0,%2\n"
             "xscvhpdp %0,%0\n"
@@ -368,8 +368,8 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
     }
 
     static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
-        register double d;
-        register ggml_fp16_t r;
+        double d;
+        ggml_fp16_t r;
         __asm__( /* xscvdphp can work on double or single precision */
             "xscvdphp %0,%2\n"
             "mffprd %1,%0\n" :
