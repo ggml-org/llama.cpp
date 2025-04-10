@@ -31,6 +31,12 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <unistd.h>
+#include <functional>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
@@ -205,6 +211,241 @@ struct ggml_cann_pool_alloc {
     ggml_cann_pool_alloc& operator=(ggml_cann_pool_alloc&&) = delete;
 };
 
+using aclnn_func_t = aclnnStatus (*)(void*, uint64_t, aclOpExecutor*, aclrtStream);
+using AnyAclResource = std::unique_ptr<void, std::function<void(void*)>>;
+
+template<typename T>
+struct AclResourceTraits;
+template<>
+struct AclResourceTraits<aclTensor> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyTensor(static_cast<aclTensor*>(p)));
+    }
+};
+template<>
+struct AclResourceTraits<aclIntArray> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyIntArray(static_cast<aclIntArray*>(p)));
+    }
+};
+template<>
+struct AclResourceTraits<aclScalar> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyScalar(static_cast<aclScalar*>(p)));
+    }
+};
+template<>
+struct AclResourceTraits<aclTensorList> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyTensorList(static_cast<aclTensorList*>(p)));
+    }
+};
+
+template<typename T>
+AnyAclResource make_acl_resource(T* ptr) {
+    return AnyAclResource(
+        static_cast<void*>(ptr),
+        [](void* p) {
+            AclResourceTraits<T>::destroy(p);
+        }
+    );
+}
+
+template<typename... Args>
+void register_acl_resources(std::vector<AnyAclResource>& vec, Args*... args) {
+    (vec.emplace_back(make_acl_resource(args)), ...);
+}
+
+class cann_task {
+public:
+    virtual void run_task() {}
+};
+
+class aclnn_task : public cann_task {
+public:
+    aclnn_task(aclnn_func_t aclnn_func, void * workspace_addr, uint64_t workspace_size, aclOpExecutor * executor,
+               aclrtStream stream) :
+        aclnn_func_(aclnn_func),
+        workspace_addr_(workspace_addr),
+        workspace_size_(workspace_size),
+        executor_(executor),
+        stream_(stream) {}
+    virtual void run_task() override {
+        ACL_CHECK(aclnn_func_(workspace_addr_, workspace_size_, executor_, stream_));
+    }
+private:
+    aclnn_func_t aclnn_func_;
+    void *          workspace_addr_;
+    uint64_t        workspace_size_;
+    aclOpExecutor * executor_;
+    aclrtStream     stream_;
+};
+
+class resource_task : public cann_task {
+public:
+    resource_task(std::vector<AnyAclResource>&& resources){
+        resource_ = std::move(resources);
+    }
+
+    virtual void run_task() override {
+        resource_.clear();
+    }
+private:
+    std::vector<AnyAclResource> resource_;
+};
+
+class free_ptr_task : public cann_task {
+public:
+    free_ptr_task(void* ptr) : ptr_(ptr) {}
+
+    virtual void run_task() override {
+        free(ptr_);
+    }
+private:
+    void* ptr_;
+};
+
+class async_memcpy_task : public cann_task {
+public:
+    async_memcpy_task(void* dst, const void* src, size_t size, aclrtMemcpyKind kind, aclrtStream stream)
+        : dst_(dst), src_(src), size_(size), kind_(kind), stream_(stream) {}
+
+    virtual void run_task() override {
+        
+        ACL_CHECK(aclrtMemcpyAsync(dst_, size_, src_, size_, kind_, stream_));
+    }
+private:
+    void* dst_;
+    const void* src_;
+    size_t size_;
+    aclrtMemcpyKind kind_;
+    aclrtStream stream_;
+};
+
+class async_memset_task : public cann_task {
+    public:
+    async_memset_task(void* buffer, size_t size, int32_t value, aclrtStream stream)
+            : buffer_(buffer), size_(size), value_(value), stream_(stream) {}
+    
+        virtual void run_task() override {
+            ACL_CHECK(aclrtMemsetAsync(buffer_, size_, value_, size_, stream_));
+        }
+    private:
+        void* buffer_;
+        size_t size_;
+        int32_t value_;
+        aclrtStream stream_;
+    };
+
+class cann_task_queue {
+public:
+    explicit cann_task_queue(size_t capacity, int32_t device)
+        : buffer_(capacity), capacity_(capacity), head_(0), tail_(0), running_(false), device_(device), consuming_(false) {
+        GGML_ASSERT((capacity & (capacity - 1)) == 0 && "capacity must be power of 2");
+        mask_ = capacity_ - 1;
+    }
+
+    bool enqueue(std::unique_ptr<cann_task>&& item) {
+        size_t tail = tail_.load(std::memory_order_relaxed);
+        size_t next_tail = (tail + 1) & mask_;
+
+        if (next_tail == head_.load(std::memory_order_acquire)) {
+            return false;
+        }
+
+        buffer_[tail] = std::move(item);
+        tail_.store(next_tail, std::memory_order_release);
+
+        cv_.notify_one();
+
+        return true;
+    }
+
+    size_t dequeue_bulk(std::vector<std::unique_ptr<cann_task>>& output) {
+        output.clear();
+        size_t head = head_.load(std::memory_order_relaxed);
+        size_t tail = tail_.load(std::memory_order_acquire);
+
+        while (running_ && head == tail) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cv_.wait(lock);
+            head = head_.load(std::memory_order_relaxed);
+            tail = tail_.load(std::memory_order_acquire);
+        }
+
+        size_t count = 0;
+        while (running_ && head != tail) {
+            output.push_back(std::move(buffer_[head]));
+            head = (head + 1) & mask_;
+            ++count;
+        }
+
+        head_.store(head, std::memory_order_release);
+        return count;
+    }
+
+    void submit_task(std::unique_ptr<cann_task>&& task) {
+        while(!enqueue(std::move(task))) continue;
+        
+        if (!running_) {
+            thread_ = std::thread(&cann_task_queue::execute, this);
+            running_ = true;
+        }
+        
+    }
+
+    bool empty() const {
+        return head_.load(std::memory_order_acquire) ==
+               tail_.load(std::memory_order_acquire);
+    }
+
+    void wait() {
+        if (!running_)
+            return;
+
+        while (!(empty() && consuming_)) {}
+    }
+
+    void stop() {
+        running_ = false;
+        wait();
+        cv_.notify_all();
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+private:
+    void execute() {
+        std::vector<std::unique_ptr<cann_task>> tasks;
+        ggml_cann_set_device(device_);
+
+        while(running_) {
+            consuming_ = true;
+            int count = dequeue_bulk(tasks);
+            consuming_ = false;
+            if (count == 0)
+                continue;
+            
+            for(auto &task : tasks) {
+                task->run_task();
+            }
+        }
+    }
+
+    std::vector<std::unique_ptr<cann_task>> buffer_;
+    const size_t capacity_;
+    size_t mask_;
+    std::atomic<size_t> head_;
+    std::atomic<size_t> tail_;
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool running_;
+    std::thread thread_;
+    int32_t device_;
+    bool consuming_;
+};
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -213,6 +454,7 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    cann_task_queue task_queue;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -221,7 +463,7 @@ struct ggml_backend_cann_context {
      * @param device Device ID.
      */
     explicit ggml_backend_cann_context(int device)
-        : device(device), name("CANN" + std::to_string(device)) {
+        : device(device), name("CANN" + std::to_string(device)), task_queue(1024, device) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
     }
@@ -231,6 +473,7 @@ struct ggml_backend_cann_context {
      */
     ~ggml_backend_cann_context() {
         ggml_cann_set_device(device);
+        task_queue.stop();
         if (copy_event != nullptr) {
             ACL_CHECK(aclrtDestroyEvent(copy_event));
         }
