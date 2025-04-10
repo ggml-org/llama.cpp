@@ -1209,6 +1209,11 @@ void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     GGML_CANN_CALL_ACLNN_OP(Sin, acl_src, acl_dst);
 }
 
+void aclnn_geluv2(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+                       aclTensor* acl_dst) {
+        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+}
+
 void ggml_cann_timestep_embedding(ggml_backend_cann_context& ctx,
                                   ggml_tensor* dst) {
     const ggml_tensor* src = dst->src[0];
@@ -1783,7 +1788,7 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 src0->data, ACL_INT8, sizeof(int8_t), weight_ne, weight_nb,
                 GGML_MAX_DIMS + 1);
             aclTensor* acl_scale_tensor = ggml_cann_create_tensor(
-                src0->data, ACL_FLOAT16, sizeof(float16_t), scale_ne, scale_nb,
+                src0->data, ACL_FLOAT16, sizeof(uint16_t), scale_ne, scale_nb,
                 GGML_MAX_DIMS + 1, ACL_FORMAT_ND, scale_offset);
             aclTensor* dequant_tensor = ggml_cann_create_tensor(
                 dequant_buffer_allocator.get(), ACL_FLOAT, sizeof(float_t),

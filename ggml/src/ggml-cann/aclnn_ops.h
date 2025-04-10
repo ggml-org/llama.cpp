@@ -593,6 +593,9 @@ void aclnn_cos(ggml_backend_cann_context& ctx, aclTensor* acl_src,
 void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     aclTensor* acl_dst);
 
+void aclnn_geluv2(ggml_backend_cann_context& ctx, aclTensor* acl_src,
+    aclTensor* acl_dst);
+
 /**
  * @brief Prepares broadcast-compatible ACL tensors for two input tensors and one
  * output tensor.
@@ -840,14 +843,13 @@ void ggml_cann_unary_op(
  * @see ggml_cann_unary_op
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                         \
-    do {                                                         \
-        auto lambda = [](ggml_backend_cann_context& ctx,         \
-            aclTensor* acl_src,                                  \
-            aclTensor* acl_dst) {                                \
-            GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
-        };                                                       \
-        ggml_cann_unary_op(lambda, ctx, dst);                    \
-    }                                                            \
-    while (0)
+#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                      \
+    do {                                                      \
+        ggml_tensor * src     = dst->src[0];                  \
+        aclTensor *   acl_src = ggml_cann_create_tensor(src); \
+        aclTensor *   acl_dst = ggml_cann_create_tensor(dst); \
+        GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);   \
+        ACL_CHECK(aclDestroyTensor(acl_src));                 \
+        ACL_CHECK(aclDestroyTensor(acl_dst));                 \
+    } while (0)
 #endif  // CANN_ACLNN_OPS
