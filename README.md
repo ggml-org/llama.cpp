@@ -265,6 +265,8 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
+You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from Hugging Face by using this CLI argument: `-hf <user>/<model>[:quant]`
+
 LLAMA.CPP has supported a environment variable `HF_ENDPOINT`, you can set this to change the downloading url:
 - By default, HF_ENDPOINT=https://huggingface.co/
 - To use ModelScope, you can change to HF_ENDPOINT=https://www.modelscope.cn/
