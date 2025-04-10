@@ -1579,7 +1579,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
     }
 }
 
-static void ggml_metal_encode_node(
+static bool ggml_metal_encode_node(
                         ggml_backend_t   backend,
                                    int   idx,
           id<MTLComputeCommandEncoder>   encoder,
@@ -1599,7 +1599,7 @@ static void ggml_metal_encode_node(
     struct ggml_tensor * dst  = node;
 
     if (ggml_is_empty(dst)) {
-        return;
+        return true;
     }
 
     switch (dst->op) {
@@ -1610,7 +1610,7 @@ static void ggml_metal_encode_node(
         case GGML_OP_PERMUTE:
             {
                 // noop -> next node
-            } return;
+            } return true;
         default:
             {
             } break;
@@ -2214,6 +2214,8 @@ static void ggml_metal_encode_node(
             {
                 GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32);
 
+                GGML_ASSERT(ggml_is_contiguous(src0));
+
                 int nth = 32; // SIMD width
 
                 id<MTLComputePipelineState> pipeline = nil;
@@ -2278,7 +2280,9 @@ static void ggml_metal_encode_node(
 
                 id<MTLBuffer> id_src0h = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), 32);
                 if (!id_src0h) {
-                    break;
+                    //GGML_LOG_ERROR("%s: failed to allocate buffer for cpy, size = %zu, need = %zu, max available = %zu\n",
+                    //        __func__, ggml_nbytes(src0), heap->need, [heap->obj maxAvailableSizeWithAlignment:32]);
+                    return false;
                 }
 
                 if (src0->type == GGML_TYPE_F16) {
@@ -4669,6 +4673,8 @@ static void ggml_metal_encode_node(
                 GGML_ABORT("fatal error");
             }
     }
+
+    return true;
 }
 
 static enum ggml_status ggml_metal_graph_compute(
@@ -4683,6 +4689,8 @@ static enum ggml_status ggml_metal_graph_compute(
     // number of threads in addition to the main thread
     const int n_cb = ctx->n_cb;
 
+    int n_try = 64;
+
     // submit the ggml compute graph to the GPU by creating command buffers and encoding the ops in them
     // the first n_nodes_0 are encoded and submitted for processing directly by the calling thread
     // while these nodes are processing, we start n_cb threads to enqueue the rest of the nodes
@@ -4690,6 +4698,7 @@ static enum ggml_status ggml_metal_graph_compute(
     //
     // tests on M1 Pro and M2 Ultra using LLaMA models, show that optimal values for n_cb are 1 or 2
 
+    while (n_try-- > 0) {
     @autoreleasepool {
         ctx->gf = gf;
 
@@ -4752,8 +4761,6 @@ static enum ggml_status ggml_metal_graph_compute(
             id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
             [cmd_buf waitUntilCompleted];
 
-            ggml_metal_heap_reset(ctx->cmd_bufs[n_cb].heap);
-
             MTLCommandBufferStatus status = [cmd_buf status];
             if (status != MTLCommandBufferStatusCompleted) {
                 GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, n_cb, status);
@@ -4768,8 +4775,6 @@ static enum ggml_status ggml_metal_graph_compute(
         for (int i = 0; i < n_cb; ++i) {
             id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
             [cmd_buf waitUntilCompleted];
-
-            ggml_metal_heap_reset(ctx->cmd_bufs[i].heap);
 
             MTLCommandBufferStatus status = [cmd_buf status];
             if (status != MTLCommandBufferStatusCompleted) {
@@ -4803,6 +4808,54 @@ static enum ggml_status ggml_metal_graph_compute(
             [ctx->capture_scope endScope];
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
         }
+    }
+
+    bool retry = false;
+
+    // check heap statuses
+    for (int i = 0; i <= n_cb; ++i) {
+        struct ggml_metal_heap * heap = ctx->cmd_bufs[i].heap;
+
+        const size_t need = 4*heap->need;
+
+        //printf("\nXXXXXXXXXXXXXXXXX cb %d, need = %zu, fail = %d, size = %zu\n", i, need, heap->fail, [heap->obj currentAllocatedSize]);
+
+        if (heap->fail == 0) {
+            ggml_metal_heap_reset(ctx->cmd_bufs[i].heap);
+
+            continue;
+        }
+
+        if (heap->fail == 2) {
+            GGML_LOG_ERROR("%s: command buffer %d, MTLHeap ran out of buffers, max = %d\n", __func__, i, heap->n);
+            return GGML_STATUS_ALLOC_FAILED;
+        }
+
+        if (heap->fail == 3) {
+            GGML_LOG_ERROR("%s: command buffer %d, MTLHeap failed to allocate buffer, max = %d\n", __func__, i, heap->n);
+            return GGML_STATUS_ALLOC_FAILED;
+        }
+
+        //GGML_LOG_INFO("%s: command buffer %d, MTLHeap need = %zu\n", __func__, i, need);
+
+        if (!ggml_metal_heap_resize(heap, need)) {
+            GGML_LOG_ERROR("%s: failed to increase heap size to %zu\n", __func__, need);
+            return GGML_STATUS_ALLOC_FAILED;
+        }
+
+        retry = true;
+    }
+
+    if (!retry) {
+        break;
+    }
+
+    //printf("XXXXXXXXXXXXXXXXXXXXXXX retry\n");
+
+    if (n_try == 0) {
+        GGML_LOG_ERROR("%s: failed to allocate heap memory\n", __func__);
+        return GGML_STATUS_ALLOC_FAILED;
+    }
     }
 
     return GGML_STATUS_SUCCESS;
@@ -5167,63 +5220,35 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
         struct ggml_metal_heap * heap = ctx->cmd_bufs[cb_idx].heap;
 
-        int n_try = 2;
+        id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
 
-        while (n_try-- > 0) {
-            id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
+        int node_start = 0;
+        int node_end   = n_nodes_0;
 
-            int node_start = 0;
-            int node_end   = n_nodes_0;
+        if (cb_idx < n_cb_l) {
+            node_start = n_nodes_0 + (                                         (cb_idx + 0) * n_nodes_per_cb);
+            node_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
+        }
 
-            if (cb_idx < n_cb_l) {
-                node_start = n_nodes_0 + (                                         (cb_idx + 0) * n_nodes_per_cb);
-                node_end   = n_nodes_0 + (MIN((cb_idx == n_cb_l - 1) ? n_nodes_1 : (cb_idx + 1) * n_nodes_per_cb, n_nodes_1));
+        const bool should_capture = ctx->capture_next_compute;
+
+        for (int idx = node_start; idx < node_end; ++idx) {
+            if (should_capture) {
+                [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
             }
 
-            const bool should_capture = ctx->capture_next_compute;
+            const bool res = ggml_metal_encode_node(backend, idx, encoder, heap);
 
-            for (int idx = node_start; idx < node_end; ++idx) {
-                if (should_capture) {
-                    [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
-                }
-
-                ggml_metal_encode_node(backend, idx, encoder, heap);
-
-                if (should_capture) {
-                    [encoder popDebugGroup];
-                }
+            if (should_capture) {
+                [encoder popDebugGroup];
             }
 
-            [encoder endEncoding];
-
-            if (heap->fail == 0) {
-                break;
-            }
-
-            if (heap->fail == 2) {
-                GGML_LOG_ERROR("%s: MTLHeap ran out of buffers, max = %d\n", __func__, heap->n);
-                break;
-            }
-
-            if (heap->fail == 3) {
-                GGML_LOG_ERROR("%s: MTLHeap failed to allocate buffer\n", __func__);
-                break;
-            }
-
-            if (n_try == 0) {
-                GGML_LOG_ERROR("%s: failed to allocate heap memory\n", __func__);
-                break;
-            }
-
-            const size_t need = heap->need;
-
-            GGML_LOG_INFO("%s: increasing heap size to %zu\n", __func__, need);
-
-            if (!ggml_metal_heap_resize(heap, need)) {
-                GGML_LOG_ERROR("%s: failed to increase heap size to %zu\n", __func__, need);
+            if (!res) {
                 break;
             }
         }
+
+        [encoder endEncoding];
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
             [cmd_buf commit];
