@@ -2459,6 +2459,16 @@ class Qwen2MoeModel(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("Qwen3ForCausalLM")
+class Qwen3Model(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+
+@Model.register("Qwen3MoeForCausalLM")
+class Qwen3MoeModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+
 @Model.register("GPT2LMHeadModel")
 class GPT2Model(Model):
     model_arch = gguf.MODEL_ARCH.GPT2
