@@ -2162,7 +2162,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    // theta_scale arange, [0,1,...,ne0/2] 
+    // theta_scale arange, [0,1,...,ne0/2]
     int64_t theta_scale_length = ne00 / 2;
     ggml_cann_pool_alloc theta_scale_allocator(ctx.pool(),
                                           theta_scale_length * sizeof(float_t));
@@ -2171,22 +2171,22 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     size_t theta_scale_nb[] = {sizeof(float_t), sizeof(float_t), sizeof(float_t),
                           theta_scale_length * sizeof(float_t)};
 
-    aclTensor* acl_theat_scale_tensor =
+    aclTensor* acl_theta_scale_tensor =
         ggml_cann_create_tensor(theta_scale_buffer, ACL_FLOAT, sizeof(float_t),
                                 theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
     float start = 0;
     float step = 1;
     float stop = ne00 / 2;
     float n_elements = ne00 / 2;
-    aclnn_arange(ctx, acl_theat_scale_tensor, start, stop, step, n_elements);
+    aclnn_arange(ctx, acl_theta_scale_tensor, start, stop, step, n_elements);
 
     // power
     aclScalar* acl_theta_scale = aclCreateScalar(&theta_scale, aclDataType::ACL_FLOAT);
-    GGML_CANN_CALL_ACLNN_OP(PowScalarTensor, acl_theta_scale, acl_theat_scale_tensor, acl_theat_scale_tensor);
-    
+    GGML_CANN_CALL_ACLNN_OP(PowScalarTensor, acl_theta_scale, acl_theta_scale_tensor, acl_theta_scale_tensor);
+
     // freq_scale
     if (freq_scale != 1) {
-        aclnn_muls(ctx, acl_theat_scale_tensor, freq_scale, nullptr, true);
+        aclnn_muls(ctx, acl_theta_scale_tensor, freq_scale, nullptr, true);
     }
 
     // freq_factors
@@ -2194,7 +2194,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         aclTensor* acl_freq_factors_tensor = ggml_cann_create_tensor(
             src2->data, ggml_cann_type_mapping(src2->type),
             ggml_type_size(src2->type), theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
-        aclnn_div(ctx, acl_theat_scale_tensor, acl_freq_factors_tensor);
+        aclnn_div(ctx, acl_theta_scale_tensor, acl_freq_factors_tensor);
         ACL_CHECK(aclDestroyTensor(acl_freq_factors_tensor));
     }
 
@@ -2222,7 +2222,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     aclTensor* acl_theta_tensor =
         ggml_cann_create_tensor(theta_buffer, ACL_FLOAT, sizeof(float_t),
                                 theta_ne, theta_nb, GGML_MAX_DIMS);
-    aclnn_mul(ctx, acl_position_tensor, acl_theat_scale_tensor,
+    aclnn_mul(ctx, acl_position_tensor, acl_theta_scale_tensor,
               acl_theta_tensor);
 
     // sin/cos
@@ -2264,11 +2264,12 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     }
 
     // release
-    ACL_CHECK(aclDestroyTensor(acl_theat_scale_tensor));
+    ACL_CHECK(aclDestroyTensor(acl_theta_scale_tensor));
     ACL_CHECK(aclDestroyTensor(acl_position_tensor));
     ACL_CHECK(aclDestroyTensor(acl_theta_tensor));
     ACL_CHECK(aclDestroyTensor(acl_sin_tensor));
     ACL_CHECK(aclDestroyTensor(acl_cos_tensor));
+    ACL_CHECK(aclDestroyScalar(acl_theta_scale));
 }
 
 #ifdef __cplusplus
