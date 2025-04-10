@@ -547,14 +547,14 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     curl_slist_ptr http_headers;
     std::string res_str;
 
-    std::string hf_endpoint = "https://huggingface.co/";
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    if (hf_endpoint_env) {
-        hf_endpoint = hf_endpoint_env;
-        if (hf_endpoint.back() != '/') hf_endpoint += '/';
+    std::string model_endpoint = "https://huggingface.co/";
+    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
+    if (model_endpoint_env) {
+        model_endpoint = model_endpoint_env;
+        if (model_endpoint.back() != '/') model_endpoint += '/';
     }
 
-    std::string url = hf_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
+    std::string url = model_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
@@ -669,13 +669,13 @@ static void common_params_handle_model(
                 }
             }
 
-            std::string hf_endpoint = "https://huggingface.co/";
-            const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-            if (hf_endpoint_env) {
-                hf_endpoint = hf_endpoint_env;
-                if (hf_endpoint.back() != '/') hf_endpoint += '/';
+            std::string model_endpoint = "https://huggingface.co/";
+            const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
+            if (model_endpoint_env) {
+                model_endpoint = model_endpoint_env;
+                if (model_endpoint.back() != '/') model_endpoint += '/';
             }
-            model.url = hf_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs
@@ -2377,7 +2377,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             ? std::string("model path from which to load base model")
             : string_format(
                 "model path (default: `models/$filename` with filename from `--hf-file` "
-                "or `--model-url` if set, otherwise %s), or with a protocol prefix: hf://model-id, ms://model-id", DEFAULT_MODEL_PATH
+                "or `--model-url` if set, otherwise %s)", DEFAULT_MODEL_PATH
             ),
         [](common_params & params, const std::string & value) {
             params.model.path = value;
