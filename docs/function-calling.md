@@ -12,11 +12,12 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
   - Functionary v3.1 / v3.2
   - Hermes 2/3, Qwen 2.5
-  - Qwen 2.5 Coder (WIP: https://github.com/ggml-org/llama.cpp/pull/12034)
+  - Qwen 2.5 Coder (#12034)
   - Mistral Nemo
   - Firefunction v2
-  - Command R7B
-  - DeepSeek R1 (WIP / seems reluctant to call any tools?)
+  - Command R7B (#11585)
+  - DeepSeek R1 (#11607)
+  - Phi 4 (#12288)
 
 - Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
@@ -297,9 +298,14 @@ llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q6_K_L \
 llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF:Q4_K_M \
     --chat-template-file models/templates/llama-cpp-deepseek-r1.jinja
 
+# Native support for Phi 4 also needs a template override (official template is buggy)
+
+llama-server --jinja -fa -hf bartowski/microsoft_Phi-4-mini-instruct-GGUF \
+    --chat-template-file models/templates/llama-cpp-microsoft-Phi-4-mini-instruct.jinja
+
 # Native support requires the right template for these GGUFs:
 
-llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M
+llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M \
     --chat-template-file models/templates/meetkai-functionary-medium-v3.2.jinja
 
 llama-server --jinja -fa -hf bartowski/Hermes-2-Pro-Llama-3-8B-GGUF:Q4_K_M \
