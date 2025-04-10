@@ -575,24 +575,29 @@ static void clamp_sycl(const T *x, T *dst, const float min,
 }
 
 inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                silu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                silu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                silu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                silu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -602,24 +607,29 @@ inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                gelu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                gelu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                gelu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                gelu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -629,24 +639,29 @@ inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                gelu_quick_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                gelu_quick_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                gelu_quick_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                gelu_quick_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -656,24 +671,29 @@ inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                tanh_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                tanh_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                tanh_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                tanh_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -683,25 +703,30 @@ inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                relu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                relu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                relu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                relu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -711,26 +736,31 @@ inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                hardsigmoid_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                hardsigmoid_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                hardsigmoid_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                hardsigmoid_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -740,24 +770,29 @@ inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tenso
 }
 
 inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                hardswish_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                hardswish_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                hardswish_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                hardswish_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -767,24 +802,29 @@ inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor 
 }
 
 inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                exp_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                exp_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                exp_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                exp_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -794,24 +834,29 @@ inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                log_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                log_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                log_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                log_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -821,24 +866,29 @@ inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                sigmoid_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                sigmoid_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                sigmoid_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                sigmoid_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -848,25 +898,30 @@ inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * 
 }
 
 inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
 
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                sqrt_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                sqrt_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                sqrt_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                sqrt_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -876,24 +931,29 @@ inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                sin_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                sin_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                sin_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                sin_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -903,24 +963,29 @@ inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                cos_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                cos_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                cos_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                cos_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -930,24 +995,29 @@ inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                step_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                step_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                step_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                step_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -957,24 +1027,29 @@ inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 }
 
 inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                neg_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                neg_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                neg_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                neg_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -984,26 +1059,32 @@ inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
+
     GGML_ASSERT(dst->src[0]->type == dst->type);
     float negative_slope;
     memcpy(&negative_slope, dst->op_params, sizeof(float));
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                leaky_relu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), negative_slope, main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                leaky_relu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), negative_slope, main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                leaky_relu_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), negative_slope, main_stream);
+                auto data_pts = cast_data<float>(dst);
+                leaky_relu_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), negative_slope, main_stream);
                 break;
             }
         default:
@@ -1013,24 +1094,29 @@ inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+ #if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                sqr_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                sqr_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                sqr_sycl(src0_dd, dst_dd, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                sqr_sycl(data_pts.src, data_pts.dst, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:
@@ -1040,8 +1126,13 @@ inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
 
     dpct::queue_ptr main_stream = ctx.stream();
@@ -1052,20 +1143,20 @@ inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * 
     const float sf2 = (float) dst->ne[2] / dst->src[0]->ne[2];
     const float sf3 = (float) dst->ne[3] / dst->src[0]->ne[3];
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                upscale_sycl(src0_dd, dst_dd, dst->src[0]->nb[0], dst->src[0]->nb[1], dst->src[0]->nb[2],
+                auto data_pts = cast_data<sycl::half>(dst);
+                upscale_sycl(data_pts.src, data_pts.dst, dst->src[0]->nb[0], dst->src[0]->nb[1], dst->src[0]->nb[2],
                         dst->src[0]->nb[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3,
                         main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                upscale_sycl(src0_dd, dst_dd, dst->src[0]->nb[0], dst->src[0]->nb[1], dst->src[0]->nb[2],
+                auto data_pts = cast_data<float>(dst);
+                upscale_sycl(data_pts.src, data_pts.dst, dst->src[0]->nb[0], dst->src[0]->nb[1], dst->src[0]->nb[2],
                         dst->src[0]->nb[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], sf0, sf1, sf2, sf3,
                         main_stream);
                 break;
@@ -1077,26 +1168,31 @@ inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * 
 }
 
 inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined (GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     GGML_ASSERT(dst->src[0]->ne[3] == 1 && dst->ne[3] == 1);  // just 3D tensors
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
+#if defined (GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                pad_sycl(src0_dd, dst_dd, dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2], dst->ne[0],
+                auto data_pts = cast_data<sycl::half>(dst);
+                pad_sycl(data_pts.src, data_pts.dst, dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2], dst->ne[0],
                         dst->ne[1], dst->ne[2], main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                pad_sycl(src0_dd, dst_dd, dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2], dst->ne[0],
+                auto data_pts = cast_data<float>(dst);
+                pad_sycl(data_pts.src, data_pts.dst, dst->src[0]->ne[0], dst->src[0]->ne[1], dst->src[0]->ne[2], dst->ne[0],
                         dst->ne[1], dst->ne[2], main_stream);
                 break;
             }
@@ -1107,29 +1203,35 @@ inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if defined(GGML_SYCL_F16)
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
     GGML_ASSERT(dst->src[0]->type == dst->type);
     dpct::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-                float min;
-                float max;
-                memcpy(&min, dst->op_params, sizeof(float));
-                memcpy(&max, (float *) dst->op_params + 1, sizeof(float));
+    float min;
+    float max;
+    memcpy(&min, dst->op_params, sizeof(float));
+    memcpy(&max, (float *) dst->op_params + 1, sizeof(float));
 
     switch (dst->type) {
+#if defined(GGML_SYCL_F16)
         case GGML_TYPE_F16:
             {
-                const sycl::half * src0_dd = static_cast<const sycl::half *>(dst->src[0]->data);
-                sycl::half *       dst_dd  = static_cast<sycl::half *>(dst->data);
-                clamp_sycl(src0_dd, dst_dd, min, max, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<sycl::half>(dst);
+                clamp_sycl(data_pts.src, data_pts.dst, min, max, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
+#endif
         case GGML_TYPE_F32:
             {
-                const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-                float *       dst_dd  = static_cast<float *>(dst->data);
-                clamp_sycl(src0_dd, dst_dd, min, max, ggml_nelements(dst->src[0]), main_stream);
+                auto data_pts = cast_data<float>(dst);
+                clamp_sycl(data_pts.src, data_pts.dst, min, max, ggml_nelements(dst->src[0]), main_stream);
                 break;
             }
         default:

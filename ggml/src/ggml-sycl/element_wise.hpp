@@ -2,6 +2,7 @@
 #define GGML_SYCL_ELEMENTWISE_HPP
 
 #include "common.hpp"
+#include "ggml.h"
 #include <limits.h>
 
 template <typename T>
@@ -30,6 +31,19 @@ static __dpct_inline__ float op_div(const float a, const float b) {
     return a / b;
 }
 
+template<typename T>
+struct typed_data {
+    const T * src;
+    T * dst;
+};
+
+template<typename T>
+typed_data<T> cast_data(ggml_tensor * dst) {
+    return {
+        /* .src = */ static_cast<const T *>(dst->src[0]->data),
+        /* .dst = */ static_cast<T *>(dst->data)
+    };
+}
 
 void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
