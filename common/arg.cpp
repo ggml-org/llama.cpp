@@ -374,6 +374,8 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
         //  display download progress
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "llama.cpp/1.0");
+
 
         // helper function to hide password in URL
         auto llama_download_hide_password_in_url = [](const std::string & url) -> std::string {
@@ -544,7 +546,15 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
     curl_slist_ptr http_headers;
     std::string res_str;
-    std::string url = "https://huggingface.co/v2/" + hf_repo + "/manifests/" + tag;
+
+    std::string hf_endpoint = "https://huggingface.co/";
+    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
+    if (hf_endpoint_env) {
+        hf_endpoint = hf_endpoint_env;
+        if (hf_endpoint.back() != '/') hf_endpoint += '/';
+    }
+
+    std::string url = hf_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
