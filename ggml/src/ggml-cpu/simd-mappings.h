@@ -392,7 +392,11 @@ static inline void __avx_f32cx8_store(ggml_fp16_t *x, __m256 y) {
 #define GGML_F16_VEC_LOAD(p, i) (i & 0x1) ?                   \
   vec_extract_fp32_from_shorth(vec_xl(0, p - GGML_F16_EPR)) : \
   vec_extract_fp32_from_shortl(vec_xl(0, p))
-#define GGML_ENDIAN_BYTE(i) ((unsigned char *)&(uint16_t){1})[i]
+static inline unsigned char ggml_endian_byte(int i) {
+       uint16_t tmp_val = 1;
+       return ((unsigned char *)&tmp_val)[i];
+}
+#define GGML_ENDIAN_BYTE(i) ggml_endian_byte(i)
 #define GGML_F16_VEC_STORE(p, r, i)                             \
   if (i & 0x1)                                                  \
     vec_xst(vec_pack_to_short_fp32(r[i - GGML_ENDIAN_BYTE(1)],  \
@@ -851,13 +855,17 @@ static inline __vector float __lzs_f16cx4_load(const ggml_fp16_t * x) {
         tmp[i] = GGML_FP16_TO_FP32(x[i]);
     }
 
-    return vec_xl(0, tmp);
+    // note: keep type-cast here to prevent compiler bugs
+    // see: https://github.com/ggml-org/llama.cpp/issues/12846
+    return vec_xl(0, (const float *)(tmp));
 }
 
 static inline void __lzs_f16cx4_store(ggml_fp16_t * x, __vector float y) {
     float arr[4];
 
-    vec_xst(y, 0, arr);
+    // note: keep type-cast here to prevent compiler bugs
+    // see: https://github.com/ggml-org/llama.cpp/issues/12846
+    vec_xst(y, 0, (float *)(arr));
 
     for (int i = 0; i < 4; i++) {
         x[i] = GGML_FP32_TO_FP16(arr[i]);
