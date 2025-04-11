@@ -1333,7 +1333,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     auto lambda = [](ggml_backend_cann_context& ctx,
                         aclTensor* acl_src,
                         aclTensor* acl_dst) {
-                        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                        GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
                     };
                     ggml_cann_unary_op(lambda, ctx, dst);
                 } break;
@@ -1519,15 +1519,15 @@ static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
     ggml_backend_cann_context *cann_ctx =
         (ggml_backend_cann_context *)backend->context;
     if (!need_transform(tensor->type)) {
-        GGML_CANN_ASYNC_MEMCPY1((char *)tensor->data + offset, data, size, 
-            ACL_MEMCPY_HOST_TO_DEVICE, cann_ctx);
+        ggml_cann_async_memcpy(cann_ctx, (char *)tensor->data + offset, data, size, 
+            ACL_MEMCPY_HOST_TO_DEVICE);
     } else {
         void *transform_buffer = malloc(size);
         ggml_backend_cann_transform(tensor, data, transform_buffer);
 
-        GGML_CANN_ASYNC_MEMCPY1((char *)tensor->data + offset, transform_buffer, 
-            size, ACL_MEMCPY_HOST_TO_DEVICE, cann_ctx);
-        GGML_CANN_ASYNC_FREE(transform_buffer, cann_ctx);
+        ggml_cann_async_memcpy(cann_ctx, (char *)tensor->data + offset, transform_buffer, 
+            size, ACL_MEMCPY_HOST_TO_DEVICE);
+        ggml_cann_async_free(cann_ctx, transform_buffer);
     }
 }
 
@@ -1542,12 +1542,12 @@ static void ggml_backend_cann_get_tensor_async(
     GGML_ASSERT(buf->buft == ggml_backend_cann_buffer_type(cann_ctx->device) &&
                 "unsupported buffer type");
     if (!need_transform(tensor->type)) {
-        GGML_CANN_ASYNC_MEMCPY1(data, (char *)tensor->data + offset, size,
-            ACL_MEMCPY_DEVICE_TO_HOST, cann_ctx);
+        ggml_cann_async_memcpy(cann_ctx, data, (char *)tensor->data + offset, size,
+            ACL_MEMCPY_DEVICE_TO_HOST);
     } else {
         void *transform_buffer = malloc(size);
-        GGML_CANN_ASYNC_MEMCPY1(transform_buffer, (char *)tensor->data + offset, 
-            size, ACL_MEMCPY_DEVICE_TO_HOST, cann_ctx);
+        ggml_cann_async_memcpy(cann_ctx, transform_buffer, (char *)tensor->data + offset, 
+            size, ACL_MEMCPY_DEVICE_TO_HOST);
 
         // Fix me.
         ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));

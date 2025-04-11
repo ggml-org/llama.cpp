@@ -651,8 +651,8 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
  */
 void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
-#define ASYNC_SUBMIT 1
 
+//#define ASYNC_SUBMIT
 /**
  * @brief Launches an asynchronous task using the memory allocator.
  *
@@ -671,103 +671,92 @@ void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  * same stream are executed in queue order.
  */
 #ifdef ASYNC_SUBMIT
-#define GGML_CANN_CALL_ACLNN_OP(OP_NAME, ...)                                                             \
+#define GGML_CANN_CALL_ACLNN_OP(CTX, OP_NAME, ...)                                              \
+    do {                                                                                        \
+        uint64_t        workspaceSize = 0;                                                      \
+        aclOpExecutor * executor;                                                               \
+        void *          workspaceAddr = nullptr;                                                \
+        ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor));    \
+        /* workspace should alloced in main thread to keep malloc order when using vmm. */      \
+        if (workspaceSize > 0) {                                                                \
+            ggml_cann_pool_alloc workspace_allocator(CTX.pool(), workspaceSize);                \
+            workspaceAddr = workspace_allocator.get();                                          \
+        }                                                                                       \
+        auto task = std::make_unique<aclnn_task>(aclnn##OP_NAME, workspaceAddr,                 \
+            workspaceSize, executor, CTX.stream());                                             \
+        CTX.task_queue.submit_task(std::move(task));                                            \
+    } while (0)
+
+template <typename... Args> 
+void ggml_cann_release_resources(ggml_backend_cann_context & ctx, Args &&... args) {
+    std::vector<AnyAclResource> resources;
+    register_acl_resources(resources, std::forward<Args>(args)...);
+    auto task = std::make_unique<resource_task>(std::move(resources));
+    ctx.task_queue.submit_task(std::move(task));
+}
+
+inline void ggml_cann_async_free(ggml_backend_cann_context * ctx, void * ptr) {
+    auto task = std::make_unique<free_ptr_task>(ptr);
+    ctx->task_queue.submit_task(std::move(task));
+}
+
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context & ctx, void * dst,
+                                   const void * src, size_t len, aclrtMemcpyKind kind) {
+    auto task = std::make_unique<async_memcpy_task>(dst, const_cast<void *>(src), len, kind, ctx.stream());
+    ctx.task_queue.submit_task(std::move(task));
+}
+
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context * ctx, void * dst,
+                                   const void * src, size_t len, aclrtMemcpyKind kind) {
+    auto task = std::make_unique<async_memcpy_task>(dst, const_cast<void *>(src), len, kind, ctx->stream());
+    ctx->task_queue.submit_task(std::move(task));
+}
+
+inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffer,
+                                   size_t size, int value) {
+    auto task = std::make_unique<async_memset_task>(buffer, size, value, ctx.stream());
+    ctx.task_queue.submit_task(std::move(task));
+}
+#else
+#define GGML_CANN_CALL_ACLNN_OP(CTX, OP_NAME, ...)                                                        \
     do {                                                                                                  \
         uint64_t        workspaceSize = 0;                                                                \
         aclOpExecutor * executor;                                                                         \
         void *          workspaceAddr = nullptr;                                                          \
         ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor));              \
         if (workspaceSize > 0) {                                                                          \
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);                          \
+            ggml_cann_pool_alloc workspace_allocator(CTX.pool(), workspaceSize);                          \
             workspaceAddr = workspace_allocator.get();                                                    \
         }                                                                                                 \
-        auto task = std::make_unique<aclnn_task>(aclnn##OP_NAME, workspaceAddr,                           \
-            workspaceSize, executor, ctx.stream());                                                       \
-        ctx.task_queue.submit_task(std::move(task));                                                      \
+        ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, CTX.stream()));                  \
     } while (0)
-#else
-#define GGML_CANN_CALL_ACLNN_OP(OP_NAME, ...)                                                             \
-    do {                                                                                                  \
-        uint64_t        workspaceSize = 0;                                                                \
-        aclOpExecutor * executor;                                                                         \
-        void *          workspaceAddr = nullptr;                                                          \
-        ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor));              \
-        if (workspaceSize > 0) {                                                                          \
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);                          \
-            workspaceAddr = workspace_allocator.get();                                                    \
-        }                                                                                                 \
-        ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, ctx.stream()));                  \
-    } while (0)
-#endif
 
-#ifdef ASYNC_SUBMIT
-#define GGML_CANN_RELEASE_RESOURCES(...)                                   \
-    do {                                                                   \
-        std::vector<AnyAclResource> resources;                             \
-        register_acl_resources(resources, __VA_ARGS__);                    \
-        auto task = std::make_unique<resource_task>(std::move(resources)); \
-        ctx.task_queue.submit_task(std::move(task));                       \
-    } while (0)
-#else
-#define GGML_CANN_RELEASE_RESOURCES(...)                        \
-    do {                                                        \
-        std::vector<AnyAclResource> resources;                  \
-        register_acl_resources(resources, __VA_ARGS__);         \
-    } while (0)
-#endif
+template <typename... Args>
+void ggml_cann_release_resources(ggml_backend_cann_context & ctx, Args &&... args) {
+    GGML_UNUSED(ctx);
+    std::vector<AnyAclResource> resources;
+    register_acl_resources(resources, std::forward<Args>(args)...);
+}
 
-#ifdef ASYNC_SUBMIT
-#define GGML_CANN_ASYNC_FREE(PTR, CTX)                     \
-    do {                                                   \
-        auto task = std::make_unique<free_ptr_task>(PTR);  \
-        CTX->task_queue.submit_task(std::move(task));      \
-    } while (0);
-#else
-#define GGML_CANN_ASYNC_FREE(PTR, CTX)                    \
-    do {                                                  \
-        ACL_CHECK(aclrtSynchronizeStream(CTX->stream())); \
-        free(PTR);                                        \
-    } while (0);
-#endif
+inline void ggml_cann_async_free(ggml_backend_cann_context * ctx, void * ptr) {
+    ACL_CHECK(aclrtSynchronizeStream(ctx->stream()));
+    free(ptr);
+}
 
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context & ctx, void * dst,
+                                  const void * src, size_t len, aclrtMemcpyKind kind) {
+    ACL_CHECK(aclrtMemcpyAsync(dst, len, src, len, kind, ctx.stream()));
+}
 
-#ifdef ASYNC_SUBMIT
-#define GGML_CANN_ASYNC_MEMCPY(DST, SRC, LEN, KIND, CTX)                                    \
-    do {                                                                                    \
-        auto task = std::make_unique<async_memcpy_task>(DST, SRC, LEN, KIND, CTX.stream()); \
-        CTX.task_queue.submit_task(std::move(task));                                        \
-    } while (0)
-#else
-#define GGML_CANN_ASYNC_MEMCPY(DST, SRC, LEN, KIND, CTX)                                   \
-    do {                                                                                   \
-        ACL_CHECK(aclrtMemcpyAsync(DST, LEN, SRC, LEN, KIND, CTX.stream()))                \
-    } while (0)
-#endif
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context * ctx, void * dst,
+                                   const void * src, size_t len, aclrtMemcpyKind kind) {
+    ACL_CHECK(aclrtMemcpyAsync(dst, len, src, len, kind, ctx->stream()));
+}
 
-#ifdef ASYNC_SUBMIT
-#define GGML_CANN_ASYNC_MEMCPY1(DST, SRC, LEN, KIND, CTX)                                    \
-    do {                                                                                    \
-        auto task = std::make_unique<async_memcpy_task>(DST, SRC, LEN, KIND, CTX->stream()); \
-        CTX->task_queue.submit_task(std::move(task));                                        \
-    } while (0)
-#else
-#define GGML_CANN_ASYNC_MEMCPY1(DST, SRC, LEN, KIND, CTX)                                  \
-    do {                                                                                   \
-        ACL_CHECK(aclrtMemcpyAsync(DST, LEN, SRC, LEN, KIND, CTX->stream()))                \
-    } while (0)
-#endif
-
-#ifdef ASYNC_SUBMIT
-#define GGML_CANN_ASYNC_MEMSET(BUFFER, SIZE, VALUE)                                         \
-    do {                                                                                    \
-        auto task = std::make_unique<async_memset_task>(BUFFER, SIZE, VALUE, ctx.stream()); \
-        ctx.task_queue.submit_task(std::move(task));                                        \
-    } while (0)
-#else
-#define GGML_CANN_ASYNC_MEMSET(BUFFER, SIZE, VALUE)                                   \
-    do {                                                                              \
-        ACL_CHECK(aclrtMemsetAsync(BUFFER, SIZE, VALUE, SIZE, ctx.stream()))          \
-    } while (0)
+inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffer,
+                                   size_t size, int value) {
+    ACL_CHECK(aclrtMemsetAsync(buffer, size, value, size, ctx.stream()));
+}
 #endif
 
 /**
@@ -799,7 +788,7 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     bcast_shape(src0, src1, dst, &acl_src0, &acl_src1, &acl_dst);
     binary_op(ctx, acl_src0, acl_src1, acl_dst);
 
-    GGML_CANN_RELEASE_RESOURCES(acl_src0, acl_src1, acl_dst);
+    ggml_cann_release_resources(ctx, acl_src0, acl_src1, acl_dst);
 }
 
 
@@ -823,7 +812,7 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
     unary_op(ctx, acl_src, acl_dst);
-    GGML_CANN_RELEASE_RESOURCES(acl_src, acl_dst);
+    ggml_cann_release_resources(ctx, acl_src, acl_dst);
 }
 
 /**
@@ -854,7 +843,7 @@ void ggml_cann_unary_op(
  *
  * Internally, the lambda will call:
  * @code
- * GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);
+ * GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);
  * @endcode
  *
  * @param OP_NAME The name of the ACL unary operator to invoke via GGML_CANN_CALL_ACLNN_OP.
@@ -862,14 +851,14 @@ void ggml_cann_unary_op(
  * @see ggml_cann_unary_op
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                         \
-    do {                                                         \
-        auto lambda = [](ggml_backend_cann_context& ctx,         \
-            aclTensor* acl_src,                                  \
-            aclTensor* acl_dst) {                                \
-            GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
-        };                                                       \
-        ggml_cann_unary_op(lambda, ctx, dst);                    \
-    }                                                            \
+#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                              \
+    do {                                                              \
+        auto lambda = [](ggml_backend_cann_context& ctx,              \
+            aclTensor* acl_src,                                       \
+            aclTensor* acl_dst) {                                     \
+            GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);  \
+        };                                                            \
+        ggml_cann_unary_op(lambda, ctx, dst);                         \
+    }                                                                 \
     while (0)
 #endif  // CANN_ACLNN_OPS
