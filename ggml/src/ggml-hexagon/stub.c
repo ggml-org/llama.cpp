@@ -1,6 +1,6 @@
 //qidl copyright
 //qidl nested=false
-#include "ggmlop_ap_skel.h"
+#include "skel.h"
 #include <string.h>
 #ifndef _WIN32
 #include "HAP_farf.h"
