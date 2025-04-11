@@ -1602,7 +1602,12 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     GGML_CANN_CALL_UNARY_OP(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
-                    ggml_cann_unary_op<aclnn_geluv2>(ctx, dst);
+                    auto lambda = [](ggml_backend_cann_context& ctx,
+                        aclTensor* acl_src,
+                        aclTensor* acl_dst) {
+                        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                    };
+                    ggml_cann_unary_op(lambda, ctx, dst);
                 } break;
                 case GGML_UNARY_OP_TANH:
                     GGML_CANN_CALL_UNARY_OP(Tanh);
