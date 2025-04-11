@@ -346,7 +346,7 @@ struct clip_ctx {
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
         }
 
-        backend_ptrs.push_back(backend);
+        backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
         sched.reset(
