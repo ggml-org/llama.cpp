@@ -1783,7 +1783,7 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 src0->data, ACL_INT8, sizeof(int8_t), weight_ne, weight_nb,
                 GGML_MAX_DIMS + 1);
             aclTensor* acl_scale_tensor = ggml_cann_create_tensor(
-                src0->data, ACL_FLOAT16, sizeof(float16_t), scale_ne, scale_nb,
+                src0->data, ACL_FLOAT16, sizeof(uint16_t), scale_ne, scale_nb,
                 GGML_MAX_DIMS + 1, ACL_FORMAT_ND, scale_offset);
             aclTensor* dequant_tensor = ggml_cann_create_tensor(
                 dequant_buffer_allocator.get(), ACL_FLOAT, sizeof(float_t),
