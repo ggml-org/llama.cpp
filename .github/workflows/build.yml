@@ -1771,7 +1771,7 @@ jobs:
     strategy:
       matrix:
         cann:
-          - '8.0.rc3.beta1-910b-openeuler22.03-py3.10'
+          - '8.1.RC1.alpha001-910b-openeuler22.03-py3.10'
         device:
           - 'ascend910b3'
         build:
@@ -1784,7 +1784,7 @@ jobs:
       - name: Dependencies
         run: |
           yum update -y
-          yum install -y git gcc gcc-c++ make cmake
+          yum install -y git gcc gcc-c++ make cmake libcurl-devel
 
       - name: Build
         run: |
