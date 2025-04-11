@@ -24,9 +24,11 @@ static void zeros(std::ofstream & file, size_t n) {
 
 const char* _gguf_is_moe = std::getenv("GGUF_IS_MOE");
 const bool gguf_is_moe = (_gguf_is_moe != nullptr && std::string(_gguf_is_moe) == "1");
-for (int i = 0; i < 10; i++) {
-    std::cout << "Use MoE: " << gguf_is_moe << std::endl;
-}
+std::cout << "Use MoE: " << gguf_is_moe << std::endl;
+std::cout << "Use MoE: " << gguf_is_moe << std::endl;
+std::cout << "Use MoE: " << gguf_is_moe << std::endl;
+std::cout << "Use MoE: " << gguf_is_moe << std::endl;
+std::cout << "Use MoE: " << gguf_is_moe << std::endl;
 
 struct quantize_state_impl {
     const llama_model                 & model;
