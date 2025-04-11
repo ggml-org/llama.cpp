@@ -4616,7 +4616,7 @@ static void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
                     utmp_01[1] = (utmp_01[2] & kmask2) | (((utmp_01[0] >> 6) & kmask3) << 4);
                     utmp_01[2] = uaux_01;
                     utmp_01[0] &= kmask1;
-                    
+
                     // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
                     memcpy(utmp_10, b_ptr_1[b].scales + sb * 24, 12);
                     utmp_10[3] = ((utmp_10[2] >> 4) & kmask2) | (((utmp_10[1] >> 6) & kmask3) << 4);
