@@ -44,8 +44,8 @@ static struct ggml_backend_device g_ggml_backend_metal_device;
 // note: assumes single GPU device - the default one
 // TODO: support multiple GPU devices
 static struct ggml_backend_metal_device_context {
-    id<MTLDevice> mtl_device;
-    int           mtl_device_ref_count;
+    id<MTLDevice>  mtl_device;
+    int            mtl_device_ref_count;
     id<MTLLibrary> mtl_library;
 
     bool has_simdgroup_reduction;
@@ -468,7 +468,141 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_COUNT
 };
 
+struct ggml_metal_heap {
+    int fail;
+
+    size_t offs;
+    size_t need;
+
+    id<MTLDevice> device;
+    id<MTLHeap>   obj;
+
+    NSMutableArray * bufs;
+};
+
+static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_t size) {
+    struct ggml_metal_heap * heap = calloc(1, sizeof(struct ggml_metal_heap));
+
+    MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
+    desc.storageMode  = MTLStorageModePrivate;
+    desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
+    desc.type         = MTLHeapTypePlacement;
+    desc.size         = size;
+
+    heap->device = device;
+    heap->obj = [device newHeapWithDescriptor:desc];
+    if (!heap->obj) {
+        GGML_LOG_ERROR("%s: error: failed to create MTLHeap with size %zu\n", __func__, size);
+
+        free(heap);
+
+        return false;
+    }
+
+    [desc release];
+
+    heap->bufs = [[NSMutableArray alloc] init];
+
+    return heap;
+}
+
+static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
+    heap->fail = 0;
+    heap->offs = 0;
+    heap->need = 0;
+
+    for (id<MTLBuffer> buf in heap->bufs) {
+        [buf release];
+    }
+    [heap->bufs removeAllObjects];
+}
+
+static void ggml_metal_heap_free(struct ggml_metal_heap * heap) {
+    if (heap == nil) {
+        return;
+    }
+
+    ggml_metal_heap_reset(heap);
+
+    [heap->obj  release];
+    [heap->bufs release];
+
+    free(heap);
+}
+
+static bool ggml_metal_heap_resize(struct ggml_metal_heap * heap, size_t size) {
+    if (heap == nil) {
+        return false;
+    }
+
+    [heap->obj release];
+
+    MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
+    desc.storageMode  = MTLStorageModePrivate;
+    desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
+    desc.type         = MTLHeapTypePlacement;
+    desc.size         = size;
+
+    heap->obj = [heap->device newHeapWithDescriptor:desc];
+    if (!heap->obj) {
+        GGML_LOG_ERROR("%s: error: failed to create MTLHeap with size %zu\n", __func__, size);
+
+        return false;
+    }
+
+    [desc release];
+
+    //GGML_LOG_INFO("%s: resized heap to %zu\n", __func__, [heap->obj size]);
+
+    ggml_metal_heap_reset(heap);
+
+    return true;
+}
+
+static id<MTLBuffer> ggml_metal_heap_alloc(struct ggml_metal_heap * heap, size_t size, bool no_alloc) {
+    // note: this is probably more than needed, but just in case
+    const size_t alignment = 1024;
+
+    const size_t size_aligned = GGML_PAD(size, alignment);
+
+    heap->offs += size_aligned;
+    heap->need = MAX(heap->need, heap->offs + size_aligned);
+
+    //GGML_LOG_INFO("%s: size = %zu, size_aligned = %zu, offs = %zu, need = %zu\n", __func__, size, size_aligned, offs, heap->offs, heap->need);
+
+    if (no_alloc) {
+        return nil;
+    }
+
+    if (!heap->fail && heap->offs + size_aligned > [heap->obj size]) {
+        heap->fail = 1;
+    }
+
+    if (heap->fail) {
+        return nil;
+    }
+
+    id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate offset:heap->offs];
+    if (!buf) {
+        heap->fail = 3;
+        return nil;
+    }
+
+    [heap->bufs addObject:buf];
+
+    //GGML_LOG_INFO("%s: allocated buffer, size = %zu, offs = %zu, heap size = %zu, heap used = %zu\n", __func__, size_aligned, offs, [heap->obj size], [heap->obj usedSize]);
+
+    return buf;
+}
+
+struct ggml_metal_command_buffer {
+    id<MTLCommandBuffer> obj;
+
+    struct ggml_metal_heap * heap;
+};
+
 struct ggml_backend_metal_context {
+    id<MTLDevice>       device;
     id<MTLCommandQueue> queue;
 
     dispatch_queue_t d_queue;
@@ -493,7 +627,7 @@ struct ggml_backend_metal_context {
     void (^encode_async)(size_t ith);
 
     // n_cb command buffers + 1 used by the main thread
-    id<MTLCommandBuffer> command_buffers[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
+    struct ggml_metal_command_buffer cmd_bufs[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
 
     // abort ggml_metal_graph_compute if callback returns true
     ggml_abort_callback abort_callback;
@@ -683,9 +817,11 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     struct ggml_backend_metal_device_context * ctx_dev = dev->context;
 
     id<MTLDevice> device = ggml_backend_metal_device_acq(ctx_dev);
+
     GGML_LOG_INFO("%s: picking default device: %s\n", __func__, [[device name] UTF8String]);
 
-    ctx->queue  = [device newCommandQueue];
+    ctx->device = device;
+    ctx->queue = [device newCommandQueue];
     if (ctx->queue == nil) {
         GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
         return NULL;
@@ -746,7 +882,11 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
     ctx->gf = nil;
     ctx->encode_async = nil;
     for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
-        ctx->command_buffers[i] = nil;
+        ctx->cmd_bufs[i].obj = nil;
+
+        // create initial small heaps per command buffer
+        // these can be resized during compute when necessary
+        ctx->cmd_bufs[i].heap = ggml_metal_heap_init(device, 32);
     }
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
@@ -1137,6 +1277,12 @@ static void ggml_metal_free(struct ggml_backend_metal_context * ctx) {
 
     [ctx->queue release];
 
+    for (int i = 0; i < GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
+        // ctx->cmd_bufs[i].obj is auto released
+
+        ggml_metal_heap_free(ctx->cmd_bufs[i].heap);
+    }
+
     dispatch_release(ctx->d_queue);
 
     free(ctx);
@@ -1436,10 +1582,12 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
     }
 }
 
-static void ggml_metal_encode_node(
+static bool ggml_metal_encode_node(
                         ggml_backend_t   backend,
                                    int   idx,
-          id<MTLComputeCommandEncoder>   encoder) {
+          id<MTLComputeCommandEncoder>   encoder,
+                struct ggml_metal_heap * heap,
+                                  bool   no_compute) {
     struct ggml_backend_metal_context        * ctx     = backend->context;
     struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
@@ -1455,7 +1603,7 @@ static void ggml_metal_encode_node(
     struct ggml_tensor * dst  = node;
 
     if (ggml_is_empty(dst)) {
-        return;
+        return true;
     }
 
     switch (dst->op) {
@@ -1466,7 +1614,7 @@ static void ggml_metal_encode_node(
         case GGML_OP_PERMUTE:
             {
                 // noop -> next node
-            } return;
+            } return true;
         default:
             {
             } break;
@@ -1475,6 +1623,33 @@ static void ggml_metal_encode_node(
     if (!ggml_metal_supports_op(ctx_dev, dst)) {
         GGML_LOG_ERROR("%s: error: unsupported op '%s'\n", __func__, ggml_op_desc(dst));
         GGML_ABORT("unsupported op");
+    }
+
+    const bool no_alloc = no_compute;
+
+    // heap buffers for temporary data
+    id<MTLBuffer> h_src0 = nil;
+
+    // always allocate buffers from the start of the heap for the current node
+    heap->offs = 0;
+
+    switch (dst->op) {
+        case GGML_OP_SOFT_MAX:
+            {
+                h_src0 = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), no_alloc);
+                if (!no_alloc && !h_src0) {
+                    GGML_LOG_ERROR("%s: failed to allocate buffer, idx = %4d, size = %8zu, offs = %8zu, max available = %9zu, heap size = %9zu, heap used = %zu, fail = %d\n",
+                            __func__, idx, ggml_nbytes(src0), heap->offs, [heap->obj maxAvailableSizeWithAlignment:0], [heap->obj size], [heap->obj usedSize], heap->fail);
+                    return false;
+                }
+            } break;
+        default:
+            {
+            } break;
+    }
+
+    if (no_compute) {
+        return true;
     }
 
     const int64_t  ne00 = src0 ? src0->ne[0] : 0;
@@ -2111,26 +2286,63 @@ static void ggml_metal_encode_node(
                 const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
                 const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-                ggml_metal_kargs_soft_max args = {
+                // cpy to tmp buffer in MTLHeap
+
+                ggml_metal_kargs_cpy args_cpy = {
                     /*.ne00 =*/ ne00,
                     /*.ne01 =*/ ne01,
                     /*.ne02 =*/ ne02,
-                    /*.scale =*/ scale,
-                    /*.max_bias =*/ max_bias,
-                    /*.m0 =*/ m0,
-                    /*.m1 =*/ m1,
+                    /*.ne03 =*/ ne03,
+                    /*.nb00 =*/ nb00,
+                    /*.nb01 =*/ nb01,
+                    /*.nb02 =*/ nb02,
+                    /*.nb03 =*/ nb03,
+                    /*.ne0  =*/ ne00,
+                    /*.ne1  =*/ ne01,
+                    /*.ne2  =*/ ne02,
+                    /*.ne3  =*/ ne03,
+                    /*.nb0  =*/ nb00,
+                    /*.nb1  =*/ nb01,
+                    /*.nb2  =*/ nb02,
+                    /*.nb3  =*/ nb03,
+                };
+
+                if (src0->type == GGML_TYPE_F16) {
+                    [encoder setComputePipelineState:ctx->kernels[GGML_METAL_KERNEL_TYPE_CPY_F16_F16].pipeline];
+                } else {
+                    [encoder setComputePipelineState:ctx->kernels[GGML_METAL_KERNEL_TYPE_CPY_F32_F32].pipeline];
+                }
+                [encoder setBytes:&args_cpy length:sizeof(args_cpy) atIndex:0];
+                [encoder setBuffer:id_src0  offset:offs_src0        atIndex:1];
+                [encoder setBuffer:h_src0   offset:0                atIndex:2];
+
+                GGML_ASSERT(ne00 % ggml_blck_size(src0->type) == 0);
+                int nth_cpy = MIN(1024, ne00 / ggml_blck_size(src0->type));
+
+                [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth_cpy, 1, 1)];
+
+                // softmax
+
+                ggml_metal_kargs_soft_max args = {
+                    /*.ne00        =*/ ne00,
+                    /*.ne01        =*/ ne01,
+                    /*.ne02        =*/ ne02,
+                    /*.scale       =*/ scale,
+                    /*.max_bias    =*/ max_bias,
+                    /*.m0          =*/ m0,
+                    /*.m1          =*/ m1,
                     /*.n_head_log2 =*/ n_head_log2,
                 };
 
                 [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:id_src0 offset:offs_src0   atIndex:0];
+                [encoder setBuffer:h_src0 offset:0              atIndex:0];
                 if (id_src1) {
-                    [encoder setBuffer:id_src1 offset:offs_src1   atIndex:1];
+                    [encoder setBuffer:id_src1 offset:offs_src1 atIndex:1];
                 } else {
-                    [encoder setBuffer:id_src0 offset:offs_src0   atIndex:1];
+                    [encoder setBuffer:h_src0 offset:0          atIndex:1];
                 }
-                [encoder setBuffer:id_dst      offset:offs_dst            atIndex:2];
-                [encoder setBytes:&args        length:sizeof(args)        atIndex:3];
+                [encoder setBuffer:id_dst offset:offs_dst       atIndex:2];
+                [encoder setBytes:&args   length:sizeof(args)   atIndex:3];
 
                 [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0];
 
@@ -4483,6 +4695,8 @@ static void ggml_metal_encode_node(
                 GGML_ABORT("fatal error");
             }
     }
+
+    return true;
 }
 
 static enum ggml_status ggml_metal_graph_compute(
@@ -4535,26 +4749,32 @@ static enum ggml_status ggml_metal_graph_compute(
             }
         }
 
-        // the main thread commits the first few commands immediately
-        // command_buffer[n_cb]
-        {
-            id<MTLCommandBuffer> command_buffer = [ctx->queue commandBufferWithUnretainedReferences];
-            ctx->command_buffers[n_cb] = command_buffer;
+        for (int i = 0; i <= n_cb; ++i) {
+            struct ggml_metal_heap * heap = ctx->cmd_bufs[i].heap;
 
-            [command_buffer enqueue];
+            [heap->obj setPurgeableState:MTLPurgeableStateNonVolatile];
+        }
+
+        // the main thread commits the first few commands immediately
+        // cmd_buf[n_cb]
+        {
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            ctx->cmd_bufs[n_cb].obj = cmd_buf;
+
+            [cmd_buf enqueue];
             ctx->encode_async(n_cb);
         }
 
         // prepare the rest of the command buffers asynchronously
-        // command_buffer[0.. n_cb)
+        // cmd_buf[0.. n_cb)
         for (int cb_idx = 0; cb_idx < n_cb; ++cb_idx) {
-            id<MTLCommandBuffer> command_buffer = [ctx->queue commandBufferWithUnretainedReferences];
-            ctx->command_buffers[cb_idx] = command_buffer;
+            id<MTLCommandBuffer> cmd_buf = [ctx->queue commandBufferWithUnretainedReferences];
+            ctx->cmd_bufs[cb_idx].obj = cmd_buf;
 
             // always enqueue the first two command buffers
             // enqueue all of the command buffers if we don't need to abort
             if (cb_idx < 2 || ctx->abort_callback == NULL) {
-                [command_buffer enqueue];
+                [cmd_buf enqueue];
             }
         }
 
@@ -4563,14 +4783,14 @@ static enum ggml_status ggml_metal_graph_compute(
         // wait for completion and check status of each command buffer
         // needed to detect if the device ran out-of-memory for example (#1881)
         {
-            id<MTLCommandBuffer> command_buffer = ctx->command_buffers[n_cb];
-            [command_buffer waitUntilCompleted];
+            id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[n_cb].obj;
+            [cmd_buf waitUntilCompleted];
 
-            MTLCommandBufferStatus status = [command_buffer status];
+            MTLCommandBufferStatus status = [cmd_buf status];
             if (status != MTLCommandBufferStatusCompleted) {
                 GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, n_cb, status);
                 if (status == MTLCommandBufferStatusError) {
-                    GGML_LOG_INFO("error: %s\n", [[command_buffer error].localizedDescription UTF8String]);
+                    GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                 }
 
                 return GGML_STATUS_FAILED;
@@ -4578,20 +4798,20 @@ static enum ggml_status ggml_metal_graph_compute(
         }
 
         for (int i = 0; i < n_cb; ++i) {
-            id<MTLCommandBuffer> command_buffer = ctx->command_buffers[i];
-            [command_buffer waitUntilCompleted];
+            id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[i].obj;
+            [cmd_buf waitUntilCompleted];
 
-            MTLCommandBufferStatus status = [command_buffer status];
+            MTLCommandBufferStatus status = [cmd_buf status];
             if (status != MTLCommandBufferStatusCompleted) {
                 GGML_LOG_INFO("%s: command buffer %d failed with status %lu\n", __func__, i, status);
                 if (status == MTLCommandBufferStatusError) {
-                    GGML_LOG_INFO("error: %s\n", [[command_buffer error].localizedDescription UTF8String]);
+                    GGML_LOG_INFO("error: %s\n", [[cmd_buf error].localizedDescription UTF8String]);
                 }
 
                 return GGML_STATUS_FAILED;
             }
 
-            id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->command_buffers[i + 1] : nil);
+            id<MTLCommandBuffer> next_buffer = (i + 1 < n_cb ? ctx->cmd_bufs[i + 1].obj : nil);
             if (!next_buffer) {
                 continue;
             }
@@ -4607,6 +4827,12 @@ static enum ggml_status ggml_metal_graph_compute(
             }
 
             [next_buffer commit];
+        }
+
+        for (int i = 0; i <= n_cb; ++i) {
+            struct ggml_metal_heap * heap = ctx->cmd_bufs[i].heap;
+
+            [heap->obj setPurgeableState:MTLPurgeableStateEmpty];
         }
 
         if (!should_capture && ctx->capture_started) {
@@ -4974,8 +5200,10 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 
         const int n_nodes_per_cb = ctx->n_nodes_per_cb;
 
-        id<MTLCommandBuffer> command_buffer  = ctx->command_buffers[cb_idx];
-        id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+        id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
+        struct ggml_metal_heap * heap = ctx->cmd_bufs[cb_idx].heap;
+
+        id<MTLComputeCommandEncoder> encoder = [cmd_buf computeCommandEncoder];
 
         int node_start = 0;
         int node_end   = n_nodes_0;
@@ -4987,22 +5215,47 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
 
         const bool should_capture = ctx->capture_next_compute;
 
+        ggml_metal_heap_reset(heap);
+
         for (int idx = node_start; idx < node_end; ++idx) {
-            if (should_capture) {
-                [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
+            ggml_metal_encode_node(backend, idx, encoder, heap, true);
+        }
+
+        bool can_compute = true;
+
+        if (heap->need > [heap->obj size]) {
+            const size_t need = heap->need;
+
+            if (!ggml_metal_heap_resize(heap, need)) {
+                GGML_LOG_ERROR("%s: failed to resize MTLHeap, need = %zu\n", __func__, need);
+                can_compute = false;
             }
+        }
 
-            ggml_metal_encode_node(backend, idx, encoder);
+        //GGML_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXX\n");
 
-            if (should_capture) {
-                [encoder popDebugGroup];
+        if (can_compute) {
+            for (int idx = node_start; idx < node_end; ++idx) {
+                if (should_capture) {
+                    [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
+                }
+
+                const bool res = ggml_metal_encode_node(backend, idx, encoder, heap, false);
+
+                if (should_capture) {
+                    [encoder popDebugGroup];
+                }
+
+                if (!res) {
+                    break;
+                }
             }
         }
 
         [encoder endEncoding];
 
         if (cb_idx < 2 || ctx->abort_callback == NULL) {
-            [command_buffer commit];
+            [cmd_buf commit];
         }
     });
 }
