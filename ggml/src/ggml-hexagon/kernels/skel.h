@@ -1,5 +1,5 @@
-#ifndef _GGMLOP_H
-#define _GGMLOP_H
+#ifndef _SKEL_H
+#define _SKEL_H
 //qidl copyright
 //qidl nested=false
 #include <AEEStdDef.h>
@@ -284,4 +284,4 @@ __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_pool2d)(remote_handle64 _h, co
 #ifdef __cplusplus
 }
 #endif
-#endif //_GGMLOP_H
+#endif //_SKEL_H

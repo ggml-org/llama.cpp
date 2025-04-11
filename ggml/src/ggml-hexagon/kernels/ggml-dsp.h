@@ -5,11 +5,27 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include <assert.h>
+
+#include "HAP_perf.h"
+#include "HAP_farf.h"
+#include "HAP_power.h"
+#include "HAP_vtcm_mgr.h"
+#include "HAP_compute_res.h"
+
+#include "qurt.h"
+#include "AEEStdErr.h"
+#include "hexagon_types.h"
+#include "hexagon_protos.h"
+
+#include "skel.h"
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
+
+#define ggml_tensor         dsptensor
 
 #define GGML_MAX_DIMS       4
 
@@ -51,7 +67,7 @@ extern "C" {
 #define GGML_FP16_TO_FP32(x)            ggml_lookup_fp16_to_fp32(x)
 
 //NPU performance will be slower when enable GGMLHEXAGON_DEBUG
-#ifdef NDEBUG
+#if 1//def NDEBUG
 #define GGMLHEXAGON_DEBUG                                   0
 #else
 #define GGMLHEXAGON_DEBUG                                   1
@@ -322,6 +338,43 @@ struct ggml_type_traits_cpu {
     enum ggml_type           vec_dot_type;
     int64_t                  nrows; // number of rows to process simultaneously
 };
+
+void ggml_time_init(void);
+int64_t ggml_time_ms(void);
+int64_t ggml_time_us(void);
+
+size_t ggml_type_size(enum ggml_type type);
+int64_t ggml_blck_size(enum ggml_type type);
+
+inline float ggml_lookup_fp16_to_fp32(ggml_fp16_t f);
+inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f);
+
+int64_t ggml_nrows(const struct ggml_tensor * tensor);
+bool ggml_is_transposed(const struct ggml_tensor * tensor);
+
+bool ggml_is_empty(const struct ggml_tensor * tensor);
+size_t ggml_nbytes(const struct ggml_tensor * tensor);
+
+bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+bool ggml_are_same_shape(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+
+void ggml_abort(const char * file, int line, const char * fmt, ...);
+bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+
+size_t ggml_row_size(enum ggml_type type, int64_t ne);
+int64_t ggml_nelements(const struct ggml_tensor * tensor);
+bool ggml_is_contiguous(const struct ggml_tensor * tensor);
+
+void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor);
+void ggmlhexagon_dump_tensor(const ggml_tensor * tensor, int dump_tensor_data);
+void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...);
+
+int ggmlop_get_thread_counts(void);
+int ggml_get_params_size(void);
+char * ggml_get_params_data(void);
+struct ggml_compute_params * ggmlop_get_params(void);
+
+extern struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT];
 
 #ifdef  __cplusplus
 }
