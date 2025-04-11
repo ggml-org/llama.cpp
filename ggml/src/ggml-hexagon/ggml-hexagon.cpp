@@ -255,6 +255,28 @@ enum qcom_chipset_soc_model {
 #endif
 };
 
+//borrowed from Android source code, might not be accurate
+enum ion_heap_ids {
+    INVALID_HEAP_ID             = -1,
+    ION_CP_MM_HEAP_ID           = 8,
+    ION_SECURE_HEAP_ID          = 9,
+    ION_SECURE_DISPLAY_HEAP_ID  = 10,
+    ION_CP_MFC_HEAP_ID          = 12,
+    ION_SPSS_HEAP_ID            = 13,
+    ION_CP_WB_HEAP_ID           = 16,
+    ION_CAMERA_HEAP_ID          = 20,
+    ION_SYSTEM_CONTIG_HEAP_ID   = 21,
+    ION_ADSP_HEAP_ID            = 22,
+    ION_PIL1_HEAP_ID            = 23,
+    ION_SF_HEAP_ID              = 24,
+    ION_SYSTEM_HEAP_ID          = 25,
+    ION_PIL2_HEAP_ID            = 26,
+    ION_QSECOM_HEAP_ID          = 27,
+    ION_AUDIO_HEAP_ID           = 28,
+    ION_MM_FIRMWARE_HEAP_ID     = 29,
+    ION_HEAP_ID_RESERVED        = 31
+};
+
 struct qcom_socinfo {
     uint32_t soc_model;
     size_t htp_arch;
@@ -315,6 +337,7 @@ struct hexagon_appcfg_t {
     int print_tensors_info;     // enable/disable print tensors info in op function
     int dump_op_info;           // enable/disable dump op info in handle_op
     int enable_q_mulmat;        // enable/disable offload quantized mulmat
+    int enable_pinned_memory;   // enable/disable pinned-memory feature
     int precision_mode;         // 0: default 1:fp16
     int hvx_threads;
     int vtcm_size_in_mb;
@@ -339,6 +362,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .print_tensors_info     = 0,
         .dump_op_info           = 0,
         .enable_q_mulmat        = 0,
+        .enable_pinned_memory   = 0,
         .precision_mode         = 0,
         .hvx_threads            = 4,
         .vtcm_size_in_mb        = 8,
@@ -1775,6 +1799,7 @@ static void ggmlhexagon_load_cfg() {
     hexagoncfg_instance.get_intvalue("general", "enable_profiler", g_hexagon_appcfg.enable_profiler, 0);
     hexagoncfg_instance.get_intvalue("general", "profiler_duration", g_hexagon_appcfg.profiler_duration, 5);
     hexagoncfg_instance.get_intvalue("general", "profiler_counts", g_hexagon_appcfg.profiler_counts, 100);
+    hexagoncfg_instance.get_intvalue("general", "enable_pinned_memory", g_hexagon_appcfg.enable_pinned_memory, 0);
 
     hexagoncfg_instance.get_intvalue("qnn", "hvx_threads", g_hexagon_appcfg.hvx_threads, 4);
     hexagoncfg_instance.get_intvalue("qnn", "vtcm_size_in_mb", g_hexagon_appcfg.vtcm_size_in_mb, 8);
@@ -1860,6 +1885,7 @@ static void ggmlhexagon_print_running_timestamp(ggml_backend_hexagon_context * c
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend:                  %d(%s)", g_hexagon_appcfg.hexagon_backend,
                          ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend));
+    GGMLHEXAGON_LOG_INFO("enable pinned_memory:             %s", g_hexagon_appcfg.enable_pinned_memory ? "YES" : "NO");
     ggmlhexagon_get_timestring(timestamp);
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGMLHEXAGON_LOG_INFO("offload quantize GGML_OP_MUL_MAT: %s", g_hexagon_appcfg.enable_q_mulmat ? "YES" : "NO");
@@ -6139,18 +6165,33 @@ static const char * ggml_backend_hexagon_host_buffer_name(ggml_backend_buffer_t 
 }
 
 static void ggml_backend_hexagon_host_buffer_free(ggml_backend_buffer_t buffer) {
-    ggml_aligned_free(buffer->context, 0);
+    if (0 == g_hexagon_appcfg.enable_pinned_memory) {
+        ggml_aligned_free(buffer->context, 0);
+    } else {
+        rpcmem_free(buffer->context);
+    }
 }
 
 static void * ggml_hexagon_host_malloc(ggml_backend_buffer_type_t buft, size_t size) {
-    return ggml_aligned_malloc(size);
+    if (0 == g_hexagon_appcfg.enable_pinned_memory) {
+        return ggml_aligned_malloc(size);
+    } else {
+        //TODO: there are no corresponding APIs in existing Hexagon SDK, here try to re-use camera ion heap as a pinned memory
+        return rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, ION_CAMERA_HEAP_ID | RPCMEM_TRY_MAP_STATIC, size);
+    }
 }
 
 static ggml_backend_buffer_t ggml_backend_hexagon_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     void * host_ptr = ggml_hexagon_host_malloc(buft, size);
 
     if (nullptr == host_ptr) {
+        GGMLHEXAGON_LOG_INFO("failed to alloc host buffer");
+        //TODO: use assertion here before find a better approach to release "correct" host buffer
+        //      in function ggml_backend_hexagon_host_buffer_free
+        GGML_ASSERT(nullptr != host_ptr);
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
+    } else {
+        GGMLHEXAGON_LOG_INFO("succeed to alloc host buffer %d MiB", size / SIZE_IN_MB);
     }
 
     ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(host_ptr, size);
@@ -6356,9 +6397,12 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
                 } else {
                     ggml_backend_hexagon_device_interface.supports_op = ggmlhexagon_can_handle_op_through_qnn;
                 }
+
                 if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
-                    //don't use system memory in this scenario
-                    ggml_backend_hexagon_device_interface.get_host_buffer_type = nullptr;
+                    if (0 == g_hexagon_appcfg.enable_pinned_memory) {
+                        //don't use system memory in this scenario
+                        ggml_backend_hexagon_device_interface.get_host_buffer_type = nullptr;
+                    }
                 }
 
                 GGMLHEXAGON_LOG_DEBUG("create backend device for device %d", i);
