@@ -1,25 +1,37 @@
 #!/bin/bash
-# build llama.cpp + ggml-hexagon for Snapdragon mobile SoC equipped Android phone on Linux
-
+# build llama.cpp + ggml-hexagon for Qualcomm Snapdragon mobile SoC equipped Android phone on Linux
+#
+# this script will download Android NDK and Qualcomm QNN SDK automatically,
+# Hexagon SDK must be obtained with a Qualcomm Developer Account and cannot be downloaded automatically in this script.
+#
 set -e
 
 PWD=`pwd`
-ANDROID_PLATFORM=android-34
-ANDROID_NDK=${PWD}/android-ndk-r26c
+
+#running path on Android phone
 REMOTE_PATH=/data/local/tmp/
+#LLM model file on Android phone
 GGUF_MODEL_NAME=/sdcard/gemma-3-4b-it-Q8_0.gguf
 GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 
-#QNN SDK could be found at:
+#Android NDK can be found at:
+#https://developer.android.com/ndk/downloads
+ANDROID_PLATFORM=android-34
+ANDROID_NDK_VERSION=r28
+ANDROID_NDK_NAME=android-ndk-${ANDROID_NDK_VERSION}
+ANDROID_NDK_FULLNAME=${ANDROID_NDK_NAME}-linux.zip
+ANDROID_NDK=${PWD}/${ANDROID_NDK_NAME}
+
+#QNN SDK can be found at:
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
-#https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
 QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_VERSION=2.33.0.250327
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
-#5.5.3.0 should be also ok
+#Hexagon SDK can be found at:
+#https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
 HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #available htp arch version:
 #v68 --- Snapdragon 888
@@ -27,13 +39,13 @@ HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #v73 --- Snapdragon 8 Gen2
 #v75 --- Snapdragon 8 Gen3
 #v79 --- Snapdragon 8 Elite(aka Gen4)
+#8Gen3
 HTP_ARCH_VERSION=v75
 HTP_ARCH_VERSION_a=V75
-
+#8Elite
 HTP_ARCH_VERSION=v79
 HTP_ARCH_VERSION_a=V79
 
-#running_params=" -mg 2 -ngl 99 "
 #running_params=" -mg 2 -ngl 99 -t 8 -fa 1 "
 running_params=" -mg 2 -ngl 99 -t 8 "
 
@@ -109,11 +121,11 @@ function check_and_download_ndk()
 
     if [ ${is_android_ndk_exist} -eq 0 ]; then
 
-        if [ ! -f android-ndk-r26c-linux.zip ]; then
-            wget --no-config --quiet --show-progress -O android-ndk-r26c-linux.zip  https://dl.google.com/android/repository/android-ndk-r26c-linux.zip
+        if [ ! -f ${ANDROID_NDK_FULLNAME} ]; then
+            wget --no-config --quiet --show-progress -O ${ANDROID_NDK_FULLNAME} https://dl.google.com/android/repository/${ANDROID_NDK_FULLNAME}
         fi
 
-        unzip android-ndk-r26c-linux.zip
+        unzip ${ANDROID_NDK_FULLNAME}
 
         if [ $? -ne 0 ]; then
             printf "failed to download android ndk to %s \n" "${ANDROID_NDK}"
