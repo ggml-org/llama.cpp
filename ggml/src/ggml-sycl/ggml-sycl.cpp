@@ -2844,6 +2844,15 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
     return false;
 }
 
+inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -2863,13 +2872,14 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     }
 }
 
-static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-
-    const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
-    int64_t min_compute_capability = INT_MAX;
+static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                              ggml_tensor * dst) {
+    const bool split                  = ggml_backend_buffer_is_sycl_split(src0->buffer);
+    int64_t    min_compute_capability = INT_MAX;
 
     if (split) {
-        ggml_backend_sycl_split_buffer_type_context * buft_ctx = (ggml_backend_sycl_split_buffer_type_context *) src0->buffer->buft->context;
+        ggml_backend_sycl_split_buffer_type_context * buft_ctx =
+            (ggml_backend_sycl_split_buffer_type_context *) src0->buffer->buft->context;
         auto & tensor_split = buft_ctx->tensor_split;
         for (int id = 0; id < ggml_sycl_info().device_count; ++id) {
             // skip devices that are not going to do any work:
@@ -2882,7 +2892,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             }
         }
     } else {
-        min_compute_capability    = ggml_sycl_info().devices[ctx.device].cc;
+        min_compute_capability = ggml_sycl_info().devices[ctx.device].cc;
     }
 
     // check data types and tensor shapes for custom matrix multiplication kernels:
@@ -2904,9 +2914,17 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
+    const bool reorder = static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra) &&
+                         static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra)->optimized_feature.reorder;
+
     // mmvq path is faster in the CUDA backend.
-    if (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda)
+    if (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
+        // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
+        // is enabled takes precedence over DMMV, the current if-else implementation
+        // requires disabling DMMV if both conditions are met
+        || (reorder && ggml_sycl_supports_reorder_mmvq(src0->type))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
+    }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
         // TODO: Refactor and cleanup of mul mat dispatching.
@@ -2925,14 +2943,17 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         // KQ + KQV multi-batch
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
     } else if (use_dequantize_mul_mat_vec) {
-        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec, false);
-        // save_tensor_txt("1/dst_1.txt", (float*) dst->data, src0->ne[1], sizeof(float), ctx.stream());
+        constexpr bool convert_src1_to_q8_1 = false;
+        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec, convert_src1_to_q8_1);
     } else if (use_mul_mat_vec_q) {
-        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, true);
+        constexpr bool convert_src1_to_q8_1 = true;
+        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, convert_src1_to_q8_1);
     } else if (use_mul_mat_q) {
-        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, true);
+        constexpr bool convert_src1_to_q8_1 = true;
+        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, convert_src1_to_q8_1);
     } else {
-        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, false);
+        constexpr bool convert_src1_to_q8_1 = false;
+        ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, convert_src1_to_q8_1);
     }
 }
 
