@@ -337,6 +337,7 @@ struct clip_ctx {
                         ? ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr)
                         : nullptr);
 
+        ggml_backend_t backend_cpu_raw_ptr = backend_cpu.get();
         if (backend) {
             LOG_INF("%s: CLIP using %s backend\n", __func__, ggml_backend_name(backend.get()));
             backend_ptrs.push_back(backend.get());
@@ -346,8 +347,8 @@ struct clip_ctx {
             LOG_INF("%s: CLIP using CPU backend\n", __func__);
         }
 
-        backend_ptrs.push_back(backend_cpu.get());
-        backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu.get()));
+        backend_ptrs.push_back(backend_cpu_raw_ptr);
+        backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu_raw_ptr));
 
         sched.reset(
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false)
@@ -2610,7 +2611,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
-    ggml_backend_cpu_set_n_threads(ctx->backend_cpu.get(), n_threads);
+    ggml_backend_t cpu_backend_raw_ptr =
+            ggml_backend_is_cpu(ctx->backend.get()) ? ctx->backend.get() : ctx->backend_cpu.get();
+    ggml_backend_cpu_set_n_threads(cpu_backend_raw_ptr, n_threads);
 
     auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
