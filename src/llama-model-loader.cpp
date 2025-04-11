@@ -651,7 +651,7 @@ llama_model_loader::llama_model_loader(
             }
         }
 
-        LLAMA_LOG_INFO("%s: Dumping metadata keys/values. Note: KV overrides do not apply in this output.\n", __func__);
+        //LLAMA_LOG_INFO("%s: Dumping metadata keys/values. Note: KV overrides do not apply in this output.\n", __func__);
 
         for (int i = 0; i < n_kv; i++) {
             const char * name           = gguf_get_key(meta.get(), i);
@@ -677,7 +677,7 @@ llama_model_loader::llama_model_loader(
                 continue;
             }
 
-            LLAMA_LOG_INFO("%s: - type %4s: %4d tensors\n", __func__, ggml_type_name(kv.first), kv.second);
+            //LLAMA_LOG_INFO("%s: - type %4s: %4d tensors\n", __func__, ggml_type_name(kv.first), kv.second);
         }
     }
 
@@ -1119,6 +1119,7 @@ std::string llama_model_loader::ftype_name() const {
 }
 
 void llama_model_loader::print_info() const {
+    return;
     LLAMA_LOG_INFO("%s: file format = %s\n", __func__, llama_file_version_name(fver));
     LLAMA_LOG_INFO("%s: file type   = %s\n", __func__, llama_model_ftype_name(ftype).c_str());
     if (n_bytes < GiB) {
