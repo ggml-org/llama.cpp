@@ -1028,9 +1028,8 @@ struct common_init_result common_init_from_params(common_params & params) {
 }
 
 std::string get_model_endpoint() {
-    //For other communities with the same model backend protocols
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    //For HF or HF mirror endpoints
+    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
     const char * hf_endpoint_env = getenv("HF_ENDPOINT");
     const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
     std::string model_endpoint = "https://huggingface.co/";
