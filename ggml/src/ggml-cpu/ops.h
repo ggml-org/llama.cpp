@@ -96,29 +96,10 @@ void ggml_compute_forward_add_rel_pos(const struct ggml_compute_params * params,
 void ggml_compute_forward_rwkv_wkv6(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_rwkv_wkv7(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_gla(const struct ggml_compute_params * params, struct ggml_tensor * dst);
-void ggml_compute_forward_map_unary(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const ggml_unary_op_f32_t fun);
-void ggml_compute_forward_map_binary(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const ggml_binary_op_f32_t fun);
-void ggml_compute_forward_map_custom1_f32(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const ggml_custom1_op_f32_t fun);
-void ggml_compute_forward_map_custom2_f32(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const ggml_custom2_op_f32_t fun);
-void ggml_compute_forward_map_custom3_f32(
-    const struct ggml_compute_params * params,
-    struct ggml_tensor * dst,
-    const ggml_custom3_op_f32_t fun);
 void ggml_compute_forward_map_custom1(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_map_custom2(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_map_custom3(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_custom(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_cross_entropy_loss(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_cross_entropy_loss_back(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_opt_step_adamw(const struct ggml_compute_params * params, struct ggml_tensor * dst);

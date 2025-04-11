@@ -1334,8 +1334,9 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
             return op->src[0]->type == GGML_TYPE_F16;
         case GGML_OP_POOL_1D:
             return false;
-        case GGML_OP_POOL_2D:
         case GGML_OP_UPSCALE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
+        case GGML_OP_POOL_2D:
         case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_TIMESTEP_EMBEDDING:
