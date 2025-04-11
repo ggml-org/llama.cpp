@@ -400,6 +400,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
 	            regex_exprs = {
                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*|\\p{N}|[\\p{P}\\p{S}]{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
 		        };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_GPT4O:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -1626,7 +1627,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "velvet") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_VELVET;
             } else if (
-                tokenizer_pre == "gpt-4o") {
                     tokenizer_pre == "gpt-4o" ||
                     tokenizer_pre == "llama4") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
