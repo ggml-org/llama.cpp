@@ -12,6 +12,8 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <cstdlib>
+#include <iostream>
 
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
@@ -188,26 +190,18 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
         bool is_one_bit = (ftype == LLAMA_FTYPE_MOSTLY_IQ1_M || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S);
+        
+        const char* _gguf_is_moe = std::getenv("GGUF_IS_MOE");
+
+        bool gguf_is_moe = false;
+        if (_gguf_is_moe != nullptr && std::string(_gguf_is_moe) == "1")
+            gguf_is_moe = true;
+
         if (name.find("attn_v.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
             // if (qs.model.hparams.n_gqa() >= 4 || qs.model.hparams.n_expert >= 4) new_type = GGML_TYPE_Q4_K;
             // else new_type = ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M ? GGML_TYPE_IQ3_S : GGML_TYPE_Q2_K;
             ++qs.i_attention_wv;
-        }
-        else if (
-            (name.find("blk.1.ffn_down_exps.weight")  != std::string::npos) ||
-            (name.find("blk.3.ffn_down_exps.weight")  != std::string::npos) ||
-            (name.find("blk.45.ffn_down_exps.weight") != std::string::npos) ) {
-            new_type = GGML_TYPE_Q4_K;
-        }
-        else if (
-            (name.find("blk.1.ffn_gate_exps.weight")  != std::string::npos) ||
-            (name.find("blk.1.ffn_up_exps.weight")    != std::string::npos) ||
-            (name.find("blk.3.ffn_gate_exps.weight")  != std::string::npos) ||
-            (name.find("blk.3.ffn_up_exps.weight")    != std::string::npos) ||
-            (name.find("blk.45.ffn_gate_exps.weight") != std::string::npos) ||
-            (name.find("blk.45.ffn_up_exps.weight")   != std::string::npos) ) {
-            new_type = GGML_TYPE_Q3_K;
         }
         else if (qs.model.hparams.n_expert == 8 && name.find("attn_k.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
