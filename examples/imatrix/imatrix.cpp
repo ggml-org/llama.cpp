@@ -247,9 +247,8 @@ void IMatrixCollector::save_imatrix(int ncall) const {
         }
 
         if (n_zeros > 0) {
-            // LOG_WRN("%s: entry '%40s' has partial data (%.2f%%) - skipping\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%) - skipping\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
             // continue;
-            fprintf(stderr, "%s: entry '%40s' has partial data (%.2f%%)", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
             bool store_it = false;
             if (kv.second.n_as > 1) {
                 int n_per_expert = n_all / kv.second.n_as;
