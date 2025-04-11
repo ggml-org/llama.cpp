@@ -253,6 +253,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int n_layers_left = n_layer - 6 - 2;
             if (n_layers_left <= 0) n_layers_left = 0;
             int divisor = n_layers_left / 3;
+            if (divisor <= 0) divisor = 1;
 
             int which = 6;
 
