@@ -4,6 +4,7 @@
 #include "log.h"
 #include "llama.h"
 #include "base64.hpp"
+#include "mtmd.h"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
@@ -21,6 +22,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <cinttypes>
 
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo"
 
@@ -40,6 +42,8 @@ using json = nlohmann::ordered_json;
 #define QUE_WRN(fmt, ...) LOG_WRN("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define QUE_ERR(fmt, ...) LOG_ERR("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define QUE_DBG(fmt, ...) LOG_DBG("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+
+using raw_buffer = std::vector<uint8_t>;
 
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
@@ -386,7 +390,7 @@ static inline bool is_base64(uint8_t c) {
     return (isalnum(c) || (c == '+') || (c == '/'));
 }
 
-static inline std::vector<uint8_t> base64_decode(const std::string & encoded_string) {
+static inline raw_buffer base64_decode(const std::string & encoded_string) {
     int i = 0;
     int j = 0;
     int in_ = 0;
@@ -396,7 +400,7 @@ static inline std::vector<uint8_t> base64_decode(const std::string & encoded_str
     uint8_t char_array_4[4];
     uint8_t char_array_3[3];
 
-    std::vector<uint8_t> ret;
+    raw_buffer ret;
 
     while (in_len-- && (encoded_string[in_] != '=') && is_base64(encoded_string[in_])) {
         char_array_4[i++] = encoded_string[in_]; in_++;
@@ -579,7 +583,8 @@ static json oaicompat_completion_params_parse(
     const json & body, /* openai api json semantics */
     bool use_jinja,
     common_reasoning_format reasoning_format,
-    const struct common_chat_templates * tmpls)
+    const struct common_chat_templates * tmpls,
+    std::vector<raw_buffer> & out_files)
 {
     json llama_params;
 
@@ -627,8 +632,47 @@ static json oaicompat_completion_params_parse(
         }
     }
 
+    // get input files
+    json messages = json_value(body, "messages", json::array());
+    if (!messages.is_array()) {
+        throw std::runtime_error("Expected 'messages' to be an array, got " + messages.dump());
+    }
+    for (auto & msg : messages) {
+        json & content = msg.at("content");
+        if (content.is_string()) {
+            continue;
+        }
+
+        if (!content.is_array()) {
+            throw std::runtime_error("Expected 'content' to be a string or an array");
+        }
+
+        for (auto & p : content) {
+            std::string type      = json_value(p, "type", std::string());
+            json        image_url = json_value(p, "image_url", json::object());
+            if (type == "image_url") {
+                std::string url = json_value(image_url, "url", std::string());
+                std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+                if (parts.size() != 2) {
+                    throw std::runtime_error("Invalid image_url.url value");
+                } else if (!string_starts_with(parts[0], "data:image/")) {
+                    throw std::runtime_error("Invalid image_url.url format: " + parts[0]);
+                } else if (!string_ends_with(parts[0], "base64")) {
+                    throw std::runtime_error("image_url.url must be base64 encoded");
+                } else {
+                    auto base64_data = parts[1];
+                    auto decoded_data = base64_decode(base64_data);
+                    out_files.push_back(decoded_data);
+                }
+                p["type"] = "text";
+                p["text"] = "<__image__>";
+                p.erase("image_url");
+            }
+        }        
+    }
+
     common_chat_templates_inputs inputs;
-    inputs.messages              = common_chat_msgs_parse_oaicompat(body.at("messages"));
+    inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(json_value(body, "tool_choice", std::string("auto")));
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
@@ -912,4 +956,232 @@ static std::vector<common_adapter_lora_info> parse_lora_request(
     }
 
     return lora;
+}
+
+//
+// utils for interacting with libmtmd
+// (may need to refactor in near future)
+//
+
+struct server_inp_chunk {
+    llama_token tok_text;
+    mtmd_image_tokens_ptr tok_image;
+    std::string str() {
+        // for debugging
+        if (tok_image) {
+            return "<image> ";
+        } else {
+            return std::to_string(tok_text) + " ";
+        }
+    }
+};
+
+struct server_inputs {
+    std::vector<server_inp_chunk> chunks;
+
+    server_inputs() = default;
+    ~server_inputs() = default; // Important if unique_ptr is used
+
+    // Prevent copying
+    server_inputs(const server_inputs&) = delete;
+    server_inputs& operator=(const server_inputs&) = delete;
+
+    // Allow moving (usually implicitly generated if members are movable)
+    server_inputs(server_inputs&&) = default;
+    server_inputs& operator=(server_inputs&&) = default;
+
+    server_inputs(mtmd_input_chunks * mtmd_chunks) {
+        for (auto & c : *mtmd_chunks) {
+            if (c.type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                chunks.push_back({LLAMA_TOKEN_NULL, mtmd_image_tokens_ptr(c.tokens_image)});
+            } else if (c.type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                for (auto & tok : c.tokens_text) {
+                    chunks.push_back({tok, nullptr});
+                }
+            } else {
+                GGML_ASSERT(false && "Invalid chunk type");
+            }
+        }
+    }
+
+    size_t n_tokens() const {
+        size_t res = 0;
+        for (const auto & chunk : chunks) {
+            if (chunk.tok_image) {
+                res += mtmd_image_tokens_get_n_tokens(chunk.tok_image.get());
+            } else {
+                res++;
+            }
+        }
+        return res;
+    }
+
+    bool empty() const {
+        return n_tokens() == 0;
+    }
+
+    void clear() {
+        chunks.clear();
+    }
+
+    void add_text_token(llama_token tok) {
+        GGML_ASSERT(tok != LLAMA_TOKEN_NULL);
+        chunks.push_back({tok, nullptr});
+    }
+
+    size_t get_common_prefix(const server_inputs & b) const {
+        size_t ret = 0;
+        size_t max_idx = std::min(chunks.size(), b.chunks.size());
+        for (size_t i = 0; i < max_idx; ++i) {
+            auto & ai =   chunks[i];
+            auto & bi = b.chunks[i];
+
+            if (ai.tok_text == bi.tok_text && !ai.tok_image && !bi.tok_image) {
+                ret++;
+                continue;
+            } else if (ai.tok_image && bi.tok_image) {
+                // TODO check image hash
+                break;
+            } else {
+                break;
+            }
+        }
+        return ret;
+    }
+
+    bool validate(llama_token max_vocab_id) const {
+        for (const auto & chunk : chunks) {
+            if (!chunk.tok_image) {
+                if (chunk.tok_text < 0 || chunk.tok_text >= max_vocab_id) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    server_inp_chunk & get_chunk(size_t pos) {
+        return chunks[get_chunk_idx(pos)];
+    }
+
+    size_t get_chunk_idx(size_t pos) const {
+        size_t current_pos = 0;
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            const auto & chunk = chunks[i];
+            size_t chunk_size = chunk.tok_image ? mtmd_image_tokens_get_n_tokens(chunk.tok_image.get()) : 1;
+            size_t chunk_end_pos = current_pos + chunk_size;
+            if (pos < chunk_end_pos) {
+                // The target position 'pos' falls within this chunk
+                return i;
+            }
+
+            current_pos = chunk_end_pos;
+        }
+        // If the loop finishes, 'pos' is >= the total number of logical positions
+        return chunks.size();
+    }
+
+    // same idea with std::vector<llama_token> resize()
+    void keep_until(size_t pos) {
+        if (pos == 0) {
+            chunks.clear();
+            return;
+        }
+
+        size_t current_pos = 0;
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            const auto & chunk = chunks[i];
+            size_t chunk_size = chunk.tok_image ? mtmd_image_tokens_get_n_tokens(chunk.tok_image.get()) : 1;
+            size_t chunk_end_pos = current_pos + chunk_size;
+            if (pos <= current_pos) {
+                // Truncation point is exactly at or before the start of this chunk.
+                // Keep only chunks before index 'i'.
+                chunks.resize(i);
+                return;
+            }
+            if (pos < chunk_end_pos) {
+                // Truncation point 'pos' falls within this chunk.
+                if (chunk.tok_image) {
+                    // It's an image chunk, keep the whole chunk.
+                    // Keep chunks up to and including index 'i'.
+                    chunks.resize(i + 1);
+                } else {
+                    // It's a text chunk. Since pos < chunk_end_pos and chunk_size is 1,
+                    // this means pos == current_pos.
+                    // Keep only chunks before index 'i'.
+                    chunks.resize(i);
+                }
+                return;
+            }
+            // pos >= chunk_end_pos, so keep this chunk entirely and continue.
+            current_pos = chunk_end_pos;
+        }
+        // If the loop completes, it means 'pos' is >= the total logical size.
+        // No truncation needed, the vector remains unchanged.
+    }
+};
+
+// helper struct to make working with embd batch easier
+// note: this will be removed after llama_batch_ext refactoring
+struct server_embd_batch {
+    std::vector<llama_pos>      pos;
+    std::vector<int32_t>        n_seq_id;
+    std::vector<llama_seq_id>   seq_id_0;
+    std::vector<llama_seq_id *> seq_ids;
+    std::vector<int8_t>         logits;
+    llama_batch batch;
+    server_embd_batch() = default;
+    server_embd_batch(float * embd, int32_t n_tokens, llama_pos pos_0, llama_seq_id seq_id) {
+        pos     .resize(n_tokens);
+        n_seq_id.resize(n_tokens);
+        seq_ids .resize(n_tokens + 1);
+        logits  .resize(n_tokens);
+        seq_id_0.resize(1);
+        seq_id_0[0] = seq_id;
+        seq_ids [n_tokens] = nullptr;
+        batch = {
+            /*n_tokens       =*/ n_tokens,
+            /*tokens         =*/ nullptr,
+            /*embd           =*/ embd,
+            /*pos            =*/ pos.data(),
+            /*n_seq_id       =*/ n_seq_id.data(),
+            /*seq_id         =*/ seq_ids.data(),
+            /*logits         =*/ logits.data(),
+        };
+        for (int i = 0; i < n_tokens; i++) {
+            batch.pos     [i] = pos_0 + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id  [i] = seq_id_0.data();
+            batch.logits  [i] = false;
+        }
+    }
+};
+
+// TODO @ngxson : quite hacky for now, but just to see if it works
+static int32_t server_encode_image(mtmd_context * mctx, server_embd_batch & batch_out, server_inp_chunk & chunk, llama_pos n_past, llama_seq_id seq_id) {
+    GGML_ASSERT(chunk.tok_image);
+
+    int64_t t0 = ggml_time_ms();
+    LOG_INF("encoding image...\n");
+    int32_t ret = mtmd_encode(mctx, chunk.tok_image.get());
+    if (ret != 0) {
+        LOG_ERR("failed to encode image\n");
+        batch_out = server_embd_batch{};
+        return ret;
+    }
+    LOG_INF("image encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
+
+    int32_t n_tokens = mtmd_image_tokens_get_n_tokens(chunk.tok_image.get());
+    float * embd = mtmd_get_output_embd(mctx);
+    batch_out = server_embd_batch(embd, n_tokens, n_past, seq_id);
+    return ret;
+}
+
+// hacky, support text-only for now
+static server_inputs convert_legacy_to_mtmd(llama_tokens & tokenized) {
+    server_inputs res;
+    for (auto & tok : tokenized) {
+        res.add_text_token(tok);
+    }
+    return res;
 }

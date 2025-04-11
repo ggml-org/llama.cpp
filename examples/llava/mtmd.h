@@ -81,13 +81,20 @@ MTMD_API void mtmd_free(mtmd_context * ctx);
 //   2. (image tokens)
 //   3. "<end_of_image>\ndescribe it in detail."
 // number of bitmaps must be equal to the number of image markers in the prompt
+// the returned value must be freed using mtmd_input_chunks_free()
 // this function is thread-safe (shared ctx)
 MTMD_API mtmd_input_chunks * mtmd_tokenize(mtmd_context * ctx,
                                 const mtmd_input_text & text,
                                 const std::vector<mtmd_bitmap> & bitmaps);
 
-// free image chunk data
-MTMD_API void mtmd_input_chunks_free(mtmd_input_chunks * chunks);
+// if free_images = true, free the image tokens ; otherwise, you must free them using mtmd_image_free()
+MTMD_API void mtmd_input_chunks_free(mtmd_input_chunks * chunks, bool free_images);
+
+// access mtmd_image_tokens
+MTMD_API size_t mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens);
+MTMD_API size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens);
+MTMD_API size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens);
+MTMD_API void   mtmd_image_tokens_free(mtmd_image_tokens * image_tokens);
 
 // returns 0 on success
 MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
@@ -95,6 +102,11 @@ MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
 
 // get output embeddings from the last encode pass
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+// whether we need to set non-causal mask before llama_decode
+MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
+
+
 
 //
 // helper functions (can be implemented based on other functions)
@@ -133,9 +145,14 @@ struct mtmd_context_deleter {
 using mtmd_context_ptr = std::unique_ptr<mtmd_context, mtmd_context_deleter>;
 
 struct mtmd_input_chunks_deleter {
-    void operator()(mtmd_input_chunks * val) { mtmd_input_chunks_free(val); }
+    void operator()(mtmd_input_chunks * val) { mtmd_input_chunks_free(val, true); }
 };
 using mtmd_input_chunks_ptr = std::unique_ptr<mtmd_input_chunks, mtmd_input_chunks_deleter>;
+
+struct mtmd_image_tokens_deleter {
+    void operator()(mtmd_image_tokens * val) { mtmd_image_tokens_free(val); }
+};
+using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens, mtmd_image_tokens_deleter>;
 
 #else
 

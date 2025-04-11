@@ -166,13 +166,34 @@ mtmd_input_chunks * mtmd_tokenize(mtmd_context * ctx,
     return output;
 }
 
-void mtmd_input_chunks_free(mtmd_input_chunks * chunks) {
-    for (auto & chunk : *chunks) {
-        if (chunk.type == MTMD_INPUT_CHUNK_TYPE_IMAGE && chunk.tokens_image) {
-            delete chunk.tokens_image;
+void mtmd_image_tokens_free(mtmd_image_tokens * image_tokens) {
+    if (image_tokens) {
+        delete image_tokens;
+    }
+}
+
+void mtmd_input_chunks_free(mtmd_input_chunks * chunks, bool free_images) {
+    if (free_images) {
+        for (auto & chunk : *chunks) {
+            if (chunk.type == MTMD_INPUT_CHUNK_TYPE_IMAGE && chunk.tokens_image) {
+                mtmd_image_tokens_free(chunk.tokens_image);
+                chunk.tokens_image = nullptr;
+            }
         }
     }
     delete chunks;
+}
+
+size_t mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->n_tokens();
+}
+
+size_t mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->nx;
+}
+
+size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->ny;
 }
 
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
@@ -289,7 +310,7 @@ int32_t mtmd_helper_eval(mtmd_context * ctx,
                 LOG_INF("image encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
             }
 
-            int32_t n_tokens = chunk.tokens_image->n_tokens();
+            int32_t n_tokens = mtmd_image_tokens_get_n_tokens(chunk.tokens_image);
             float * embd = mtmd_get_output_embd(ctx);
             decode_embd_batch batch_img(embd, n_tokens, n_past, 0);
             int64_t t1 = ggml_time_ms();
@@ -338,4 +359,12 @@ int32_t mtmd_helper_bitmap_init_from_file(const char * fname, mtmd_bitmap & outp
     output.data.resize(output.nx * output.ny * 3);
     std::memcpy(output.data.data(), data, output.nx * output.ny * 3);
     return 0;
+}
+
+bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
+    projector_type proj_type = clip_get_projector_type(ctx->ctx_clip);
+    if (proj_type == PROJECTOR_TYPE_GEMMA3) {
+        return true;
+    }
+    return false;
 }

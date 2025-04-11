@@ -7,6 +7,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "mtmd.h"
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
@@ -196,8 +197,8 @@ struct server_task {
     int id_target = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
-    slot_params  params;
-    llama_tokens prompt_tokens;
+    slot_params   params;
+    server_inputs prompt_tokens;
     int id_selected_slot = -1;
 
     // used by SERVER_TASK_TYPE_SLOT_SAVE, SERVER_TASK_TYPE_SLOT_RESTORE, SERVER_TASK_TYPE_SLOT_ERASE
@@ -1246,6 +1247,9 @@ struct server_slot {
     llama_context * ctx = nullptr;
     llama_context * ctx_dft = nullptr;
 
+    // multimodal
+    mtmd_context * mctx = nullptr;
+
     common_speculative * spec = nullptr;
 
     std::vector<common_adapter_lora_info> lora;
@@ -1273,14 +1277,14 @@ struct server_slot {
     int32_t n_prompt_tokens_processed = 0;
 
     // input prompt tokens
-    llama_tokens prompt_tokens;
+    server_inputs prompt_tokens;
 
     size_t last_nl_pos = 0;
 
     std::string  generated_text;
     llama_tokens generated_tokens;
 
-    llama_tokens cache_tokens;
+    server_inputs cache_tokens;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -1474,7 +1478,7 @@ struct server_slot {
             {"is_processing", is_processing()},
             {"non_causal",    is_non_causal()},
             {"params",        params.to_json()},
-            {"prompt",        common_detokenize(ctx, prompt_tokens)},
+            {"prompt",        ""}, // TODO @ngxson, hacky patch, to fix before merge
             {"next_token",
                 {
                     {"has_next_token", has_next_token},
@@ -1552,11 +1556,11 @@ struct server_queue {
     std::condition_variable condition_tasks;
 
     // callback functions
-    std::function<void(server_task)> callback_new_task;
-    std::function<void(void)>        callback_update_slots;
+    std::function<void(server_task&)> callback_new_task;
+    std::function<void(void)>         callback_update_slots;
 
     // Add a new task to the end of the queue
-    int post(server_task task, bool front = false) {
+    int post(server_task & task, bool front = false) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         GGML_ASSERT(task.id != -1);
         // if this is cancel task make sure to clean up pending tasks
@@ -1596,7 +1600,7 @@ struct server_queue {
     }
 
     // Add a new task, but defer until one slot is available
-    void defer(server_task task) {
+    void defer(server_task & task) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         QUE_DBG("defer task, id = %d\n", task.id);
         queue_tasks_deferred.push_back(std::move(task));
@@ -1611,7 +1615,7 @@ struct server_queue {
     }
 
     // Register function to process a new task
-    void on_new_task(std::function<void(server_task)> callback) {
+    void on_new_task(std::function<void(server_task&)> callback) {
         callback_new_task = std::move(callback);
     }
 
@@ -1660,12 +1664,12 @@ struct server_queue {
                     lock.unlock();
                     break;
                 }
-                server_task task = queue_tasks.front();
+                server_task task = std::move(queue_tasks.front());
                 queue_tasks.pop_front();
                 lock.unlock();
 
                 QUE_DBG("processing task, id = %d\n", task.id);
-                callback_new_task(std::move(task));
+                callback_new_task(task);
             }
 
             // all tasks in the current loop is processed, slots data is now ready
@@ -1846,6 +1850,9 @@ struct server_context {
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
 
+    // multimodal
+    mtmd_context * mctx = nullptr;
+
     const llama_vocab * vocab = nullptr;
 
     llama_model * model_dft = nullptr;
@@ -1875,6 +1882,8 @@ struct server_context {
     common_chat_templates_ptr chat_templates;
 
     ~server_context() {
+        mtmd_free(mctx);
+
         // Clear any sampling context
         for (server_slot & slot : slots) {
             common_sampler_free(slot.smpl);
@@ -1962,6 +1971,18 @@ struct server_context {
             chat_templates = common_chat_templates_init(model, "chatml");
         }
 
+        std::string & mmproj_path = params_base.mmproj.path;
+        if (!mmproj_path.empty()) {
+            mtmd_context_params mparams;
+            mparams.n_threads = params_base.cpuparams.n_threads;
+            mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
+            if (mctx == nullptr) {
+                SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
+                return false;
+            }
+            SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
+        }
+
         return true;
     }
 
@@ -1977,6 +1998,7 @@ struct server_context {
             slot.ctx = ctx;
             slot.n_ctx = n_ctx_slot;
             slot.n_predict = params_base.n_predict;
+            slot.mctx = mctx;
 
             if (model_dft) {
                 slot.batch_spec = llama_batch_init(params_base.speculative.n_max + 1, 0, 1);
@@ -2004,7 +2026,7 @@ struct server_context {
 
             slot.reset();
 
-            slots.push_back(slot);
+            slots.push_back(std::move(slot));
         }
 
         default_generation_settings_for_props = slots[0].to_json();
@@ -2051,10 +2073,10 @@ struct server_context {
                 }
 
                 // length of the Longest Common Subsequence between the current slot's prompt and the input prompt
-                int cur_lcs_len = common_lcs(slot.cache_tokens, task.prompt_tokens);
+                int cur_lcs_len = slot.cache_tokens.get_common_prefix(task.prompt_tokens);
 
                 // fraction of the common subsequence length compared to the current slot's prompt length
-                float cur_similarity = static_cast<float>(cur_lcs_len) / static_cast<int>(slot.cache_tokens.size());
+                float cur_similarity = static_cast<float>(cur_lcs_len) / static_cast<int>(slot.cache_tokens.n_tokens());
 
                 // select the current slot if the criteria match
                 if (cur_lcs_len > lcs_len && cur_similarity > slot_prompt_similarity) {
@@ -2093,19 +2115,14 @@ struct server_context {
         return ret;
     }
 
-    bool can_be_detokenized(const struct llama_context * ctx, const std::vector<llama_token> & tokens) {
+    bool can_be_detokenized(const struct llama_context * ctx, const server_inputs & inp) {
         const llama_model * model = llama_get_model(ctx);
         const llama_vocab * vocab = llama_model_get_vocab(model);
         const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-        for (const auto & token : tokens) {
-            if (token < 0 || token >= n_vocab) {
-                return false;
-            }
-        }
-        return true;
+        return inp.validate(n_vocab);
     }
 
-    bool launch_slot_with_task(server_slot & slot, const server_task & task) {
+    bool launch_slot_with_task(server_slot & slot, server_task & task) {
         slot.reset();
         slot.id_task       = task.id;
         slot.index         = task.index;
@@ -2421,7 +2438,7 @@ struct server_context {
         res->content         = std::move(slot.generated_text);
         res->tokens          = std::move(slot.generated_tokens);
         res->timings         = slot.get_timings();
-        res->prompt          = common_detokenize(ctx, slot.prompt_tokens, true);
+        //res->prompt          = common_detokenize(ctx, slot.prompt_tokens, true); // TODO @ngxson : hacky, need to fix
         res->response_fields = std::move(slot.params.response_fields);
 
         res->truncated           = slot.truncated;
@@ -2547,7 +2564,7 @@ struct server_context {
             server_task task(SERVER_TASK_TYPE_CANCEL);
             task.id_target = id_task;
             queue_results.remove_waiting_task_id(id_task);
-            cancel_tasks.push_back(task);
+            cancel_tasks.push_back(std::move(task));
         }
         // push to beginning of the queue, so it has highest priority
         queue_tasks.post(cancel_tasks, true);
@@ -2637,7 +2654,7 @@ struct server_context {
     // Functions to process the task
     //
 
-    void process_single_task(server_task task) {
+    void process_single_task(server_task & task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
@@ -2729,7 +2746,7 @@ struct server_context {
                     }
                     queue_results.send(std::move(res));
                 } break;
-            case SERVER_TASK_TYPE_SLOT_SAVE:
+            /*case SERVER_TASK_TYPE_SLOT_SAVE:
                 {
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
@@ -2833,7 +2850,11 @@ struct server_context {
                     res->id_slot  = id_slot;
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
-                } break;
+                } break;*/
+            case SERVER_TASK_TYPE_SLOT_SAVE:
+            case SERVER_TASK_TYPE_SLOT_RESTORE:
+            case SERVER_TASK_TYPE_SLOT_ERASE:
+                GGML_ASSERT(false && "TODO @ngxson : removed due to not compat with multimodal");
             case SERVER_TASK_TYPE_SET_LORA:
                 {
                     params_base.lora_adapters = std::move(task.set_lora);
@@ -2841,6 +2862,7 @@ struct server_context {
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
+                 
         }
     }
 
@@ -2876,7 +2898,8 @@ struct server_context {
 
         // apply context-shift if needed
         // TODO: simplify and improve
-        for (server_slot & slot : slots) {
+        // TODO @ngxson : hacky, need to disable context shift for multimodal
+        /*for (server_slot & slot : slots) {
             if (slot.is_processing() && slot.n_past + 1 >= slot.n_ctx) {
                 if (!params_base.ctx_shift) {
                     // this check is redundant (for good)
@@ -2908,7 +2931,7 @@ struct server_context {
 
                 slot.truncated = true;
             }
-        }
+        }*/
 
         // start populating the batch for this iteration
         common_batch_clear(batch);
@@ -2940,16 +2963,20 @@ struct server_context {
             slot.n_past += 1;
 
             if (slot.params.cache_prompt) {
-                slot.cache_tokens.push_back(slot.sampled);
+                slot.cache_tokens.add_text_token(slot.sampled);
             }
 
             SLT_DBG(slot, "slot decode token, n_ctx = %d, n_past = %d, n_cache_tokens = %d, truncated = %d\n",
-                    slot.n_ctx, slot.n_past, (int) slot.cache_tokens.size(), slot.truncated);
+                    slot.n_ctx, slot.n_past, (int) slot.cache_tokens.n_tokens(), slot.truncated);
         }
 
         // process in chunks of params.n_batch
         int32_t n_batch  = llama_n_batch(ctx);
         int32_t n_ubatch = llama_n_ubatch(ctx);
+
+        // for multimodal
+        bool is_decoding_embd = false;
+        server_embd_batch batch_embd;
 
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.n_tokens == 0) {
@@ -2973,23 +3000,23 @@ struct server_context {
                         slot.t_start_generation = 0;
 
                         slot.n_past = 0;
-                        slot.n_prompt_tokens = prompt_tokens.size();
+                        slot.n_prompt_tokens = prompt_tokens.n_tokens();
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, n_prompt_tokens = %d\n", slot.n_ctx, slot.params.n_keep, slot.n_prompt_tokens);
 
                         // print prompt tokens (for debugging)
-                        if (1) {
-                            // first 16 tokens (avoid flooding logs)
-                            for (int i = 0; i < std::min<int>(16, prompt_tokens.size()); i++) {
-                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
-                            }
-                        } else {
-                            // all
-                            for (int i = 0; i < (int) prompt_tokens.size(); i++) {
-                                SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
-                            }
-                        }
+                        // if (1) {
+                        //     // first 16 tokens (avoid flooding logs)
+                        //     for (int i = 0; i < std::min<int>(16, prompt_tokens.size()); i++) {
+                        //         SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
+                        //     }
+                        // } else {
+                        //     // all
+                        //     for (int i = 0; i < (int) prompt_tokens.size(); i++) {
+                        //         SLT_DBG(slot, "prompt token %3d: %6d '%s'\n", i, prompt_tokens[i], common_token_to_piece(ctx, prompt_tokens[i]).c_str());
+                        //     }
+                        // }
 
                         // empty prompt passed -> release the slot and send empty response
                         if (prompt_tokens.empty()) {
@@ -3030,7 +3057,8 @@ struct server_context {
                             slot.params.n_keep = std::min(slot.n_ctx - 4, slot.params.n_keep);
 
                             // if input prompt is too big, truncate it
-                            if (slot.n_prompt_tokens >= slot.n_ctx) {
+                            // TODO @ngxson : this won't work with multimodal
+                            /*if (slot.n_prompt_tokens >= slot.n_ctx) {
                                 const int n_left = slot.n_ctx - slot.params.n_keep;
 
                                 const int n_block_size = n_left / 2;
@@ -3053,14 +3081,15 @@ struct server_context {
                                 SLT_WRN(slot, "input truncated, n_ctx = %d, n_keep = %d, n_left = %d, n_prompt_tokens = %d\n", slot.n_ctx, slot.params.n_keep, n_left, slot.n_prompt_tokens);
 
                                 GGML_ASSERT(slot.n_prompt_tokens < slot.n_ctx);
-                            }
+                            }*/
 
                             if (slot.params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
-                                slot.n_past = common_lcp(slot.cache_tokens, prompt_tokens);
+                                slot.n_past = slot.cache_tokens.get_common_prefix(prompt_tokens);
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
-                                if (params_base.n_cache_reuse > 0) {
+                                // TODO @ngxson : this won't work with multimodal
+                                /*if (params_base.n_cache_reuse > 0) {
                                     size_t head_c = slot.n_past; // cache
                                     size_t head_p = slot.n_past; // current prompt
 
@@ -3101,7 +3130,7 @@ struct server_context {
                                     }
 
                                     SLT_DBG(slot, "after context reuse, new slot.n_past = %d\n", slot.n_past);
-                                }
+                                }*/
                             }
                         }
 
@@ -3135,17 +3164,26 @@ struct server_context {
                     SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
 
                     // remove the non-common part from the cache
-                    slot.cache_tokens.resize(slot.n_past);
+                    slot.cache_tokens.keep_until(slot.n_past);
 
                     // add prompt tokens for processing in the current batch
                     while (slot.n_past < slot.n_prompt_tokens && batch.n_tokens < n_batch) {
                         // without pooling, we want to output the embeddings for all the tokens in the batch
                         const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING && llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE;
 
-                        common_batch_add(batch, prompt_tokens[slot.n_past], slot.n_past, { slot.id }, need_embd);
-
-                        if (slot.params.cache_prompt) {
-                            slot.cache_tokens.push_back(prompt_tokens[slot.n_past]);
+                        auto & curr_chunk = slot.prompt_tokens.get_chunk(slot.n_past);
+                        if (curr_chunk.tok_image) {
+                            // decode image
+                            server_encode_image(slot.mctx, batch_embd, curr_chunk, slot.n_past, slot.id);
+                            is_decoding_embd = true;
+                            SLT_INF(slot, "decoding image, n_past = %d, n_tokens = %d\n", slot.n_past, batch_embd.batch.n_tokens);
+                            slot.n_past += batch_embd.batch.n_tokens;
+                            break; // do not process any other slots
+                        } else {
+                            common_batch_add(batch, curr_chunk.tok_text, slot.n_past, { slot.id }, need_embd);
+                            if (slot.params.cache_prompt) {
+                                slot.cache_tokens.add_text_token(curr_chunk.tok_text);
+                            }
                         }
 
                         slot.n_prompt_tokens_processed++;
@@ -3163,8 +3201,11 @@ struct server_context {
                         common_sampler_reset(slot.smpl);
 
                         // Process all prompt tokens through sampler system
-                        for (int i = 0; i < slot.n_prompt_tokens; ++i) {
-                            common_sampler_accept(slot.smpl, prompt_tokens[i], false);
+                        for (size_t i = 0; i < slot.cache_tokens.n_tokens(); ++i) {
+                            auto & curr_chunk = slot.cache_tokens.get_chunk(i);
+                            if (curr_chunk.tok_text != LLAMA_TOKEN_NULL) {
+                                common_sampler_accept(slot.smpl, curr_chunk.tok_text, false);
+                            }
                         }
 
                         // extract the logits only for the last token
@@ -3201,7 +3242,7 @@ struct server_context {
         for (int32_t i = 0; i < batch.n_tokens; i += n_batch) {
             const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
 
-            llama_batch batch_view = {
+            llama_batch batch_view = is_decoding_embd ? batch_embd.batch : llama_batch{
                 n_tokens,
                 batch.token    + i,
                 nullptr,
@@ -3211,8 +3252,17 @@ struct server_context {
                 batch.logits   + i,
             };
 
+            // TODO @ngxson : maybe move this to llama_batch_ext
+            if (is_decoding_embd && mtmd_decode_use_non_causal(mctx)) {
+                llama_set_causal_attn(ctx, false);
+            }
+
             const int ret = llama_decode(ctx, batch_view);
             metrics.on_decoded(slots);
+
+            if (is_decoding_embd && mtmd_decode_use_non_causal(mctx)) {
+                llama_set_causal_attn(ctx, true);
+            }
 
             if (ret != 0) {
                 if (n_batch == 1 || ret < 0) {
@@ -3301,7 +3351,8 @@ struct server_context {
             }
 
             // do speculative decoding
-            for (auto & slot : slots) {
+            // TODO @ngxson : remove speculative decoding for multimodal
+            /*for (auto & slot : slots) {
                 if (!slot.is_processing() || !slot.can_speculate()) {
                     continue;
                 }
@@ -3394,7 +3445,7 @@ struct server_context {
                 }
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_past = %d\n", (int) ids.size() - 1, (int) draft.size(), slot.n_past);
-            }
+            }*/
         }
 
         SRV_DBG("%s", "run slots completed\n");
@@ -3912,6 +3963,7 @@ int main(int argc, char ** argv) {
     const auto handle_completions_impl = [&ctx_server, &res_error, &res_ok](
             server_task_type type,
             json & data,
+            std::vector<raw_buffer> & files,
             std::function<bool()> is_connection_closed,
             httplib::Response & res,
             oaicompat_type oaicompat) {
@@ -3930,15 +3982,55 @@ int main(int argc, char ** argv) {
             // TODO: this log can become very long, put it behind a flag or think about a more compact format
             //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
-            std::vector<llama_tokens> tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
-            tasks.reserve(tokenized_prompts.size());
-            for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+            // process files
+            std::vector<mtmd_bitmap> bitmaps;
+            {
+                for (auto & file : files) {
+                    mtmd_bitmap bmp;
+                    int32_t res = mtmd_helper_bitmap_init_from_buf(file.data(), file.size(), bmp);
+                    if (res != 0) {
+                        throw std::runtime_error("Failed to load image");
+                    }
+                    bitmaps.push_back(std::move(bmp));
+                }
+            }
+
+            std::vector<server_inputs> inputs;
+            if (oaicompat) {
+                if (!prompt.is_string()) {
+                    throw std::runtime_error("prompt must be a string");
+                } else {
+                    printf("prompt: %s\n", prompt.get<std::string>().c_str());
+                    mtmd_input_text inp_txt = {
+                        prompt.get<std::string>(),
+                        /* add_special */   true,
+                        /* parse_special */ true,
+                    };
+                    mtmd_input_chunks * tokenized = mtmd_tokenize(ctx_server.mctx, inp_txt, bitmaps);
+                    if (!tokenized) {
+                        throw std::runtime_error("Failed to tokenize prompt");
+                    }
+                    server_inputs tmp(tokenized);
+                    inputs.push_back(std::move(tmp));
+                    mtmd_input_chunks_free(tokenized, false); // only free the container, not the images
+                }
+            } else {
+                // non-multimodal version
+                auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
+                for (auto & p : tokenized_prompts) {
+                    auto tmp = convert_legacy_to_mtmd(p);
+                    inputs.push_back(std::move(tmp));
+                }
+            }
+
+            tasks.reserve(inputs.size());
+            for (size_t i = 0; i < inputs.size(); i++) {
                 server_task task = server_task(type);
 
                 task.id    = ctx_server.queue_tasks.get_new_id();
                 task.index = i;
 
-                task.prompt_tokens    = std::move(tokenized_prompts[i]);
+                task.prompt_tokens    = std::move(inputs[i]);
                 task.params           = server_task::params_from_json_cmpl(
                                             ctx_server.ctx,
                                             ctx_server.params_base,
@@ -3950,7 +4042,7 @@ int main(int argc, char ** argv) {
                 task.params.oaicompat_cmpl_id         = completion_id;
                 // oaicompat_model is already populated by params_from_json_cmpl
 
-                tasks.push_back(task);
+                tasks.push_back(std::move(task));
             }
         } catch (const std::exception & e) {
             res_error(res, format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
@@ -4020,9 +4112,11 @@ int main(int argc, char ** argv) {
 
     const auto handle_completions = [&handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         json data = json::parse(req.body);
+        std::vector<raw_buffer> files; // dummy
         return handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
+            files,
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_NONE);
@@ -4030,9 +4124,11 @@ int main(int argc, char ** argv) {
 
     const auto handle_completions_oai = [&handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         json data = oaicompat_completion_params_parse(json::parse(req.body));
+        std::vector<raw_buffer> files; // dummy
         return handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
+            files,
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_COMPLETION);
@@ -4107,9 +4203,11 @@ int main(int argc, char ** argv) {
             tokenized_prompts[0]
         );
 
+        std::vector<raw_buffer> files; // dummy
         return handle_completions_impl(
             SERVER_TASK_TYPE_INFILL,
             data,
+            files,
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
@@ -4123,11 +4221,13 @@ int main(int argc, char ** argv) {
         }
 
         auto body = json::parse(req.body);
-        json data = oaicompat_completion_params_parse(body, params.use_jinja, params.reasoning_format, ctx_server.chat_templates.get());
+        std::vector<raw_buffer> files;
+        json data = oaicompat_completion_params_parse(body, params.use_jinja, params.reasoning_format, ctx_server.chat_templates.get(), files);
 
         return handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
+            files,
             req.is_connection_closed,
             res,
             OAICOMPAT_TYPE_CHAT);
@@ -4136,7 +4236,8 @@ int main(int argc, char ** argv) {
     // same with handle_chat_completions, but without inference part
     const auto handle_apply_template = [&ctx_server, &params, &res_ok](const httplib::Request & req, httplib::Response & res) {
         auto body = json::parse(req.body);
-        json data = oaicompat_completion_params_parse(body, params.use_jinja, params.reasoning_format, ctx_server.chat_templates.get());
+        std::vector<raw_buffer> files; // dummy, unused
+        json data = oaicompat_completion_params_parse(body, params.use_jinja, params.reasoning_format, ctx_server.chat_templates.get(), files);
         res_ok(res, {{ "prompt", std::move(data.at("prompt")) }});
     };
 
@@ -4241,7 +4342,7 @@ int main(int argc, char ** argv) {
             }
         }
 
-        std::vector<llama_tokens> tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
+        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, prompt, true, true);
         for (const auto & tokens : tokenized_prompts) {
             // this check is necessary for models that do not add BOS token to the input
             if (tokens.empty()) {
@@ -4260,12 +4361,12 @@ int main(int argc, char ** argv) {
 
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
-                task.prompt_tokens = std::move(tokenized_prompts[i]);
+                task.prompt_tokens = convert_legacy_to_mtmd(tokenized_prompts[i]);
 
                 // OAI-compat
                 task.params.oaicompat = oaicompat;
 
-                tasks.push_back(task);
+                tasks.push_back(std::move(task));
             }
 
             ctx_server.queue_results.add_waiting_tasks(tasks);
@@ -4354,14 +4455,15 @@ int main(int argc, char ** argv) {
         bool error = false;
         {
             std::vector<server_task> tasks;
-            std::vector<llama_tokens> tokenized_docs = tokenize_input_prompts(ctx_server.vocab, documents, /* add_special */ false, true);
+            auto tokenized_docs = tokenize_input_prompts(ctx_server.vocab, documents, /* add_special */ false, true);
             tasks.reserve(tokenized_docs.size());
             for (size_t i = 0; i < tokenized_docs.size(); i++) {
+                auto tmp = format_rerank(ctx_server.vocab, tokenized_query, tokenized_docs[i]);
                 server_task task   = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
-                task.prompt_tokens = format_rerank(ctx_server.vocab, tokenized_query, tokenized_docs[i]);
-                tasks.push_back(task);
+                task.prompt_tokens = convert_legacy_to_mtmd(tmp);
+                tasks.push_back(std::move(task));
             }
 
             ctx_server.queue_results.add_waiting_tasks(tasks);
@@ -4566,7 +4668,7 @@ int main(int argc, char ** argv) {
         common_chat_templates_source(ctx_server.chat_templates.get()),
         common_chat_format_example(ctx_server.chat_templates.get(), ctx_server.params_base.use_jinja).c_str());
 
-    ctx_server.queue_tasks.on_new_task([&ctx_server](const server_task & task) {
+    ctx_server.queue_tasks.on_new_task([&ctx_server](server_task & task) {
         ctx_server.process_single_task(task);
     });
 
