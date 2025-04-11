@@ -40,6 +40,9 @@ if (CUDAToolkit_FOUND)
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
+    if(NOT DEFINED CMAKE_CUDA_COMPILER)
+        set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc")
+    endif()
     enable_language(CUDA)
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
