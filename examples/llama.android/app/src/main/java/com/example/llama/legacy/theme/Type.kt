@@ -1,4 +1,4 @@
-package com.example.llama.ui.theme
+package com.example.llama.legacy.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

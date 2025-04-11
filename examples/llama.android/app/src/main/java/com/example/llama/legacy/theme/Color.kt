@@ -1,4 +1,4 @@
-package com.example.llama.ui.theme
+package com.example.llama.legacy.theme
 
 import androidx.compose.ui.graphics.Color
 

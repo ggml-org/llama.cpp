@@ -1,4 +1,4 @@
-package com.example.llama
+package com.example.llama.legacy
 
 import android.app.DownloadManager
 import android.net.Uri
@@ -31,7 +31,7 @@ data class Downloadable(val name: String, val source: Uri, val destination: File
 
         @JvmStatic
         @Composable
-        fun Button(viewModel: MainViewModel, dm: DownloadManager, item: Downloadable) {
+        fun Button(viewModel: LegacyViewModel, dm: DownloadManager, item: Downloadable) {
             var status: State by remember {
                 mutableStateOf(
                     if (item.destination.exists()) Downloaded(item)

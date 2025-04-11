@@ -1,4 +1,4 @@
-package com.example.llama
+package com.example.llama.legacy
 
 import android.app.ActivityManager
 import android.app.DownloadManager
@@ -30,21 +30,23 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.getSystemService
-import com.example.llama.ui.theme.LlamaAndroidTheme
+import com.example.llama.legacy.theme.LlamaAndroidTheme
 import java.io.File
 
-class MainActivity(
+class LegacyActivity(
     activityManager: ActivityManager? = null,
     downloadManager: DownloadManager? = null,
     clipboardManager: ClipboardManager? = null,
-): ComponentActivity() {
-    private val tag: String? = this::class.simpleName
+) : ComponentActivity() {
+    private val TAG: String? = this::class.simpleName
 
     private val activityManager by lazy { activityManager ?: getSystemService<ActivityManager>()!! }
     private val downloadManager by lazy { downloadManager ?: getSystemService<DownloadManager>()!! }
-    private val clipboardManager by lazy { clipboardManager ?: getSystemService<ClipboardManager>()!! }
+    private val clipboardManager by lazy {
+        clipboardManager ?: getSystemService<ClipboardManager>()!!
+    }
 
-    private val viewModel: MainViewModel by viewModels()
+    private val viewModel: LegacyViewModel by viewModels()
 
     // Get a MemoryInfo object for the device's current memory status.
     private fun availableMemory(): ActivityManager.MemoryInfo {
@@ -86,6 +88,11 @@ class MainActivity(
                 Uri.parse("https://huggingface.co/TheBloke/phi-2-dpo-GGUF/resolve/main/phi-2-dpo.Q3_K_M.gguf?download=true"),
                 File(extFilesDir, "phi-2-dpo.Q3_K_M.gguf")
             ),
+            Downloadable(
+                "Phi 4 mini instruct (Q4_0, 2.33 GiB)",
+                Uri.parse("https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_0.gguf?download=true"),
+                File(extFilesDir, "microsoft_Phi-4-mini-instruct-Q4_0.gguf")
+            ),
         )
 
         setContent {
@@ -110,7 +117,7 @@ class MainActivity(
 
 @Composable
 fun MainCompose(
-    viewModel: MainViewModel,
+    viewModel: LegacyViewModel,
     clipboard: ClipboardManager,
     dm: DownloadManager,
     models: List<Downloadable>
@@ -129,11 +136,13 @@ fun MainCompose(
                 }
             }
         }
+
         OutlinedTextField(
             value = viewModel.message,
             onValueChange = { viewModel.updateMessage(it) },
             label = { Text("Message") },
         )
+
         Row {
             Button({ viewModel.send() }) { Text("Send") }
             Button({ viewModel.bench(8, 4, 1) }) { Text("Bench") }
@@ -143,12 +152,11 @@ fun MainCompose(
                     clipboard.setPrimaryClip(ClipData.newPlainText("", it))
                 }
             }) { Text("Copy") }
+            Button({ viewModel.unload() }) { Text("Unload") }
         }
 
-        Column {
-            for (model in models) {
-                Downloadable.Button(viewModel, dm, model)
-            }
+        models.forEach {
+            Downloadable.Button(viewModel, dm, it)
         }
     }
 }

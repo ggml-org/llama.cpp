@@ -1,4 +1,4 @@
-package com.example.llama.ui.theme
+package com.example.llama.legacy.theme
 
 import android.app.Activity
 import android.os.Build

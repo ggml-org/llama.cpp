@@ -16,7 +16,7 @@
         >
 
         <activity
-            android:name=".MainActivity"
+            android:name=".legacy.LegacyActivity"
             android:exported="true"
             android:theme="@style/Theme.LlamaAndroid">
             <intent-filter>
