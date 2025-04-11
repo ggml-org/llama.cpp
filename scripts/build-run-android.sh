@@ -25,7 +25,7 @@ ANDROID_NDK=${PWD}/${ANDROID_NDK_NAME}
 #QNN SDK can be found at:
 #https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
 QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct-sdk
-QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt/
+QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_VERSION=2.33.0.250327
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
