@@ -129,6 +129,9 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)e.values.size(), (int)src1->ne[0]*n_as);
             exit(1); //GGML_ABORT("fatal error");
         }
+        else if (e.n_as != n_as) {
+            fprintf(stderr, "Oops: inconsistent n_as for %s (%d vs %d)\n", wname.c_str(), e.n_as, n_as);
+        }
         LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
         // loop over all possible experts, regardless if they are used or not in the batch
         for (int ex = 0; ex < n_as; ++ex) {
@@ -244,8 +247,40 @@ void IMatrixCollector::save_imatrix(int ncall) const {
         }
 
         if (n_zeros > 0) {
-            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%) - skipping\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
-            continue;
+            // LOG_WRN("%s: entry '%40s' has partial data (%.2f%%) - skipping\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            // continue;
+            fprintf(stderr, "%s: entry '%40s' has partial data (%.2f%%)", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            bool store_it = false;
+            if (kv.second.n_as > 1) {
+                int n_per_expert = n_all / kv.second.n_as;
+                std::vector<int> bad_experts;
+                bad_experts.reserve(kv.second.n_as);
+                for (int i = 0; i < kv.second.n_as; ++i) {
+                    auto counts = kv.second.counts.data() + i*n_per_expert;
+                    int nz_i = 0;
+                    for (int j = 0; j < n_per_expert; ++j) {
+                        if (counts[j] == 0) ++nz_i;
+                    }
+                    if (nz_i > 0) bad_experts.push_back(i);
+                }
+                fprintf(stderr, " %d out of %d experts are missing data", int(bad_experts.size()), kv.second.n_as);
+                if (bad_experts.size() < round(kv.second.n_as * 0.05)) {
+                    fprintf(stderr, " Storing **but be aware**\n");
+                    store_it = true;
+                    for (auto i : bad_experts) {
+                        auto counts = (int *)kv.second.counts.data() + i*n_per_expert;
+                        auto values = (float *)kv.second.values.data() + i*n_per_expert;
+                        for (int j = 0; j < n_per_expert; ++j) {
+                            counts[j] = 1;
+                            values[j] = 1;
+                        }
+                    }
+                }
+            }
+            if (!store_it) {
+                fprintf(stderr, " - skipping\n");
+                continue;
+            }
         }
 
         n_entries++;
