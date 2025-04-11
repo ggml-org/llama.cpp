@@ -19,9 +19,6 @@
 // max number of MTLCommandBuffer used to submit a graph for processing
 #define GGML_METAL_MAX_COMMAND_BUFFERS 8
 
-// max number of buffers that can be allocated on the heap per command buffer
-#define GGML_METAL_MAX_HEAP_BUFFERS 64
-
 #ifndef TARGET_OS_VISION
 #define TARGET_OS_VISION 0
 #endif
@@ -472,14 +469,15 @@ enum ggml_metal_kernel_type {
 };
 
 struct ggml_metal_heap {
-    int n;
     int fail;
 
+    size_t offs;
     size_t need;
 
     id<MTLDevice> device;
     id<MTLHeap>   obj;
-    id<MTLBuffer> bufs[GGML_METAL_MAX_HEAP_BUFFERS];
+
+    NSMutableArray * bufs;
 };
 
 static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_t size) {
@@ -488,7 +486,7 @@ static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_
     MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
     desc.storageMode  = MTLStorageModePrivate;
     desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
-    desc.type         = MTLHeapTypeAutomatic; // TODO: use MTLHeapTypePlacement
+    desc.type         = MTLHeapTypePlacement;
     desc.size         = size;
 
     heap->device = device;
@@ -501,13 +499,22 @@ static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_
         return false;
     }
 
-    for (int i = 0; i < GGML_METAL_MAX_HEAP_BUFFERS; ++i) {
-        heap->bufs[i] = nil;
-    }
-
     [desc release];
 
+    heap->bufs = [[NSMutableArray alloc] init];
+
     return heap;
+}
+
+static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
+    heap->fail = 0;
+    heap->offs = 0;
+    heap->need = 0;
+
+    for (id<MTLBuffer> buf in heap->bufs) {
+        [buf release];
+    }
+    [heap->bufs removeAllObjects];
 }
 
 static void ggml_metal_heap_free(struct ggml_metal_heap * heap) {
@@ -515,25 +522,12 @@ static void ggml_metal_heap_free(struct ggml_metal_heap * heap) {
         return;
     }
 
-    [heap->obj release];
+    ggml_metal_heap_reset(heap);
+
+    [heap->obj  release];
+    [heap->bufs release];
 
     free(heap);
-}
-
-static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
-    heap->n = 0;
-    heap->fail = 0;
-    heap->need = 0;
-
-    for (int i = 0; i < GGML_METAL_MAX_HEAP_BUFFERS; i++) {
-        if (heap->bufs[i]) {
-            [heap->bufs[i] release];
-            heap->bufs[i] = nil;
-            continue;
-        }
-
-        break;
-    }
 }
 
 static bool ggml_metal_heap_resize(struct ggml_metal_heap * heap, size_t size) {
@@ -546,7 +540,7 @@ static bool ggml_metal_heap_resize(struct ggml_metal_heap * heap, size_t size) {
     MTLHeapDescriptor * desc = [[MTLHeapDescriptor alloc] init];
     desc.storageMode  = MTLStorageModePrivate;
     desc.cpuCacheMode = MTLCPUCacheModeDefaultCache;
-    desc.type         = MTLHeapTypeAutomatic; // TODO: use MTLHeapTypePlacement
+    desc.type         = MTLHeapTypePlacement;
     desc.size         = size;
 
     heap->obj = [heap->device newHeapWithDescriptor:desc];
@@ -571,33 +565,32 @@ static id<MTLBuffer> ggml_metal_heap_alloc(struct ggml_metal_heap * heap, size_t
 
     const size_t size_aligned = GGML_PAD(size, alignment);
 
-    //GGML_LOG_INFO("%s: size = %zu, size_aligned = %zu, need = %zu, fail = %d\n", __func__, size, size_aligned, heap->need, heap->fail);
+    heap->offs += size_aligned;
+    heap->need = MAX(heap->need, heap->offs + size_aligned);
 
-    heap->need += size_aligned;
+    //GGML_LOG_INFO("%s: size = %zu, size_aligned = %zu, offs = %zu, need = %zu\n", __func__, size, size_aligned, offs, heap->offs, heap->need);
 
     if (no_alloc) {
         return nil;
     }
 
-    if (!heap->fail && size_aligned > [heap->obj maxAvailableSizeWithAlignment:alignment]) {
+    if (!heap->fail && heap->offs + size_aligned > [heap->obj size]) {
         heap->fail = 1;
-    }
-
-    if (!heap->fail && heap->n >= GGML_METAL_MAX_HEAP_BUFFERS) {
-        heap->fail = 2;
     }
 
     if (heap->fail) {
         return nil;
     }
 
-    id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
+    id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate offset:heap->offs];
     if (!buf) {
         heap->fail = 3;
         return nil;
     }
 
-    heap->bufs[heap->n++] = buf;
+    [heap->bufs addObject:buf];
+
+    //GGML_LOG_INFO("%s: allocated buffer, size = %zu, offs = %zu, heap size = %zu, heap used = %zu\n", __func__, size_aligned, offs, [heap->obj size], [heap->obj usedSize]);
 
     return buf;
 }
@@ -634,7 +627,6 @@ struct ggml_backend_metal_context {
     void (^encode_async)(size_t ith);
 
     // n_cb command buffers + 1 used by the main thread
-    //id<MTLCommandBuffer> command_buffers[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
     struct ggml_metal_command_buffer cmd_bufs[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
 
     // abort ggml_metal_graph_compute if callback returns true
@@ -1638,13 +1630,16 @@ static bool ggml_metal_encode_node(
     // heap buffers for temporary data
     id<MTLBuffer> h_src0 = nil;
 
+    // always allocate buffers from the start of the heap for the current node
+    heap->offs = 0;
+
     switch (dst->op) {
         case GGML_OP_SOFT_MAX:
             {
                 h_src0 = ggml_metal_heap_alloc(heap, ggml_nbytes(src0), no_alloc);
                 if (!no_alloc && !h_src0) {
-                    GGML_LOG_ERROR("%s: failed to allocate buffer, idx = %4d, size = %8zu, need = %8zu, max available = %9zu, heap size = %9zu, heap used = %zu, fail = %d\n",
-                            __func__, idx, ggml_nbytes(src0), heap->need, [heap->obj maxAvailableSizeWithAlignment:0], [heap->obj size], [heap->obj usedSize], heap->fail);
+                    GGML_LOG_ERROR("%s: failed to allocate buffer, idx = %4d, size = %8zu, offs = %8zu, max available = %9zu, heap size = %9zu, heap used = %zu, fail = %d\n",
+                            __func__, idx, ggml_nbytes(src0), heap->offs, [heap->obj maxAvailableSizeWithAlignment:0], [heap->obj size], [heap->obj usedSize], heap->fail);
                     return false;
                 }
             } break;
@@ -2249,8 +2244,6 @@ static bool ggml_metal_encode_node(
         case GGML_OP_SOFT_MAX:
             {
                 GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32);
-
-                GGML_ASSERT(ggml_is_contiguous(src0));
 
                 int nth = 32; // SIMD width
 
@@ -4836,6 +4829,12 @@ static enum ggml_status ggml_metal_graph_compute(
             [next_buffer commit];
         }
 
+        for (int i = 0; i <= n_cb; ++i) {
+            struct ggml_metal_heap * heap = ctx->cmd_bufs[i].heap;
+
+            [heap->obj setPurgeableState:MTLPurgeableStateEmpty];
+        }
+
         if (!should_capture && ctx->capture_started) {
             [ctx->capture_scope endScope];
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
@@ -5232,6 +5231,8 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
                 can_compute = false;
             }
         }
+
+        //GGML_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXX\n");
 
         if (can_compute) {
             for (int idx = node_start; idx < node_end; ++idx) {
