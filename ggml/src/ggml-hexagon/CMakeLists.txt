@@ -25,7 +25,6 @@ else()
     message("Release mode:${DEBUG_FLAG}")
 endif()
 
-
 #v68 --- Snapdragon 888
 #v69 --- Snapdragon 8 Gen1
 #v73 --- Snapdragon 8 Gen2
@@ -45,6 +44,14 @@ endforeach()
 if (${CHECK_HTP_ARCH} STREQUAL "WRONG")
     message(FATAL_ERROR "ggml-hexagon backend only support htp arch v68,v69,v73,v75,v79")
 endif()
+
+#check optimization flags
+set(OPT_FLAG " ")
+if (${HTP_ARCH_VERSION} STREQUAL "v75" OR ${HTP_ARCH_VERSION} STREQUAL "v79")
+    #works fine on Snapdragon 8Gen3&8Elite with 1.5x - 3x performance gains with the default ggml backend
+    set(OPT_FLAG " -O3 -march=armv8.7-a -mcpu=cortex-x1 -mtune=cortex-x1 -fvectorize -fno-finite-math-only -ffp-model=fast ")
+endif()
+message("OPT_FLAG:${OPT_FLAG}")
 
 #cross compiling for hexagon kernels on cDSP side
 set(HEXAGON_CC              "${HEXAGON_SDK_PATH}/tools/HEXAGON_Tools/8.8.06/Tools/bin/hexagon-clang")
@@ -84,8 +91,11 @@ else()
     message(FATAL_ERROR "ggml-hexagon now only available on Android and Windows(Windows on ARM)")
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGGML_USE_HEXAGON ${DEBUG_FLAG}")
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+
+set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
 
 file(GLOB HEXAGON_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/kernels/ggmlop_ap_skel.c")
 ggml_add_backend_library(ggml-hexagon ${HEXAGON_SOURCES})
