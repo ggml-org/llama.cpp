@@ -17413,12 +17413,23 @@ static int dpu_launch_gemv_async(
     uint32_t input_offset = res->inout_offset;
     dpu_set = *(res->dpu_set);
     // broadcast input metadata
+
+#if PIM_DEBUG_PERF_PRINT
+    uint64_t t_start = get_time_us();
+#endif
+
     DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, &input_descript, sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
     input_offset += sizeof(pim_matrix_des);
 
     // broadcast input data
     uint32_t bclen = ggml_row_size(vec_dot_type, input->ne[0])*input->ne[1]*input->ne[2]*input->ne[3];
     DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, wdata, bclen, DPU_XFER_DEFAULT));
+
+#if PIM_DEBUG_PERF_PRINT
+    uint64_t t_us = get_time_us() - t_start;
+    printf("\n%s: PIM broadcast time = %ld  \n", __FUNCTION__, t_us);
+#endif
+
     input_offset += bclen;
 
     res->inout_offset = input_offset;
@@ -17433,9 +17444,9 @@ static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set) {
     struct dpu_set_t dpu;
     dpu_sync(dpu_set);
     //打印dpu log
-    DPU_FOREACH(dpu_set, dpu) {
-        DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
-    }
+    // DPU_FOREACH(dpu_set, dpu) {
+    //     DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
+    // }
     return;
 }
 

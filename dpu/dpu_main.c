@@ -11,6 +11,7 @@
 #include <alloc.h>
 #include <barrier.h>
 #include <seqread.h>
+#include <mutex_pool.h>
 
 #define PIM_KERNEL_DPU 1
 #include "../ggml/include/ggml.h"
@@ -18,6 +19,13 @@
 #include "../ggml/src/ggml-common.h"
 
 #define PRINT 0
+#define SEGMENT_PER_ROW 4
+
+// Find the lowest index for the rank-th group
+#define BLOCK_LOW(rank, size, n) ((rank) * (n) / (size))
+
+// Find the highest index for the rank-th group
+#define BLOCK_HIGH(rank, size, n) (BLOCK_LOW((rank) + 1, (size), (n)) - 1)
 
 __mram_ptr float *ptable_f32_f16;
 
@@ -35,6 +43,7 @@ inline static float lookup_fp16_to_fp32(uint16_t f) {
 
 // Barrier
 BARRIER_INIT(my_barrier, NR_TASKLETS);
+MUTEX_POOL_INIT(g_psumf_mutex_pool, NR_TASKLETS);
 
 /*
 DPU MRAM Memory:
@@ -91,8 +100,9 @@ int wram2mram(__mram_ptr void *pmram,void *pwram,uint32_t size)
 }
 
 
-// set psumf to global value for each thread access
-static float *psumf = NULL;
+// set g_psumf to global value for each thread access
+static float *g_psumf = NULL;
+static block_q8_0 *g_pinput_cache = NULL;
 
 void init(unsigned int tasklet_id) {
 #if PRINT
@@ -140,9 +150,11 @@ int main() {
 #endif
 
     // set sart line, end line and line number in each thread
-    uint16_t weight_rows_per_thread = cache_meta->rows_per_dpu / NR_TASKLETS;
-    uint16_t weight_start_row = tasklet_id * weight_rows_per_thread;
-    uint16_t weight_end_row = weight_start_row + weight_rows_per_thread;
+    uint16_t segments_num = cache_meta->rows_per_dpu * SEGMENT_PER_ROW;
+    uint16_t segment_start = BLOCK_LOW(tasklet_id, NR_TASKLETS, segments_num);
+    uint16_t segment_end = BLOCK_HIGH(tasklet_id, NR_TASKLETS, segments_num);
+
+    assert(segment_start <= segment_end && "There are not enough segments to allocate to the tasklets");
 
     // todo:rest row is existed, first thread in every dpu can one more row
     uint16_t weight_rows_cur_thread;
@@ -184,59 +196,46 @@ int main() {
             return -1;
         }
         int nb = pinputcache->ne[0]/QK8_0;
+
+        assert(SEGMENT_PER_ROW <= nb && nb % SEGMENT_PER_ROW == 0 
+            && "Too many segments are allocated to each row.");
+
         int qk = QK8_0;
         input_row_size = nb*sizeof(block_q8_0);
         __mram_ptr void *pweight_base = (__mram_ptr void *)(weightmetadatabase + sizeof(struct pim_meta));
         __mram_ptr void *pinput_base = DPU_MRAM_HEAP_POINTER + cache_meta->input_offset + sizeof(pim_matrix_des);
-
-        if (tasklet_id == 0) {
-            psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
-        }
-        barrier_wait(&my_barrier);
-
-        // psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
-        memset(psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
         
+        if (tasklet_id == 0) {
+            g_psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
+            g_pinput_cache = (block_q8_0 *) mem_alloc(sizeof(block_q8_0) * nb);
+            memset(g_psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
+        }
+
 #if PRINT
         printf("input_cols=%d, rows_cur_thread=%d, nb=%d, input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
 #endif
-        block_q4_0 *pweight_cache = (block_q4_0 *) mem_alloc(sizeof(block_q4_0)*nb);
-        block_q8_0 *pinput_cache = (block_q8_0 *) mem_alloc(sizeof(block_q8_0)*nb);
+
+        uint16_t segment_nb_size = nb / SEGMENT_PER_ROW;
+        block_q4_0 *pweight_cache = (block_q4_0 *) mem_alloc(sizeof(block_q4_0) * segment_nb_size);
 
         // weight_rows_cur_thread = 16;
         for(int l = 0;l < input_cols;l++) {
-          __mram_ptr block_q8_0 *pinput = pinput_base + l * nb * sizeof(block_q8_0);
-            mram2wram(pinput, pinput_cache, sizeof(block_q8_0)*nb);
-#if PRINT
-            printf("input:\n");
-            for (int i = 0; i < nb; i++) {
-              printf("d=%u\n",pinput[i].d);
-              for (int kkk=0;kkk<QK8_0;kkk++) {
-                printf("%d ",pinput[i].qs[kkk]);
-              }
-            printf("\n");
+            if (tasklet_id == 0) {
+                __mram_ptr block_q8_0 *pinput = pinput_base + l * nb * sizeof(block_q8_0);
+                mram2wram(pinput, g_pinput_cache, sizeof(block_q8_0)*nb);
             }
-            printf("pweight_base: %p\n", pweight_base);
-#endif
-            // for(int k = 0;k < weight_rows_cur_thread;k++) {
-            for (int k = weight_start_row; k < weight_end_row; ++k) {
-              __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid * cache_meta->layer_len + k * nb * sizeof(block_q4_0);
-                mram2wram(pweight, pweight_cache, sizeof(block_q4_0)*nb);
-#if PRINT
-                if (k % 64 == 0) {
-                  printf("pweight_cache[%d].d=%d\n pweight_cache[%d].qs=", k*128, pweight_cache[0].d, k*128);
-                  for (int kkk=0;kkk<QK4_0/2;kkk++) {
-                    int v0 = (pweight_cache[0].qs[kkk] & 0x0f) - 8;
-                    int v1 = (pweight_cache[0].qs[kkk]  >> 4) - 8;
-                    printf(" %d, %d", v0, v1);
-                  }
-                  printf("\n");
-                }
-#endif
 
-                for (int i = 0; i < nb; i++) {
-                    //printf("input_col:%d, current inner weight row idx:%d\n",l,k);
+            barrier_wait(&my_barrier);
 
+            __mram_ptr block_q4_0 *pweight_addr = pweight_base + pinputcache->layerid * cache_meta->layer_len;
+
+            for (int k = segment_start; k <= segment_end; ++k) {
+                __mram_ptr block_q4_0 *pweight = pweight_addr + k * segment_nb_size;
+                mram2wram(pweight, pweight_cache, sizeof(block_q4_0) * segment_nb_size);
+
+                block_q8_0 *pinput_cache = g_pinput_cache + k % SEGMENT_PER_ROW * segment_nb_size;
+
+                for (int i = 0; i < segment_nb_size; i++) {
                     int sumi = 0;
                     for (int j = 0; j < qk/2; ++j) {
                         const int v0 = (pweight_cache[i].qs[j] & 0x0F) - 8;
@@ -244,23 +243,33 @@ int main() {
 
                         sumi += (v0 * pinput_cache[i].qs[j]) + (v1 * pinput_cache[i].qs[j + qk/2]);
                     }
-
-                    psumf[l*weight_rows_cur_thread + k] += sumi*FP16_TO_FP32(pweight_cache[i].d)*FP16_TO_FP32(pinput_cache[i].d);
+                    
+                    int psumf_idx = l * weight_rows_cur_thread + k / SEGMENT_PER_ROW;
+                    float sum = sumi * FP16_TO_FP32(pweight_cache[i].d) * FP16_TO_FP32(pinput_cache[i].d);
+                    mutex_pool_lock(&g_psumf_mutex_pool, psumf_idx);
+                    g_psumf[psumf_idx] += sum;
+                    // g_psumf[psumf_idx] += sumi;
+                    mutex_pool_unlock(&g_psumf_mutex_pool, psumf_idx);
                 }
             }
         }
     }
 
-    offset += (sizeof(pim_matrix_des) + input_row_size * input_cols);
-#if PRINT
-    for(int iii=0;iii<cache_meta->rows_per_dpu;iii+=128) {
-        printf("psumf[%d]=%f\n",iii,psumf[iii]);
+    barrier_wait(&my_barrier);
+
+    if (tasklet_id == 0){
+        offset += (sizeof(pim_matrix_des) + input_row_size * input_cols);
+        #if PRINT
+            for(int iii=0;iii<cache_meta->rows_per_dpu;iii+=128) {
+                printf("g_psumf[%d]=%f\n",iii,g_psumf[iii]);
+            }
+        
+            printf("output offset=%d\n",offset);
+        #endif
+        // Write C Matrix to current MRAM block
+        // Note: with input_cols > 1, the results should be rearranged on host
+        wram2mram((__mram_ptr void *) (DPU_MRAM_HEAP_POINTER + offset), g_psumf, sizeof(float)*input_cols*weight_rows_cur_thread);
     }
 
-    printf("output offset=%d\n",offset);
-#endif
-    // Write C Matrix to current MRAM block
-    // Note: with input_cols > 1, the results should be rearranged on host
-    wram2mram((__mram_ptr void *) (DPU_MRAM_HEAP_POINTER + offset), psumf, sizeof(float)*input_cols*weight_rows_cur_thread);
     return 0;
 }
