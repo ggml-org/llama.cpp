@@ -22,6 +22,7 @@ if (CUDAToolkit_FOUND)
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
+    set(CMAKE_CUDA_COMPILER ${CUDAToolkit_NVCC_EXECUTABLE})
     enable_language(CUDA)
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
