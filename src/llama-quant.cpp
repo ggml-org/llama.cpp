@@ -24,11 +24,7 @@ static void zeros(std::ofstream & file, size_t n) {
 
 const char* _gguf_is_moe = std::getenv("GGUF_IS_MOE");
 const bool gguf_is_moe = (_gguf_is_moe != nullptr && std::string(_gguf_is_moe) == "1");
-std::cout << "Use MoE: " << gguf_is_moe << std::endl;
-std::cout << "Use MoE: " << gguf_is_moe << std::endl;
-std::cout << "Use MoE: " << gguf_is_moe << std::endl;
-std::cout << "Use MoE: " << gguf_is_moe << std::endl;
-std::cout << "Use MoE: " << gguf_is_moe << std::endl;
+
 
 struct quantize_state_impl {
     const llama_model                 & model;
@@ -157,6 +153,9 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     };
 
     bool is_one_bit = (ftype == LLAMA_FTYPE_MOSTLY_IQ1_M || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S);
+    
+    for (int i = 0; i < 10; i++)
+        std::cout << "Use MoE: " << gguf_is_moe << std::endl;
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
