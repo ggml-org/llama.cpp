@@ -2506,7 +2506,7 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     // ggml_mode = 0 --> aclnn_model = 1
     int64_t acl_mode = mode == 0 ? 1 : mode;
-    
+
     switch (src0->type) {
         case GGML_TYPE_F32: {
             GGML_CANN_CALL_ACLNN_OP(RotaryPositionEmbedding, acl_src, acl_cos_reshape_tensor,
@@ -2520,28 +2520,27 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_cann_pool_alloc dst_trans_allocator(
                 ctx.pool(), ggml_nelements(dst) * sizeof(float));
             void* dst_trans_buffer = dst_trans_allocator.get();
-    
+
             size_t src_trans_nb[GGML_MAX_DIMS];
             src_trans_nb[0] = sizeof(float);
             for (int i = 1; i < GGML_MAX_DIMS; i++) {
                 src_trans_nb[i] = src_trans_nb[i - 1] * src0->ne[i - 1];
             }
-    
+
             aclTensor* acl_src_trans_tensor = ggml_cann_create_tensor(
                 src_trans_buffer, ACL_FLOAT, sizeof(float), src0->ne, src_trans_nb,
                 GGML_MAX_DIMS);
-    
             aclTensor* acl_dst_trans_tensor = ggml_cann_create_tensor(
                 dst_trans_buffer, ACL_FLOAT, sizeof(float), dst->ne, src_trans_nb,
                 GGML_MAX_DIMS);
-    
+
             aclnn_cast(ctx, acl_src, acl_src_trans_tensor, ACL_FLOAT);
-            
+
             GGML_CANN_CALL_ACLNN_OP(RotaryPositionEmbedding, acl_src_trans_tensor, acl_cos_reshape_tensor,
                 acl_sin_reshape_tensor, acl_mode, acl_dst_trans_tensor);
-    
+
             aclnn_cast(ctx, acl_dst_trans_tensor, acl_dst, ACL_FLOAT16);
-    
+
             ACL_CHECK(aclDestroyTensor(acl_src_trans_tensor));
             ACL_CHECK(aclDestroyTensor(acl_dst_trans_tensor));
             break;
