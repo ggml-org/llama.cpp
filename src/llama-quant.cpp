@@ -23,9 +23,7 @@ static void zeros(std::ofstream & file, size_t n) {
 }
 
 const char* _gguf_is_moe = std::getenv("GGUF_IS_MOE");
-bool gguf_is_moe = false;
-if (_gguf_is_moe != nullptr && std::string(_gguf_is_moe) == "1")
-    gguf_is_moe = true;
+const bool gguf_is_moe = (_gguf_is_moe != nullptr && std::string(_gguf_is_moe) == "1");
 
 struct quantize_state_impl {
     const llama_model                 & model;
@@ -206,12 +204,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         else if (qs.model.hparams.n_expert == 8 && name.find("attn_k.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
         }
-        else if (gguf_is_moe and (name.find("ffn_down.weight") != std::string::npos) {
+        else if (gguf_is_moe and (name.find("ffn_down.weight") != std::string::npos)) {
             // MoE leave in 6bit for shared or dense layers
             new_type = GGML_TYPE_Q6_K;
             ++qs.i_ffn_down;
         }
-        else if (not gguf_is_moe and (name.find("ffn_down.weight") != std::string::npos) {
+        else if (not gguf_is_moe and (name.find("ffn_down.weight") != std::string::npos)) {
             // First 2 Layers and last 2 are left as higher 6 bit precision, rest whatever
             auto info = layer_info(qs.i_ffn_down, qs.n_ffn_down, name.c_str());
             int i_layer = info.first, n_layer = info.second;
