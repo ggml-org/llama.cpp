@@ -3907,7 +3907,7 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "success", true }});
     };
 
-    const auto handle_api = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_api_show = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
         json data = {
             {
                 "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -4486,7 +4486,7 @@ int main(int argc, char ** argv) {
     svr->Get ("/metrics",             handle_metrics);
     svr->Get ("/props",               handle_props);
     svr->Post("/props",               handle_props_change);
-    svr->Post("/api/show",            handle_api);
+    svr->Post("/api/show",            handle_api_show);
     svr->Get ("/models",              handle_models); // public endpoint (no API key check)
     svr->Get ("/v1/models",           handle_models); // public endpoint (no API key check)
     svr->Post("/completion",          handle_completions); // legacy
