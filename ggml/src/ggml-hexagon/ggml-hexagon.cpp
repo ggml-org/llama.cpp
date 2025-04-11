@@ -482,7 +482,21 @@ static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICE
                 .backend              = nullptr,
                 .raw_interface        = {},
                 .raw_system_interface = {},
-                .socinfo              = {}},
+                .socinfo              = {},
+                .qnn_singlenode_graph_map = {},
+                .work_data            = nullptr,
+                .tasks                = {},
+                .work_size            = 0,
+                .desired_size         = 0,
+                .n_threads            = 8,
+                .rpc_mempool_capacity = 0,
+                .rpc_mempool_len      = 0,
+                .rpc_mempool_usage    = 0,
+                .rpc_mempool          = nullptr,
+                .rpc_mempool_handle   = 0,
+                .ggmlop_handle        = 0,
+                .domain_id            = HEXAGON_CDSP,
+        },
 
         {       .device               = 1,
                 .name                 = "qnn-gpu",
@@ -496,7 +510,21 @@ static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICE
                 .backend              = nullptr,
                 .raw_interface        = {},
                 .raw_system_interface = {},
-                .socinfo              = {}},
+                .socinfo              = {},
+                .qnn_singlenode_graph_map = {},
+                .work_data            = nullptr,
+                .tasks                = {},
+                .work_size            = 0,
+                .desired_size         = 0,
+                .n_threads            = 8,
+                .rpc_mempool_capacity = 0,
+                .rpc_mempool_len      = 0,
+                .rpc_mempool_usage    = 0,
+                .rpc_mempool          = nullptr,
+                .rpc_mempool_handle   = 0,
+                .ggmlop_handle        = 0,
+                .domain_id            = HEXAGON_CDSP,
+        },
 
         {       .device               = 2,
                 .name                 = "qnn-npu",
@@ -510,7 +538,21 @@ static struct ggml_backend_hexagon_context g_hexagon_mgr[GGML_HEXAGON_MAX_DEVICE
                 .backend              = nullptr,
                 .raw_interface        = {},
                 .raw_system_interface = {},
-                .socinfo              = {}},
+                .socinfo              = {},
+                .qnn_singlenode_graph_map = {},
+                .work_data            = nullptr,
+                .tasks                = {},
+                .work_size            = 0,
+                .desired_size         = 0,
+                .n_threads            = 8,
+                .rpc_mempool_capacity = 0,
+                .rpc_mempool_len      = 0,
+                .rpc_mempool_usage    = 0,
+                .rpc_mempool          = nullptr,
+                .rpc_mempool_handle   = 0,
+                .ggmlop_handle        = 0,
+                .domain_id            = HEXAGON_CDSP,
+         },
 };
 
 static domain hexagon_supported_domains[] = {
@@ -3857,7 +3899,9 @@ static Qnn_Tensor_t * ggmlqnn_create_general_tensor(qnn_instance * instance, Qnn
                     .dataFormat = QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER,
                     .dataType = qnn_data_type,
                     .quantizeParams = {.encodingDefinition = QNN_DEFINITION_UNDEFINED,
-                            .quantizationEncoding = QNN_QUANTIZATION_ENCODING_UNDEFINED},
+                            .quantizationEncoding = QNN_QUANTIZATION_ENCODING_UNDEFINED,
+                            .scaleOffsetEncoding = {.scale = 0.0000000000000000f, .offset = 0}
+                            },
                     .rank = rank,
                     .dimensions = tensor_dims,
                     .memType = QNN_TENSORMEMTYPE_RAW,
@@ -4559,12 +4603,6 @@ static void ggmlqnn_compute_rms_norm(ggml_backend_hexagon_context * ctx, ggml_te
     GGML_UNUSED(dst);
 }
 
-static void ggmlqnn_compute_diag_mask(ggml_backend_hexagon_context * ctx, ggml_tensor * dst, float value) {
-    GGML_UNUSED(ctx);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(value);
-}
-
 static void ggmlqnn_compute_im2col(ggml_backend_hexagon_context * ctx, ggml_tensor * dst) {
     GGML_UNUSED(ctx);
     GGML_UNUSED(dst);
@@ -5203,9 +5241,8 @@ static void ggmlhexagon_deinit_cdsp(ggml_backend_hexagon_context * ctx) {
         hexagon_error = ggmlop_dsp_close(ctx->ggmlop_handle);
         if (AEE_SUCCESS != hexagon_error) {
             GGMLHEXAGON_LOG_WARN("error 0x%x: failed to close ggmlop dsp handle", hexagon_error);
-        } else {
-            ctx->ggmlop_handle = 0;
         }
+        ctx->ggmlop_handle = 0;
     }
 
     ggmlhexagon_deinit_rpcmempool(ctx);
@@ -5721,9 +5758,6 @@ static bool ggmlhexagon_compute_forward(ggml_backend_t backend, struct ggml_tens
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            ggmlqnn_compute_diag_mask(ctx, dst, -INFINITY);
             break;
         case GGML_OP_SOFT_MAX:
             ggmlqnn_compute_softmax(ctx, dst);
