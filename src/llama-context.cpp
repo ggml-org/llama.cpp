@@ -178,24 +178,37 @@ llama_context::llama_context(
     // init the memory module
     // TODO: for now, always create a unified KV cache
     if (!hparams.vocab_only) {
-        kv_self.reset(static_cast<llama_kv_cache_unified *>(model.create_memory()));
-
-        LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
-
-        cparams.n_ctx = GGML_PAD(cparams.n_ctx, kv_self->get_padding(cparams));
-
-        LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
-
-        uint32_t kv_size = cparams.n_ctx;
+        uint32_t kv_size = 0;
         ggml_type type_k = params.type_k;
         ggml_type type_v = params.type_v;
 
-        if (llama_model_is_recurrent(&model)) {
+        if (!llama_model_is_recurrent(&model)) {
+            //kv_self.reset(static_cast<llama_kv_cache_unified *>(model.create_memory()));
+            auto * kv = static_cast<llama_kv_cache_unified *>(model.create_memory());
+
+            LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
+
+            cparams.n_ctx = GGML_PAD(cparams.n_ctx, kv->get_padding(cparams));
+
+            LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
+            kv_size = cparams.n_ctx;
+            type_k = params.type_k;
+            type_v = params.type_v;
+
+            kv_self.reset(kv);
+        } else {
+            auto * kv = static_cast<llama_kv_cache_recurrent *>(model.create_memory());
+
+            LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
+
             // Mamba needs at least as many KV cells as there are sequences kept at any time
             kv_size = std::max((uint32_t) 1, params.n_seq_max);
             // it's probably best to keep as much precision as possible for the states
             type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
             type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
+
+            kv_self.reset(kv);
         }
 
         GGML_ASSERT(hparams.n_embd_head_k % ggml_blck_size(type_k) == 0);
@@ -304,7 +317,7 @@ llama_context::llama_context(
         int n_nodes_tg  = -1;
 
         // simulate full KV cache
-        kv_self->n = kv_self->size;
+        kv_self->set_full();
 
         cross.v_embd.clear();
 
@@ -553,7 +566,9 @@ llm_graph_result_ptr llama_context::build_kv_self_shift(
 
     //GGML_ASSERT(kv_self->size == n_ctx);
 
-    auto inp = std::make_unique<llm_graph_input_k_shift>(kv_self.get());
+    const auto * kv = static_cast<const llama_kv_cache_unified *>(kv_self.get());
+
+    auto inp = std::make_unique<llm_graph_input_k_shift>(kv);
 
     inp->k_shift = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, cparams.n_ctx);
     ggml_set_input(inp->k_shift);
@@ -569,16 +584,16 @@ llm_graph_result_ptr llama_context::build_kv_self_shift(
         const float freq_base_l  = is_swa ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
         const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
 
-        ggml_tensor * rope_factors = kv_self->cbs.get_rope_factors(n_ctx_per_seq(), il);
+        ggml_tensor * rope_factors = kv->cbs.get_rope_factors(n_ctx_per_seq(), il);
 
         ggml_tensor * k =
-            ggml_view_3d(ctx0, kv_self->k_l[il],
-                n_embd_head_k, n_head_kv, kv_self->size,
-                ggml_row_size(kv_self->k_l[il]->type, n_embd_head_k),
-                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
+            ggml_view_3d(ctx0, kv->k_l[il],
+                n_embd_head_k, n_head_kv, kv->size,
+                ggml_row_size(kv->k_l[il]->type, n_embd_head_k),
+                ggml_row_size(kv->k_l[il]->type, n_embd_k_gqa),
                 0);
 
-        ggml_tensor * cur = build_rope_shift(ctx0, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l, kv_self->k_l[il]->buffer);
+        ggml_tensor * cur = build_rope_shift(ctx0, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l, kv->k_l[il]->buffer);
 
         ggml_build_forward_expand(gf, cur);
     }
@@ -593,9 +608,11 @@ llm_graph_result_ptr llama_context::build_kv_self_defrag(
         ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
+    auto * kv = static_cast<llama_kv_cache_unified *>(kv_self.get());
+
     const auto & hparams = model.hparams;
 
-    const auto & ids = kv_self->defrag_info.ids;
+    const auto & ids = kv->defrag_info.ids;
 
 #if 0
     // CPU defrag
@@ -685,40 +702,40 @@ llm_graph_result_ptr llama_context::build_kv_self_defrag(
             const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
             const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
-            ggml_tensor * view_k_src = ggml_view_2d(ctx0, kv_self->k_l[il],
+            ggml_tensor * view_k_src = ggml_view_2d(ctx0, kv->k_l[il],
                     n_embd_k_gqa, nm,
-                    ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
-                    ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa*i));
+                    ggml_row_size(kv->k_l[il]->type, n_embd_k_gqa),
+                    ggml_row_size(kv->k_l[il]->type, n_embd_k_gqa*i));
 
-            ggml_tensor * view_k_dst = ggml_view_2d(ctx0, kv_self->k_l[il],
+            ggml_tensor * view_k_dst = ggml_view_2d(ctx0, kv->k_l[il],
                     n_embd_k_gqa, nm,
-                    ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
-                    ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa*id));
+                    ggml_row_size(kv->k_l[il]->type, n_embd_k_gqa),
+                    ggml_row_size(kv->k_l[il]->type, n_embd_k_gqa*id));
 
             ggml_tensor * view_v_src;
             ggml_tensor * view_v_dst;
 
             if (cparams.flash_attn) {
                 // NOTE: the V cache is not transposed when using flash attention
-                view_v_src = ggml_view_2d(ctx0, kv_self->v_l[il],
+                view_v_src = ggml_view_2d(ctx0, kv->v_l[il],
                         n_embd_v_gqa, nm,
-                        ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
-                        ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa*i));
+                        ggml_row_size(kv->v_l[il]->type, n_embd_v_gqa),
+                        ggml_row_size(kv->v_l[il]->type, n_embd_v_gqa*i));
 
-                view_v_dst = ggml_view_2d(ctx0, kv_self->v_l[il],
+                view_v_dst = ggml_view_2d(ctx0, kv->v_l[il],
                         n_embd_v_gqa, nm,
-                        ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
-                        ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa*id));
+                        ggml_row_size(kv->v_l[il]->type, n_embd_v_gqa),
+                        ggml_row_size(kv->v_l[il]->type, n_embd_v_gqa*id));
             } else {
-                view_v_src = ggml_view_2d(ctx0, kv_self->v_l[il],
+                view_v_src = ggml_view_2d(ctx0, kv->v_l[il],
                         nm, n_embd_v_gqa,
-                        ggml_row_size(kv_self->v_l[il]->type, kv_self->size),
-                        ggml_row_size(kv_self->v_l[il]->type, i));
+                        ggml_row_size(kv->v_l[il]->type, kv->size),
+                        ggml_row_size(kv->v_l[il]->type, i));
 
-                view_v_dst = ggml_view_2d(ctx0, kv_self->v_l[il],
+                view_v_dst = ggml_view_2d(ctx0, kv->v_l[il],
                         nm, n_embd_v_gqa,
-                        ggml_row_size(kv_self->v_l[il]->type, kv_self->size),
-                        ggml_row_size(kv_self->v_l[il]->type, id));
+                        ggml_row_size(kv->v_l[il]->type, kv->size),
+                        ggml_row_size(kv->v_l[il]->type, id));
             }
 
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, view_k_src, view_k_dst));
@@ -735,13 +752,11 @@ llm_graph_result_ptr llama_context::build_kv_self_defrag(
 }
 
 void llama_context::kv_self_update() {
-    auto & kv = kv_self;
-
     bool need_reserve = false;
 
-    if (kv->has_shift) {
-        if (!kv->get_can_shift()) {
-            GGML_ABORT("The current context does not support K-shift");
+    if (kv_self->get_has_shift()) {
+        if (!kv_self->get_can_shift()) {
+            GGML_ABORT("The current KV cache / model configuration does not support K-shift");
         }
 
         LLAMA_LOG_DEBUG("%s: applying K-shift\n", __func__);
@@ -764,6 +779,8 @@ void llama_context::kv_self_update() {
         }
 
         {
+            auto * kv = static_cast<llama_kv_cache_unified *>(kv_self.get());
+
             kv->has_shift = false;
 
             for (uint32_t i = 0; i < kv->size; ++i) {
@@ -773,8 +790,10 @@ void llama_context::kv_self_update() {
     }
 
     // defragment the KV cache if needed
-    if (kv->do_defrag) {
+    if (kv_self->get_do_defrag()) {
         LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
+
+        auto * kv = static_cast<llama_kv_cache_unified *>(kv_self.get());
 
         if (kv->defrag_prepare(graph_max_nodes())) {
             ggml_backend_sched_reset(sched.get());
@@ -804,7 +823,7 @@ void llama_context::kv_self_update() {
         uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         // simulate full KV cache
-        kv_self->n = kv_self->size;
+        kv_self->set_full();
 
         llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
         llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
@@ -1024,8 +1043,8 @@ int llama_context::encode(llama_batch & inp_batch) {
     }
 
     // temporary allocate memory for the input batch if needed
-    // TODO: this is incorrect for multiple sequences because pos_max() is the maximum across all sequences
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->pos_max() + 1);
+    // TODO: this is incorrect for multiple sequences because get_pos_max() is the maximum across all sequences
+    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->get_pos_max() + 1);
 
     const llama_batch & batch = batch_allocr.batch;
     const int32_t n_tokens = batch.n_tokens;
@@ -1189,8 +1208,8 @@ int llama_context::decode(llama_batch & inp_batch) {
     }
 
     // temporary allocate memory for the input batch if needed
-    // TODO: this is incorrect for multiple sequences because pos_max() is the maximum across all sequences
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->pos_max() + 1);
+    // TODO: this is incorrect for multiple sequences because get_pos_max() is the maximum across all sequences
+    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->get_pos_max() + 1);
 
     const llama_batch & batch = batch_allocr.batch;
 
@@ -1245,8 +1264,10 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     const bool logits_all = n_outputs_all == n_tokens_all;
 
+    const bool is_recurrent = llama_model_is_recurrent(&model);
+
     sbatch.from_batch(batch, n_embd,
-            /* simple_split */ !kv_self->recurrent,
+            /* simple_split */ !is_recurrent,
             /* logits_all   */ logits_all);
 
     // reserve output buffer
@@ -1265,7 +1286,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         const auto & n_ubatch = cparams.n_ubatch;
 
-        if (kv_self->recurrent) {
+        if (is_recurrent) {
             if (embd_pooled) {
                 // Pooled embeddings cannot be split across ubatches (yet)
                 ubatch = sbatch.split_seq(cparams.n_ubatch);
@@ -1303,16 +1324,18 @@ int llama_context::decode(llama_batch & inp_batch) {
                 return 1;
             }
 
-            if (!kv_self->recurrent) {
+            if (!is_recurrent) {
+                auto * kv = static_cast<llama_kv_cache_unified *>(kv_self.get());
+
                 // a heuristic, to avoid attending the full cache if it is not yet utilized
                 // after enough generations, the benefit from this heuristic disappears
                 // if we start defragmenting the cache, the benefit from this will be more important
-                const uint32_t pad = kv_self->get_padding(cparams);
-                kv_self->n = std::min(kv_self->size, std::max(pad, GGML_PAD(kv_self->cell_max(), pad)));
+                const uint32_t pad = kv->get_padding(cparams);
+                kv->n = std::min(kv->size, std::max(pad, GGML_PAD(kv->cell_max(), pad)));
+
+                //printf("kv.n = %5d, kv.used = %5d, kv.head = %5d\n", kv->n, kv->used, kv->head);
             }
         }
-
-        //printf("kv_self.n = %5d, kv_self.used = %5d, kv_self.head = %5d\n", kv_self->n, kv_self->used, kv_self->head);
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
@@ -1453,10 +1476,12 @@ int llama_context::decode(llama_batch & inp_batch) {
     //synchronize();
 
     // decide if we need to defrag the kv cache
-    if (cparams.causal_attn && cparams.defrag_thold > 0.0f) {
+    if (!llama_model_is_recurrent(&model) && cparams.causal_attn && cparams.defrag_thold > 0.0f) {
+        auto * kv = static_cast<llama_kv_cache_unified *>(kv_self.get());
+
         // - do not defrag small contexts (i.e. < 2048 tokens)
         // - count the padding towards the number of used tokens
-        const float fragmentation = kv_self->n >= 2048 ? std::max(0.0f, 1.0f - float(kv_self->used + kv_self->get_padding(cparams))/float(kv_self->n)) : 0.0f;
+        const float fragmentation = kv->n >= 2048 ? std::max(0.0f, 1.0f - float(kv->used + kv->get_padding(cparams))/float(kv->n)) : 0.0f;
 
         // queue defragmentation for next llama_kv_cache_update
         if (fragmentation > cparams.defrag_thold) {

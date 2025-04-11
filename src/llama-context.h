@@ -201,7 +201,7 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    std::unique_ptr<llama_kv_cache_unified> kv_self;
+    std::unique_ptr<llama_kv_cache> kv_self;
 
     // TODO: remove
     bool logits_all = false;
