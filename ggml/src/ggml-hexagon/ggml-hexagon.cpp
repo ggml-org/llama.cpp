@@ -901,7 +901,6 @@ public:
         _profiler_threshold_duration = profiler_threshold_duration;
         _profiler_threshold_counts   = profiler_threshold_counts;
 
-        //FIXME:hardcode filename of profiler data
         std::string filename = std::string(g_hexagon_appcfg.runtime_libpath) + "/";
         if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
             if (g_hexagon_appcfg.thread_counts > 1) {
@@ -5763,19 +5762,12 @@ struct ggml_backend_hexagon_buffer_context {
                 ggml_aligned_free(buffer, 0);
             }
         }
-
-        for (auto * sub_buffer : sub_buffers) {
-            free(sub_buffer);
-        }
-
-        sub_buffers.clear();
     }
+
     void * buffer       = nullptr;
+    size_t buffer_size  = 0;
 
     struct ggml_backend_hexagon_context * backend_ctx = nullptr;
-
-    size_t buffer_size  = 0;
-    std::vector<void *> sub_buffers;
 };
 
 static void ggml_backend_hexagon_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -5895,9 +5887,17 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     return ggml_backend_buffer_init(buft, ggml_backend_hexagon_buffer_interface, buffer_ctx, size);
 }
 
+/**
+ * @param buft   pointer to the buffer type context
+ * @return       alignment requirement in bytes
+ */
 static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
-    return 32;
+    if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
+        return 128;
+    } else {
+        return 32;
+    }
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
@@ -5919,11 +5919,7 @@ static bool ggml_backend_buft_is_hexagon(ggml_backend_buffer_type_t buft) {
 static bool ggml_backend_hexagon_buffer_is_host(ggml_backend_buffer_type_t buft) {
     struct ggml_backend_hexagon_context * ctx = static_cast<ggml_backend_hexagon_context *>(buft->context);
     GGML_ASSERT(nullptr != ctx);
-    if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
-        //FIXME: return false here is make sense in this scenario although this is not key-point at the moment
-        //       fix it after solving other urgent tasks
-        //return false;
-    }
+    GGML_UNUSED(ctx);
     return true;
 }
 
