@@ -1,5 +1,17 @@
+cmake_minimum_required(VERSION 3.19)
+project("vulkan-shaders-gen" C CXX)
+
 find_package (Threads REQUIRED)
 
+if (GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    add_compile_definitions(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+endif()
+if (GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+    add_compile_definitions(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+endif()
+if (GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+    add_compile_definitions(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+endif()
 set(TARGET vulkan-shaders-gen)
 add_executable(${TARGET} vulkan-shaders-gen.cpp)
 install(TARGETS ${TARGET} RUNTIME)

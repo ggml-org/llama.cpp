@@ -168,7 +168,7 @@ int main(int argc, char * argv[]) {
 
     llama_backend_init();
 
-    llama_model * model = llama_model_load_from_file(params.model.c_str(), mparams);
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
 
     // create generation context
     llama_context * ctx = llama_init_from_model(model, cparams);

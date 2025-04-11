@@ -31,6 +31,8 @@
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/scale.cuh"
 #include "ggml-cuda/softmax.cuh"
+#include "ggml-cuda/ssm-conv.cuh"
+#include "ggml-cuda/ssm-scan.cuh"
 #include "ggml-cuda/sum.cuh"
 #include "ggml-cuda/sumrows.cuh"
 #include "ggml-cuda/tsembd.cuh"
@@ -1192,7 +1194,35 @@ static void ggml_cuda_op_mul_mat_cublas(
 
     const bool use_fp16 = (src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) && row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT;
 
-    if (((GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) || GGML_CUDA_CC_IS_AMD(cc)) && use_fp16) {
+    if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0) && row_diff == src0->ne[1]) {
+        ggml_cuda_pool_alloc<nv_bfloat16> src1_as_bf16(ctx.pool(id));
+        if (src1->type != GGML_TYPE_BF16) {
+            const to_bf16_cuda_t to_bf16_cuda = ggml_get_to_bf16_cuda(src1->type);
+            GGML_ASSERT(to_bf16_cuda != nullptr);
+            size_t ne = src1_ncols*ne10;
+            src1_as_bf16.alloc(ne);
+            to_bf16_cuda(src1_ddf_i, src1_as_bf16.get(), ne, stream);
+        }
+        const nv_bfloat16 * src1_ptr = src1->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) src1_ddf_i : src1_as_bf16.get();
+        const nv_bfloat16 * src0_ptr = (const nv_bfloat16 *)src0_dd_i;
+        ggml_cuda_pool_alloc<nv_bfloat16> dst_bf16(ctx.pool(id), row_diff*src1_ncols);
+
+        const float alpha_f32 = 1.0f;
+        const float beta_f32  = 0.0f;
+
+        CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
+        CUBLAS_CHECK(
+            cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                    row_diff, src1_ncols, ne10,
+                    &alpha_f32,  src0_ptr,       CUDA_R_16BF, ne00,
+                                 src1_ptr,       CUDA_R_16BF, ne10,
+                    &beta_f32,   dst_bf16.get(), CUDA_R_16BF, ldc,
+                    CUBLAS_COMPUTE_32F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
+        to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff*src1_ncols, stream);
+    } else if (((GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_VOLTA) || GGML_CUDA_CC_IS_AMD(cc)) && use_fp16) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
         ggml_cuda_pool_alloc<half> src0_as_f16(ctx.pool(id));
         if (src0->type != GGML_TYPE_F16) {
@@ -1216,7 +1246,7 @@ static void ggml_cuda_op_mul_mat_cublas(
 
         CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(id), stream));
 
-        if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
             const float alpha = 1.0f;
             const float beta = 0.0f;
             CUBLAS_CHECK(
@@ -1759,7 +1789,9 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
         beta  = &beta_f32;
     }
 
-    if (GGML_CUDA_CC_IS_CDNA(ggml_cuda_info().devices[ctx.device].cc)) {
+    int id = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[id].cc;
+    if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
         cu_compute_type = CUBLAS_COMPUTE_32F;
         alpha = &alpha_f32;
         beta  = &beta_f32;
@@ -1836,7 +1868,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 #endif
 
-    if (dst->op_params[0] == GGML_PREC_DEFAULT) {
+    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type == CUDA_R_16F) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
         to_fp32_cuda(dst_f16.get(), dst_ddf, ne_dst, main_stream);
     }
@@ -2294,6 +2326,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SUM_ROWS:
             ggml_cuda_op_sum_rows(ctx, dst);
             break;
+        case GGML_OP_SSM_CONV:
+            ggml_cuda_op_ssm_conv(ctx, dst);
+            break;
+        case GGML_OP_SSM_SCAN:
+            ggml_cuda_op_ssm_scan(ctx, dst);
+            break;
         case GGML_OP_ARGSORT:
             ggml_cuda_op_argsort(ctx, dst);
             break;
@@ -2431,10 +2469,11 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_CUDA_GRAPH
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-    std::vector<void *> & ggml_cuda_cpy_fn_ptrs, bool use_cuda_graph) {
+    bool use_cuda_graph) {
 
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
-    cuda_ctx->cuda_graph->updated_kernel_arg.clear();
+    cuda_ctx->cuda_graph->cpy_dest_ptrs.clear();
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
 
@@ -2466,8 +2505,11 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
         }
 
         if (node->op == GGML_OP_CPY) {
-            // store the copy op parameter which changes with each token.
-            cuda_ctx->cuda_graph->updated_kernel_arg.push_back((char **) &(node->src[1]->data));
+
+            // Store the pointers which are updated for each token, such that these can be sent
+            // to the device and accessed using indirection from CUDA graph
+            cuda_ctx->cuda_graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
+
             // store a pointer to each copy op CUDA kernel to identify it later
             void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
             if (!ptr) {
@@ -2475,16 +2517,18 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #ifndef NDEBUG
                 GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported copy op\n", __func__);
 #endif
-            } else {
-                if (std::find(ggml_cuda_cpy_fn_ptrs.begin(), ggml_cuda_cpy_fn_ptrs.end(), ptr) == ggml_cuda_cpy_fn_ptrs.end()) {
-                    ggml_cuda_cpy_fn_ptrs.push_back(ptr);
-                }
             }
         }
 
         if (!use_cuda_graph) {
             break;
         }
+    }
+
+    if (use_cuda_graph) {
+        cuda_ctx->cuda_graph->use_cpy_indirection = true;
+        // copy pointers to GPU so they can be accessed via indirection within CUDA graph
+        ggml_cuda_cpy_dest_ptrs_copy(cuda_ctx->cuda_graph.get(), cuda_ctx->cuda_graph->cpy_dest_ptrs.data(), cuda_ctx->cuda_graph->cpy_dest_ptrs.size(), cuda_ctx->stream());
     }
 
     return use_cuda_graph;
@@ -2539,51 +2583,6 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     }
 
     return true;
-}
-
-static void maintain_cuda_graph(ggml_backend_cuda_context * cuda_ctx, std::vector<void *> & ggml_cuda_cpy_fn_ptrs, bool cuda_graph_update_required) {
-
-    if (cuda_graph_update_required) {
-        // Extract nodes from graph
-        // First call with null argument gets number of nodes in graph
-        CUDA_CHECK(cudaGraphGetNodes(cuda_ctx->cuda_graph->graph, nullptr, &cuda_ctx->cuda_graph->num_nodes));
-        // Subsequent call with non-null argument gets nodes
-        cuda_ctx->cuda_graph->nodes.clear();
-        cuda_ctx->cuda_graph->nodes.resize(cuda_ctx->cuda_graph->num_nodes);
-        cuda_ctx->cuda_graph->params.clear();
-        cuda_ctx->cuda_graph->params.resize(cuda_ctx->cuda_graph->num_nodes);
-        if (cuda_ctx->cuda_graph->num_nodes > 0) {
-            CUDA_CHECK(cudaGraphGetNodes(cuda_ctx->cuda_graph->graph, cuda_ctx->cuda_graph->nodes.data(), &cuda_ctx->cuda_graph->num_nodes));
-
-            // Loop over nodes, and extract kernel parameters from each node
-            for (size_t i = 0; i < cuda_ctx->cuda_graph->num_nodes; i++) {
-                cudaGraphNodeType node_type;
-                CUDA_CHECK(cudaGraphNodeGetType(cuda_ctx->cuda_graph->nodes[i], &node_type));
-                if (node_type == cudaGraphNodeTypeKernel) {
-                    cudaError_t stat = cudaGraphKernelNodeGetParams(cuda_ctx->cuda_graph->nodes[i], &cuda_ctx->cuda_graph->params[i]); // Get params using runtime
-                    if (stat == cudaErrorInvalidDeviceFunction) {
-                        // Fails due to incorrect handling by CUDA runtime of CUDA BLAS node.
-                        // We don't need to update blas nodes, so clear error and move on.
-                        (void)cudaGetLastError();
-                    } else {
-                        GGML_ASSERT(stat == cudaSuccess);
-                    }
-                }
-            }
-        }
-    } else {
-        // One of the arguments to the copy kernel is updated for each token, hence we need to
-        // replace that argument with the updated value in the CUDA graph
-        // on update steps, the live parameters will already be captured
-        int k = 0;
-        for (size_t i = 0; i < cuda_ctx->cuda_graph->num_nodes; i++) {
-            if(count(ggml_cuda_cpy_fn_ptrs.begin(), ggml_cuda_cpy_fn_ptrs.end(), cuda_ctx->cuda_graph->params[i].func) > 0) {
-                char ** updated_kernel_arg_ptr = cuda_ctx->cuda_graph->updated_kernel_arg.at(k++);
-                *(void**)cuda_ctx->cuda_graph->params[i].kernelParams[1] = *(void**)updated_kernel_arg_ptr;
-                CUDA_CHECK(cudaGraphKernelNodeSetParams(cuda_ctx->cuda_graph->nodes[i], &cuda_ctx->cuda_graph->params[i]));
-            }
-        }
-    }
 }
 
 static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
@@ -2645,8 +2644,7 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 #endif
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
-   [[maybe_unused]] std::vector<void *> & ggml_cuda_cpy_fn_ptrs,  bool & graph_evaluated_or_captured, bool & use_cuda_graph,
-    bool & cuda_graph_update_required) {
+    bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
 
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
@@ -2696,13 +2694,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         if (cuda_ctx->cuda_graph->instance == nullptr) { // Create executable graph from captured graph.
             CUDA_CHECK(cudaGraphInstantiate(&cuda_ctx->cuda_graph->instance, cuda_ctx->cuda_graph->graph, NULL, NULL, 0));
         }
-
-        // Perform update to graph (if required for this token), and change copy parameter (required for every token)
-        maintain_cuda_graph(cuda_ctx, ggml_cuda_cpy_fn_ptrs, cuda_graph_update_required);
-
-        // Update graph executable
-        update_cuda_graph_executable(cuda_ctx);
-
+        if (cuda_graph_update_required) { // Update graph executable
+            update_cuda_graph_executable(cuda_ctx);
+        }
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(cuda_ctx->cuda_graph->instance, cuda_ctx->stream()));
 #else
@@ -2715,10 +2709,6 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
-
-    // vector of pointers to CUDA cpy kernels, which are required to identify
-    // kernel parameters which need updated in the graph for each token
-    std::vector<void *> ggml_cuda_cpy_fn_ptrs;
 
 #ifdef USE_CUDA_GRAPH
     static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
@@ -2753,8 +2743,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_ctx, cgraph,
-                             ggml_cuda_cpy_fn_ptrs, use_cuda_graph);
+        use_cuda_graph = check_node_graph_compatibility_and_refresh_copy_ops(cuda_ctx, cgraph, use_cuda_graph);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
         if (use_cuda_graph && cuda_graph_update_required) {
@@ -2775,6 +2764,10 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
 
+    if (!use_cuda_graph) {
+        cuda_ctx->cuda_graph->use_cpy_indirection = false;
+    }
+
 #else
     bool use_cuda_graph = false;
     bool cuda_graph_update_required = false;
@@ -2782,7 +2775,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
     bool graph_evaluated_or_captured = false;
 
-    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, ggml_cuda_cpy_fn_ptrs, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
+    evaluate_and_capture_cuda_graph(cuda_ctx, cgraph, graph_evaluated_or_captured, use_cuda_graph, cuda_graph_update_required);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -3086,6 +3079,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_F32) {
                     return true;
                 }
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_BF16) {
+                    return true;
+                }
                 if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_F16) {
                     return true;
                 }
@@ -3191,6 +3187,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
+        case GGML_OP_SSM_SCAN:
+        case GGML_OP_SSM_CONV:
             return true;
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
@@ -3218,6 +3216,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_UPSCALE:
+            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
         case GGML_OP_PAD:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
@@ -3230,6 +3229,13 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #ifndef FLASH_ATTN_AVAILABLE
             return false;
 #endif // FLASH_ATTN_AVAILABLE
+            if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                // different head sizes of K and V are not supported yet
+                return false;
+            }
+            if (op->src[0]->ne[0] == 192) {
+                return false;
+            }
             if (op->src[0]->ne[3] != 1) {
                 return false;
             }

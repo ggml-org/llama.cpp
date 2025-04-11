@@ -65,6 +65,7 @@ class Model:
     model_name: str | None
     metadata_override: Path | None
     dir_model_card: Path
+    remote_hf_model_id: str | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -73,7 +74,7 @@ class Model:
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -83,11 +84,24 @@ class Model:
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
-        self.lazy = not eager
-        self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
-        self.is_safetensors = len(self.part_names) > 0
-        if not self.is_safetensors:
-            self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
+        self.lazy = not eager or (remote_hf_model_id is not None)
+        self.remote_hf_model_id = remote_hf_model_id
+        if remote_hf_model_id is not None:
+            self.is_safetensors = True
+
+            def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
+                logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
+                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
+                self.tensor_names = set(name for name in remote_tensors.keys())
+                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
+                    yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
+
+            self.get_tensors = get_remote_tensors
+        else:
+            self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
+            self.is_safetensors = len(self.part_names) > 0
+            if not self.is_safetensors:
+                self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
         self.hparams = Model.load_hparams(self.dir_model) if hparams is None else hparams
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -392,6 +406,10 @@ class Model:
         total_params, shared_params, expert_params, expert_count = self.gguf_writer.get_total_parameter_count()
 
         self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model_card, self.model_name, total_params)
+
+        # If we are using HF model id, set the metadata name to the model id
+        if self.remote_hf_model_id:
+            self.metadata.name = self.remote_hf_model_id
 
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
@@ -711,6 +729,18 @@ class Model:
         if chkhsh == "7dec86086fcc38b66b7bc1575a160ae21cf705be7718b9d5598190d7c12db76f":
             # ref: https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k
             res = "superbpe"
+        if chkhsh == "1994ffd01900cfb37395608534236ecd63f2bd5995d6cb1004dda1af50240f15":
+            # ref: https://huggingface.co/trillionlabs/Trillion-7B-preview
+            res = "trillion"
+        if chkhsh == "96a5f08be6259352137b512d4157e333e21df7edd3fcd152990608735a65b224":
+            # ref: https://huggingface.co/inclusionAI/Ling-lite
+            res = "bailingmoe"
+        if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
+            # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
+            res = "llama4"
+        if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-hf
+            res = "glm4"
 
         if res is None:
             logger.warning("\n")
@@ -1605,6 +1635,7 @@ class StableLMModel(Model):
 @Model.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM")
 class LlamaModel(Model):
     model_arch = gguf.MODEL_ARCH.LLAMA
+    undo_permute = True
 
     def set_vocab(self):
         try:
@@ -1669,10 +1700,11 @@ class LlamaModel(Model):
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
 
-        if name.endswith(("q_proj.weight", "q_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-        if name.endswith(("k_proj.weight", "k_proj.bias")):
-            data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
+        if self.undo_permute:
+            if name.endswith(("q_proj.weight", "q_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_head)
+            if name.endswith(("k_proj.weight", "k_proj.bias")):
+                data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
         # process the experts separately
         if name.find("block_sparse_moe.experts") != -1:
@@ -1724,7 +1756,7 @@ class LlamaModel(Model):
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
-                assert low_freq_wavelen != high_freq_wavelen
+                # assert low_freq_wavelen != high_freq_wavelen # Errors for Llama4
 
                 rope_factors = []
                 for freq in freqs:
@@ -1747,6 +1779,57 @@ class LlamaModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("Llama4ForConditionalGeneration")
+class Llama4Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA4
+    has_vision: bool = False
+    undo_permute = False
+
+    # TODO @ngxson : avoid duplicate this code everywhere by at least support "text_config"
+    # same with llama, but we need to merge the text_config into the root level of hparams
+    def __init__(self, *args, **kwargs):
+        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
+        if "text_config" in hparams:
+            hparams = {**hparams, **hparams["text_config"]}
+            kwargs["hparams"] = hparams
+        super().__init__(*args, **kwargs)
+        if "vision_config" in hparams:
+            logger.info("Has vision encoder, but it will be ignored")
+            self.has_vision = True
+        # IMPORTANT: the normal "intermediate_size" is renamed to "intermediate_size_mlp", we need to undo this
+        self.hparams["intermediate_size_moe"] = self.hparams["intermediate_size"]
+        self.hparams["intermediate_size"] = self.hparams["intermediate_size_mlp"]
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+        self.gguf_writer.add_add_bos_token(True)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_interleave_moe_layer_step(self.hparams["interleave_moe_layer_step"])
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # split the gate_up into gate and up
+        if "gate_up_proj" in name:
+            name_up = name.replace("gate_up_proj", "up_proj.weight")
+            name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+            dim_half = data_torch.shape[-1] // 2
+            gate_proj_weight, up_proj_weight = data_torch.transpose(-1, -2).split(dim_half, dim=-2)
+            return [
+                (self.map_tensor_name(name_gate), gate_proj_weight),
+                (self.map_tensor_name(name_up), up_proj_weight)
+            ]
+
+        if name.endswith("down_proj"):
+            name += ".weight"
+            data_torch = data_torch.transpose(-1, -2)
+
+        if "multi_modal_projector" in name or "vision_model" in name:
+            return []
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @Model.register("Mistral3ForConditionalGeneration")
@@ -2272,7 +2355,7 @@ class Qwen2Model(Model):
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
 
-@Model.register("Qwen2VLForConditionalGeneration")
+@Model.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
 class Qwen2VLModel(Model):
     model_arch = gguf.MODEL_ARCH.QWEN2VL
 
@@ -2394,6 +2477,16 @@ class Qwen2MoeModel(Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@Model.register("Qwen3ForCausalLM")
+class Qwen3Model(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN3
+
+
+@Model.register("Qwen3MoeForCausalLM")
+class Qwen3MoeModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
 
 @Model.register("GPT2LMHeadModel")
@@ -3554,8 +3647,8 @@ class RWKV6Qwen2Model(Rwkv6Model):
         head_size = hidden_size // num_attention_heads
         rms_norm_eps = self.hparams["rms_norm_eps"]
         intermediate_size = self.hparams["intermediate_size"]
-        time_mix_extra_dim = 64 if hidden_size >= 4096 else 32
-        time_decay_extra_dim = 128 if hidden_size >= 4096 else 64
+        time_mix_extra_dim = self.hparams.get("lora_rank_tokenshift", 64 if hidden_size >= 4096 else 32)
+        time_decay_extra_dim = self.hparams.get("lora_rank_decay", 128 if hidden_size >= 4096 else 64)
 
         # RWKV isn't context limited
         self.gguf_writer.add_context_length(1048576)
@@ -3806,8 +3899,6 @@ class MambaModel(Model):
     _tok_embd = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-
         output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
         tok_embd_name = self.format_tensor_name(gguf.MODEL_TENSOR.TOKEN_EMBD)
 
@@ -3816,6 +3907,10 @@ class MambaModel(Model):
         if name.endswith(".A_log"):
             logger.debug("A_log --> A ==> " + new_name)
             data_torch = -torch.exp(data_torch)
+
+        # [4 1 8192 1] -> [4 8192 1 1]
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):
+            data_torch = data_torch.squeeze()
 
         # assuming token_embd.weight is seen before output.weight
         if self._tok_embd is not None and new_name == output_name:
@@ -4420,6 +4515,29 @@ class DeepseekV2Model(Model):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@Model.register("PLMForCausalLM")
+class PLMModel(Model):
+    model_arch = gguf.MODEL_ARCH.PLM
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+        self.gguf_writer.add_key_length(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+
 @Model.register("T5WithLMHeadModel")
 @Model.register("T5ForConditionalGeneration")
 @Model.register("MT5ForConditionalGeneration")
@@ -4785,6 +4903,22 @@ class JaisModel(Model):
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
 
+@Model.register("Glm4ForCausalLM")
+class Glm4Model(Model):
+    model_arch = gguf.MODEL_ARCH.GLM4
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
+            if self.hparams["rope_scaling"].get("type") == "yarn":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+
+
 @Model.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(Model):
     model_arch = gguf.MODEL_ARCH.CHATGLM
@@ -5108,6 +5242,105 @@ class GraniteMoeModel(GraniteModel):
         return super().modify_tensors(data_torch, name, bid)
 
 
+@Model.register("BailingMoeForCausalLM")
+class BailingMoeModel(Model):
+    model_arch = gguf.MODEL_ARCH.BAILINGMOE
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
+
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_weights_scale(1.0)
+        self.gguf_writer.add_expert_count(hparams["num_experts"])
+        self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
+        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    @staticmethod
+    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
+        if n_head_kv is not None and n_head != n_head_kv:
+            n_head = n_head_kv
+        return (weights.reshape(n_head, 2, weights.shape[0] // n_head // 2, *weights.shape[1:])
+                .swapaxes(1, 2)
+                .reshape(weights.shape))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        n_head = self.hparams["num_attention_heads"]
+        n_kv_head = self.hparams.get("num_key_value_heads")
+        n_embd = self.hparams["hidden_size"]
+        head_dim = self.hparams.get("head_dim") or n_embd // n_head
+
+        output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
+
+        if name.endswith("attention.dense.weight"):
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_OUT, bid), data_torch)]
+        elif name.endswith("query_key_value.weight"):
+            q, k, v = data_torch.split([n_head * head_dim, n_kv_head * head_dim, n_kv_head * head_dim], dim=-2)
+
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), BailingMoeModel.permute(q, n_head, n_head)),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), BailingMoeModel.permute(k, n_head, n_kv_head)),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), v)
+            ]
+        elif name.find("mlp.experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            tensors: list[tuple[str, Tensor]] = []
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+
+            return tensors
+
+        new_name = self.map_tensor_name(name)
+
+        if new_name == output_name and self.hparams.get("norm_head"):
+            data_torch = data_torch.float()
+            data_torch /= torch.norm(data_torch, p=2, dim=0, keepdim=True) + 1e-7
+
+        return [(new_name, data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
 @Model.register("ChameleonForConditionalGeneration")
 @Model.register("ChameleonForCausalLM")  # obsolete
 class ChameleonModel(Model):
@@ -5207,6 +5440,14 @@ class LazyTorchTensor(gguf.LazyBase):
         return cast(torch.Tensor, lazy)
 
     @classmethod
+    def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
+        dtype = cls._dtype_str_map[remote_tensor.dtype]
+        shape = remote_tensor.shape
+        meta = cls.meta_with_dtype_and_shape(dtype, shape)
+        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.frombuffer(r.data(), dtype=dtype).reshape(shape))
+        return cast(torch.Tensor, lazy)
+
+    @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         del types  # unused
 
@@ -5283,6 +5524,10 @@ def parse_args() -> argparse.Namespace:
         "--print-supported-models", action="store_true",
         help="Print the supported models"
     )
+    parser.add_argument(
+        "--remote", action="store_true",
+        help="(Experimental) Read safetensors file remotely without downloading to disk. Config and tokenizer files will still be downloaded. To use this feature, you need to specify Hugging Face model repo name instead of a local directory. For example: 'HuggingFaceTB/SmolLM2-1.7B-Instruct'. Note: To access gated repo, set HF_TOKEN environment variable to your Hugging Face token.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -5323,6 +5568,14 @@ def main() -> None:
 
     dir_model = args.model
 
+    if args.remote:
+        from huggingface_hub import snapshot_download
+        local_dir = snapshot_download(
+            repo_id=str(dir_model),
+            allow_patterns=["LICENSE", "*.json", "*.md", "*.txt", "tokenizer.model"])
+        dir_model = Path(local_dir)
+        logger.info(f"Downloaded config and tokenizer to {local_dir}")
+
     if not dir_model.is_dir():
         logger.error(f'Error: {args.model} is not a directory')
         sys.exit(1)
@@ -5344,6 +5597,9 @@ def main() -> None:
 
     if args.outfile is not None:
         fname_out = args.outfile
+    elif args.remote:
+        # if remote, use the model ID as the output file name
+        fname_out = Path("./" + str(args.model).replace("/", "-") + "-{ftype}.gguf")
     else:
         fname_out = dir_model
 
@@ -5354,7 +5610,6 @@ def main() -> None:
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
         model_architecture = hparams["architectures"][0]
-
         try:
             model_class = Model.from_model_architecture(model_architecture)
         except NotImplementedError:
@@ -5367,7 +5622,8 @@ def main() -> None:
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
-                                     small_first_shard=args.no_tensor_first_split)
+                                     small_first_shard=args.no_tensor_first_split,
+                                     remote_hf_model_id=str(args.model) if args.remote else None)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")

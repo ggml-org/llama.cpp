@@ -69,7 +69,11 @@ while read c; do
     git format-patch -U${ctx} -k $c~1..$c --stdout -- \
         CMakeLists.txt \
         src/CMakeLists.txt \
-        cmake/FindSIMD.cmake \
+        cmake/BuildTypes.cmake \
+        cmake/GitVars.cmake \
+        cmake/common.cmake \
+        cmake/ggml-config.cmake.in \
+        src/ggml-cpu/cmake/FindSIMD.cmake \
         src/ggml*.h \
         src/ggml*.c \
         src/ggml*.cpp \
@@ -121,7 +125,12 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     #
     # CMakelists.txt       -> ggml/CMakeLists.txt
     # src/CMakeLists.txt   -> ggml/src/CMakeLists.txt
-    # cmake/FindSIMD.cmake -> ggml/cmake/FindSIMD.cmake
+
+    # cmake/BuildTypes.cmake            -> ggml/cmake/BuildTypes.cmake
+    # cmake/GitVars.cmake               -> ggml/cmake/GitVars.cmake
+    # cmake/common.cmake                -> ggml/cmake/common.cmake
+    # cmake/ggml-config.cmake.in        -> ggml/cmake/ggml-config.cmake.in
+    # src/ggml-cpu/cmake/FindSIMD.cmake -> ggml/src/ggml-cpu/cmake/FindSIMD.cmake
     #
     # src/ggml*.c          -> ggml/src/ggml*.c
     # src/ggml*.cpp        -> ggml/src/ggml*.cpp
@@ -149,9 +158,13 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # scripts/gen-authors.sh -> scripts/gen-authors.sh
 
     cat ggml-src.patch | sed -E \
-        -e 's/(^[[:space:]]| [ab]\/)CMakeLists.txt/\1ggml\/CMakeLists.txt/g' \
-        -e 's/(^[[:space:]]| [ab]\/)src\/CMakeLists.txt/\1ggml\/src\/CMakeLists.txt/g' \
-        -e 's/(^[[:space:]]| [ab]\/)cmake\/FindSIMD.cmake/\1ggml\/cmake\/FindSIMD.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)CMakeLists.txt/\1ggml\/CMakeLists.txt/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/CMakeLists.txt/\1ggml\/src\/CMakeLists.txt/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/BuildTypes.cmake/\1ggml\/cmake\/BuildTypes.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/GitVars.cmake/\1ggml\/cmake\/GitVars.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/common.cmake/\1ggml\/cmake\/common.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/ggml-config.cmake.in/\1ggml\/cmake\/ggml-config.cmake.in/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/ggml-cpu\/cmake\/FindSIMD.cmake/\1ggml\/src\/ggml-cpu\/cmake\/FindSIMD.cmake/g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.c/\1ggml\/src\/ggml\2.c/g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.cpp/\1ggml\/src\/ggml\2.cpp/g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)\.h/\1ggml\/src\/ggml\2.h/g' \
@@ -167,11 +180,11 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]| [ab]\/)src\/ggml-rpc\//\1ggml\/src\/ggml-rpc\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-sycl\//\1ggml\/src\/ggml-sycl\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-vulkan\//\1ggml\/src\/ggml-vulkan\//g' \
-        -e 's/^([[:space:]]| [ab]\/)include\/ggml(.*)\.h/\1ggml\/include\/ggml\2.h/g' \
-        -e 's/^([[:space:]]| [ab]\/)include\/gguf(.*)\.h/\1ggml\/include\/gguf\2.h/g' \
-        -e 's/^([[:space:]]| [ab]\/)tests\/(.*)\.cpp/\1tests\/\2.cpp/g' \
-        -e 's/^([[:space:]]| [ab]\/)LICENSE/\1LICENSE/g' \
-        -e 's/^([[:space:]]| [ab]\/)scripts\/gen-authors\.sh/\1scripts\/gen-authors.sh/g' \
+        -e 's/([[:space:]]| [ab]\/)include\/ggml(.*)\.h/\1ggml\/include\/ggml\2.h/g' \
+        -e 's/([[:space:]]| [ab]\/)include\/gguf(.*)\.h/\1ggml\/include\/gguf\2.h/g' \
+        -e 's/([[:space:]]| [ab]\/)tests\/(.*)\.cpp/\1tests\/\2.cpp/g' \
+        -e 's/([[:space:]]| [ab]\/)LICENSE/\1LICENSE/g' \
+        -e 's/([[:space:]]| [ab]\/)scripts\/gen-authors\.sh/\1scripts\/gen-authors.sh/g' \
         > ggml-src.patch.tmp
     mv ggml-src.patch.tmp ggml-src.patch
 

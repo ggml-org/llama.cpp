@@ -112,6 +112,10 @@ models = [
     {"name": "velvet",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Almawave/Velvet-14B"},
     {"name": "gpt-4o",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Xenova/gpt-4o", },
     {"name": "superbpe",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k", },
+    {"name": "trillion",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/trillionlabs/Trillion-7B-preview", },
+    {"name": "bailingmoe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/inclusionAI/Ling-lite", },
+    {"name": "llama4",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct", },
+    {"name": "glm4",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/THUDM/glm-4-9b-hf", },
 ]
 
 

@@ -8,14 +8,26 @@
 // SPDX-License-Identifier: MIT
 #pragma once
 
+#include <algorithm>
+#include <cctype>
+#include <cstddef>
+#include <cmath>
+#include <exception>
+#include <functional>
 #include <iostream>
-#include <string>
-#include <vector>
-#include <regex>
+#include <iterator>
+#include <limits>
+#include <map>
 #include <memory>
-#include <stdexcept>
+#include <regex>
 #include <sstream>
+#include <string>
+#include <stdexcept>
+#include <unordered_map>
 #include <unordered_set>
+#include <utility>
+#include <vector>
+
 #include <json.hpp>
 
 using json = nlohmann::ordered_json;
@@ -731,51 +743,51 @@ public:
 
 struct TextTemplateToken : public TemplateToken {
     std::string text;
-    TextTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, const std::string& t) : TemplateToken(Type::Text, location, pre, post), text(t) {}
+    TextTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, const std::string& t) : TemplateToken(Type::Text, loc, pre, post), text(t) {}
 };
 
 struct ExpressionTemplateToken : public TemplateToken {
     std::shared_ptr<Expression> expr;
-    ExpressionTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && e) : TemplateToken(Type::Expression, location, pre, post), expr(std::move(e)) {}
+    ExpressionTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && e) : TemplateToken(Type::Expression, loc, pre, post), expr(std::move(e)) {}
 };
 
 struct IfTemplateToken : public TemplateToken {
     std::shared_ptr<Expression> condition;
-    IfTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && c) : TemplateToken(Type::If, location, pre, post), condition(std::move(c)) {}
+    IfTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && c) : TemplateToken(Type::If, loc, pre, post), condition(std::move(c)) {}
 };
 
 struct ElifTemplateToken : public TemplateToken {
     std::shared_ptr<Expression> condition;
-    ElifTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && c) : TemplateToken(Type::Elif, location, pre, post), condition(std::move(c)) {}
+    ElifTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && c) : TemplateToken(Type::Elif, loc, pre, post), condition(std::move(c)) {}
 };
 
 struct ElseTemplateToken : public TemplateToken {
-    ElseTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::Else, location, pre, post) {}
+    ElseTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::Else, loc, pre, post) {}
 };
 
 struct EndIfTemplateToken : public TemplateToken {
-    EndIfTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndIf, location, pre, post) {}
+    EndIfTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndIf, loc, pre, post) {}
 };
 
 struct MacroTemplateToken : public TemplateToken {
     std::shared_ptr<VariableExpr> name;
     Expression::Parameters params;
-    MacroTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, std::shared_ptr<VariableExpr> && n, Expression::Parameters && p)
-      : TemplateToken(Type::Macro, location, pre, post), name(std::move(n)), params(std::move(p)) {}
+    MacroTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<VariableExpr> && n, Expression::Parameters && p)
+      : TemplateToken(Type::Macro, loc, pre, post), name(std::move(n)), params(std::move(p)) {}
 };
 
 struct EndMacroTemplateToken : public TemplateToken {
-    EndMacroTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndMacro, location, pre, post) {}
+    EndMacroTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndMacro, loc, pre, post) {}
 };
 
 struct FilterTemplateToken : public TemplateToken {
     std::shared_ptr<Expression> filter;
-    FilterTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && filter)
-      : TemplateToken(Type::Filter, location, pre, post), filter(std::move(filter)) {}
+    FilterTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, std::shared_ptr<Expression> && filter)
+      : TemplateToken(Type::Filter, loc, pre, post), filter(std::move(filter)) {}
 };
 
 struct EndFilterTemplateToken : public TemplateToken {
-    EndFilterTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndFilter, location, pre, post) {}
+    EndFilterTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndFilter, loc, pre, post) {}
 };
 
 struct ForTemplateToken : public TemplateToken {
@@ -783,38 +795,38 @@ struct ForTemplateToken : public TemplateToken {
     std::shared_ptr<Expression> iterable;
     std::shared_ptr<Expression> condition;
     bool recursive;
-    ForTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, const std::vector<std::string> & vns, std::shared_ptr<Expression> && iter,
+    ForTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, const std::vector<std::string> & vns, std::shared_ptr<Expression> && iter,
       std::shared_ptr<Expression> && c, bool r)
-      : TemplateToken(Type::For, location, pre, post), var_names(vns), iterable(std::move(iter)), condition(std::move(c)), recursive(r) {}
+      : TemplateToken(Type::For, loc, pre, post), var_names(vns), iterable(std::move(iter)), condition(std::move(c)), recursive(r) {}
 };
 
 struct EndForTemplateToken : public TemplateToken {
-    EndForTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndFor, location, pre, post) {}
+    EndForTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndFor, loc, pre, post) {}
 };
 
 struct GenerationTemplateToken : public TemplateToken {
-    GenerationTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::Generation, location, pre, post) {}
+    GenerationTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::Generation, loc, pre, post) {}
 };
 
 struct EndGenerationTemplateToken : public TemplateToken {
-    EndGenerationTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndGeneration, location, pre, post) {}
+    EndGenerationTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndGeneration, loc, pre, post) {}
 };
 
 struct SetTemplateToken : public TemplateToken {
     std::string ns;
     std::vector<std::string> var_names;
     std::shared_ptr<Expression> value;
-    SetTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, const std::string & ns, const std::vector<std::string> & vns, std::shared_ptr<Expression> && v)
-      : TemplateToken(Type::Set, location, pre, post), ns(ns), var_names(vns), value(std::move(v)) {}
+    SetTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, const std::string & ns, const std::vector<std::string> & vns, std::shared_ptr<Expression> && v)
+      : TemplateToken(Type::Set, loc, pre, post), ns(ns), var_names(vns), value(std::move(v)) {}
 };
 
 struct EndSetTemplateToken : public TemplateToken {
-    EndSetTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndSet, location, pre, post) {}
+    EndSetTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post) : TemplateToken(Type::EndSet, loc, pre, post) {}
 };
 
 struct CommentTemplateToken : public TemplateToken {
     std::string text;
-    CommentTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, const std::string& t) : TemplateToken(Type::Comment, location, pre, post), text(t) {}
+    CommentTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, const std::string& t) : TemplateToken(Type::Comment, loc, pre, post), text(t) {}
 };
 
 enum class LoopControlType { Break, Continue };
@@ -830,7 +842,7 @@ public:
 
 struct LoopControlTemplateToken : public TemplateToken {
     LoopControlType control_type;
-    LoopControlTemplateToken(const Location & location, SpaceHandling pre, SpaceHandling post, LoopControlType control_type) : TemplateToken(Type::Break, location, pre, post), control_type(control_type) {}
+    LoopControlTemplateToken(const Location & loc, SpaceHandling pre, SpaceHandling post, LoopControlType control_type) : TemplateToken(Type::Break, loc, pre, post), control_type(control_type) {}
 };
 
 class TemplateNode {
@@ -868,8 +880,8 @@ public:
 class SequenceNode : public TemplateNode {
     std::vector<std::shared_ptr<TemplateNode>> children;
 public:
-    SequenceNode(const Location & location, std::vector<std::shared_ptr<TemplateNode>> && c)
-      : TemplateNode(location), children(std::move(c)) {}
+    SequenceNode(const Location & loc, std::vector<std::shared_ptr<TemplateNode>> && c)
+      : TemplateNode(loc), children(std::move(c)) {}
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
         for (const auto& child : children) child->render(out, context);
     }
@@ -878,7 +890,7 @@ public:
 class TextNode : public TemplateNode {
     std::string text;
 public:
-    TextNode(const Location & location, const std::string& t) : TemplateNode(location), text(t) {}
+    TextNode(const Location & loc, const std::string& t) : TemplateNode(loc), text(t) {}
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> &) const override {
       out << text;
     }
@@ -887,7 +899,7 @@ public:
 class ExpressionNode : public TemplateNode {
     std::shared_ptr<Expression> expr;
 public:
-    ExpressionNode(const Location & location, std::shared_ptr<Expression> && e) : TemplateNode(location), expr(std::move(e)) {}
+    ExpressionNode(const Location & loc, std::shared_ptr<Expression> && e) : TemplateNode(loc), expr(std::move(e)) {}
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
       if (!expr) throw std::runtime_error("ExpressionNode.expr is null");
       auto result = expr->evaluate(context);
@@ -904,8 +916,8 @@ public:
 class IfNode : public TemplateNode {
     std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<TemplateNode>>> cascade;
 public:
-    IfNode(const Location & location, std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<TemplateNode>>> && c)
-        : TemplateNode(location), cascade(std::move(c)) {}
+    IfNode(const Location & loc, std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<TemplateNode>>> && c)
+        : TemplateNode(loc), cascade(std::move(c)) {}
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
       for (const auto& branch : cascade) {
           auto enter_branch = true;
@@ -924,7 +936,7 @@ public:
 class LoopControlNode : public TemplateNode {
     LoopControlType control_type_;
   public:
-    LoopControlNode(const Location & location, LoopControlType control_type) : TemplateNode(location), control_type_(control_type) {}
+    LoopControlNode(const Location & loc, LoopControlType control_type) : TemplateNode(loc), control_type_(control_type) {}
     void do_render(std::ostringstream &, const std::shared_ptr<Context> &) const override {
       throw LoopControlException(control_type_);
     }
@@ -938,9 +950,9 @@ class ForNode : public TemplateNode {
     bool recursive;
     std::shared_ptr<TemplateNode> else_body;
 public:
-    ForNode(const Location & location, std::vector<std::string> && var_names, std::shared_ptr<Expression> && iterable,
+    ForNode(const Location & loc, std::vector<std::string> && var_names, std::shared_ptr<Expression> && iterable,
       std::shared_ptr<Expression> && condition, std::shared_ptr<TemplateNode> && body, bool recursive, std::shared_ptr<TemplateNode> && else_body)
-            : TemplateNode(location), var_names(var_names), iterable(std::move(iterable)), condition(std::move(condition)), body(std::move(body)), recursive(recursive), else_body(std::move(else_body)) {}
+            : TemplateNode(loc), var_names(var_names), iterable(std::move(iterable)), condition(std::move(condition)), body(std::move(body)), recursive(recursive), else_body(std::move(else_body)) {}
 
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
       // https://jinja.palletsprojects.com/en/3.0.x/templates/#for
@@ -1025,8 +1037,8 @@ class MacroNode : public TemplateNode {
     std::shared_ptr<TemplateNode> body;
     std::unordered_map<std::string, size_t> named_param_positions;
 public:
-    MacroNode(const Location & location, std::shared_ptr<VariableExpr> && n, Expression::Parameters && p, std::shared_ptr<TemplateNode> && b)
-        : TemplateNode(location), name(std::move(n)), params(std::move(p)), body(std::move(b)) {
+    MacroNode(const Location & loc, std::shared_ptr<VariableExpr> && n, Expression::Parameters && p, std::shared_ptr<TemplateNode> && b)
+        : TemplateNode(loc), name(std::move(n)), params(std::move(p)), body(std::move(b)) {
         for (size_t i = 0; i < params.size(); ++i) {
           const auto & name = params[i].first;
           if (!name.empty()) {
@@ -1072,8 +1084,8 @@ class FilterNode : public TemplateNode {
     std::shared_ptr<TemplateNode> body;
 
 public:
-    FilterNode(const Location & location, std::shared_ptr<Expression> && f, std::shared_ptr<TemplateNode> && b)
-        : TemplateNode(location), filter(std::move(f)), body(std::move(b)) {}
+    FilterNode(const Location & loc, std::shared_ptr<Expression> && f, std::shared_ptr<TemplateNode> && b)
+        : TemplateNode(loc), filter(std::move(f)), body(std::move(b)) {}
 
     void do_render(std::ostringstream & out, const std::shared_ptr<Context> & context) const override {
         if (!filter) throw std::runtime_error("FilterNode.filter is null");
@@ -1095,8 +1107,8 @@ class SetNode : public TemplateNode {
     std::vector<std::string> var_names;
     std::shared_ptr<Expression> value;
 public:
-    SetNode(const Location & location, const std::string & ns, const std::vector<std::string> & vns, std::shared_ptr<Expression> && v)
-        : TemplateNode(location), ns(ns), var_names(vns), value(std::move(v)) {}
+    SetNode(const Location & loc, const std::string & ns, const std::vector<std::string> & vns, std::shared_ptr<Expression> && v)
+        : TemplateNode(loc), ns(ns), var_names(vns), value(std::move(v)) {}
     void do_render(std::ostringstream &, const std::shared_ptr<Context> & context) const override {
       if (!value) throw std::runtime_error("SetNode.value is null");
       if (!ns.empty()) {
@@ -1118,8 +1130,8 @@ class SetTemplateNode : public TemplateNode {
     std::string name;
     std::shared_ptr<TemplateNode> template_value;
 public:
-    SetTemplateNode(const Location & location, const std::string & name, std::shared_ptr<TemplateNode> && tv)
-        : TemplateNode(location), name(name), template_value(std::move(tv)) {}
+    SetTemplateNode(const Location & loc, const std::string & name, std::shared_ptr<TemplateNode> && tv)
+        : TemplateNode(loc), name(name), template_value(std::move(tv)) {}
     void do_render(std::ostringstream &, const std::shared_ptr<Context> & context) const override {
       if (!template_value) throw std::runtime_error("SetTemplateNode.template_value is null");
       Value value { template_value->render(context) };
@@ -1132,8 +1144,8 @@ class IfExpr : public Expression {
     std::shared_ptr<Expression> then_expr;
     std::shared_ptr<Expression> else_expr;
 public:
-    IfExpr(const Location & location, std::shared_ptr<Expression> && c, std::shared_ptr<Expression> && t, std::shared_ptr<Expression> && e)
-        : Expression(location), condition(std::move(c)), then_expr(std::move(t)), else_expr(std::move(e)) {}
+    IfExpr(const Location & loc, std::shared_ptr<Expression> && c, std::shared_ptr<Expression> && t, std::shared_ptr<Expression> && e)
+        : Expression(loc), condition(std::move(c)), then_expr(std::move(t)), else_expr(std::move(e)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
       if (!condition) throw std::runtime_error("IfExpr.condition is null");
       if (!then_expr) throw std::runtime_error("IfExpr.then_expr is null");
@@ -1150,16 +1162,16 @@ public:
 class LiteralExpr : public Expression {
     Value value;
 public:
-    LiteralExpr(const Location & location, const Value& v)
-      : Expression(location), value(v) {}
+    LiteralExpr(const Location & loc, const Value& v)
+      : Expression(loc), value(v) {}
     Value do_evaluate(const std::shared_ptr<Context> &) const override { return value; }
 };
 
 class ArrayExpr : public Expression {
     std::vector<std::shared_ptr<Expression>> elements;
 public:
-    ArrayExpr(const Location & location, std::vector<std::shared_ptr<Expression>> && e)
-      : Expression(location), elements(std::move(e)) {}
+    ArrayExpr(const Location & loc, std::vector<std::shared_ptr<Expression>> && e)
+      : Expression(loc), elements(std::move(e)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         auto result = Value::array();
         for (const auto& e : elements) {
@@ -1173,8 +1185,8 @@ public:
 class DictExpr : public Expression {
     std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<Expression>>> elements;
 public:
-    DictExpr(const Location & location, std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<Expression>>> && e)
-      : Expression(location), elements(std::move(e)) {}
+    DictExpr(const Location & loc, std::vector<std::pair<std::shared_ptr<Expression>, std::shared_ptr<Expression>>> && e)
+      : Expression(loc), elements(std::move(e)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         auto result = Value::object();
         for (const auto& [key, value] : elements) {
@@ -1189,8 +1201,8 @@ public:
 class SliceExpr : public Expression {
 public:
     std::shared_ptr<Expression> start, end;
-    SliceExpr(const Location & location, std::shared_ptr<Expression> && s, std::shared_ptr<Expression> && e)
-      : Expression(location), start(std::move(s)), end(std::move(e)) {}
+    SliceExpr(const Location & loc, std::shared_ptr<Expression> && s, std::shared_ptr<Expression> && e)
+      : Expression(loc), start(std::move(s)), end(std::move(e)) {}
     Value do_evaluate(const std::shared_ptr<Context> &) const override {
         throw std::runtime_error("SliceExpr not implemented");
     }
@@ -1200,8 +1212,8 @@ class SubscriptExpr : public Expression {
     std::shared_ptr<Expression> base;
     std::shared_ptr<Expression> index;
 public:
-    SubscriptExpr(const Location & location, std::shared_ptr<Expression> && b, std::shared_ptr<Expression> && i)
-        : Expression(location), base(std::move(b)), index(std::move(i)) {}
+    SubscriptExpr(const Location & loc, std::shared_ptr<Expression> && b, std::shared_ptr<Expression> && i)
+        : Expression(loc), base(std::move(b)), index(std::move(i)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         if (!base) throw std::runtime_error("SubscriptExpr.base is null");
         if (!index) throw std::runtime_error("SubscriptExpr.index is null");
@@ -1243,8 +1255,8 @@ public:
     enum class Op { Plus, Minus, LogicalNot, Expansion, ExpansionDict };
     std::shared_ptr<Expression> expr;
     Op op;
-    UnaryOpExpr(const Location & location, std::shared_ptr<Expression> && e, Op o)
-      : Expression(location), expr(std::move(e)), op(o) {}
+    UnaryOpExpr(const Location & loc, std::shared_ptr<Expression> && e, Op o)
+      : Expression(loc), expr(std::move(e)), op(o) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         if (!expr) throw std::runtime_error("UnaryOpExpr.expr is null");
         auto e = expr->evaluate(context);
@@ -1269,8 +1281,8 @@ private:
     std::shared_ptr<Expression> right;
     Op op;
 public:
-    BinaryOpExpr(const Location & location, std::shared_ptr<Expression> && l, std::shared_ptr<Expression> && r, Op o)
-        : Expression(location), left(std::move(l)), right(std::move(r)), op(o) {}
+    BinaryOpExpr(const Location & loc, std::shared_ptr<Expression> && l, std::shared_ptr<Expression> && r, Op o)
+        : Expression(loc), left(std::move(l)), right(std::move(r)), op(o) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         if (!left) throw std::runtime_error("BinaryOpExpr.left is null");
         if (!right) throw std::runtime_error("BinaryOpExpr.right is null");
@@ -1427,8 +1439,8 @@ class MethodCallExpr : public Expression {
     std::shared_ptr<VariableExpr> method;
     ArgumentsExpression args;
 public:
-    MethodCallExpr(const Location & location, std::shared_ptr<Expression> && obj, std::shared_ptr<VariableExpr> && m, ArgumentsExpression && a)
-        : Expression(location), object(std::move(obj)), method(std::move(m)), args(std::move(a)) {}
+    MethodCallExpr(const Location & loc, std::shared_ptr<Expression> && obj, std::shared_ptr<VariableExpr> && m, ArgumentsExpression && a)
+        : Expression(loc), object(std::move(obj)), method(std::move(m)), args(std::move(a)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         if (!object) throw std::runtime_error("MethodCallExpr.object is null");
         if (!method) throw std::runtime_error("MethodCallExpr.method is null");
@@ -1526,8 +1538,8 @@ class CallExpr : public Expression {
 public:
     std::shared_ptr<Expression> object;
     ArgumentsExpression args;
-    CallExpr(const Location & location, std::shared_ptr<Expression> && obj, ArgumentsExpression && a)
-        : Expression(location), object(std::move(obj)), args(std::move(a)) {}
+    CallExpr(const Location & loc, std::shared_ptr<Expression> && obj, ArgumentsExpression && a)
+        : Expression(loc), object(std::move(obj)), args(std::move(a)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         if (!object) throw std::runtime_error("CallExpr.object is null");
         auto obj = object->evaluate(context);
@@ -1542,8 +1554,8 @@ public:
 class FilterExpr : public Expression {
     std::vector<std::shared_ptr<Expression>> parts;
 public:
-    FilterExpr(const Location & location, std::vector<std::shared_ptr<Expression>> && p)
-      : Expression(location), parts(std::move(p)) {}
+    FilterExpr(const Location & loc, std::vector<std::shared_ptr<Expression>> && p)
+      : Expression(loc), parts(std::move(p)) {}
     Value do_evaluate(const std::shared_ptr<Context> & context) const override {
         Value result;
         bool first = true;
@@ -2460,7 +2472,7 @@ private:
                 static std::regex leading_space_regex(R"(^\s+)");
                 text = std::regex_replace(text, leading_space_regex, "");
               } else if (options.trim_blocks && (it - 1) != begin && !dynamic_cast<ExpressionTemplateToken*>((*(it - 2)).get())) {
-                if (text.length() > 0 && text[0] == '\n') {
+                if (!text.empty() && text[0] == '\n') {
                   text.erase(0, 1);
                 }
               }
@@ -2538,7 +2550,7 @@ public:
         TemplateTokenIterator begin = tokens.begin();
         auto it = begin;
         TemplateTokenIterator end = tokens.end();
-        return parser.parseTemplate(begin, it, end, /* full= */ true);
+        return parser.parseTemplate(begin, it, end, /* fully= */ true);
     }
 };
 
@@ -2577,7 +2589,7 @@ inline std::shared_ptr<Context> Context::builtins() {
     throw std::runtime_error(args.at("message").get<std::string>());
   }));
   globals.set("tojson", simple_function("tojson", { "value", "indent" }, [](const std::shared_ptr<Context> &, Value & args) {
-    return Value(args.at("value").dump(args.get<int64_t>("indent", -1), /* tojson= */ true));
+    return Value(args.at("value").dump(args.get<int64_t>("indent", -1), /* to_json= */ true));
   }));
   globals.set("items", simple_function("items", { "object" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto items = Value::array();
@@ -2599,21 +2611,25 @@ inline std::shared_ptr<Context> Context::builtins() {
   globals.set("last", simple_function("last", { "items" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto items = args.at("items");
     if (!items.is_array()) throw std::runtime_error("object is not a list");
-    if (items.size() == 0) return Value();
+    if (items.empty()) return Value();
     return items.at(items.size() - 1);
   }));
   globals.set("trim", simple_function("trim", { "text" }, [](const std::shared_ptr<Context> &, Value & args) {
     auto & text = args.at("text");
     return text.is_null() ? text : Value(strip(text.get<std::string>()));
   }));
-  globals.set("lower", simple_function("lower", { "text" }, [](const std::shared_ptr<Context> &, Value & args) {
-    auto text = args.at("text");
-    if (text.is_null()) return text;
-    std::string res;
-    auto str = text.get<std::string>();
-    std::transform(str.begin(), str.end(), std::back_inserter(res), ::tolower);
-    return Value(res);
-  }));
+  auto char_transform_function = [](const std::string & name, const std::function<char(char)> & fn) {
+    return simple_function(name, { "text" }, [=](const std::shared_ptr<Context> &, Value & args) {
+      auto text = args.at("text");
+      if (text.is_null()) return text;
+      std::string res;
+      auto str = text.get<std::string>();
+      std::transform(str.begin(), str.end(), std::back_inserter(res), fn);
+      return Value(res);
+    });
+  };
+  globals.set("lower", char_transform_function("lower", ::tolower));
+  globals.set("upper", char_transform_function("upper", ::toupper));
   globals.set("default", Value::callable([=](const std::shared_ptr<Context> &, ArgumentsValue & args) {
     args.expectArgs("default", {2, 3}, {0, 1});
     auto & value = args.args[0];
@@ -2743,12 +2759,17 @@ inline std::shared_ptr<Context> Context::builtins() {
     return Value::callable([=](const std::shared_ptr<Context> & context, ArgumentsValue & args) {
       args.expectArgs(is_select ? "select" : "reject", {2, (std::numeric_limits<size_t>::max)()}, {0, 0});
       auto & items = args.args[0];
-      if (items.is_null())
+      if (items.is_null()) {
         return Value::array();
-      if (!items.is_array()) throw std::runtime_error("object is not iterable: " + items.dump());
+      }
+      if (!items.is_array()) {
+        throw std::runtime_error("object is not iterable: " + items.dump());
+      }
 
       auto filter_fn = context->get(args.args[1]);
-      if (filter_fn.is_null()) throw std::runtime_error("Undefined filter: " + args.args[1].dump());
+      if (filter_fn.is_null()) {
+        throw std::runtime_error("Undefined filter: " + args.args[1].dump());
+      }
 
       auto filter_args = Value::array();
       for (size_t i = 2, n = args.args.size(); i < n; i++) {
@@ -2870,20 +2891,25 @@ inline std::shared_ptr<Context> Context::builtins() {
         auto v = arg.get<int64_t>();
         startEndStep[i] = v;
         param_set[i] = true;
-        }
       }
-      for (auto & [name, value] : args.kwargs) {
-        size_t i;
-        if (name == "start") i = 0;
-        else if (name == "end") i = 1;
-        else if (name == "step") i = 2;
-        else throw std::runtime_error("Unknown argument " + name + " for function range");
+    }
+    for (auto & [name, value] : args.kwargs) {
+      size_t i;
+      if (name == "start") {
+        i = 0;
+      } else if (name == "end") {
+        i = 1;
+      } else if (name == "step") {
+        i = 2;
+      } else {
+        throw std::runtime_error("Unknown argument " + name + " for function range");
+      }
 
-        if (param_set[i]) {
-          throw std::runtime_error("Duplicate argument " + name + " for function range");
-        }
-        startEndStep[i] = value.get<int64_t>();
-        param_set[i] = true;
+      if (param_set[i]) {
+        throw std::runtime_error("Duplicate argument " + name + " for function range");
+      }
+      startEndStep[i] = value.get<int64_t>();
+      param_set[i] = true;
     }
     if (!param_set[1]) {
       throw std::runtime_error("Missing required argument 'end' for function range");

@@ -20,7 +20,7 @@
 **oneAPI** is an open ecosystem and a standard-based specification, supporting multiple architectures including but not limited to intel CPUs, GPUs and FPGAs. The key components of the oneAPI ecosystem include:
 
 - **DPCPP** *(Data Parallel C++)*: The primary oneAPI SYCL implementation, which includes the icpx/icx Compilers.
-- **oneAPI Libraries**: A set of highly optimized libraries targeting multiple domains *(e.g. oneMKL and oneDNN)*.
+- **oneAPI Libraries**: A set of highly optimized libraries targeting multiple domains *(e.g. Intel oneMKL, oneMath and oneDNN)*.
 - **oneAPI LevelZero**: A high performance low level interface for fine-grained control over intel iGPUs and dGPUs.
 - **Nvidia & AMD Plugins**: These are plugins extending oneAPI's DPCPP support to SYCL on Nvidia and AMD GPU targets.
 
@@ -227,16 +227,6 @@ Upon a successful installation, SYCL is enabled for the available intel devices,
 
 **oneAPI Plugin**: In order to enable SYCL support on Nvidia GPUs, please install the [Codeplay oneAPI Plugin for Nvidia GPUs](https://developer.codeplay.com/products/oneapi/nvidia/download). User should also make sure the plugin version matches the installed base toolkit one *(previous step)* for a seamless "oneAPI on Nvidia GPU" setup.
 
-
-**oneMKL for cuBlas**: The current oneMKL releases *(shipped with the oneAPI base-toolkit)* do not contain the cuBLAS backend. A build from source of the upstream [oneMKL](https://github.com/oneapi-src/oneMKL) with the *cuBLAS* backend enabled is thus required to run it on Nvidia GPUs.
-
-```sh
-git clone https://github.com/oneapi-src/oneMKL
-cd oneMKL
-cmake -B buildWithCublas -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENABLE_MKLGPU_BACKEND=OFF -DENABLE_MKLCPU_BACKEND=OFF -DENABLE_CUBLAS_BACKEND=ON -DTARGET_DOMAINS=blas
-cmake --build buildWithCublas --config Release
-```
-
 **oneDNN**: The current oneDNN releases *(shipped with the oneAPI base-toolkit)* do not include the NVIDIA backend. Therefore, oneDNN must be compiled from source to enable the NVIDIA target:
 
 ```sh
@@ -249,16 +239,6 @@ cmake --build build-nvidia --config Release
 - **Adding support to AMD GPUs**
 
 **oneAPI Plugin**: In order to enable SYCL support on AMD GPUs, please install the [Codeplay oneAPI Plugin for AMD GPUs](https://developer.codeplay.com/products/oneapi/amd/download). As with Nvidia GPUs, the user should also make sure the plugin version matches the installed base toolkit.
-
-**oneMKL for rocBlas**: The current oneMKL releases *(shipped with the oneAPI base-toolkit)* doesn't contain the rocBLAS backend. A build from source of the upstream [oneMKL](https://github.com/oneapi-src/oneMKL) with the *rocBLAS* backend enabled is thus required to run it on AMD GPUs.
-
-```sh
-git clone https://github.com/oneapi-src/oneMKL
-cd oneMKL
-# Find your HIPTARGET with rocminfo, under the key 'Name:'
-cmake -B buildWithrocBLAS -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENABLE_MKLGPU_BACKEND=OFF -DENABLE_MKLCPU_BACKEND=OFF -DENABLE_ROCBLAS_BACKEND=ON -DHIPTARGETS=${HIPTARGET} -DTARGET_DOMAINS=blas
-cmake --build buildWithrocBLAS --config Release
-```
 
 3. **Verify installation and environment**
 
@@ -322,15 +302,16 @@ cmake -B build -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -
 cmake --build build --config Release -j -v
 ```
 
+It is possible to come across some precision issues when running tests that stem from using faster
+instructions, which can be circumvented by setting the environment variable `SYCL_PROGRAM_COMPILE_OPTIONS`
+as `-cl-fp32-correctly-rounded-divide-sqrt`
+
 #### Nvidia GPU
 
-```sh
-# Export relevant ENV variables
-export LD_LIBRARY_PATH=/path/to/oneMKL/buildWithCublas/lib:$LD_LIBRARY_PATH
-export LIBRARY_PATH=/path/to/oneMKL/buildWithCublas/lib:$LIBRARY_PATH
-export CPLUS_INCLUDE_DIR=/path/to/oneMKL/buildWithCublas/include:$CPLUS_INCLUDE_DIR
-export CPLUS_INCLUDE_DIR=/path/to/oneMKL/include:$CPLUS_INCLUDE_DIR
+The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
+By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
 
+```sh
 # Build LLAMA with Nvidia BLAS acceleration through SYCL
 # Setting GGML_SYCL_DEVICE_ARCH is optional but can improve performance
 GGML_SYCL_DEVICE_ARCH=sm_80 # Example architecture
@@ -345,14 +326,15 @@ cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DGGML_SYCL_DEVICE_ARCH=
 cmake --build build --config Release -j -v
 ```
 
+It is possible to come across some precision issues when running tests that stem from using faster
+instructions, which can be circumvented by passing the `-fno-fast-math` flag to the compiler.
+
 #### AMD GPU
 
-```sh
-# Export relevant ENV variables
-export LD_LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LD_LIBRARY_PATH
-export LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LIBRARY_PATH
-export CPLUS_INCLUDE_DIR=/path/to/oneMKL/buildWithrocBLAS/include:$CPLUS_INCLUDE_DIR
+The SYCL backend depends on [oneMath](https://github.com/uxlfoundation/oneMath) for Nvidia and AMD devices.
+By default it is automatically built along with the project. A specific build can be provided by setting the CMake flag `-DoneMath_DIR=/path/to/oneMath/install/lib/cmake/oneMath`.
 
+```sh
 # Build LLAMA with rocBLAS acceleration through SYCL
 
 ## AMD
@@ -443,13 +425,13 @@ Examples:
 - Use device 0:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm none -mg 0
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm none -mg 0
 ```
 
 - Use multiple devices:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm layer
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm layer
 ```
 
 *Notes:*
@@ -493,6 +475,12 @@ b. Enable oneAPI running environment:
 "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64
 ```
 
+- if you are using Powershell, enable the runtime environment with the following:
+
+```
+cmd.exe "/K" '"C:\Program Files (x86)\Intel\oneAPI\setvars.bat" && powershell'
+```
+
 c. Verify installation
 
 In the oneAPI command line, run the following to print the available SYCL devices:
@@ -523,13 +511,13 @@ You could download the release package for Windows directly, which including bin
 
 Choose one of following methods to build from source code.
 
-1. Script
+#### 1. Script
 
 ```sh
 .\examples\sycl\win-build-sycl.bat
 ```
 
-2. CMake
+#### 2. CMake
 
 On the oneAPI command line window, step into the llama.cpp main directory and run the following:
 
@@ -558,13 +546,84 @@ cmake --preset x64-windows-sycl-debug
 cmake --build build-x64-windows-sycl-debug -j --target llama-cli
 ```
 
-3. Visual Studio
+#### 3. Visual Studio
 
-You can use Visual Studio to open llama.cpp folder as a CMake project. Choose the sycl CMake presets (`x64-windows-sycl-release` or `x64-windows-sycl-debug`) before you compile the project.
+You have two options to use Visual Studio to build llama.cpp:
+- As CMake Project using CMake presets.
+- Creating a Visual Studio solution to handle the project.
+
+**Note**:
+
+All following commands are executed in PowerShell.
+
+##### - Open as a CMake Project
+
+You can use Visual Studio to open the `llama.cpp` folder directly as a CMake project. Before compiling, select one of the SYCL CMake presets:
+
+- `x64-windows-sycl-release`
+
+- `x64-windows-sycl-debug`
 
 *Notes:*
+- For a minimal experimental setup, you can build only the inference executable using:
 
-- In case of a minimal experimental setup, the user can build the inference executable only through `cmake --build build --config Release -j --target llama-cli`.
+    ```Powershell
+    cmake --build build --config Release -j --target llama-cli
+    ```
+
+##### - Generating a Visual Studio Solution
+
+You can use Visual Studio solution to build and work on llama.cpp on Windows. You need to convert the CMake Project into a `.sln` file.
+
+If you want to use the Intel C++ Compiler for the entire `llama.cpp` project, run the following command:
+
+```Powershell
+cmake -B build -G "Visual Studio 17 2022" -T "Intel C++ Compiler 2025" -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release
+```
+
+If you prefer to use the Intel C++ Compiler only for `ggml-sycl`, ensure that `ggml` and its backend libraries are built as shared libraries ( i.e. `-DBUILD_SHARED_LIBRARIES=ON`, this is default behaviour):
+
+```Powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64 -DGGML_SYCL=ON -DCMAKE_BUILD_TYPE=Release \
+      -DSYCL_INCLUDE_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\include" \
+      -DSYCL_LIBRARY_DIR="C:\Program Files (x86)\Intel\oneAPI\compiler\latest\lib"
+```
+
+If successful the build files have been written to: *path/to/llama.cpp/build*
+Open the project file **build/llama.cpp.sln** with Visual Studio.
+
+Once the Visual Studio solution is created, follow these steps:
+
+1. Open the solution in Visual Studio.
+
+2. Right-click on `ggml-sycl` and select **Properties**.
+
+3. In the left column, expand **C/C++** and select **DPC++**.
+
+4. In the right panel, find **Enable SYCL Offload** and set it to `Yes`.
+
+5. Apply the changes and save.
+
+
+*Navigation Path:*
+
+```
+Properties -> C/C++ -> DPC++ -> Enable SYCL Offload (Yes)
+```
+
+Now, you can build `llama.cpp` with the SYCL backend as a Visual Studio project.
+To do it from menu: `Build -> Build Solution`.
+Once it is completed, final results will be in **build/Release/bin**
+
+*Additional Note*
+
+- You can avoid specifying `SYCL_INCLUDE_DIR` and `SYCL_LIBRARY_DIR` in the CMake command by setting the environment variables:
+
+    - `SYCL_INCLUDE_DIR_HINT`
+
+    - `SYCL_LIBRARY_DIR_HINT`
+
+- Above instruction has been tested with Visual Studio 17 Community edition and oneAPI 2025.0. We expect them to work also with future version if the instructions are adapted accordingly.
 
 ### III. Run the inference
 
@@ -638,13 +697,13 @@ Examples:
 - Use device 0:
 
 ```
-build\bin\llama-cli.exe -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 33 -s 0 -sm none -mg 0
+build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 33 -s 0 -sm none -mg 0
 ```
 
 - Use multiple devices:
 
 ```
-build\bin\llama-cli.exe -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 33 -s 0 -sm layer
+build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 33 -s 0 -sm layer
 ```
 
 

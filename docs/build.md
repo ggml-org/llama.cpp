@@ -191,7 +191,7 @@ The following compilation options are also available to tweak performance:
 
 | Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                             |
 |-------------------------------|------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, RDNA3). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
+| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, CDNA and RDNA3+). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
 | GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models                                                                                                                                                                                       |
 | GGML_CUDA_F16                 | Boolean                | false   | If enabled, use half-precision floating point arithmetic for the CUDA dequantization + mul mat vec kernels and for the q4_1 and q5_1 matrix matrix multiplication kernels. Can improve performance on relatively recent GPUs.                                                           |
 | GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                         |
@@ -455,6 +455,96 @@ load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
 KleidiAI's microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm and SME. llama.cpp selects the most efficient kernel based on runtime CPU feature detection. However, on platforms that support SME, you must manually enable SME microkernels by setting the environment variable `GGML_KLEIDIAI_SME=1`.
 
 Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
+
+## OpenCL
+
+This provides GPU acceleration through OpenCL on recent Adreno GPU.
+More information about OpenCL backend can be found in [OPENCL.md](./backend/OPENCL.md) for more information.
+
+### Android
+
+Assume NDK is available in `$ANDROID_NDK`. First, install OpenCL headers and ICD loader library if not available,
+
+```sh
+mkdir -p ~/dev/llm
+cd ~/dev/llm
+
+git clone https://github.com/KhronosGroup/OpenCL-Headers && \
+cd OpenCL-Headers && \
+cp -r CL $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+
+cd ~/dev/llm
+
+git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && \
+cd OpenCL-ICD-Loader && \
+mkdir build_ndk && cd build_ndk && \
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DOPENCL_ICD_LOADER_HEADERS_DIR=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=24 \
+  -DANDROID_STL=c++_shared && \
+ninja && \
+cp libOpenCL.so $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+```
+
+Then build llama.cpp with OpenCL enabled,
+
+```sh
+cd ~/dev/llm
+
+git clone https://github.com/ggml-org/llama.cpp && \
+cd llama.cpp && \
+mkdir build-android && cd build-android
+
+cmake .. -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_OPENCL=ON
+
+ninja
+```
+
+### Windows Arm64
+
+First, install OpenCL headers and ICD loader library if not available,
+
+```powershell
+mkdir -p ~/dev/llm
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-Headers && cd OpenCL-Headers
+mkdir build && cd build
+cmake .. -G Ninja `
+  -DBUILD_TESTING=OFF `
+  -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+  -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && cd OpenCL-ICD-Loader
+mkdir build && cd build
+cmake .. -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" `
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+```
+
+Then build llama.cpp with OpenCL enabled,
+
+```powershell
+cmake .. -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$HOME/dev/llm/llama.cpp/cmake/arm64-windows-llvm.cmake" `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" `
+  -DBUILD_SHARED_LIBS=OFF `
+  -DGGML_OPENCL=ON
+ninja
+```
 
 ## Android
 
