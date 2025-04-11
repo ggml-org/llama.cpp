@@ -32,6 +32,7 @@ struct Stats {
     std::vector<float> values;
     std::vector<int> counts;
     int ncall = 0;
+    int n_as = 1;
 };
 
 class IMatrixCollector {
@@ -124,6 +125,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (e.values.empty()) {
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(src1->ne[0]*n_as, 0);
+            e.n_as = n_as;
         }
         else if (e.values.size() != (size_t)src1->ne[0]*n_as) {
             LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)e.values.size(), (int)src1->ne[0]*n_as);
