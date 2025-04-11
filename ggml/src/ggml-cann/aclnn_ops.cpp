@@ -1209,11 +1209,6 @@ void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     GGML_CANN_CALL_ACLNN_OP(Sin, acl_src, acl_dst);
 }
 
-void aclnn_geluv2(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                       aclTensor* acl_dst) {
-        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
-}
-
 void ggml_cann_timestep_embedding(ggml_backend_cann_context& ctx,
                                   ggml_tensor* dst) {
     const ggml_tensor* src = dst->src[0];
