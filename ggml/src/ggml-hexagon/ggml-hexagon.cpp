@@ -121,7 +121,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
-#include "kernels/ggmlop_ap_skel.h"
+#include "kernels/skel.h"
 
 // =================================================================================================
 //  section-1: forward/prototype declaration, global vars, macros, data structures
@@ -383,8 +383,8 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.04"},
-        .ggml_dsp_version       = {"0.61"},
+        .ggml_hexagon_version   = {"1.05"},
+        .ggml_dsp_version       = {"0.62"},
 };
 
 //file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/overview.html#tbl-supported-snapdragon-devices
