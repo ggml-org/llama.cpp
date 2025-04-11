@@ -2,11 +2,11 @@
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
-#include "clip.h"
-#include "stb_image.h"
 #include "llama.h"
 #include "ggml.h"
 #include "console.h"
+#include "chat.h"
+#include "mtmd.h"
 
 #include <vector>
 #include <limits.h>
@@ -57,13 +57,18 @@ static void sigint_handler(int signo) {
 #endif
 
 struct gemma3_context {
-    struct clip_ctx    * ctx_clip = NULL;
-    common_init_result   llama_init;
+    mtmd_context_ptr ctx_vision;
+    common_init_result llama_init;
 
     llama_model       * model;
     llama_context     * lctx;
     const llama_vocab * vocab;
     llama_batch         batch;
+    int                 n_batch;
+
+    // note: we know that gemma3 template is "linear", meaning each turn is completely separated to another
+    // so here we don't need to keep track of chat history
+    common_chat_templates_ptr tmpls;
 
     int n_threads    = 1;
     llama_pos n_past = 0;
@@ -74,20 +79,23 @@ struct gemma3_context {
         vocab = llama_model_get_vocab(model);
         n_threads = params.cpuparams.n_threads;
         batch = llama_batch_init(params.n_batch, 0, 1);
-        init_clip_model(params);
+        n_batch = params.n_batch;
+        tmpls = common_chat_templates_init(model, params.chat_template);
+        init_vision_context(params);
     }
 
-    void init_clip_model(common_params & params) {
+    void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
-        ctx_clip = clip_model_load(clip_path, GGML_LOG_LEVEL_INFO);
-        if (!ctx_clip) {
-            LOG_ERR("Failed to load CLIP model from %s\n", clip_path);
+        ctx_vision.reset(mtmd_init_from_file(clip_path, model, mtmd_context_params{
+            /* use_gpu */   true,
+            /* timings */   true,
+            /* n_threads */ params.cpuparams.n_threads,
+            /* verbosity */ GGML_LOG_LEVEL_INFO,
+        }));
+        if (!ctx_vision.get()) {
+            LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
-    }
-
-    ~gemma3_context() {
-        clip_free(ctx_clip);
     }
 };
 
@@ -124,77 +132,6 @@ struct decode_embd_batch {
     }
 };
 
-static int eval_text(gemma3_context & ctx, std::string input, bool logits_last = false) {
-    llama_tokens tokens = common_tokenize(ctx.lctx, input, false, true);
-    common_batch_clear(ctx.batch);
-    for (llama_token & t : tokens) {
-        common_batch_add(ctx.batch, t, ctx.n_past++, {0}, false);
-    }
-    if (logits_last) {
-        ctx.batch.logits[ctx.batch.n_tokens - 1] = true;
-    }
-    // LOG("eval_text (n_tokens = %d): %s\n", (int)tokens.size(), input.c_str());
-    if (llama_decode(ctx.lctx, ctx.batch)) {
-        LOG_ERR("Failed to decode text\n");
-        return 1;
-    }
-    return 0;
-}
-
-static int eval_image(gemma3_context & ctx, std::string & fname) {
-    std::vector<float> image_embd_v;
-    int n_embd = llama_model_n_embd(ctx.model);
-    int n_tokens = 256;
-    image_embd_v.resize(n_tokens * n_embd);
-
-    bool ok;
-    struct clip_image_u8 * img_u8 = clip_image_u8_init();
-    ok = clip_image_load_from_file(fname.c_str(), img_u8);
-    if (!ok) {
-        LOG_ERR("Unable to load image %s\n", fname.c_str());
-        clip_image_u8_free(img_u8);
-        return 2; // non-fatal error
-    }
-
-    clip_image_f32_batch batch_f32;
-    ok = clip_image_preprocess(ctx.ctx_clip, img_u8, &batch_f32);
-    if (!ok) {
-        LOG_ERR("Unable to preprocess image\n");
-        clip_image_f32_batch_free(&batch_f32);
-        clip_image_u8_free(img_u8);
-        return 1;
-    }
-
-    int64_t t0 = ggml_time_ms();
-    LOG("Encoding image %s\n", fname.c_str());
-    ok = clip_image_batch_encode(ctx.ctx_clip, ctx.n_threads, &batch_f32, image_embd_v.data());
-    if (!ok) {
-        LOG_ERR("Unable to encode image\n");
-        clip_image_f32_batch_free(&batch_f32);
-        clip_image_u8_free(img_u8);
-        return 1;
-    }
-    LOG("Image encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
-
-    clip_image_f32_batch_free(&batch_f32);
-    clip_image_u8_free(img_u8);
-
-    // decode image embeddings
-    int64_t t1 = ggml_time_ms();
-    eval_text(ctx, "<start_of_image>");
-    llama_set_causal_attn(ctx.lctx, false);
-    decode_embd_batch batch_img(image_embd_v.data(), n_tokens, ctx.n_past, 0);
-    if (llama_decode(ctx.lctx, batch_img.batch)) {
-        LOG_ERR("failed to decode image\n");
-        return 1;
-    }
-    ctx.n_past += n_tokens;
-    llama_set_causal_attn(ctx.lctx, true);
-    eval_text(ctx, "<end_of_image>");
-    LOG("Image decoded in %" PRId64 " ms\n", ggml_time_ms() - t1);
-    return 0;
-}
-
 static int generate_response(gemma3_context & ctx, common_sampler * smpl, int n_predict) {
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating) {
@@ -221,6 +158,45 @@ static int generate_response(gemma3_context & ctx, common_sampler * smpl, int n_
             return 1;
         }
     }
+    return 0;
+}
+
+static int eval_message(gemma3_context & ctx, common_chat_msg & msg, std::vector<std::string> & images_fname, bool add_bos = false) {
+    std::vector<mtmd_bitmap> bitmaps;
+
+    common_chat_templates_inputs tmpl_inputs;
+    tmpl_inputs.messages = {msg};
+    tmpl_inputs.add_generation_prompt = true;
+    tmpl_inputs.use_jinja = false; // jinja is buggy here
+    auto formatted_chat = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
+    LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
+
+    for (auto & fname : images_fname) {
+        mtmd_bitmap bitmap;
+        if (mtmd_helper_bitmap_init_from_file(fname.c_str(), bitmap)) {
+            LOG_ERR("Unable to load image %s\n", fname.c_str());
+            return 2; // image not found
+        }
+        bitmaps.push_back(std::move(bitmap));
+    }
+
+    mtmd_input_text text;
+    text.text          = formatted_chat.prompt;
+    text.add_special   = add_bos;
+    text.parse_special = true;
+    mtmd_input_chunks_ptr chunks(mtmd_tokenize(ctx.ctx_vision.get(), text, bitmaps));
+    if (chunks == nullptr) {
+        LOG_ERR("Unable to tokenize prompt\n");
+        return 1;
+    }
+
+    if (mtmd_helper_eval(ctx.ctx_vision.get(), ctx.lctx, chunks.get(), ctx.n_past, 0, ctx.n_batch)) {
+        LOG_ERR("Unable to eval prompt\n");
+        return 1;
+    }
+
+    ctx.n_past += mtmd_helper_get_n_tokens(chunks.get());
+
     return 0;
 }
 
@@ -265,21 +241,15 @@ int main(int argc, char ** argv) {
 #endif
     }
 
-    if (eval_text(ctx, "<bos>")) {
-        return 1;
-    }
-
     if (is_single_turn) {
         g_is_generating = true;
-        if (eval_text(ctx, "<start_of_turn>user\n")) {
-            return 1;
+        if (params.prompt.find("<__image__>") == std::string::npos) {
+            params.prompt += " <__image__>";
         }
-        for (auto & fname : params.image) {
-            if (eval_image(ctx, fname)) {
-                return 1;
-            }
-        }
-        if (eval_text(ctx, params.prompt + "<end_of_turn><start_of_turn>model\n", true)) {
+        common_chat_msg msg;
+        msg.role = "user";
+        msg.content = params.prompt;
+        if (eval_message(ctx, msg, params.image, true)) {
             return 1;
         }
         if (generate_response(ctx, smpl, n_predict)) {
@@ -293,9 +263,9 @@ int main(int argc, char ** argv) {
         LOG("\n   /quit or /exit   exit the program");
         LOG("\n");
 
-        if (eval_text(ctx, "<start_of_turn>user\n")) {
-            return 1;
-        }
+        bool is_first_msg = true;
+        std::vector<std::string> images_fname;
+        std::string content;
 
         while (true) {
             g_is_generating = false;
@@ -320,24 +290,31 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             if (line.find("/image") == 0) {
                 std::string image = line.substr(7);
-                int res = eval_image(ctx, image);
-                if (res == 2) {
-                    continue; // image not found
-                }
-                if (res) {
-                    return 1;
-                }
+                images_fname.push_back(string_strip(image));
+                content += "<__image__>";
+                continue;
+            } else {
+                content += line;
+            }
+            common_chat_msg msg;
+            msg.role = "user";
+            msg.content = content;
+            int ret = eval_message(ctx, msg, images_fname, is_first_msg);
+            if (ret == 2) {
+                // non-fatal error
+                images_fname.clear();
+                content.clear();
                 continue;
             }
-            if (eval_text(ctx, line + "<end_of_turn><start_of_turn>model\n", true)) {
+            if (ret) {
                 return 1;
             }
             if (generate_response(ctx, smpl, n_predict)) {
                 return 1;
             }
-            if (eval_text(ctx, "<end_of_turn><start_of_turn>user\n")) {
-                return 1;
-            }
+            images_fname.clear();
+            content.clear();
+            is_first_msg = false;
         }
     }
 

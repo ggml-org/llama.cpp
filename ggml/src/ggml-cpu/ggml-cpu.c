@@ -2027,41 +2027,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_rwkv_wkv7(params, tensor);
             } break;
-        case GGML_OP_MAP_UNARY:
-            {
-                ggml_unary_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_unary(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_BINARY:
-            {
-                ggml_binary_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_binary(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM1_F32:
-            {
-                ggml_custom1_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom1_f32(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM2_F32:
-            {
-                ggml_custom2_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom2_f32(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM3_F32:
-            {
-                ggml_custom3_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom3_f32(params, tensor, fun);
-            }
-            break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2075,6 +2040,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_MAP_CUSTOM3:
             {
                 ggml_compute_forward_map_custom3(params, tensor);
+            }
+            break;
+        case GGML_OP_CUSTOM:
+            {
+                ggml_compute_forward_custom(params, tensor);
             }
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
@@ -2328,11 +2298,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:
         case GGML_OP_GET_REL_POS:
-        case GGML_OP_MAP_UNARY:
-        case GGML_OP_MAP_BINARY:
-        case GGML_OP_MAP_CUSTOM1_F32:
-        case GGML_OP_MAP_CUSTOM2_F32:
-        case GGML_OP_MAP_CUSTOM3_F32:
             {
                 n_tasks = 1;
             } break;
@@ -2359,6 +2324,16 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MAP_CUSTOM3:
             {
                 struct ggml_map_custom3_op_params p;
+                memcpy(&p, node->op_params, sizeof(p));
+                if (p.n_tasks == GGML_N_TASKS_MAX) {
+                    n_tasks = n_threads;
+                } else {
+                    n_tasks = MIN(p.n_tasks, n_threads);
+                }
+            } break;
+        case GGML_OP_CUSTOM:
+            {
+                struct ggml_custom_op_params p;
                 memcpy(&p, node->op_params, sizeof(p));
                 if (p.n_tasks == GGML_N_TASKS_MAX) {
                     n_tasks = n_threads;
