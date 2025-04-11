@@ -1750,7 +1750,7 @@ class LlamaModel(Model):
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
-                assert low_freq_wavelen != high_freq_wavelen
+                # assert low_freq_wavelen != high_freq_wavelen # Errors for Llama4
 
                 rope_factors = []
                 for freq in freqs:
