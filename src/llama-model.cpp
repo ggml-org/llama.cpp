@@ -4440,8 +4440,8 @@ struct llm_build_llama : public llm_graph_context {
 
                 if (arch == LLM_ARCH_LLAMA4 && use_rope && hparams.use_kq_norm) {
                     // Llama4TextL2Norm
-                    Qcur = ggml_rms_norm(ctx0, Qcur, 1e-6);
-                    Kcur = ggml_rms_norm(ctx0, Kcur, 1e-6);
+                    Qcur = ggml_rms_norm(ctx0, Qcur, hparams.f_norm_rms_eps);
+                    Kcur = ggml_rms_norm(ctx0, Kcur, hparams.f_norm_rms_eps);
                     cb(Qcur, "Qcur_normed", il);
                     cb(Kcur, "Kcur_normed", il);
                 }

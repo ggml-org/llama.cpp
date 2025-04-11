@@ -32,23 +32,6 @@ struct clip_logger_state g_logger_state = {GGML_LOG_LEVEL_CONT, clip_log_callbac
 
 //#define CLIP_DEBUG_FUNCTIONS
 
-// RGB uint8 image
-struct clip_image_u8 {
-    int nx;
-    int ny;
-
-    std::vector<uint8_t> buf;
-};
-
-// RGB float32 image (NHWC)
-// Memory layout: RGBRGBRGB...
-struct clip_image_f32 {
-    int nx;
-    int ny;
-
-    std::vector<float> buf;
-};
-
 #ifdef CLIP_DEBUG_FUNCTIONS
 static void clip_image_write_image_to_ppm(const clip_image_u8& img, const std::string& filename) {
     std::ofstream file(filename, std::ios::binary);
@@ -1614,6 +1597,12 @@ struct clip_image_f32 * clip_image_f32_init() {
     return new clip_image_f32();
 }
 
+unsigned char * clip_image_u8_get_data(struct clip_image_u8 * img, uint32_t * nx, uint32_t * ny) {
+    if (nx) *nx = img->nx;
+    if (ny) *ny = img->ny;
+    return img->buf.data();
+}
+
 void clip_image_size_free(struct clip_image_size * load_image_size) {
     if (load_image_size == nullptr) {
         return;
@@ -2346,6 +2335,8 @@ int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * i
         int x_patch = img->nx / patch_size + (int)(img->nx % patch_size > 0);
         int y_patch = img->ny / patch_size + (int)(img->ny % patch_size > 0);
         n_patches = x_patch * y_patch;
+    } else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
+        n_patches = 256;
     }
 
     return n_patches;
@@ -2892,4 +2883,12 @@ bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img,
     clip_img.ny = h;
     clip_image_encode(ctx, n_threads, &clip_img, vec);
     return true;
+}
+
+//
+// API used internally with mtmd
+//
+
+projector_type clip_get_projector_type(const struct clip_ctx * ctx) {
+    return ctx->proj_type;
 }

@@ -65,6 +65,7 @@ class Model:
     model_name: str | None
     metadata_override: Path | None
     dir_model_card: Path
+    remote_hf_model_id: str | None
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
@@ -73,7 +74,7 @@ class Model:
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -83,11 +84,24 @@ class Model:
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
-        self.lazy = not eager
-        self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
-        self.is_safetensors = len(self.part_names) > 0
-        if not self.is_safetensors:
-            self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
+        self.lazy = not eager or (remote_hf_model_id is not None)
+        self.remote_hf_model_id = remote_hf_model_id
+        if remote_hf_model_id is not None:
+            self.is_safetensors = True
+
+            def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
+                logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
+                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
+                self.tensor_names = set(name for name in remote_tensors.keys())
+                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
+                    yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
+
+            self.get_tensors = get_remote_tensors
+        else:
+            self.part_names = Model.get_model_part_names(self.dir_model, "model", ".safetensors")
+            self.is_safetensors = len(self.part_names) > 0
+            if not self.is_safetensors:
+                self.part_names = Model.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
         self.hparams = Model.load_hparams(self.dir_model) if hparams is None else hparams
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -392,6 +406,10 @@ class Model:
         total_params, shared_params, expert_params, expert_count = self.gguf_writer.get_total_parameter_count()
 
         self.metadata = gguf.Metadata.load(self.metadata_override, self.dir_model_card, self.model_name, total_params)
+
+        # If we are using HF model id, set the metadata name to the model id
+        if self.remote_hf_model_id:
+            self.metadata.name = self.remote_hf_model_id
 
         # Fallback to model directory name if metadata name is still missing
         if self.metadata.name is None:
@@ -1788,10 +1806,6 @@ class Llama4Model(LlamaModel):
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
-        name = name.replace("language_model.", "")
-        name = name.replace("feed_forward.", "mlp.") # a bit hacky for now
-        name = name.replace(".router.weight", ".gate.weight") # a bit hacky for now
-
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             name_up = name.replace("gate_up_proj", "up_proj.weight")
@@ -5404,6 +5418,14 @@ class LazyTorchTensor(gguf.LazyBase):
         return cast(torch.Tensor, lazy)
 
     @classmethod
+    def from_remote_tensor(cls, remote_tensor: gguf.utility.RemoteTensor):
+        dtype = cls._dtype_str_map[remote_tensor.dtype]
+        shape = remote_tensor.shape
+        meta = cls.meta_with_dtype_and_shape(dtype, shape)
+        lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.frombuffer(r.data(), dtype=dtype).reshape(shape))
+        return cast(torch.Tensor, lazy)
+
+    @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
         del types  # unused
 
@@ -5480,6 +5502,10 @@ def parse_args() -> argparse.Namespace:
         "--print-supported-models", action="store_true",
         help="Print the supported models"
     )
+    parser.add_argument(
+        "--remote", action="store_true",
+        help="(Experimental) Read safetensors file remotely without downloading to disk. Config and tokenizer files will still be downloaded. To use this feature, you need to specify Hugging Face model repo name instead of a local directory. For example: 'HuggingFaceTB/SmolLM2-1.7B-Instruct'. Note: To access gated repo, set HF_TOKEN environment variable to your Hugging Face token.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -5520,6 +5546,14 @@ def main() -> None:
 
     dir_model = args.model
 
+    if args.remote:
+        from huggingface_hub import snapshot_download
+        local_dir = snapshot_download(
+            repo_id=str(dir_model),
+            allow_patterns=["LICENSE", "*.json", "*.md", "*.txt", "tokenizer.model"])
+        dir_model = Path(local_dir)
+        logger.info(f"Downloaded config and tokenizer to {local_dir}")
+
     if not dir_model.is_dir():
         logger.error(f'Error: {args.model} is not a directory')
         sys.exit(1)
@@ -5541,6 +5575,9 @@ def main() -> None:
 
     if args.outfile is not None:
         fname_out = args.outfile
+    elif args.remote:
+        # if remote, use the model ID as the output file name
+        fname_out = Path("./" + str(args.model).replace("/", "-") + "-{ftype}.gguf")
     else:
         fname_out = dir_model
 
@@ -5564,7 +5601,8 @@ def main() -> None:
                                      metadata_override=args.metadata, model_name=args.model_name,
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
-                                     small_first_shard=args.no_tensor_first_split)
+                                     small_first_shard=args.no_tensor_first_split,
+                                     remote_hf_model_id=str(args.model) if args.remote else None)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
