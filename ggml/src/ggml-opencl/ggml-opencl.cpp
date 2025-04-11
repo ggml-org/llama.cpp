@@ -1024,7 +1024,7 @@ static void ggml_cl2_free(void) {
             info.cmd_complete_duration_ns/1.e6f,
             info.cmd_total_duration_ns/1.e6f,
             info.global_size[0], info.global_size[1], info.global_size[2],
-            info.local_size[0], info.local_size[2], info.local_size[2],
+            info.local_size[0], info.local_size[1], info.local_size[2],
             info.output_size[0], info.output_size[1], info.output_size[2], info.output_size[3]);
     }
     fclose(fperf);
