@@ -1028,10 +1028,14 @@ struct common_init_result common_init_from_params(common_params & params) {
 }
 
 std::string get_model_endpoint() {
-    std::string model_endpoint = "https://huggingface.co/";
+    //For other communities with the same model backend protocols
     const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    if (model_endpoint_env) {
-        model_endpoint = model_endpoint_env;
+    //For HF or HF mirror endpoints
+    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
+    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
+    std::string model_endpoint = "https://huggingface.co/";
+    if (endpoint_env) {
+        model_endpoint = endpoint_env;
         if (model_endpoint.back() != '/') model_endpoint += '/';
     }
     return model_endpoint;
