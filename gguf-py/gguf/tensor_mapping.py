@@ -677,6 +677,14 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.kv_b_proj", # deepseek2
         ),
 
+        MODEL_TENSOR.ATTN_K_B: (
+            "model.layers.{bid}.self_attn.k_b_proj",  # deepseek2
+        ),
+
+        MODEL_TENSOR.ATTN_V_B: (
+            "model.layers.{bid}.self_attn.v_b_proj",  # deepseek2
+        ),
+
         MODEL_TENSOR.ATTN_Q_A_NORM: (
             "model.layers.{bid}.self_attn.q_a_layernorm", # deepseek2
         ),
