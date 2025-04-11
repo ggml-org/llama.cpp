@@ -4885,6 +4885,7 @@ class JaisModel(Model):
         super().prepare_tensors()
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
+
 @Model.register("Glm4ForCausalLM")
 class Glm4Model(Model):
     model_arch = gguf.MODEL_ARCH.GLM4
@@ -4899,6 +4900,7 @@ class Glm4Model(Model):
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+
 
 @Model.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
 class ChatGLMModel(Model):
