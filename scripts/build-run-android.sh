@@ -12,6 +12,7 @@ PWD=`pwd`
 REMOTE_PATH=/data/local/tmp/
 #LLM model file on Android phone
 GGUF_MODEL_NAME=/sdcard/gemma-3-4b-it-Q8_0.gguf
+#https://huggingface.co/Qwen/Qwen1.5-1.8B-Chat-GGUF/blob/main/qwen1_5-1_8b-chat-q4_0.gguf
 GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 
 #Android NDK can be found at:
@@ -241,6 +242,10 @@ function prepare_run_on_phone()
         adb push ./out/android/bin/*.so ${REMOTE_PATH}/
     fi
     adb push ./out/android/bin/${program} ${REMOTE_PATH}/
+    #for non developers: deploy dev ops once time with build outputs in ./out/android/bin/
+    #adb push ./out/android/bin/ggml-hexagon.cfg ${REMOTE_PATH}/
+    #for developers: modify ./scritps/ggml-hexagon.cfg before run
+    adb push ./scripts/ggml-hexagon.cfg ${REMOTE_PATH}/
     adb shell chmod +x ${REMOTE_PATH}/${program}
 }
 
