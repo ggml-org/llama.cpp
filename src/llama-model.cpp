@@ -9611,18 +9611,24 @@ struct llm_build_deepseek2 : public llm_graph_context {
                         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
                 cb(k_pe, "k_pe", il);
 
+                // TODO: the CUDA backend used to not support non-cont. RoPE, investigate removing this
+                q_pe = ggml_cont(ctx0, q_pe);
                 q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor_scaled, beta_fast, beta_slow
                 );
                 cb(q_pe, "q_pe", il);
 
+                // TODO: the CUDA backend used to not support non-cont. RoPE, investigate removing this
+                k_pe = ggml_cont(ctx0, k_pe);
                 k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor_scaled, beta_fast, beta_slow
                 );
                 cb(k_pe, "k_pe", il);
 
+                // TODO: the CUDA backend used to not support non-cont. (RMS) norm, investigate removing ggml_cont
+                kv_cmpr = ggml_cont(ctx0, kv_cmpr);
                 kv_cmpr = build_norm(kv_cmpr,
                         model.layers[il].attn_kv_a_norm, nullptr,
                         LLM_NORM_RMS, il);
