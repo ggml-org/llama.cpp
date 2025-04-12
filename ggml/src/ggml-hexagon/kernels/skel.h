@@ -279,7 +279,7 @@ __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_softmax)(remote_handle64 _h, c
 __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_rmsnorm)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
 __QAIC_HEADER_EXPORT int __QAIC_HEADER(ggmlop_dsp_pool2d)(remote_handle64 _h, const dsptensor* src0, const dsptensor* src1, dsptensor* dst) __QAIC_HEADER_ATTRIBUTE;
 #ifndef ggmlop_URI
-#define ggmlop_URI "file:///libggmlop_skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1"
+#define ggmlop_URI "file:///libggmlop-skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1"
 #endif /*ggmlop_URI*/
 #ifdef __cplusplus
 }

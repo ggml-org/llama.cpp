@@ -7,7 +7,7 @@ HEXAGON_COMPUTE=compute${HTP_ARCH_VERSION}
 HEXAGON_CC=${HEXAGON_SDK_PATH}/tools/HEXAGON_Tools/8.8.06/Tools/bin/hexagon-clang
 HEXAGON_CXX=${HEXAGON_SDK_PATH}/tools/HEXAGON_Tools/8.8.06/Tools/bin/hexagon-clang
 
-TARGET=libggmlop_skel.so
+TARGET=libggmlop-skel.so
 
 $(info HEXAGON_SDK_PATH:${HEXAGON_SDK_PATH})
 $(info HTP_ARCH_VERSION:${HTP_ARCH_VERSION})
@@ -20,19 +20,20 @@ CFLAGS=-m${HTP_ARCH_VERSION} -c -Ofast -Wall -Wstrict-prototypes -fno-zero-initi
 
 LDFLAGS=-m${HTP_ARCH_VERSION} -Wl,--defsym=ISDB_TRUSTED_FLAG=2 -Wl,--defsym=ISDB_SECURE_FLAG=2 -Wl,--no-threads -fpic -shared -Wl,-Bsymbolic -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=free -Wl,--wrap=realloc -Wl,--wrap=memalign -lc -Wl,-soname=${TARGET}
 
-SRCS = $(wildcard *.c)
+#SRCS = $(wildcard *.c)
+SRCS = ggml-dsp.c skel.c add.c  mulmat.c
 OBJS = $(patsubst %.c, %.o, $(SRCS))
 
 ALL:$(OBJS)
 		${HEXAGON_CC} ${LDFLAGS} -o ${TARGET} -Wl,--start-group ${OBJS} -Wl,--end-group
 		@ls -l ${TARGET}
 		/bin/cp -fv ${TARGET} ../../../../out/android/bin/
-		/bin/cp -fv ${TARGET} ../../../../out/android/bin/libggmlop_skel${HTP_ARCH_VERSION}.so
+		/bin/cp -fv ${TARGET} ../../../../out/android/bin/libggmlop-skel${HTP_ARCH_VERSION}.so
 		/bin/rm -f *.so
 
 %.o:%.c
 		@echo "${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<"
-		${HEXAGON_CC} ${CFLAGS} -D__FILENAME__=\"$<\" -o $@ -c $<
+		${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<
 		@echo "\n"
 
 clean:
