@@ -252,6 +252,7 @@ sealed class Message {
         override val timestamp: Long
     ) : Message()
 
+    // TODO-han.yin: break down into ongoing & completed message subtypes
     data class Assistant(
         override val content: String,
         override val timestamp: Long,

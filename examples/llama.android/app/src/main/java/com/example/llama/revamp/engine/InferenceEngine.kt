@@ -86,7 +86,8 @@ class InferenceEngine {
         // This would be replaced with actual token generation logic
         return flow {
             try {
-                delay(500) // Simulate processing time
+                // Simulate longer processing time (1.5 seconds)
+                delay(1500)
 
                 _state.value = State.Generating
 
@@ -96,7 +97,8 @@ class InferenceEngine {
 
                 for (word in words) {
                     emit(word + " ")
-                    delay(50) // Simulate token generation delay
+                    // Slower token generation (200ms per token instead of 50ms)
+                    delay(200)
                 }
 
                 _state.value = State.AwaitingUserPrompt

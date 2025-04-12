@@ -1,6 +1,16 @@
 package com.example.llama.revamp.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,48 +23,61 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerState
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AppScaffold
 import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.Message
+import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * Screen for LLM conversation with user.
+ */
 @Composable
 fun ConversationScreen(
     onBackPressed: () -> Unit,
     drawerState: DrawerState,
     navigationActions: NavigationActions,
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()
@@ -64,13 +87,38 @@ fun ConversationScreen(
     val isProcessing = engineState is InferenceEngine.State.ProcessingUserPrompt
     val isGenerating = engineState is InferenceEngine.State.Generating
 
-    val lazyListState = rememberLazyListState()
+    val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
+    val coroutineScope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Auto-scroll to bottom when messages change
-    LaunchedEffect(messages.size) {
+    // Auto-scroll to bottom when messages change or when typing
+    val shouldScrollToBottom by remember(messages.size, isGenerating) {
+        derivedStateOf { true }
+    }
+
+    LaunchedEffect(shouldScrollToBottom, messages.size) {
         if (messages.isNotEmpty()) {
-            lazyListState.animateScrollToItem(messages.size - 1)
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    // Set up lifecycle-aware message monitoring
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                // Scroll to bottom when returning to the screen
+                if (messages.isNotEmpty()) {
+                    coroutineScope.launch {
+                        listState.scrollToItem(messages.size - 1)
+                    }
+                }
+            }
+        }
+
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -86,145 +134,80 @@ fun ConversationScreen(
                 .padding(paddingValues)
         ) {
             // System prompt display (collapsible)
-            systemPrompt?.let { prompt ->
-                var expanded by remember { mutableStateOf(false) }
+            AnimatedSystemPrompt(systemPrompt)
 
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "System Prompt",
-                                style = MaterialTheme.typography.titleMedium
-                            )
-
-                            Spacer(modifier = Modifier.weight(1f))
-
-                            IconButton(onClick = { expanded = !expanded }) {
-                                Icon(
-                                    imageVector = if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                                    contentDescription = if (expanded) "Collapse" else "Expand"
-                                )
-                            }
-                        }
-
-                        AnimatedVisibility(visible = expanded) {
-                            Text(
-                                text = prompt,
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(8.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Messages
-            LazyColumn(
-                state = lazyListState,
+            // Messages list
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
             ) {
-                items(messages) { message ->
-                    MessageBubble(message = message)
-                }
-
-                // Show thinking indicator when processing
-                item {
-                    if (isProcessing) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Assistant avatar
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "AI",
-                                    color = MaterialTheme.colorScheme.onPrimary
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Text(
-                                text = "Thinking...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
+                ConversationMessageList(
+                    messages = messages,
+                    listState = listState,
+                )
             }
 
             // Input area
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
+            ConversationInputField(
+                value = inputText,
+                onValueChange = { inputText = it },
+                onSendClick = {
+                    if (inputText.isNotBlank()) {
+                        viewModel.sendMessage(inputText)
+                        inputText = ""
+                    }
+                },
+                isEnabled = !isProcessing && !isGenerating
+            )
+        }
+    }
+}
+
+@Composable
+fun AnimatedSystemPrompt(systemPrompt: String?) {
+    var expanded by remember { mutableStateOf(false) }
+
+    if (!systemPrompt.isNullOrBlank()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            onClick = { expanded = !expanded }
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Type your message...") },
-                        singleLine = false,
-                        maxLines = 5,
-                        enabled = !isProcessing && !isGenerating
+                    Text(
+                        text = "System Prompt",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
                     )
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (expanded) "Hide" else "Show",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
 
-                    IconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                viewModel.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank() && !isProcessing && !isGenerating
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Send,
-                            contentDescription = "Send",
-                            tint = if (inputText.isNotBlank() && !isProcessing && !isGenerating)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                        )
-                    }
+                AnimatedVisibility(
+                    visible = expanded,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically()
+                ) {
+                    Text(
+                        text = systemPrompt,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp)
+                    )
                 }
             }
         }
@@ -232,122 +215,275 @@ fun ConversationScreen(
 }
 
 @Composable
+fun ConversationMessageList(
+    messages: List<Message>,
+    listState: LazyListState,
+) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        reverseLayout = false
+    ) {
+        items(
+            items = messages,
+            key = { "${it::class.simpleName}_${it.timestamp}" }
+        ) { message ->
+            MessageBubble(message = message)
+        }
+
+        // Add extra space at the bottom for better UX
+        item { Spacer(modifier = Modifier.height(16.dp)) }
+    }
+}
+
+@Composable
 fun MessageBubble(message: Message) {
-    Row(
+    when (message) {
+        is Message.User -> UserMessageBubble(
+            content = message.content,
+            formattedTime = message.formattedTime
+        )
+
+        is Message.Assistant -> AssistantMessageBubble(
+            content = message.content,
+            formattedTime = message.formattedTime,
+            isComplete = message.isComplete,
+            isThinking = !message.isComplete && message.content.isBlank(),
+            metrics = if (message.isComplete && message.content.isNotBlank()) {
+                // TODO-han.yin: Generate some example metrics for now
+                // This would come from the actual LLM engine in a real implementation
+                val tokenCount = message.content.split("\\s+".toRegex()).size
+                val ttft = (200 + (Math.random() * 80)).toInt()
+                val tps = 8.5 + (Math.random() * 1.5)
+                "Tokens: $tokenCount, TTFT: ${ttft}ms, TPS: ${"%.1f".format(tps)}"
+            } else null
+        )
+    }
+}
+
+@Composable
+fun UserMessageBubble(content: String, formattedTime: String) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.Top
+        horizontalAlignment = Alignment.End
     ) {
-        when (message) {
-            is Message.User -> {
-                Spacer(modifier = Modifier.weight(1f))
+        // Timestamp above bubble
+        Text(
+            text = formattedTime,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+            modifier = Modifier.padding(bottom = 4.dp)
+        )
 
-                Box(
-                    modifier = Modifier
-                        .width(40.dp)
-                        .height(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.secondaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "You",
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        style = MaterialTheme.typography.labelMedium
-                    )
-                }
+        Row {
+            Spacer(modifier = Modifier.weight(1f))
 
-                Spacer(modifier = Modifier.width(8.dp))
+            Card(
+                shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.padding(12.dp)
+                )
+            }
+        }
+    }
+}
 
-                Box(
-                    modifier = Modifier
-                        .weight(5f)
-                        .clip(
-                            RoundedCornerShape(
-                                topStart = 16.dp,
-                                topEnd = 16.dp,
-                                bottomStart = 16.dp,
-                                bottomEnd = 4.dp
-                            )
-                        )
-                        .background(MaterialTheme.colorScheme.primaryContainer)
-                        .padding(12.dp)
-                ) {
-                    Column {
-                        Text(
-                            text = message.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+@Composable
+fun AssistantMessageBubble(
+    content: String,
+    formattedTime: String,
+    isComplete: Boolean,
+    isThinking: Boolean,
+    metrics: String? = null
+) {
+    Row(
+        verticalAlignment = Alignment.Top,
+    ) {
+        // Assistant avatar
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "AI",
+                color = MaterialTheme.colorScheme.onPrimary,
+                style = MaterialTheme.typography.labelMedium
+            )
+        }
 
-                        Text(
-                            text = message.formattedTime,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
-                            modifier = Modifier.align(Alignment.End)
-                        )
-                    }
-                }
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+        ) {
+            // Timestamp above bubble
+            if (formattedTime.isNotBlank()) {
+                Text(
+                    text = formattedTime,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
             }
 
-            is Message.Assistant -> {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center
-                ) {
+            Card(
+                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+            ) {
+                // Show actual content
+                Text(
+                    modifier = Modifier.padding(12.dp),
+                    text = content,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Show metrics or generation status below the bubble
+            Row(
+                modifier = Modifier.height(20.dp).padding(top = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (!isComplete) {
+                    PulsatingDots(small = true)
+
+                    Spacer(modifier = Modifier.width(4.dp))
+
                     Text(
-                        text = "AI",
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        style = MaterialTheme.typography.labelMedium
+                        text = if (isThinking) "Thinking..." else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else if (metrics != null) {
+                    // Show metrics when message is complete
+                    Text(
+                        text = metrics,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                     )
                 }
+            }
+        }
+    }
+}
 
-                Spacer(modifier = Modifier.width(8.dp))
+@Composable
+fun PulsatingDots(small: Boolean = false) {
+    val transition = rememberInfiniteTransition(label = "dots")
 
-                Box(
-                    modifier = Modifier
-                        .weight(5f)
-                        .clip(
-                            RoundedCornerShape(
-                                topStart = 16.dp,
-                                topEnd = 16.dp,
-                                bottomStart = 4.dp,
-                                bottomEnd = 16.dp
-                            )
+    val animations = List(3) { index ->
+        transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(
+                    durationMillis = 1000,
+                    delayMillis = index * 300,
+                    easing = LinearEasing
+                ),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "dot-$index"
+        )
+    }
+
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        animations.forEach { animation ->
+            Spacer(modifier = Modifier.width(2.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(if (small) 5.dp else 8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        color = MaterialTheme.colorScheme.primary.copy(
+                            alpha = 0.3f + (animation.value * 0.7f)
                         )
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(12.dp)
-                ) {
-                    Column {
-                        Text(
-                            text = message.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    )
+            )
 
-                        if (message.isComplete) {
-                            Text(
-                                text = message.formattedTime,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                modifier = Modifier.align(Alignment.End)
-                            )
-                        } else {
-                            CircularProgressIndicator(
-                                modifier = Modifier
-                                    .size(12.dp)
-                                    .align(Alignment.End),
-                                strokeWidth = 2.dp
-                            )
-                        }
-                    }
+            Spacer(modifier = Modifier.width(2.dp))
+        }
+    }
+}
+
+@Composable
+fun ConversationInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSendClick: () -> Unit,
+    isEnabled: Boolean
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth(),
+        shadowElevation = 4.dp,
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp),
+                placeholder = { Text("Message Kleidi LLaMA...") },
+                maxLines = 5,
+                enabled = isEnabled,
+                colors = TextFieldDefaults.colors(
+                    unfocusedContainerColor = Color.Transparent,
+                    focusedContainerColor = Color.Transparent
+                ),
+                shape = RoundedCornerShape(24.dp)
+            )
+
+            IconButton(
+                onClick = onSendClick,
+                enabled = value.isNotBlank() && isEnabled,
+                modifier = Modifier
+                    .padding(bottom = 4.dp)
+                    .size(48.dp)
+            ) {
+                if (isEnabled) {
+                    Icon(
+                        imageVector = Icons.Default.Send,
+                        contentDescription = "Send message",
+                        tint = if (value.isNotBlank())
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                } else {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp,
+                        strokeCap = StrokeCap.Round
+                    )
                 }
-
-                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }
