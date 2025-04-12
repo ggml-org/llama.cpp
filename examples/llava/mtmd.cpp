@@ -41,14 +41,14 @@ struct mtmd_context {
 };
 
 struct mtmd_image_tokens_data {
-    clip_image_f32_batch_ptr batch_f32; // preprocessed image patches
+    clip_image_f32_batch batch_f32; // preprocessed image patches
 };
 
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
     uint32_t n_tokens() const { return nx * ny; }
-    clip_image_f32_batch_ptr batch_f32; // preprocessed image patches
+    clip_image_f32_batch batch_f32; // preprocessed image patches
 };
 
 mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
@@ -141,8 +141,8 @@ mtmd_input_chunks * mtmd_tokenize(mtmd_context * ctx,
             std::memcpy(img_u8->buf.data(), bitmaps[i_img].data.data(), img_u8->nx * img_u8->ny * 3);
 
             // preprocess image
-            clip_image_f32_batch_ptr batch_f32(new clip_image_f32_batch);
-            bool ok = clip_image_preprocess(ctx->ctx_clip, img_u8.get(), batch_f32.get());
+            clip_image_f32_batch batch_f32;
+            bool ok = clip_image_preprocess(ctx->ctx_clip, img_u8.get(), &batch_f32);
             if (!ok) {
                 LOG_ERR("Unable to preprocess image\n");
                 return nullptr;
@@ -181,7 +181,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
     bool ok = clip_image_batch_encode(
         ctx->ctx_clip,
         ctx->n_threads,
-        image_tokens->batch_f32.get(),
+        &image_tokens->batch_f32,
         ctx->image_embd_v.data());
     return ok ? 0 : 1;
 }

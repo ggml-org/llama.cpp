@@ -13,7 +13,7 @@ class TensorNameMap:
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
-            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "language_model.embedding.word_embeddings",  # persimmon
@@ -241,7 +241,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2
+            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
         ),
 
         # Rotary embeddings
@@ -278,6 +279,7 @@ class TensorNameMap:
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
+            "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -316,7 +318,7 @@ class TensorNameMap:
             "h.{bid}.mlp.c_fc",                                       # gpt2
             "transformer.h.{bid}.mlp.fc1",                            # phi2
             "model.layers.{bid}.mlp.fc1",                             # phi2
-            "model.layers.{bid}.mlp.gate_up_proj",                    # phi3
+            "model.layers.{bid}.mlp.gate_up_proj",                    # phi3 glm-4-0414
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
