@@ -115,4 +115,16 @@ function(ggml_hexagon_build_kernel KNAME)
     )
 endfunction()
 
+function(ggml_hexagon_setup_cfg KNAME)
+    message(STATUS "ggml_hexagon: setup runtime configuration file ${KNAME}")
+    add_custom_command(
+        TARGET ${PROJECT_NAME}
+        POST_BUILD
+        COMMAND echo "current working path:`pwd`\n"
+        COMMAND /bin/cp -fv ../../../../../scripts/${KNAME}  ../../../bin/
+        COMMENT "setup runtime configuration file"
+    )
+endfunction()
+
 ggml_hexagon_build_kernel("cdsp")
+ggml_hexagon_setup_cfg("ggml-hexagon.cfg")
