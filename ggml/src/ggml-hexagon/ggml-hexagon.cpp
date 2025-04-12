@@ -1830,7 +1830,7 @@ static void ggmlhexagon_load_cfg() {
     });
     std::string precision_mode;
     std::string ggml_hexagon_version;
-    hexagoncfg_instance.get_stringvalue("general", "ggml_hexagon_version", ggml_hexagon_version, "1.03");
+    hexagoncfg_instance.get_stringvalue("general", "version", ggml_hexagon_version, "1.00");
     hexagoncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
     hexagoncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
     hexagoncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
