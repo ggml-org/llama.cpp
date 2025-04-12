@@ -3249,8 +3249,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         // note: only old legacy GGUF files will have the unsplit wkv_b tensor in
                         if (is_mla) {
-                            layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, n_head * kv_lora_rank}, 0);
-                            layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_head * n_embd_head_v_mla}, 0);
+                            layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
+                            layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v_mla, n_head}, 0);
                         } else {
                             layer.wkv_b = create_tensor(tn(LLM_TENSOR_ATTN_KV_B, "weight", i), {kv_lora_rank, n_head * (n_embd_head_qk_nope + n_embd_head_v_mla)}, 0);
                         }
@@ -10143,18 +10143,11 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 cb(kv_cmpr, "kv_cmpr", il);
 
                 if (is_mla) {
-                    ggml_tensor * wk_b = ggml_view_3d(ctx0, model.layers[il].wk_b,
-                            n_embd_head_qk_nope, kv_lora_rank, n_head,
-                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope),
-                            ggml_row_size(model.layers[il].wk_b->type, n_embd_head_qk_nope) * kv_lora_rank,
-                            0);
-                    cb(wk_b, "wk_b", il);
-
                     // {n_embd_head_qk_nope, n_tokens, n_head}
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                     cb(q_nope, "q_nope_perm", il);
 
-                    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, wk_b, q_nope);
+                    ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, model.layers[il].wk_b, q_nope);
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
 
                     // {n_embd_head_qk_rope, n_tokens, n_head}
@@ -10178,17 +10171,10 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     ggml_tensor * v_states = kv_cmpr;
                     cb(v_states, "v_states", il);
 
-                    ggml_tensor * v_mla = ggml_view_3d(ctx0, model.layers[il].wv_b,
-                            kv_lora_rank, n_embd_head_v, n_head,
-                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank),
-                            ggml_row_size(model.layers[il].wv_b->type, kv_lora_rank) * n_embd_head_v,
-                            0);
-                    cb(v_mla, "v_mla", il);
-
                     // note: MLA with the absorption optimzation converts into MQA (ie: GQA with 1 group)
                     cur = build_attn_mla(inp_attn, gf,
                             model.layers[il].wo, NULL,
-                            q_states, k_states, v_states, nullptr, v_mla, kq_scale, il);
+                            q_states, k_states, v_states, nullptr, model.layers[il].wv_b, kq_scale, il);
                 } else {
                     ggml_tensor * kv = ggml_mul_mat(ctx0, model.layers[il].wkv_b, kv_cmpr);
                     cb(kv, "kv", il);
