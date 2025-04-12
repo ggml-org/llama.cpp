@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Divider
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -23,10 +22,6 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -38,14 +33,13 @@ import kotlinx.coroutines.launch
 
 /**
  * App navigation drawer that provides access to different sections of the app.
- * Gesture opening is disabled when a model is loaded to prevent accidental navigation,
- * but gesture dismissal is always enabled.
+ * Gesture opening can be controlled based on current screen.
  */
 @Composable
 fun AppNavigationDrawer(
     drawerState: DrawerState,
     navigationActions: NavigationActions,
-    modelLoaded: Boolean = false,
+    gesturesEnabled: Boolean,
     content: @Composable () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -53,15 +47,6 @@ fun AppNavigationDrawer(
 
     // Calculate drawer width (60% of screen width)
     val drawerWidth = (configuration.screenWidthDp * 0.6).dp
-
-    // Determine if gestures should be enabled
-    // Always enable when drawer is open (to allow dismissal)
-    // Only enable when model is not loaded (to prevent accidental opening)
-    val gesturesEnabled by remember(drawerState.currentValue, modelLoaded) {
-        derivedStateOf {
-            drawerState.currentValue == DrawerValue.Open || !modelLoaded
-        }
-    }
 
     // Handle back button to close drawer if open
     BackHandler(enabled = drawerState.currentValue == DrawerValue.Open) {

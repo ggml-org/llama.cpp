@@ -3,12 +3,10 @@ package com.example.llama.revamp
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -39,8 +37,8 @@ import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
-import com.example.llama.revamp.ui.screens.ModelSelectionScreen
 import com.example.llama.revamp.ui.screens.ModeSelectionScreen
+import com.example.llama.revamp.ui.screens.ModelSelectionScreen
 import com.example.llama.revamp.ui.screens.SettingsScreen
 import com.example.llama.revamp.ui.screens.SettingsTab
 import com.example.llama.revamp.ui.theme.LlamaTheme
@@ -80,11 +78,7 @@ fun AppContent() {
     val viewModel: MainViewModel = viewModel(factory = factory)
 
     val engineState by viewModel.engineState.collectAsState()
-
-    // Track if model is loaded for gesture handling
-    val isModelLoaded = remember(engineState) {
-        viewModel.isModelLoaded()
-    }
+    val isModelLoaded = remember(engineState) { viewModel.isModelLoaded() }
 
     val navigationActions = remember(navController) {
         NavigationActions(navController)
@@ -97,7 +91,21 @@ fun AppContent() {
     // Get current route
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute by remember {
-        derivedStateOf { navBackStackEntry?.destination?.route }
+        derivedStateOf { navBackStackEntry?.destination?.route ?: "" }
+    }
+
+    // Determine if drawer gestures should be enabled based on route
+    val drawerGesturesEnabled by remember(currentRoute, drawerState.currentValue) {
+        derivedStateOf {
+            // Always allow gesture dismissal when drawer is open
+            if (drawerState.currentValue == DrawerValue.Open) {
+                true
+            } else {
+                // Only enable drawer opening by gesture on these screens
+                currentRoute == AppDestinations.MODEL_SELECTION_ROUTE ||
+                    currentRoute.startsWith(AppDestinations.SETTINGS_ROUTE)
+            }
+        }
     }
 
     // Determine if current route requires model unloading
@@ -172,7 +180,7 @@ fun AppContent() {
     AppNavigationDrawer(
         drawerState = drawerState,
         navigationActions = navigationActions,
-        modelLoaded = isModelLoaded
+        gesturesEnabled = drawerGesturesEnabled
     ) {
         NavHost(
             navController = navController,
