@@ -153,9 +153,6 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     };
 
     bool is_one_bit = (ftype == LLAMA_FTYPE_MOSTLY_IQ1_M || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S);
-    
-    for (int i = 0; i < 10; i++)
-        std::cout << "Use MoE: " << gguf_is_moe << std::endl;
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
@@ -640,7 +637,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             default: throw std::runtime_error("\nUnsupported tensor size encountered\n");
         }
         if (tensor->ne[0] % ggml_blck_size(new_type) != 0) {
-            new_type = GGML_TYPE_F16;
+            new_type = GGML_TYPE_BF16;
         }
         LLAMA_LOG_WARN(" - using fallback quantization %s\n", ggml_type_name(new_type));
         ++qs.n_fallback;
