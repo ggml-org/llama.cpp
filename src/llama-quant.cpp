@@ -145,7 +145,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             if (sscanf(name, "blk.%d.", &i_layer) != 1) {
                 throw std::runtime_error(format("Failed to determine layer for tensor %s", name));
             }
-            if (i_layer < 0 || i_layer >= n_layer) {
+            if (i_layer < 0 || i_layer > n_layer) {
                 throw std::runtime_error(format("Bad layer %d for tensor %s. Must be in [0, %d)", i_layer, name, n_layer));
             }
         }
@@ -194,7 +194,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
-               ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
+               ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M ||
+               ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
         
         if (name.find("attn_v.weight") != std::string::npos) {
             new_type = GGML_TYPE_Q4_K;
@@ -217,12 +218,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
             int which;
             if (is_one_bit) which = 4;
-            else which = 3;
+            else which = 5;
 
-            if (i_layer < which) new_type = GGML_TYPE_Q6_K;
-            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q6_K;
-            else if (is_one_bit) new_type = GGML_TYPE_IQ3_XXS;
-            else new_type = GGML_TYPE_Q4_K;
+            if      (i_layer < which)           new_type = GGML_TYPE_Q6_K;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q6_K;
+            else if (is_one_bit)                new_type = GGML_TYPE_IQ3_XXS;
+            else                                new_type = GGML_TYPE_Q4_K;
 
             ++qs.i_ffn_down;
         }
@@ -237,7 +238,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 int which = 4;
 
                 if (i_layer < which) new_type = GGML_TYPE_Q8_0;
-                else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q8_0;
+                else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q8_0;
                 else new_type = GGML_TYPE_Q6_K;
             }
         }
@@ -257,7 +258,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
             if (is_one_bit) {
                 if      (i_layer < which)             new_type = GGML_TYPE_Q4_K;
-                else if (i_layer >= n_layer - which)  new_type = GGML_TYPE_Q4_K;
+                else if (i_layer > n_layer - which)   new_type = GGML_TYPE_Q4_K;
                 else if (i_layer < which + divisor*1) new_type = GGML_TYPE_Q3_K;
                 else if (i_layer < which + divisor*2) new_type = GGML_TYPE_IQ3_XXS;
                 else if (i_layer < which + divisor*3) new_type = GGML_TYPE_IQ3_S;
@@ -265,7 +266,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             else {
                 if      (i_layer < which)             new_type = GGML_TYPE_Q4_K;
-                else if (i_layer >= n_layer - which)  new_type = GGML_TYPE_Q4_K;
+                else if (i_layer > n_layer - which)  new_type = GGML_TYPE_Q4_K;
                 else if (i_layer < which + divisor*1) new_type = GGML_TYPE_Q3_K;
                 else if (i_layer < which + divisor*2) new_type = GGML_TYPE_IQ2_XXS;
                 else if (i_layer < which + divisor*3) new_type = GGML_TYPE_IQ3_XXS;
@@ -292,9 +293,33 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             ++qs.i_ffn_down;
         }
-        else if (name.find("ffn_gate.weight") != std::string::npos) {
-            // First 3 Layers
-            new_type = GGML_TYPE_Q4_K;
+        else if (gguf_is_moe and (name.find("ffn_gate.weight") != std::string::npos)) {
+            // First 2 Layers and last 2 are left as higher 6 bit precision, rest whatever
+            auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
+            int i_layer = info.first, n_layer = info.second;
+
+            int which;
+            if (is_one_bit) which = 2;
+            else which = 3;
+
+            if      (i_layer < which)           new_type = GGML_TYPE_Q4_K;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q4_K;
+            else                                new_type = GGML_TYPE_IQ3_XXS;
+
+            ++qs.i_ffn_gate;
+        }
+        else if (not gguf_is_moe and (name.find("ffn_gate.weight") != std::string::npos)) {
+            // First 2 Layers and last 2 are left as higher 6 bit precision, rest whatever
+            auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
+            int i_layer = info.first, n_layer = info.second;
+
+            int which;
+            if (is_one_bit) which = 2;
+            else which = 3;
+
+            if      (i_layer < which)           new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+
             ++qs.i_ffn_gate;
         }
         else if (name.find("ffn_gate_shexp.weight") != std::string::npos) {
@@ -311,14 +336,37 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int which = 2;
 
             if (i_layer < which) new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_gate;
         }
-        else if (name.find("ffn_up.weight") != std::string::npos) {
-            // Shared experts
-            if (is_one_bit) new_type = GGML_TYPE_Q4_K;
-            else new_type = GGML_TYPE_Q5_K;
+        else if (gguf_is_moe and (name.find("ffn_up.weight") != std::string::npos)) {
+            // First 2 Layers and last 2 are left as higher 6 bit precision, rest whatever
+            auto info = layer_info(qs.i_ffn_up, qs.n_ffn_up, name.c_str());
+            int i_layer = info.first, n_layer = info.second;
+
+            int which;
+            if (is_one_bit) which = 2;
+            else which = 3;
+
+            if      (i_layer < which)           new_type = GGML_TYPE_Q4_K;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q4_K;
+            else                                new_type = GGML_TYPE_IQ3_XXS;
+
+            ++qs.i_ffn_up;
+        }
+        else if (not gguf_is_moe and (name.find("ffn_up.weight") != std::string::npos)) {
+            // First 2 Layers and last 2 are left as higher 6 bit precision, rest whatever
+            auto info = layer_info(qs.i_ffn_up, qs.n_ffn_up, name.c_str());
+            int i_layer = info.first, n_layer = info.second;
+
+            int which;
+            if (is_one_bit) which = 2;
+            else which = 3;
+
+            if      (i_layer < which)           new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+
             ++qs.i_ffn_up;
         }
         else if (name.find("ffn_up_shexp.weight") != std::string::npos) {
@@ -334,7 +382,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int which = 2;
 
             if (i_layer < which) new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_up;
         }
@@ -356,25 +404,24 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         }
         else if (name.find("attn_output.weight") != std::string::npos) {
             // Leave as 4bit
-            new_type = GGML_TYPE_Q4_K;
-            // if (qs.model.hparams.n_expert == 8) {
-            //     new_type = GGML_TYPE_Q5_K;
-            // } else {
-            //     if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ2_XXS;
-            //     else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M) new_type = GGML_TYPE_IQ3_S;
-            // }
+            // new_type = GGML_TYPE_Q4_K;
+            if (qs.model.hparams.n_expert == 8) {
+                new_type = GGML_TYPE_Q5_K;
+            }
+            else if (gguf_is_moe) new_type = GGML_TYPE_Q4_K;
+            else {
+                if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ2_XXS;
+                else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M) new_type = GGML_TYPE_IQ3_S;
+            }
         }
         else if (name.find("attn_k.weight") != std::string::npos) {
-            // Leave as 4bit
-            new_type = GGML_TYPE_Q4_K;
+            new_type = gguf_is_moe ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
         else if (name.find("attn_q.weight") != std::string::npos) {
-            // Leave as 4bit
-            new_type = GGML_TYPE_Q4_K;
+            new_type = gguf_is_moe ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
         else if (name.find("attn_v.weight") != std::string::npos) {
-            // Leave as 4bit
-            new_type = GGML_TYPE_Q4_K;
+            new_type = gguf_is_moe ? GGML_TYPE_Q5_K : GGML_TYPE_Q4_K;
         }
     } else if (name.find("attn_v.weight") != std::string::npos) {
         if      (ftype == LLAMA_FTYPE_MOSTLY_Q2_K) {
@@ -453,7 +500,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         else which = 3;
 
         if (i_layer < which) new_type = GGML_TYPE_Q6_K;
-        else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q6_K;
+        else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q6_K;
         else if (is_one_bit) new_type = GGML_TYPE_IQ3_XXS;
         else new_type = GGML_TYPE_Q4_K;
 
@@ -552,7 +599,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     } else if (name.find("ffn_gate") != std::string::npos) {
         auto info = layer_info(qs.i_ffn_gate, qs.n_ffn_gate, name.c_str());
         int i_layer = info.first, n_layer = info.second;
-        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer > n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
         ++qs.i_ffn_gate;
@@ -570,7 +617,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
     else if (name.find("ffn_up") != std::string::npos) {
         auto info = layer_info(qs.i_ffn_up, qs.n_ffn_up, name.c_str());
         int i_layer = info.first, n_layer = info.second;
-        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer >= n_layer/8 && i_layer < 7*n_layer/8)) {
+        if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && (i_layer > n_layer/8 && i_layer < 7*n_layer/8)) {
             new_type = GGML_TYPE_IQ3_XXS;
         }
         ++qs.i_ffn_up;
