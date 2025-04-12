@@ -220,10 +220,10 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             if (is_one_bit) which = 4;
             else which = 5;
 
-            if      (i_layer < which)           new_type = GGML_TYPE_Q6_K;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q6_K;
-            else if (is_one_bit)                new_type = GGML_TYPE_IQ3_XXS;
-            else                                new_type = GGML_TYPE_Q4_K;
+            if      (i_layer < which)            new_type = GGML_TYPE_Q6_K;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q6_K;
+            else if (is_one_bit)                 new_type = GGML_TYPE_IQ3_XXS;
+            else                                 new_type = GGML_TYPE_Q4_K;
 
             ++qs.i_ffn_down;
         }
@@ -238,7 +238,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 int which = 4;
 
                 if (i_layer < which) new_type = GGML_TYPE_Q8_0;
-                else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q8_0;
+                else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q8_0;
                 else new_type = GGML_TYPE_Q6_K;
             }
         }
@@ -258,7 +258,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
             if (is_one_bit) {
                 if      (i_layer < which)             new_type = GGML_TYPE_Q4_K;
-                else if (i_layer > n_layer - which)   new_type = GGML_TYPE_Q4_K;
+                else if (i_layer >= n_layer - which)   new_type = GGML_TYPE_Q4_K;
                 else if (i_layer < which + divisor*1) new_type = GGML_TYPE_Q3_K;
                 else if (i_layer < which + divisor*2) new_type = GGML_TYPE_IQ3_XXS;
                 else if (i_layer < which + divisor*3) new_type = GGML_TYPE_IQ3_S;
@@ -266,7 +266,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             else {
                 if      (i_layer < which)             new_type = GGML_TYPE_Q4_K;
-                else if (i_layer > n_layer - which)  new_type = GGML_TYPE_Q4_K;
+                else if (i_layer >= n_layer - which)  new_type = GGML_TYPE_Q4_K;
                 else if (i_layer < which + divisor*1) new_type = GGML_TYPE_Q3_K;
                 else if (i_layer < which + divisor*2) new_type = GGML_TYPE_IQ2_XXS;
                 else if (i_layer < which + divisor*3) new_type = GGML_TYPE_IQ3_XXS;
@@ -299,12 +299,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 2;
+            if (is_one_bit) which = 4;
             else which = 3;
 
-            if      (i_layer < which)           new_type = GGML_TYPE_Q4_K;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q4_K;
-            else                                new_type = GGML_TYPE_IQ3_XXS;
+            if      (i_layer < which)            new_type = GGML_TYPE_Q4_K;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q4_K;
+            else                                 new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_gate;
         }
@@ -314,11 +314,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 2;
-            else which = 3;
+            if (is_one_bit) which = 5;
+            else which = 4;
 
-            if      (i_layer < which)           new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_gate;
         }
@@ -336,7 +336,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int which = 2;
 
             if (i_layer < which) new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_gate;
         }
@@ -346,11 +346,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 2;
+            if (is_one_bit) which = 4;
             else which = 3;
 
             if      (i_layer < which)           new_type = GGML_TYPE_Q4_K;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q4_K;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q4_K;
             else                                new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_up;
@@ -361,11 +361,11 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 2;
-            else which = 3;
+            if (is_one_bit) which = 5;
+            else which = 4;
 
-            if      (i_layer < which)           new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_up;
         }
@@ -382,7 +382,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int which = 2;
 
             if (i_layer < which) new_type = GGML_TYPE_IQ3_XXS;
-            else if (i_layer > n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
 
             ++qs.i_ffn_up;
         }
@@ -410,7 +410,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             }
             else if (gguf_is_moe) new_type = GGML_TYPE_Q4_K;
             else {
-                if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ2_XXS;
+                if (ftype == LLAMA_FTYPE_MOSTLY_IQ1_S || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) new_type = GGML_TYPE_IQ3_XXS;
                 else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M) new_type = GGML_TYPE_Q3_K;
                 else new_type = GGML_TYPE_Q3_K;
             }
@@ -501,7 +501,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         else which = 3;
 
         if (i_layer < which) new_type = GGML_TYPE_Q6_K;
-        else if (i_layer > n_layer - which) new_type = GGML_TYPE_Q6_K;
+        else if (i_layer >= n_layer - which) new_type = GGML_TYPE_Q6_K;
         else if (is_one_bit) new_type = GGML_TYPE_IQ3_XXS;
         else new_type = GGML_TYPE_Q4_K;
 
