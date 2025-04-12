@@ -10,7 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <cinttypes>
-#include <math.h>
+#include <cmath>
 
 //
 // llama_context
