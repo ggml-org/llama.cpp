@@ -1,13 +1,21 @@
 name: CI
+description: |
+  This workflow builds and tests the llama.cpp project on various platforms.
+  It is triggered on push, pull request, or manually via workflow_dispatch.
+  It also creates a release when a new commit is pushed to the master branch or when manually triggered.
+  The workflow includes jobs for macOS, Linux, and Windows, with different configurations and dependencies.
+  The workflow uses concurrency to cancel in-progress jobs if a new commit is pushed to the same branch.
+  It uses ccache to speed up the build process by caching compiled files.
 
 on:
   workflow_dispatch: # allows manual triggering
     inputs:
       create_release:
+        default: false
         description: 'Create new release'
-        required: true
-        type: boolean
-  push:
+        required: true  
+        type: boolean 
+  push: 
     branches:
       - master
     paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
@@ -31,6 +39,7 @@ env:
   LLAMA_LOG_COLORS: 1
   LLAMA_LOG_PREFIX: 1
   LLAMA_LOG_TIMESTAMPS: 1
+  CREATE_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' }}
 
 jobs:
   macOS-latest-cmake-arm64:
@@ -89,13 +98,13 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: "${{ github.event_name == 'workflow_dispatch' ? github.event.inputs.create_release == 'true' : github.ref == 'refs/heads/master' }}"
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
 
       - name: Upload artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip
@@ -158,7 +167,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
@@ -240,7 +249,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
@@ -424,7 +433,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
@@ -723,7 +732,6 @@ jobs:
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
-
       - name: Dependencies
         id: depends
         continue-on-error: true
@@ -781,6 +789,10 @@ jobs:
             mingw-w64-${{matrix.env}}-toolchain
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-openblas
+
+      - name: Setup for build
+        run: |
+          echo "Setting up build environment"
 
       - name: Build using CMake
         shell: msys2 {0}
@@ -929,12 +941,25 @@ jobs:
 
       - name: Build
         id: cmake_build
+        shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -S . -B build ${{ matrix.defines }} `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CUDA=ON ^
+            -DGGML_RPC=ON ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+          cmake --build build --config Release
+
+      - name: Copy libcurl DLL
+        id: copy_curl_dll
+        run: |
+          cp $env:RUNNER_TEMP/curl/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
@@ -959,13 +984,13 @@ jobs:
       - name: Test
         id: cmake_test
         # not all machines have native AVX-512
-        if: ${{ matrix.build != 'arm64' && matrix.build != 'clblast' && matrix.build != 'kompute' && matrix.build != 'vulkan' && (matrix.build != 'avx512' || env.HAS_AVX512F == '1') }}
+        if: ${{ matrix.build != 'arm64' && matrix.build != 'clblast' && matrix.build != 'kompute' && matrix.build != 'vulkan' && (matrix.build != 'avx512' || steps.check_avx512f.outputs.has_avx512f == '1') }}
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
 
       - name: Test (Intel SDE)
-        id: cmake_test_sde
+        if: ${{ matrix.build == 'avx512-x64' && (steps.check_avx512f.outputs.has_avx512f == '0') }} # use Intel SDE for AVX-512 emulation
         if: ${{ matrix.build == 'avx512-x64' && env.HAS_AVX512F == '0' }} # use Intel SDE for AVX-512 emulation
         run: |
           curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
@@ -992,7 +1017,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
@@ -1125,7 +1150,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
@@ -1205,7 +1230,7 @@ jobs:
 
       - name: Build the release package
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         run: |
           echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
 
@@ -1437,7 +1462,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || ( github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true' ) }}
         run: |
           zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
 
@@ -1487,7 +1512,7 @@ jobs:
       - ubuntu-cpu-cmake
       - ubuntu-22-cmake-vulkan
       - windows-latest-cmake
-      - windows-2019-cmake-cuda
+      - windows-latest-cmake-cuda
       - windows-latest-cmake-sycl
       - windows-latest-cmake-hip-release
       - macOS-latest-cmake-arm64
