@@ -3,18 +3,21 @@ package com.example.llama.revamp.ui.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -23,6 +26,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
@@ -40,6 +44,7 @@ fun AppNavigationDrawer(
     drawerState: DrawerState,
     navigationActions: NavigationActions,
     gesturesEnabled: Boolean,
+    currentRoute: String,
     content: @Composable () -> Unit
 ) {
     val coroutineScope = rememberCoroutineScope()
@@ -63,18 +68,14 @@ fun AppNavigationDrawer(
                 modifier = Modifier.width(drawerWidth)
             ) {
                 DrawerContent(
-                    onHomeClicked = {
+                    currentRoute = currentRoute,
+                    onNavigate = { destination ->
                         coroutineScope.launch {
                             drawerState.close()
-                            navigationActions.navigateToModelSelection()
+                            destination()
                         }
                     },
-                    onSettingsClicked = {
-                        coroutineScope.launch {
-                            drawerState.close()
-                            navigationActions.navigateToSettings()
-                        }
-                    }
+                    navigationActions = navigationActions
                 )
             }
         },
@@ -84,8 +85,9 @@ fun AppNavigationDrawer(
 
 @Composable
 private fun DrawerContent(
-    onHomeClicked: () -> Unit,
-    onSettingsClicked: () -> Unit,
+    currentRoute: String,
+    onNavigate: ((Function0<Unit>)) -> Unit,
+    navigationActions: NavigationActions,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -93,30 +95,68 @@ private fun DrawerContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        Text(
-            text = "Local LLM",
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center,
+        // App Header
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 16.dp)
-        )
+                .padding(vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "Local LLM",
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center
+            )
+
+            Text(
+                text = "v1.0.0",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+        }
 
         HorizontalDivider()
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Navigation Items
+        // Main Navigation Items
+        Text(
+            text = "Navigation",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+        )
+
         DrawerNavigationItem(
             icon = Icons.Default.Home,
             label = "Home",
-            onClick = onHomeClicked
+            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.MODEL_SELECTION_ROUTE,
+            onClick = { onNavigate { navigationActions.navigateToModelSelection() } }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Settings Group
+        Text(
+            text = "Settings",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
         )
 
         DrawerNavigationItem(
             icon = Icons.Default.Settings,
-            label = "Settings",
-            onClick = onSettingsClicked
+            label = "General Settings",
+            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.SETTINGS_GENERAL_ROUTE,
+            onClick = { onNavigate { navigationActions.navigateToSettingsGeneral() } }
+        )
+
+        DrawerNavigationItem(
+            icon = Icons.Default.Folder,
+            label = "Models Management",
+            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.MODELS_MANAGEMENT_ROUTE,
+            onClick = { onNavigate { navigationActions.navigateToModelsManagement() } }
         )
     }
 }
@@ -125,28 +165,47 @@ private fun DrawerContent(
 private fun DrawerNavigationItem(
     icon: ImageVector,
     label: String,
+    isSelected: Boolean,
     onClick: () -> Unit
 ) {
+    val backgroundColor = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+
+    val contentColor = if (isSelected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 8.dp),
-        color = MaterialTheme.colorScheme.surface
+            .padding(vertical = 4.dp),
+        color = backgroundColor,
+        shape = MaterialTheme.shapes.small
     ) {
-        Column(
-            modifier = Modifier.padding(8.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp, horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = label,
-                tint = MaterialTheme.colorScheme.primary
+                tint = contentColor,
+                modifier = Modifier.size(24.dp)
             )
 
             Text(
                 text = label,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(start = 8.dp, top = 4.dp)
+                style = MaterialTheme.typography.bodyLarge,
+                color = contentColor,
+                modifier = Modifier.padding(start = 16.dp)
             )
         }
     }

@@ -6,11 +6,15 @@ import androidx.navigation.NavController
  * Navigation destinations for the app
  */
 object AppDestinations {
+    // Primary navigation destinations
     const val MODEL_SELECTION_ROUTE = "model_selection"
     const val MODE_SELECTION_ROUTE = "mode_selection"
     const val CONVERSATION_ROUTE = "conversation"
     const val BENCHMARK_ROUTE = "benchmark"
-    const val SETTINGS_ROUTE = "settings"
+
+    // Settings destinations (moved from tabs to separate routes)
+    const val SETTINGS_GENERAL_ROUTE = "settings_general"
+    const val MODELS_MANAGEMENT_ROUTE = "models_management"
 }
 
 /**
@@ -37,8 +41,12 @@ class NavigationActions(private val navController: NavController) {
         navController.navigate(AppDestinations.BENCHMARK_ROUTE)
     }
 
-    fun navigateToSettings(tab: String = "GENERAL") {
-        navController.navigate("${AppDestinations.SETTINGS_ROUTE}/$tab")
+    fun navigateToSettingsGeneral() {
+        navController.navigate(AppDestinations.SETTINGS_GENERAL_ROUTE)
+    }
+
+    fun navigateToModelsManagement() {
+        navController.navigate(AppDestinations.MODELS_MANAGEMENT_ROUTE)
     }
 
     fun navigateUp() {

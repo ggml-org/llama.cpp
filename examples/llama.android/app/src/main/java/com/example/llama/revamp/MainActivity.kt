@@ -3,6 +3,7 @@ package com.example.llama.revamp
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.setContent
@@ -24,12 +25,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.navigation.navArgument
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
@@ -37,10 +36,10 @@ import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
-import com.example.llama.revamp.ui.screens.ModeSelectionScreen
 import com.example.llama.revamp.ui.screens.ModelSelectionScreen
-import com.example.llama.revamp.ui.screens.SettingsScreen
-import com.example.llama.revamp.ui.screens.SettingsTab
+import com.example.llama.revamp.ui.screens.ModelsManagementScreen
+import com.example.llama.revamp.ui.screens.ModeSelectionScreen
+import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
 import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.MainViewModel
@@ -103,7 +102,8 @@ fun AppContent() {
             } else {
                 // Only enable drawer opening by gesture on these screens
                 currentRoute == AppDestinations.MODEL_SELECTION_ROUTE ||
-                    currentRoute.startsWith(AppDestinations.SETTINGS_ROUTE)
+                    currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE ||
+                    currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE
             }
         }
     }
@@ -180,7 +180,8 @@ fun AppContent() {
     AppNavigationDrawer(
         drawerState = drawerState,
         navigationActions = navigationActions,
-        gesturesEnabled = drawerGesturesEnabled
+        gesturesEnabled = drawerGesturesEnabled,
+        currentRoute = currentRoute
     ) {
         NavHost(
             navController = navController,
@@ -194,7 +195,7 @@ fun AppContent() {
                         navigationActions.navigateToModeSelection()
                     },
                     onManageModelsClicked = {
-                        navigationActions.navigateToSettings(SettingsTab.MODEL_MANAGEMENT.name)
+                        navigationActions.navigateToModelsManagement()
                     },
                     onMenuClicked = openDrawer,
                     drawerState = drawerState,
@@ -255,28 +256,23 @@ fun AppContent() {
                 )
             }
 
-            // Settings Screen
-            composable(
-                route = "${AppDestinations.SETTINGS_ROUTE}/{tab}",
-                arguments = listOf(
-                    navArgument("tab") {
-                        type = NavType.StringType
-                        defaultValue = SettingsTab.GENERAL.name
-                    }
-                )
-            ) { backStackEntry ->
-                val tabName = backStackEntry.arguments?.getString("tab") ?: SettingsTab.GENERAL.name
-                val tab = try {
-                    SettingsTab.valueOf(tabName)
-                } catch (e: IllegalArgumentException) {
-                    SettingsTab.GENERAL
-                }
-
-                SettingsScreen(
-                    selectedTab = tab,
+            // Settings General Screen
+            composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
+                SettingsGeneralScreen(
                     onBackPressed = { navController.popBackStack() },
                     drawerState = drawerState,
-                    navigationActions = navigationActions
+                    navigationActions = navigationActions,
+                    onMenuClicked = openDrawer
+                )
+            }
+
+            // Models Management Screen
+            composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
+                ModelsManagementScreen(
+                    onBackPressed = { navController.popBackStack() },
+                    drawerState = drawerState,
+                    navigationActions = navigationActions,
+                    onMenuClicked = openDrawer
                 )
             }
         }
