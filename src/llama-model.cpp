@@ -9661,11 +9661,8 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     q_states = ggml_permute(ctx0, q_states, 0, 2, 1, 3);
                     cb(q_states, "q_states_perm", il);
 
-                    k_pe = ggml_view_2d(ctx0, k_pe,
-                            n_embd_head_qk_rope, n_tokens,
-                            ggml_row_size(k_pe->type, n_embd_head_qk_rope),
-                            0);
-                    cb(k_pe, "k_pe_view", il);
+                    k_pe = ggml_reshape_2d(ctx0, k_pe, n_embd_head_qk_rope, n_tokens);
+                    cb(k_pe, "k_pe_reshape", il);
 
                     ggml_tensor * k_states = ggml_concat(ctx0, k_pe, kv_cmpr, 0);
                     cb(k_states, "k_states", il);
