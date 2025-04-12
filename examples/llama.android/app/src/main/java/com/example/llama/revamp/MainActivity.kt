@@ -2,30 +2,40 @@ package com.example.llama.revamp
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
+import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
@@ -71,6 +81,11 @@ fun AppContent() {
 
     val engineState by viewModel.engineState.collectAsState()
 
+    // Track if model is loaded for gesture handling
+    val isModelLoaded = remember(engineState) {
+        viewModel.isModelLoaded()
+    }
+
     val navigationActions = remember(navController) {
         NavigationActions(navController)
     }
@@ -78,6 +93,65 @@ fun AppContent() {
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
     var pendingNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+    // Get current route
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute by remember {
+        derivedStateOf { navBackStackEntry?.destination?.route }
+    }
+
+    // Determine if current route requires model unloading
+    val routeNeedsModelUnloading by remember(currentRoute) {
+        derivedStateOf {
+            currentRoute == AppDestinations.CONVERSATION_ROUTE ||
+                currentRoute == AppDestinations.BENCHMARK_ROUTE ||
+                currentRoute == AppDestinations.MODE_SELECTION_ROUTE
+        }
+    }
+
+    // Get local back dispatcher
+    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Helper function to handle back press with model unloading check
+    val handleBackWithModelCheck = {
+        if (viewModel.isModelLoaded()) {
+            showUnloadDialog = true
+            pendingNavigation = { navController.popBackStack() }
+            true // Mark as handled
+        } else {
+            navController.popBackStack()
+            true // Mark as handled
+        }
+    }
+
+    // Register a system back handler for screens that need unload confirmation
+    DisposableEffect(lifecycleOwner, backDispatcher, currentRoute, isModelLoaded) {
+        val callback = object : OnBackPressedCallback(
+            // Only enable for screens that need model unloading confirmation
+            routeNeedsModelUnloading && isModelLoaded
+        ) {
+            override fun handleOnBackPressed() {
+                handleBackWithModelCheck()
+            }
+        }
+
+        backDispatcher?.addCallback(lifecycleOwner, callback)
+
+        // Remove the callback when the effect leaves the composition
+        onDispose {
+            callback.remove()
+        }
+    }
+
+    // Compose BackHandler for added protection (this handles Compose-based back navigation)
+    BackHandler(
+        enabled = routeNeedsModelUnloading &&
+            isModelLoaded &&
+            drawerState.currentValue == DrawerValue.Closed
+    ) {
+        handleBackWithModelCheck()
+    }
 
     // Observe back button
     LaunchedEffect(navController) {
@@ -94,118 +168,109 @@ fun AppContent() {
         }
     }
 
-    // Main Content
-    NavHost(
-        navController = navController,
-        startDestination = AppDestinations.MODEL_SELECTION_ROUTE
+    // Main Content with navigation drawer wrapper
+    AppNavigationDrawer(
+        drawerState = drawerState,
+        navigationActions = navigationActions,
+        modelLoaded = isModelLoaded
     ) {
-        // Model Selection Screen
-        composable(AppDestinations.MODEL_SELECTION_ROUTE) {
-            ModelSelectionScreen(
-                onModelSelected = { modelInfo ->
-                    viewModel.selectModel(modelInfo)
-                    navigationActions.navigateToModeSelection()
-                },
-                onManageModelsClicked = {
-                    navigationActions.navigateToSettings(SettingsTab.MODEL_MANAGEMENT.name)
-                },
-                onMenuClicked = openDrawer,
-                drawerState = drawerState,
-                navigationActions = navigationActions
-            )
-        }
-
-        // Mode Selection Screen
-        composable(AppDestinations.MODE_SELECTION_ROUTE) {
-            ModeSelectionScreen(
-                engineState = engineState,
-                onBenchmarkSelected = {
-                    viewModel.prepareForBenchmark()
-                    navigationActions.navigateToBenchmark()
-                },
-                onConversationSelected = { systemPrompt ->
-                    viewModel.prepareForConversation(systemPrompt)
-                    navigationActions.navigateToConversation()
-                },
-                onBackPressed = {
-                    // Need to unload model before going back
-                    if (viewModel.isModelLoaded()) {
-                        showUnloadDialog = true
-                        pendingNavigation = { navController.popBackStack() }
-                    } else {
-                        navController.popBackStack()
-                    }
-                },
-                drawerState = drawerState,
-                navigationActions = navigationActions
-            )
-        }
-
-        // Conversation Screen
-        composable(AppDestinations.CONVERSATION_ROUTE) {
-            ConversationScreen(
-                onBackPressed = {
-                    // Need to unload model before going back
-                    if (viewModel.isModelLoaded()) {
-                        showUnloadDialog = true
-                        pendingNavigation = { navController.popBackStack() }
-                    } else {
-                        navController.popBackStack()
-                    }
-                },
-                drawerState = drawerState,
-                navigationActions = navigationActions,
-                viewModel = viewModel
-            )
-        }
-
-        // Benchmark Screen
-        composable(AppDestinations.BENCHMARK_ROUTE) {
-            BenchmarkScreen(
-                onBackPressed = {
-                    // Need to unload model before going back
-                    if (viewModel.isModelLoaded()) {
-                        showUnloadDialog = true
-                        pendingNavigation = { navController.popBackStack() }
-                    } else {
-                        navController.popBackStack()
-                    }
-                },
-                onRerunPressed = {
-                    viewModel.rerunBenchmark()
-                },
-                onSharePressed = {
-                    // Stub for sharing functionality
-                },
-                drawerState = drawerState,
-                navigationActions = navigationActions,
-                viewModel = viewModel
-            )
-        }
-
-        // Settings Screen
-        composable(
-            route = "${AppDestinations.SETTINGS_ROUTE}/{tab}",
-            arguments = listOf(
-                navArgument("tab") {
-                    type = NavType.StringType
-                    defaultValue = SettingsTab.GENERAL.name
-                }
-            )
-        ) { backStackEntry ->
-            val tabName = backStackEntry.arguments?.getString("tab") ?: SettingsTab.GENERAL.name
-            val tab = try {
-                SettingsTab.valueOf(tabName)
-            } catch (e: IllegalArgumentException) {
-                SettingsTab.GENERAL
+        NavHost(
+            navController = navController,
+            startDestination = AppDestinations.MODEL_SELECTION_ROUTE
+        ) {
+            // Model Selection Screen
+            composable(AppDestinations.MODEL_SELECTION_ROUTE) {
+                ModelSelectionScreen(
+                    onModelSelected = { modelInfo ->
+                        viewModel.selectModel(modelInfo)
+                        navigationActions.navigateToModeSelection()
+                    },
+                    onManageModelsClicked = {
+                        navigationActions.navigateToSettings(SettingsTab.MODEL_MANAGEMENT.name)
+                    },
+                    onMenuClicked = openDrawer,
+                    drawerState = drawerState,
+                    navigationActions = navigationActions
+                )
             }
 
-            SettingsScreen(
-                selectedTab = tab,
-                onBackPressed = { navController.popBackStack() },
-                drawerState = drawerState,
-                navigationActions = navigationActions
-            )
+            // Mode Selection Screen
+            composable(AppDestinations.MODE_SELECTION_ROUTE) {
+                ModeSelectionScreen(
+                    engineState = engineState,
+                    onBenchmarkSelected = {
+                        viewModel.prepareForBenchmark()
+                        navigationActions.navigateToBenchmark()
+                    },
+                    onConversationSelected = { systemPrompt ->
+                        viewModel.prepareForConversation(systemPrompt)
+                        navigationActions.navigateToConversation()
+                    },
+                    onBackPressed = {
+                        // Need to unload model before going back
+                        handleBackWithModelCheck()
+                    },
+                    drawerState = drawerState,
+                    navigationActions = navigationActions
+                )
+            }
+
+            // Conversation Screen
+            composable(AppDestinations.CONVERSATION_ROUTE) {
+                ConversationScreen(
+                    onBackPressed = {
+                        // Need to unload model before going back
+                        handleBackWithModelCheck()
+                    },
+                    drawerState = drawerState,
+                    navigationActions = navigationActions,
+                    viewModel = viewModel
+                )
+            }
+
+            // Benchmark Screen
+            composable(AppDestinations.BENCHMARK_ROUTE) {
+                BenchmarkScreen(
+                    onBackPressed = {
+                        // Need to unload model before going back
+                        handleBackWithModelCheck()
+                    },
+                    onRerunPressed = {
+                        viewModel.rerunBenchmark()
+                    },
+                    onSharePressed = {
+                        // Stub for sharing functionality
+                    },
+                    drawerState = drawerState,
+                    navigationActions = navigationActions,
+                    viewModel = viewModel
+                )
+            }
+
+            // Settings Screen
+            composable(
+                route = "${AppDestinations.SETTINGS_ROUTE}/{tab}",
+                arguments = listOf(
+                    navArgument("tab") {
+                        type = NavType.StringType
+                        defaultValue = SettingsTab.GENERAL.name
+                    }
+                )
+            ) { backStackEntry ->
+                val tabName = backStackEntry.arguments?.getString("tab") ?: SettingsTab.GENERAL.name
+                val tab = try {
+                    SettingsTab.valueOf(tabName)
+                } catch (e: IllegalArgumentException) {
+                    SettingsTab.GENERAL
+                }
+
+                SettingsScreen(
+                    selectedTab = tab,
+                    onBackPressed = { navController.popBackStack() },
+                    drawerState = drawerState,
+                    navigationActions = navigationActions
+                )
+            }
         }
     }
 

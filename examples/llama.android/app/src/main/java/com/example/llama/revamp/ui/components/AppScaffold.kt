@@ -62,28 +62,23 @@ fun AppScaffold(
     // Formatted memory usage
     val memoryText = "${memoryUsage.availableGb}GB available"
 
-    AppNavigationDrawer(
-        drawerState = drawerState,
-        navigationActions = navigationActions
-    ) {
-        Scaffold(
-            topBar = {
-                SystemStatusTopBar(
-                    title = title,
-                    memoryUsage = memoryText,
-                    batteryLevel = batteryInfo.level,
-                    temperature = temperatureInfo.temperature,
-                    useFahrenheit = useFahrenheit,
-                    onBackPressed = onBackPressed,
-                    onMenuPressed = onMenuPressed,
-                    onRerunPressed = onRerunPressed,
-                    onSharePressed = onSharePressed
-                )
-            },
-            snackbarHost = {
-                SnackbarHost(hostState = snackbarHostState)
-            },
-            content = content
-        )
-    }
+    Scaffold(
+        topBar = {
+            SystemStatusTopBar(
+                title = title,
+                memoryUsage = memoryText,
+                batteryLevel = batteryInfo.level,
+                temperature = temperatureInfo.temperature,
+                useFahrenheit = useFahrenheit,
+                onBackPressed = onBackPressed,
+                onMenuPressed = onMenuPressed,
+                onRerunPressed = onRerunPressed,
+                onSharePressed = onSharePressed
+            )
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
+        content = content
+    )
 }
