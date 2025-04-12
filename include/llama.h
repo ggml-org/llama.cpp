@@ -110,6 +110,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_SUPERBPE       = 30,
         LLAMA_VOCAB_PRE_TYPE_TRILLION       = 31,
         LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
+        LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
     };
 
     enum llama_rope_type {
