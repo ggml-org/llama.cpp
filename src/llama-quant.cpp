@@ -314,8 +314,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 5;
-            else which = 4;
+            if (is_one_bit) which = 4;
+            else which = 5;
 
             if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
             else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
@@ -362,8 +362,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
             int i_layer = info.first, n_layer = info.second;
 
             int which;
-            if (is_one_bit) which = 5;
-            else which = 4;
+            if (is_one_bit) which = 4;
+            else which = 5;
 
             if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
             else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
