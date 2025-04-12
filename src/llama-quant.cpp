@@ -319,6 +319,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
             if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
             else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else new_type = GGML_TYPE_IQ2_XXS; // 1 bit will fail for non MoE
 
             ++qs.i_ffn_gate;
         }
@@ -366,6 +367,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
 
             if      (i_layer < which)            new_type = GGML_TYPE_IQ3_XXS;
             else if (i_layer >= n_layer - which) new_type = GGML_TYPE_IQ3_XXS;
+            else new_type = GGML_TYPE_IQ2_XXS; // 1 bit will fail for non MoE
 
             ++qs.i_ffn_up;
         }
