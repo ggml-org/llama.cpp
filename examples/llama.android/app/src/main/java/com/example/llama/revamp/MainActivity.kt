@@ -3,7 +3,6 @@ package com.example.llama.revamp
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
-import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.setContent
@@ -38,7 +37,7 @@ import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
 import com.example.llama.revamp.ui.screens.ModelSelectionScreen
 import com.example.llama.revamp.ui.screens.ModelsManagementScreen
-import com.example.llama.revamp.ui.screens.ModeSelectionScreen
+import com.example.llama.revamp.ui.screens.ModelLoadingScreen
 import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
 import com.example.llama.revamp.util.ViewModelFactoryProvider
@@ -113,7 +112,7 @@ fun AppContent() {
         derivedStateOf {
             currentRoute == AppDestinations.CONVERSATION_ROUTE ||
                 currentRoute == AppDestinations.BENCHMARK_ROUTE ||
-                currentRoute == AppDestinations.MODE_SELECTION_ROUTE
+                currentRoute == AppDestinations.MODEL_LOADING_ROUTE
         }
     }
 
@@ -192,7 +191,7 @@ fun AppContent() {
                 ModelSelectionScreen(
                     onModelSelected = { modelInfo ->
                         viewModel.selectModel(modelInfo)
-                        navigationActions.navigateToModeSelection()
+                        navigationActions.navigateToModelLoading()
                     },
                     onManageModelsClicked = {
                         navigationActions.navigateToModelsManagement()
@@ -204,8 +203,8 @@ fun AppContent() {
             }
 
             // Mode Selection Screen
-            composable(AppDestinations.MODE_SELECTION_ROUTE) {
-                ModeSelectionScreen(
+            composable(AppDestinations.MODEL_LOADING_ROUTE) {
+                ModelLoadingScreen(
                     engineState = engineState,
                     onBenchmarkSelected = {
                         viewModel.prepareForBenchmark()

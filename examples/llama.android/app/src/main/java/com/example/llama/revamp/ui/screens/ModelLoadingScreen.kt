@@ -63,7 +63,7 @@ enum class SystemPromptTab {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun ModeSelectionScreen(
+fun ModelLoadingScreen(
     engineState: InferenceEngine.State,
     onBenchmarkSelected: () -> Unit,
     onConversationSelected: (String?) -> Unit,

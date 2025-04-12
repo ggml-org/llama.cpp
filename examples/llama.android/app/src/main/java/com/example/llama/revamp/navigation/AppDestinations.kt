@@ -8,7 +8,7 @@ import androidx.navigation.NavController
 object AppDestinations {
     // Primary navigation destinations
     const val MODEL_SELECTION_ROUTE = "model_selection"
-    const val MODE_SELECTION_ROUTE = "mode_selection"
+    const val MODEL_LOADING_ROUTE = "model_loading"
     const val CONVERSATION_ROUTE = "conversation"
     const val BENCHMARK_ROUTE = "benchmark"
 
@@ -29,8 +29,8 @@ class NavigationActions(private val navController: NavController) {
         }
     }
 
-    fun navigateToModeSelection() {
-        navController.navigate(AppDestinations.MODE_SELECTION_ROUTE)
+    fun navigateToModelLoading() {
+        navController.navigate(AppDestinations.MODEL_LOADING_ROUTE)
     }
 
     fun navigateToConversation() {
