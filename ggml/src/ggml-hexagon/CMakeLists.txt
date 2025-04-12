@@ -89,7 +89,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_F
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -DGGML_USE_HEXAGON ${DEBUG_FLAG} ${OPT_FLAG}")
 
-file(GLOB HEXAGON_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/stub.c")
+file(GLOB HEXAGON_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp" "${CMAKE_CURRENT_LIST_DIR}/kernels/stub.c")
 ggml_add_backend_library(ggml-hexagon ${HEXAGON_SOURCES})
 
 target_include_directories(ggml-hexagon PRIVATE ${QNN_SDK_PATH}/include/QNN ${HEXAGON_SDK_PATH} ${CMAKE_CURRENT_LIST_DIR})
@@ -98,7 +98,7 @@ target_link_libraries(ggml-hexagon PRIVATE ${QNN_LINK_LIBRARIES})
 string(REGEX REPLACE "/$" "" QNN_DEFAULT_LIB_SEARCH_PATH "${QNN_DEFAULT_LIB_SEARCH_PATH}")
 target_compile_definitions(ggml-hexagon PRIVATE QNN_DEFAULT_LIB_SEARCH_PATH="${QNN_DEFAULT_LIB_SEARCH_PATH}/")
 
-#cross compiling hexagon kernels which running on cDSP side
+#cross compiling source codes of hexagon kernels which running on cDSP side
 function(ggml_hexagon_build_kernel KNAME)
     message(STATUS "ggml_hexagon: build hexagon-kernel ${KNAME}")
 
@@ -109,7 +109,8 @@ function(ggml_hexagon_build_kernel KNAME)
         COMMAND echo "${CMAKE_CURRENT_LIST_DIR}/kernels"
         COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ clean
         COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ HEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} HTP_ARCH_VERSION=${HTP_ARCH_VERSION} DEBUG_FLAG=${DEBUG_FLAG}
-        COMMAND ls -l  ../../../bin/libggmlop_skel.so
+        COMMAND echo "current working path:`pwd`\n"
+        COMMAND ls -l  ../../../bin/libggmlop-skel.so
         COMMENT "build hexagon-kernel"
     )
 endfunction()
