@@ -75,6 +75,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_70B:           return "70B";
         case LLM_TYPE_236B:          return "236B";
         case LLM_TYPE_314B:          return "314B";
+        case LLM_TYPE_405B:          return "405B";
         case LLM_TYPE_671B:          return "671B";
         case LLM_TYPE_SMALL:         return "0.1B";
         case LLM_TYPE_MEDIUM:        return "0.4B";
