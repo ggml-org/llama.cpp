@@ -89,16 +89,22 @@ export const AppContextProvider = ({
   useEffect(() => {
     // also reset the canvas data
     setCanvasData(null);
-    const handleConversationChange = async (changedConvId: string) => {
-      if (changedConvId !== convId) return;
-      setViewingChat(await getViewingChat(changedConvId));
+    const handleConversationChange = async (changedConvId: string | null) => {
+      // Refresh if the change affects the current viewing conversation OR if all conversations were cleared (null)
+      if (changedConvId === convId || changedConvId === null) {
+        // Re-fetch data for the current URL's convId (which might be undefined now)
+        const currentUrlConvId = params?.params?.convId;
+        // Ensure getViewingChat can handle potential undefined/null input if needed, or provide fallback like ''
+        setViewingChat(await getViewingChat(currentUrlConvId ?? '')); // Use currentUrlConvId
+      }
+      // Otherwise, ignore changes for conversations not being viewed.
     };
     StorageUtils.onConversationChanged(handleConversationChange);
     getViewingChat(convId ?? '').then(setViewingChat);
     return () => {
       StorageUtils.offConversationChanged(handleConversationChange);
     };
-  }, [convId]);
+  }, [convId, params?.params?.convId]);
 
   const setPending = (convId: string, pendingMsg: PendingMessage | null) => {
     // if pendingMsg is null, remove the key from the object

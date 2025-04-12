@@ -6,13 +6,13 @@ import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
 
 const event = new EventTarget();
-
-type CallbackConversationChanged = (convId: string) => void;
+// Modify callback type to accept null for "clear all" events
+type CallbackConversationChanged = (convId: string | null) => void;
 let onConversationChangedHandlers: [
   CallbackConversationChanged,
   EventListener,
 ][] = [];
-const dispatchConversationChange = (convId: string) => {
+const dispatchConversationChange = (convId: string | null) => {
   event.dispatchEvent(
     new CustomEvent('conversationChange', { detail: { convId } })
   );
@@ -167,18 +167,43 @@ const StorageUtils = {
     dispatchConversationChange(convId);
   },
 
+  /**
+   * Added function to clear all conversation data.
+   */
+  async clearAllConversations(): Promise<void> {
+    try {
+      await db.transaction('rw', db.conversations, db.messages, async () => {
+        await db.conversations.clear(); // Clear conversations table
+        await db.messages.clear(); // Clear messages table
+      });
+      console.log('All conversations cleared.');
+      // Dispatch change with null to indicate everything was cleared
+      dispatchConversationChange(null);
+    } catch (error) {
+      console.error('Failed to clear all conversations:', error);
+      throw error; // Re-throw error for potential handling by the caller
+    }
+  },
+
   // event listeners
   onConversationChanged(callback: CallbackConversationChanged) {
-    const fn = (e: Event) => callback((e as CustomEvent).detail.convId);
+    // Ensure the event listener correctly handles the detail (string | null)
+    const fn = (e: Event) =>
+      callback((e as CustomEvent).detail.convId as string | null);
     onConversationChangedHandlers.push([callback, fn]);
     event.addEventListener('conversationChange', fn);
   },
   offConversationChanged(callback: CallbackConversationChanged) {
-    const fn = onConversationChangedHandlers.find(([cb, _]) => cb === callback);
-    if (fn) {
-      event.removeEventListener('conversationChange', fn[1]);
+    const handlerTuple = onConversationChangedHandlers.find(
+      ([cb]) => cb === callback
+    );
+    if (handlerTuple) {
+      event.removeEventListener('conversationChange', handlerTuple[1]);
+      // Filter out the specific handler, don't reset the whole array
+      onConversationChangedHandlers = onConversationChangedHandlers.filter(
+        (tuple) => tuple[0] !== callback
+      );
     }
-    onConversationChangedHandlers = [];
   },
 
   // manage config

@@ -33,7 +33,8 @@
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.1.1",
     "textlinestream": "^1.1.1",
-    "vite-plugin-singlefile": "^2.0.3"
+    "vite-plugin-singlefile": "^2.0.3",
+    "webui": "file:"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",
