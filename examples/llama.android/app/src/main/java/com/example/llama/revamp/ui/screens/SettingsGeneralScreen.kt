@@ -102,7 +102,7 @@ fun SettingsGeneralScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            text = "Local LLM",
+                            text = "Kleidi LLaMA",
                             style = MaterialTheme.typography.titleLarge
                         )
 

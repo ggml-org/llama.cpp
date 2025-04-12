@@ -103,7 +103,7 @@ private fun DrawerContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Local LLM",
+                text = "Kleidi LLaMA",
                 style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center
             )

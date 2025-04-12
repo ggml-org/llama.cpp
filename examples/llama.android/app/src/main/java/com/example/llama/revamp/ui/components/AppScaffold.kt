@@ -55,7 +55,7 @@ fun AppScaffold(
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
     // Formatted memory usage
-    val memoryText = "${memoryUsage.availableGb}GB available"
+    val memoryText = String.format("%.1f / %.1f GB", memoryUsage.availableGb, memoryUsage.totalGb)
 
     Scaffold(
         topBar = {
