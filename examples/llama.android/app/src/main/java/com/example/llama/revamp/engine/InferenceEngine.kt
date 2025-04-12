@@ -1,9 +1,11 @@
 package com.example.llama.revamp.engine
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 
 /**
@@ -39,7 +41,8 @@ class InferenceEngine {
 
     // Keep track of current benchmark results
     private var _benchmarkResults: String? = null
-    val benchmarkResults: StateFlow<String?> = MutableStateFlow(_benchmarkResults)
+    private val _benchmarkResultsFlow = MutableStateFlow<String?>(null)
+    val benchmarkResults: StateFlow<String?> = _benchmarkResultsFlow
 
     init {
         // Simulate library loading
@@ -66,6 +69,9 @@ class InferenceEngine {
             }
 
             _state.value = State.AwaitingUserPrompt
+        } catch (e: CancellationException) {
+            // If coroutine is cancelled, propagate cancellation
+            throw e
         } catch (e: Exception) {
             _state.value = State.Error(e.message ?: "Unknown error during model loading")
         }
@@ -79,21 +85,35 @@ class InferenceEngine {
 
         // This would be replaced with actual token generation logic
         return flow {
-            delay(500) // Simulate processing time
+            try {
+                delay(500) // Simulate processing time
 
-            _state.value = State.Generating
+                _state.value = State.Generating
 
-            // Simulate token generation
-            val response =
-                "This is a simulated response from the LLM model. The actual implementation would generate tokens one by one based on the input: $message"
-            val words = response.split(" ")
+                // Simulate token generation
+                val response = "This is a simulated response from the LLM model. The actual implementation would generate tokens one by one based on the input: $message"
+                val words = response.split(" ")
 
-            for (word in words) {
-                emit(word + " ")
-                delay(50) // Simulate token generation delay
+                for (word in words) {
+                    emit(word + " ")
+                    delay(50) // Simulate token generation delay
+                }
+
+                _state.value = State.AwaitingUserPrompt
+            } catch (e: CancellationException) {
+                // Handle cancellation gracefully
+                _state.value = State.AwaitingUserPrompt
+                throw e
+            } catch (e: Exception) {
+                _state.value = State.Error(e.message ?: "Unknown error during generation")
+                throw e
             }
-
-            _state.value = State.AwaitingUserPrompt
+        }.catch { e ->
+            // If it's not a cancellation, update state to error
+            if (e !is CancellationException) {
+                _state.value = State.Error(e.message ?: "Unknown error during generation")
+            }
+            throw e
         }
     }
 
@@ -128,11 +148,15 @@ class InferenceEngine {
             result.append("$backend | tg $tg | $tg_avg ± $tg_std |\n")
 
             _benchmarkResults = result.toString()
-            (benchmarkResults as MutableStateFlow).value = _benchmarkResults
+            _benchmarkResultsFlow.value = _benchmarkResults
 
             _state.value = State.AwaitingUserPrompt
 
             return _benchmarkResults ?: ""
+        } catch (e: CancellationException) {
+            // If coroutine is cancelled, propagate cancellation
+            _state.value = State.AwaitingUserPrompt
+            throw e
         } catch (e: Exception) {
             _state.value = State.Error(e.message ?: "Unknown error during benchmarking")
             return "Error: ${e.message}"
@@ -147,7 +171,7 @@ class InferenceEngine {
         delay(300)
         _state.value = State.LibraryLoaded
         _benchmarkResults = null
-        (benchmarkResults as MutableStateFlow).value = null
+        _benchmarkResultsFlow.value = null
     }
 
     /**

@@ -5,9 +5,12 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.InferenceEngine
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -42,6 +45,9 @@ class MainViewModel(
     // System prompt for the conversation
     private val _systemPrompt = MutableStateFlow<String?>(null)
     val systemPrompt: StateFlow<String?> = _systemPrompt.asStateFlow()
+
+    // Flag to track if token collection is active
+    private var tokenCollectionJob: Job? = null
 
     /**
      * Selects a model for use.
@@ -96,6 +102,9 @@ class MainViewModel(
     fun sendMessage(content: String) {
         if (content.isBlank()) return
 
+        // Cancel any ongoing token collection
+        tokenCollectionJob?.cancel()
+
         // Add user message
         val userMessage = Message.User(
             content = content,
@@ -112,31 +121,72 @@ class MainViewModel(
         _messages.value = _messages.value + assistantMessage
 
         // Get response from engine
-        val messageIndex = _messages.value.size - 1
-
-        viewModelScope.launch {
+        tokenCollectionJob = viewModelScope.launch {
             val response = StringBuilder()
 
-            inferenceEngine.sendUserPrompt(content).collect { token ->
-                response.append(token)
+            try {
+                inferenceEngine.sendUserPrompt(content)
+                    .catch { e ->
+                        // Handle errors during token collection
+                        val currentMessages = _messages.value.toMutableList()
+                        if (currentMessages.size >= 2) {
+                            val messageIndex = currentMessages.size - 1
+                            val currentAssistantMessage = currentMessages[messageIndex] as? Message.Assistant
+                            if (currentAssistantMessage != null) {
+                                currentMessages[messageIndex] = currentAssistantMessage.copy(
+                                    content = "${response}[Error: ${e.message}]",
+                                    isComplete = true
+                                )
+                                _messages.value = currentMessages
+                            }
+                        }
+                    }
+                    .onCompletion { cause ->
+                        // Handle completion (normal or cancelled)
+                        val currentMessages = _messages.value.toMutableList()
+                        if (currentMessages.isNotEmpty()) {
+                            val messageIndex = currentMessages.size - 1
+                            val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                            if (currentAssistantMessage != null) {
+                                currentMessages[messageIndex] = currentAssistantMessage.copy(
+                                    isComplete = true
+                                )
+                                _messages.value = currentMessages
+                            }
+                        }
+                    }
+                    .collect { token ->
+                        response.append(token)
 
-                // Update the assistant message with the generated text
+                        // Safely update the assistant message with the generated text
+                        val currentMessages = _messages.value.toMutableList()
+                        if (currentMessages.isNotEmpty()) {
+                            val messageIndex = currentMessages.size - 1
+                            val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                            if (currentAssistantMessage != null) {
+                                currentMessages[messageIndex] = currentAssistantMessage.copy(
+                                    content = response.toString(),
+                                    isComplete = false
+                                )
+                                _messages.value = currentMessages
+                            }
+                        }
+                    }
+            } catch (e: Exception) {
+                // Handle any unexpected exceptions
                 val currentMessages = _messages.value.toMutableList()
-                val currentAssistantMessage = currentMessages[messageIndex] as Message.Assistant
-                currentMessages[messageIndex] = currentAssistantMessage.copy(
-                    content = response.toString(),
-                    isComplete = false
-                )
-                _messages.value = currentMessages
+                if (currentMessages.isNotEmpty()) {
+                    val messageIndex = currentMessages.size - 1
+                    val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                    if (currentAssistantMessage != null) {
+                        currentMessages[messageIndex] = currentAssistantMessage.copy(
+                            content = "${response}[Error: ${e.message}]",
+                            isComplete = true
+                        )
+                        _messages.value = currentMessages
+                    }
+                }
             }
-
-            // Mark message as complete when generation finishes
-            val finalMessages = _messages.value.toMutableList()
-            val finalAssistantMessage = finalMessages[messageIndex] as Message.Assistant
-            finalMessages[messageIndex] = finalAssistantMessage.copy(
-                isComplete = true
-            )
-            _messages.value = finalMessages
         }
     }
 
@@ -144,8 +194,14 @@ class MainViewModel(
      * Unloads the currently loaded model.
      */
     suspend fun unloadModel() {
-        inferenceEngine.unloadModel()
+        // Cancel any ongoing token collection
+        tokenCollectionJob?.cancel()
+
+        // Clear messages
         _messages.value = emptyList()
+
+        // Unload model
+        inferenceEngine.unloadModel()
     }
 
     /**
