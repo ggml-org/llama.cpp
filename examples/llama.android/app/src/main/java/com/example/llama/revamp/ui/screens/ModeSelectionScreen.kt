@@ -17,10 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
@@ -39,24 +36,26 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.llama.revamp.data.model.SystemPrompt
+import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AppScaffold
-import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.example.llama.revamp.util.ViewModelFactoryProvider
+import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 
 enum class SystemPromptTab {
     PRESETS, CUSTOM, RECENTS
@@ -72,17 +71,37 @@ fun ModeSelectionScreen(
     drawerState: DrawerState,
     navigationActions: NavigationActions
 ) {
-    val staffPickedPrompts = remember { SystemPrompt.getStaffPickedPrompts() }
-    val recentPrompts = remember { SystemPrompt.getRecentPrompts() }
+    // Set up SystemPromptViewModel
+    val context = LocalContext.current
+    val repository = remember { SystemPromptRepository(context) }
+    val factory = remember { ViewModelFactoryProvider.getSystemPromptViewModelFactory(repository) }
+    val viewModel: SystemPromptViewModel = viewModel(factory = factory)
+
+    val presetPrompts by viewModel.presetPrompts.collectAsState()
+    val recentPrompts by viewModel.recentPrompts.collectAsState()
 
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
-    var selectedPrompt by remember { mutableStateOf<SystemPrompt?>(staffPickedPrompts.firstOrNull()) }
+    var selectedPrompt by remember { mutableStateOf<SystemPrompt?>(null) }
     var selectedTab by remember { mutableStateOf(SystemPromptTab.PRESETS) }
     var customPromptText by remember { mutableStateOf("") }
     var expandedPromptId by remember { mutableStateOf<String?>(null) }
 
-    val coroutineScope = rememberCoroutineScope()
+    // Automatically select first preset and expand it
+    LaunchedEffect(presetPrompts) {
+        if (presetPrompts.isNotEmpty() && selectedPrompt == null) {
+            val firstPreset = presetPrompts.first()
+            selectedPrompt = firstPreset
+            expandedPromptId = firstPreset.id
+        }
+    }
+
+    // Determine if a system prompt is actually selected/entered when the switch is on
+    val hasActiveSystemPrompt = when {
+        !useSystemPrompt -> true  // Not using system prompt, so this is fine
+        selectedTab == SystemPromptTab.CUSTOM -> customPromptText.isNotBlank()
+        else -> selectedPrompt != null
+    }
 
     // Check if we're in a loading state
     val isLoading = engineState !is InferenceEngine.State.Uninitialized &&
@@ -134,10 +153,14 @@ fun ModeSelectionScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
+                    // Only use weight if system prompt is active, otherwise wrap content
+                    .then(if (useSystemPrompt) Modifier.weight(1f) else Modifier)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        // Only fill height if system prompt is active
+                        .then(if (useSystemPrompt) Modifier.fillMaxSize() else Modifier)
                 ) {
                     // Conversation option
                     Row(
@@ -199,6 +222,7 @@ fun ModeSelectionScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .fillMaxSize() // Fill remaining card space
                                 .padding(horizontal = 16.dp, vertical = 8.dp)
                         ) {
                             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -258,20 +282,29 @@ fun ModeSelectionScreen(
                             // Content based on selected tab
                             when (selectedTab) {
                                 SystemPromptTab.PRESETS -> {
-                                    PromptList(
-                                        prompts = staffPickedPrompts,
-                                        selectedPromptId = selectedPrompt?.id,
-                                        expandedPromptId = expandedPromptId,
-                                        onPromptSelected = {
-                                            selectedPrompt = it
-                                            expandedPromptId = it.id
-                                        },
-                                        onExpandPrompt = { expandedPromptId = it }
-                                    )
+                                    if (presetPrompts.isEmpty()) {
+                                        Text(
+                                            text = "No preset prompts available.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(16.dp)
+                                        )
+                                    } else {
+                                        PromptList(
+                                            prompts = presetPrompts,
+                                            selectedPromptId = selectedPrompt?.id,
+                                            expandedPromptId = expandedPromptId,
+                                            onPromptSelected = {
+                                                selectedPrompt = it
+                                                expandedPromptId = it.id
+                                            },
+                                            onExpandPrompt = { expandedPromptId = it }
+                                        )
+                                    }
                                 }
 
                                 SystemPromptTab.CUSTOM -> {
-                                    // Custom prompt editor
+                                    // Custom prompt editor (fill remaining space)
                                     OutlinedTextField(
                                         value = customPromptText,
                                         onValueChange = {
@@ -283,11 +316,10 @@ fun ModeSelectionScreen(
                                         },
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(200.dp),
+                                            .fillMaxSize(),  // Fill available space
                                         label = { Text("Enter system prompt") },
                                         placeholder = { Text("You are a helpful assistant...") },
-                                        minLines = 5,
-                                        maxLines = 10
+                                        minLines = 5
                                     )
                                 }
 
@@ -318,7 +350,10 @@ fun ModeSelectionScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            // Flexible spacer when system prompt is not active
+            if (!useSystemPrompt) {
+                Spacer(modifier = Modifier.weight(1f))
+            }
 
             // Start button
             Button(
@@ -329,9 +364,16 @@ fun ModeSelectionScreen(
                             val systemPrompt = if (useSystemPrompt) {
                                 when (selectedTab) {
                                     SystemPromptTab.PRESETS, SystemPromptTab.RECENTS ->
-                                        selectedPrompt?.content
+                                        selectedPrompt?.let { prompt ->
+                                            // Save the prompt to recent prompts database
+                                            viewModel.savePromptToRecents(prompt)
+                                            prompt.content
+                                        }
                                     SystemPromptTab.CUSTOM ->
-                                        customPromptText.takeIf { it.isNotBlank() }
+                                        customPromptText.takeIf { it.isNotBlank() }?.also { promptText ->
+                                            // Save custom prompt to database
+                                            viewModel.saveCustomPromptToRecents(promptText)
+                                        }
                                 }
                             } else null
                             onConversationSelected(systemPrompt)
@@ -342,7 +384,8 @@ fun ModeSelectionScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp),
-                enabled = selectedMode != null && !isLoading
+                enabled = selectedMode != null && !isLoading &&
+                    (!useSystemPrompt || hasActiveSystemPrompt)
             ) {
                 if (isLoading) {
                     CircularProgressIndicator(
@@ -379,7 +422,7 @@ fun PromptList(
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
-            .height(250.dp),
+            .fillMaxSize(), // Fill available space
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(
@@ -416,16 +459,8 @@ fun PromptList(
                             .weight(1f)
                             .padding(start = 8.dp)
                     ) {
-                        // Format title for recents if needed
-                        val title = if (prompt.category == SystemPrompt.Category.USER_CREATED && prompt.lastUsed != null) {
-                            val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
-                            dateFormat.format(Date(prompt.lastUsed))
-                        } else {
-                            prompt.name
-                        }
-
                         Text(
-                            text = title,
+                            text = prompt.title,
                             style = MaterialTheme.typography.titleSmall,
                             color = if (isSelected)
                                 MaterialTheme.colorScheme.primary
@@ -443,7 +478,7 @@ fun PromptList(
                     }
                 }
 
-                if (prompt != prompts.last()) {
+                if (prompt.id != prompts.last().id) {
                     HorizontalDivider(
                         modifier = Modifier.padding(top = 8.dp, start = 40.dp)
                     )

@@ -3,15 +3,15 @@ package com.example.llama.revamp.util
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.example.llama.revamp.data.preferences.UserPreferences
+import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
+import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 
 /**
  * Utility class to provide ViewModel factories.
- *
- * TODO-han.yin: Replace with Hilt
  */
 object ViewModelFactoryProvider {
 
@@ -44,6 +44,23 @@ object ViewModelFactoryProvider {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
                     return MainViewModel(inferenceEngine) as T
+                }
+                throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+            }
+        }
+    }
+
+    /**
+     * Creates a factory for SystemPromptViewModel.
+     */
+    fun getSystemPromptViewModelFactory(
+        repository: SystemPromptRepository
+    ): ViewModelProvider.Factory {
+        return object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                if (modelClass.isAssignableFrom(SystemPromptViewModel::class.java)) {
+                    return SystemPromptViewModel(repository) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
             }
