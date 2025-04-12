@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.symbol.processing)
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.jetbrains.kotlin.compose.compiler)
 }
@@ -51,6 +52,7 @@ dependencies {
     // Platform & Bundles
     implementation(platform(libs.compose.bom))
     implementation(libs.bundles.androidx)
+    ksp(libs.androidx.room.compiler)
     implementation(libs.bundles.compose)
     implementation(libs.bundles.coroutines)
 

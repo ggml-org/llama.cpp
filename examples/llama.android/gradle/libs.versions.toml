@@ -1,8 +1,9 @@
 [versions]
 
 # Plugins
-kotlin = "2.1.10"
 agp = "8.9.1"
+ksp = "2.1.20-2.0.0"
+kotlin = "2.1.20"
 
 # AndroidX
 activity = "1.10.1"
@@ -10,6 +11,10 @@ core-ktx = "1.15.0"
 datastore-preferences = "1.0.0"
 lifecycle = "2.8.7"
 navigation = "2.8.9"
+room = "2.7.0"
+
+# Coroutines
+coroutines = "1.10.2"
 
 # Compose
 compose-bom = "2025.03.01"
@@ -17,9 +22,6 @@ compose-foundation = "1.7.8"
 compose-material-icons = "1.7.8"
 compose-material3 = "1.3.2"
 compose-ui = "1.7.8"
-
-# Coroutines
-coroutines = "1.10.2"
 
 # Accompanist
 accompanist = "0.36.0"
@@ -33,8 +35,9 @@ junit = "4.13.2"
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
-jetbrains-kotlin-compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-symbol-processing = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+jetbrains-kotlin-compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 
 
 [libraries]
@@ -47,6 +50,12 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 androidx-lifecycle = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle"}
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation"}
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+
+# Coroutines
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 # Compose
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
@@ -61,10 +70,6 @@ compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4
 compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest", version.ref = "compose-ui" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling", version.ref = "compose-ui" }
 compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "compose-ui" }
-
-# Coroutines
-kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
-kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 # Accompanist
 accompanist-systemuicontroller = { group = "com.google.accompanist", name = "accompanist-systemuicontroller", version.ref = "accompanist" }
@@ -81,7 +86,8 @@ androidx = [
     "androidx-datastore-preferences",
     "androidx-lifecycle",
     "androidx-lifecycle-viewmodel-compose",
-    "androidx-navigation-compose"
+    "androidx-navigation-compose",
+    "androidx-room-ktx",
 ]
 compose = [
     "compose-foundation",
