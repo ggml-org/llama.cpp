@@ -1331,7 +1331,7 @@ class GGUFEditorWindow(QMainWindow):
 
         # Open array editor dialog
         dialog = ArrayEditorDialog(array_values, element_type, key, self)
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             new_values = dialog.get_array_values()
 
             # Store the change
