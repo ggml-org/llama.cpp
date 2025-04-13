@@ -1498,7 +1498,6 @@ class GGUFEditorWindow(QMainWindow):
             # Create writer
             writer = GGUFWriter(file_path, arch=arch, endianess=self.reader.endianess)
 
-
             # Get alignment if present
             alignment = None
             field = self.reader.get_field(gguf.Keys.General.ALIGNMENT)
