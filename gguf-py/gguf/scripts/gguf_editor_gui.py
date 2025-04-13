@@ -1495,7 +1495,7 @@ class GGUFEditorWindow(QMainWindow):
             arch = 'unknown'
             field = self.reader.get_field(gguf.Keys.General.ARCHITECTURE)
             if field:
-                arch = self.decode_field(field)
+                arch = field.contents()
 
             # Determine endianness
             if np.uint32(1) == np.uint32(1).newbyteorder("<"):
