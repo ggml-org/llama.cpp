@@ -525,6 +525,7 @@ struct llm_graph_context {
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
             ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
 
@@ -539,6 +540,7 @@ struct llm_graph_context {
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
             ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
 
@@ -552,21 +554,6 @@ struct llm_graph_context {
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,
-                  float   kq_scale,
-                    int   il) const;
-
-    // ****************************************************************************************************************
-    // *** THIS WILL BE REMOVED AFTER CODE REVIEW IS ACCPETED AND READY TO MERGE - IT'S JUST A COPY OF build_attn() ***
-    // ****************************************************************************************************************
-    ggml_tensor * build_attn_mla(
-            llm_graph_input_attn_kv_unified * inp,
-            ggml_cgraph * gf,
-            ggml_tensor * wo,
-            ggml_tensor * wo_b,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
-            ggml_tensor * k_cur, // [n_embd_head_k, 1,        n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, 1,        n_tokens]
             ggml_tensor * kq_b,
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,

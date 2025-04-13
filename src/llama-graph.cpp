@@ -1311,6 +1311,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * k_cur,
         ggml_tensor * v_cur,
         ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
             float     kq_scale,
             int       il) const {
     GGML_UNUSED(n_tokens);
@@ -1332,7 +1333,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
     //cb(k, "v", il);
 
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, false, kq_scale);
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, false, kq_scale);
 
     cb(cur, "kqv_out", il);
 
@@ -1378,181 +1379,6 @@ llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified()
 }
 
 ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_kv_unified * inp,
-        ggml_cgraph * gf,
-        ggml_tensor * wo,
-        ggml_tensor * wo_b,
-        ggml_tensor * q_cur,
-        ggml_tensor * k_cur,
-        ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
-            float     kq_scale,
-            int       il) const {
-    // these nodes are added to the graph together so that they are not reordered
-    // by doing so, the number of splits in the graph is reduced
-    ggml_build_forward_expand(gf, q_cur);
-    ggml_build_forward_expand(gf, k_cur);
-    ggml_build_forward_expand(gf, v_cur);
-
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
-    const auto & n_ctx = cparams.n_ctx;
-
-    const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
-    const int64_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
-
-    const auto n_tokens = q_cur->ne[2];
-
-    const bool v_trans = !cparams.flash_attn;
-
-    // store to KV cache
-    {
-        GGML_ASSERT(!kv_self->recurrent);
-
-        const auto kv_head = kv_self->head;
-
-        GGML_ASSERT(kv_self->size == n_ctx);
-
-        ggml_tensor * k_cache_view = ggml_view_1d(ctx0, kv_self->k_l[il], n_tokens*n_embd_k_gqa, ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa)*kv_head);
-        //cb(k_cache_view, "k_cache_view", il);
-
-        // note: storing RoPE-ed version of K in the KV cache
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, k_cur, k_cache_view));
-
-        v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_gqa, n_tokens);
-
-        ggml_tensor * v_cache_view = nullptr;
-
-        if (!v_trans) {
-            v_cache_view = ggml_view_1d(ctx0, kv_self->v_l[il], n_tokens*n_embd_v_gqa, ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa)*kv_head);
-        } else {
-            // note: the V cache is transposed when not using flash attention
-            v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il], n_tokens, n_embd_v_gqa,
-                    (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
-                    (kv_head)*ggml_element_size(kv_self->v_l[il]));
-
-            v_cur = ggml_transpose(ctx0, v_cur);
-        }
-        //cb(v_cache_view, "v_cache_view", il);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
-    }
-
-    const bool is_swa = hparams.is_swa(il);
-
-    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
-
-    const auto n_kv = kv_self->n;
-
-    const int64_t n_head_kv = hparams.n_head_kv(il);
-
-    const auto & n_embd_head_k = hparams.n_embd_head_k;
-    const auto & n_embd_head_v = hparams.n_embd_head_v;
-
-    ggml_tensor * q = ggml_permute(ctx0, q_cur, 0, 2, 1, 3);
-    //cb(q, "q", il);
-
-    ggml_tensor * k =
-        ggml_view_3d(ctx0, kv_self->k_l[il],
-                n_embd_head_k, n_kv, n_head_kv,
-                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
-                ggml_row_size(kv_self->k_l[il]->type, n_embd_head_k),
-                0);
-    //cb(k, "k", il);
-
-    ggml_tensor * v = !v_trans ?
-        ggml_view_3d(ctx0, kv_self->v_l[il],
-                n_embd_head_v, n_kv, n_head_kv,
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_head_v),
-                0) :
-        ggml_view_3d(ctx0, kv_self->v_l[il],
-                n_kv, n_embd_head_v, n_head_kv,
-                ggml_element_size(kv_self->v_l[il])*n_ctx,
-                ggml_element_size(kv_self->v_l[il])*n_ctx*n_embd_head_v,
-                0);
-
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, v_trans, kq_scale);
-    cb(cur, "kqv_out", il);
-
-    if (wo) {
-        cur = build_lora_mm(wo, cur);
-    }
-
-    if (wo_b) {
-        //cb(cur, "kqv_wo", il);
-    }
-
-    if (wo_b) {
-        cur = ggml_add(ctx0, cur, wo_b);
-    }
-
-    return cur;
-}
-
-llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
-    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
-
-    const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
-
-    inp->cross_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_enc, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
-    ggml_set_input(inp->cross_kq_mask);
-
-    inp->cross_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->cross_kq_mask, GGML_TYPE_F16) : inp->cross_kq_mask;
-
-    return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
-}
-
-ggml_tensor * llm_graph_context::build_attn(
-        llm_graph_input_attn_cross * inp,
-        ggml_cgraph * gf,
-        ggml_tensor * wo,
-        ggml_tensor * wo_b,
-        ggml_tensor * q_cur,
-        ggml_tensor * k_cur,
-        ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
-            float     kq_scale,
-            int       il) const {
-    // these nodes are added to the graph together so that they are not reordered
-    // by doing so, the number of splits in the graph is reduced
-    ggml_build_forward_expand(gf, q_cur);
-    ggml_build_forward_expand(gf, k_cur);
-    ggml_build_forward_expand(gf, v_cur);
-
-    const auto & kq_mask = inp->get_kq_mask_cross();
-
-    ggml_tensor * q = ggml_permute(ctx0, q_cur, 0, 2, 1, 3);
-    //cb(q, "q", il);
-
-    ggml_tensor * k = ggml_permute(ctx0, k_cur, 0, 2, 1, 3);
-    //cb(k, "k", il);
-
-    ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
-    //cb(k, "v", il);
-
-    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, nullptr, false, kq_scale);
-
-    cb(cur, "kqv_out", il);
-
-    if (wo) {
-        cur = build_lora_mm(wo, cur);
-    }
-
-    if (wo_b) {
-        //cb(cur, "kqv_wo", il);
-    }
-
-    if (wo_b) {
-        cur = ggml_add(ctx0, cur, wo_b);
-    }
-
-    return cur;
-}
-
-// ****************************************************************************************************************
-// *** THIS WILL BE REMOVED AFTER CODE REVIEW IS ACCPETED AND READY TO MERGE - IT'S JUST A COPY OF build_attn() ***
-// ****************************************************************************************************************
-ggml_tensor * llm_graph_context::build_attn_mla(
         llm_graph_input_attn_kv_unified * inp,
         ggml_cgraph * gf,
         ggml_tensor * wo,
@@ -1663,7 +1489,67 @@ ggml_tensor * llm_graph_context::build_attn_mla(
     }
 
     return cur;
+}
 
+llm_graph_input_attn_cross * llm_graph_context::build_attn_inp_cross() const {
+    auto inp = std::make_unique<llm_graph_input_attn_cross>(cross);
+
+    const int32_t n_enc = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
+
+    inp->cross_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_enc, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    ggml_set_input(inp->cross_kq_mask);
+
+    inp->cross_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->cross_kq_mask, GGML_TYPE_F16) : inp->cross_kq_mask;
+
+    return (llm_graph_input_attn_cross *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_cross * inp,
+        ggml_cgraph * gf,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const auto & kq_mask = inp->get_kq_mask_cross();
+
+    ggml_tensor * q = ggml_permute(ctx0, q_cur, 0, 2, 1, 3);
+    //cb(q, "q", il);
+
+    ggml_tensor * k = ggml_permute(ctx0, k_cur, 0, 2, 1, 3);
+    //cb(k, "k", il);
+
+    ggml_tensor * v = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
+    //cb(k, "v", il);
+
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, false, kq_scale);
+
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+
+    if (wo_b) {
+        //cb(cur, "kqv_wo", il);
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
 }
 
 ggml_tensor * llm_graph_context::build_copy_mask_state(
