@@ -730,7 +730,7 @@ class ArrayEditorDialog(QDialog):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
 
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             # Update the value display and stored data
             new_value = combo.currentData()
             enum_val = enum_type(new_value)
