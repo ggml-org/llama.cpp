@@ -9,6 +9,7 @@ import numpy
 import enum
 from pathlib import Path
 from typing import Any, Optional, Tuple, Type
+import warnings
 
 import numpy as np
 from PySide6.QtWidgets import (
@@ -940,12 +941,9 @@ class GGUFEditorWindow(QMainWindow):
             return
 
         # Disconnect to prevent triggering during loading
-        try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore')
             self.metadata_table.itemChanged.disconnect(self.on_metadata_changed)
-        except (RuntimeError, TypeError):
-            pass
-        finally:
-            pass
 
         for i, (key, field) in enumerate(self.reader.fields.items()):
             self.metadata_table.insertRow(i)
