@@ -1290,7 +1290,7 @@ class GGUFEditorWindow(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
 
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             # Get the selected value
             new_value = combo.currentData()
             enum_val = enum_type(new_value)
