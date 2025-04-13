@@ -1330,12 +1330,13 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     GGML_CANN_CALL_UNARY_OP(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
-                        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) {
-                            GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
-                        };
-                        ggml_cann_unary_op<lambda>(ctx, dst);
-                    }
-                    break;
+                    auto lambda = [](ggml_backend_cann_context& ctx,
+                        aclTensor* acl_src,
+                        aclTensor* acl_dst) {
+                        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                    };
+                    ggml_cann_unary_op(lambda, ctx, dst);
+                } break;
                 case GGML_UNARY_OP_TANH:
                     GGML_CANN_CALL_UNARY_OP(Tanh);
                     break;
@@ -1353,6 +1354,15 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     break;
                 case GGML_UNARY_OP_EXP:
                     GGML_CANN_CALL_UNARY_OP(Exp);
+                    break;
+                case GGML_UNARY_OP_ELU:
+                    ggml_cann_elu(ctx, dst);
+                    break;
+                case GGML_UNARY_OP_SGN:
+                    GGML_CANN_CALL_UNARY_OP(Sign);
+                    break;
+                case GGML_UNARY_OP_STEP:
+                    ggml_cann_step(ctx, dst);
                     break;
                 default:
                     return false;
@@ -1448,7 +1458,22 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             break;
         case GGML_OP_SIN:
             ggml_cann_unary_op<aclnn_sin>(ctx, dst);
-        break;
+            break;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            ggml_cann_conv_transpose_1d(ctx, dst);
+            break;
+        case GGML_OP_LOG:
+            GGML_CANN_CALL_UNARY_OP(Log);
+            break;
+        case GGML_OP_MEAN:
+            ggml_cann_mean(ctx, dst);
+            break;
+        case GGML_OP_PAD_REFLECT_1D:
+            ggml_cann_pad_reflect_1d(ctx, dst);
+            break;
+        case GGML_OP_COUNT_EQUAL:
+            ggml_cann_count_equal(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -1710,6 +1735,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
+                case GGML_UNARY_OP_ELU:
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_STEP:
                     return true;
                 default:
                     return false;
@@ -1796,6 +1824,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (op->src[0]->ne[2] * op->ne[3] != op->src[0]->ne[3] * op->ne[2]) {
                 return false;
             }
+            if (op->op_params[0] != GGML_SCALE_MODE_NEAREST) {
+                return false;
+            }
             return true;
         }
         case GGML_OP_POOL_2D: {
@@ -1842,6 +1873,11 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_ARGMAX:
         case GGML_OP_COS:
         case GGML_OP_SIN:
+        case GGML_OP_CONV_TRANSPOSE_1D:
+        case GGML_OP_LOG:
+        case GGML_OP_MEAN:
+        case GGML_OP_PAD_REFLECT_1D:
+        case GGML_OP_COUNT_EQUAL:
             return true;
         default:
             return false;
