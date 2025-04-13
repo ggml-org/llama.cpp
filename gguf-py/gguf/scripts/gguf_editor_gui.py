@@ -1375,7 +1375,7 @@ class GGUFEditorWindow(QMainWindow):
 
         # Open the tokenizer editor dialog
         dialog = TokenizerEditorDialog(tokens, token_types, scores, self)
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             new_tokens, new_token_types, new_scores = dialog.get_data()
 
             # Store changes for all three arrays
