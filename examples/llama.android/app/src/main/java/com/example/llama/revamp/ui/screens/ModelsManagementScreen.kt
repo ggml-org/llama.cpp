@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -23,15 +26,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.StorageAppScaffold
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -42,18 +47,22 @@ import java.util.Locale
 @Composable
 fun ModelsManagementScreen(
     onBackPressed: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions,
-    onMenuClicked: () -> Unit
 ) {
     // For demo purposes, we'll use sample models
     val installedModels = remember { ModelInfo.getSampleModels() }
 
-    AppScaffold(
-        title = "Models",
-        navigationActions = navigationActions,
-        onBackPressed = onBackPressed,
-        onMenuPressed = onMenuClicked
+    // Edit mode for models' batch deletion
+    var isEditMode by remember { mutableStateOf(false) }
+
+    // Calculate storage info
+    val storageUsed = 14.6f // This would be calculated from actual models
+    val storageTotal = 32.0f // This would be from device storage info
+
+    StorageAppScaffold(
+        title = "Models Management",
+        storageUsed = storageUsed,
+        storageTotal = storageTotal,
+        onNavigateBack = onBackPressed,
     ) { paddingValues ->
         Column(
             modifier = Modifier

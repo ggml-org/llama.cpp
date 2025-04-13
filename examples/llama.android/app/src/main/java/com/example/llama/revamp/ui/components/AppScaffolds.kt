@@ -1,13 +1,10 @@
 package com.example.llama.revamp.ui.components
 
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.material3.DrawerState
-import androidx.compose.material3.DrawerValue
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -16,25 +13,41 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.llama.revamp.data.preferences.UserPreferences
 import com.example.llama.revamp.monitoring.PerformanceMonitor
-import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
-/**
- * Main scaffold for the app that provides the top bar with system status
- * and wraps content in a consistent layout.
- */
-@OptIn(ExperimentalMaterial3Api::class)
+// DefaultAppScaffold.kt
 @Composable
-fun AppScaffold(
+fun DefaultAppScaffold(
     title: String,
-    navigationActions: NavigationActions,
-    drawerState: DrawerState = rememberDrawerState(initialValue = DrawerValue.Closed),
+    onNavigateBack: (() -> Unit)? = null,
+    onMenuOpen: (() -> Unit)? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
-    onBackPressed: (() -> Unit)? = null,
-    onMenuPressed: (() -> Unit)? = null,
-    onRerunPressed: (() -> Unit)? = null,
-    onSharePressed: (() -> Unit)? = null,
+    content: @Composable (PaddingValues) -> Unit
+) {
+    Scaffold(
+        topBar = {
+            DefaultTopBar(
+                title = title,
+                onNavigateBack = onNavigateBack,
+                onMenuOpen = onMenuOpen
+            )
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
+        content = content
+    )
+}
+
+// PerformanceAppScaffold.kt
+@Composable
+fun PerformanceAppScaffold(
+    title: String,
+    onNavigateBack: (() -> Unit)? = null,
+    onMenuOpen: (() -> Unit)? = null,
+    showTemperature: Boolean = false,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     content: @Composable (PaddingValues) -> Unit
 ) {
     // Create dependencies for PerformanceViewModel
@@ -50,22 +63,45 @@ fun AppScaffold(
 
     // Collect performance metrics
     val memoryUsage by performanceViewModel.memoryUsage.collectAsState()
-    val batteryInfo by performanceViewModel.batteryInfo.collectAsState()
     val temperatureInfo by performanceViewModel.temperatureInfo.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
     Scaffold(
         topBar = {
-            SystemStatusTopBar(
+            PerformanceTopBar(
                 title = title,
-                memoryUsage = memoryUsage,
-                batteryLevel = batteryInfo.level,
-                temperature = temperatureInfo.temperature,
+                memoryMetrics = memoryUsage,
+                temperatureMetrics = temperatureInfo,
+                onNavigateBack = onNavigateBack,
+                onMenuOpen = onMenuOpen,
+                showTemperature = showTemperature,
                 useFahrenheit = useFahrenheit,
-                onBackPressed = onBackPressed,
-                onMenuPressed = onMenuPressed,
-                onRerunPressed = onRerunPressed,
-                onSharePressed = onSharePressed
+            )
+        },
+        snackbarHost = {
+            SnackbarHost(hostState = snackbarHostState)
+        },
+        content = content
+    )
+}
+
+// StorageAppScaffold.kt
+@Composable
+fun StorageAppScaffold(
+    title: String,
+    storageUsed: Float,
+    storageTotal: Float,
+    onNavigateBack: (() -> Unit)? = null,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    content: @Composable (PaddingValues) -> Unit
+) {
+    Scaffold(
+        topBar = {
+            StorageTopBar(
+                title = title,
+                storageUsed = storageUsed,
+                storageTotal = storageTotal,
+                onNavigateBack = onNavigateBack,
             )
         },
         snackbarHost = {

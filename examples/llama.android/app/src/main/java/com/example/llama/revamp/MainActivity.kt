@@ -245,8 +245,6 @@ fun AppContent() {
                         // Need to unload model before going back
                         handleBackWithModelCheck()
                     },
-                    drawerState = drawerState,
-                    navigationActions = navigationActions,
                     viewModel = viewModel
                 )
             }
@@ -284,9 +282,6 @@ fun AppContent() {
             composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
                 ModelsManagementScreen(
                     onBackPressed = { navController.popBackStack() },
-                    drawerState = drawerState,
-                    navigationActions = navigationActions,
-                    onMenuClicked = openDrawer
                 )
             }
         }

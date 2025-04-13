@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.MainViewModel
 
@@ -42,13 +42,10 @@ fun BenchmarkScreen(
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
 
-    AppScaffold(
-        title = "Benchmark Results",
-        drawerState = drawerState,
-        navigationActions = navigationActions,
-        onBackPressed = onBackPressed,
-        onRerunPressed = onRerunPressed,
-        onSharePressed = onSharePressed
+    PerformanceAppScaffold(
+        title = "Chat",
+        onNavigateBack = onBackPressed,
+        showTemperature = true
     ) { paddingValues ->
         Column(
             modifier = Modifier

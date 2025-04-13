@@ -53,7 +53,7 @@ import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 
@@ -108,11 +108,10 @@ fun ModelLoadingScreen(
         engineState !is InferenceEngine.State.LibraryLoaded &&
         engineState !is InferenceEngine.State.AwaitingUserPrompt
 
-    AppScaffold(
-        title = "Select Mode",
-        drawerState = drawerState,
-        navigationActions = navigationActions,
-        onBackPressed = onBackPressed
+    PerformanceAppScaffold(
+        title = "Load Model",
+        onNavigateBack = onBackPressed,
+        showTemperature = false
     ) { paddingValues ->
         Column(
             modifier = Modifier

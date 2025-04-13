@@ -106,13 +106,13 @@ class PerformanceMonitor(private val context: Context) {
         val tempC = tempTenthsC / 10.0f
 
         val warningLevel = when {
-            tempC >= 45.0f -> TemperatureWarningLevel.HIGH
-            tempC >= 40.0f -> TemperatureWarningLevel.MEDIUM
+            tempC >= 40.0f -> TemperatureWarningLevel.HIGH
+            tempC >= 35.0f -> TemperatureWarningLevel.MEDIUM
             else -> TemperatureWarningLevel.NORMAL
         }
 
         return TemperatureMetrics(
-            temperature = tempC,
+            tempCelsiusValue = tempC,
             warningLevel = warningLevel
         )
     }
@@ -162,6 +162,15 @@ enum class TemperatureWarningLevel {
  * Data class containing temperature information.
  */
 data class TemperatureMetrics(
-    val temperature: Float,
+    private val tempCelsiusValue: Float,
     val warningLevel: TemperatureWarningLevel
-)
+) {
+    val celsiusDisplay: String
+        get() = "${tempCelsiusValue.toInt()}°C"
+
+    val fahrenheitDisplay: String
+        get() = "${(tempCelsiusValue * 9/5 + 32).toInt()}°F"
+
+    fun getDisplay(useFahrenheit: Boolean) =
+        if (useFahrenheit) fahrenheitDisplay else celsiusDisplay
+}

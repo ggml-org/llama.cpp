@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,11 +60,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.llama.revamp.engine.InferenceEngine
-import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.Message
-import com.example.llama.revamp.viewmodel.TokenMetrics
 import kotlinx.coroutines.launch
 
 /**
@@ -74,8 +71,6 @@ import kotlinx.coroutines.launch
 @Composable
 fun ConversationScreen(
     onBackPressed: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions,
     viewModel: MainViewModel
 ) {
     val engineState by viewModel.engineState.collectAsState()
@@ -121,11 +116,10 @@ fun ConversationScreen(
         }
     }
 
-    AppScaffold(
+    PerformanceAppScaffold(
         title = "Chat",
-        drawerState = drawerState,
-        navigationActions = navigationActions,
-        onBackPressed = onBackPressed
+        onNavigateBack = onBackPressed,
+        showTemperature = true
     ) { paddingValues ->
         Column(
             modifier = Modifier

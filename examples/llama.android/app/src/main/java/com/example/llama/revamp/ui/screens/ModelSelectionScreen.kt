@@ -28,7 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,11 +45,10 @@ fun ModelSelectionScreen(
     // For demo purposes, we'll use sample models
     val models = remember { ModelInfo.getSampleModels() }
 
-    AppScaffold(
+    PerformanceAppScaffold(
         title = "Models",
-        drawerState = drawerState,
-        navigationActions = navigationActions,
-        onMenuPressed = onMenuClicked
+        onMenuOpen = onMenuClicked,
+        showTemperature = false
     ) { paddingValues ->
         Column(
             modifier = Modifier

@@ -27,7 +27,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.llama.revamp.data.preferences.UserPreferences
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import com.example.llama.revamp.navigation.NavigationActions
-import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.DefaultAppScaffold
 import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
@@ -56,11 +56,10 @@ fun SettingsGeneralScreen(
     val isMonitoringEnabled by performanceViewModel.isMonitoringEnabled.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
-    AppScaffold(
+    DefaultAppScaffold(
         title = "Settings",
-        navigationActions = navigationActions,
-        onBackPressed = onBackPressed,
-        onMenuPressed = onMenuClicked
+        onNavigateBack = onBackPressed,
+        onMenuOpen = onMenuClicked
     ) { paddingValues ->
         Column(
             modifier = Modifier
