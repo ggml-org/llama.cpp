@@ -1264,7 +1264,7 @@ class GGUFEditorWindow(QMainWindow):
             return
 
         # Get current value
-        current_value = self.decode_field(field)
+        current_value = field.contents()
 
         # Create a dialog with enum options
         dialog = QDialog(self)
