@@ -16,15 +16,12 @@ class SystemPromptRepository(context: Context) {
 
     private val systemPromptDao = AppDatabase.getDatabase(context).systemPromptDao()
 
-    // Maximum number of recent prompts to keep
-    private val MAX_RECENT_PROMPTS = 10
-
     /**
      * Get all preset prompts.
      */
     fun getPresetPrompts(): Flow<List<SystemPrompt>> {
         // For now, we'll just return the static list since we don't store presets in the database
-        return kotlinx.coroutines.flow.flowOf(SystemPrompt.getStaffPickedPrompts())
+        return kotlinx.coroutines.flow.flowOf(SystemPrompt.STUB_PRESETS)
     }
 
     /**
@@ -104,5 +101,10 @@ class SystemPromptRepository(context: Context) {
      */
     suspend fun deleteAllPrompts() {
         systemPromptDao.deleteAllPrompts()
+    }
+
+    companion object {
+        // Maximum number of recent prompts to keep
+        private const val MAX_RECENT_PROMPTS = 10
     }
 }
