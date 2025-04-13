@@ -1419,7 +1419,7 @@ class GGUFEditorWindow(QMainWindow):
 
     def add_metadata(self):
         dialog = AddMetadataDialog(self)
-        if dialog.exec_() == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             key, value_type, value = dialog.get_data()
 
             if not key:
