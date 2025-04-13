@@ -65,6 +65,7 @@ import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AppScaffold
 import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.Message
+import com.example.llama.revamp.viewmodel.TokenMetrics
 import kotlinx.coroutines.launch
 
 /**
@@ -244,23 +245,22 @@ fun ConversationMessageList(
 fun MessageBubble(message: Message) {
     when (message) {
         is Message.User -> UserMessageBubble(
-            content = message.content,
-            formattedTime = message.formattedTime
-        )
-
-        is Message.Assistant -> AssistantMessageBubble(
-            content = message.content,
             formattedTime = message.formattedTime,
-            isComplete = message.isComplete,
-            isThinking = !message.isComplete && message.content.isBlank(),
-            metrics = if (message.isComplete && message.content.isNotBlank()) {
-                // TODO-han.yin: Generate some example metrics for now
-                // This would come from the actual LLM engine in a real implementation
-                val tokenCount = message.content.split("\\s+".toRegex()).size
-                val ttft = (200 + (Math.random() * 80)).toInt()
-                val tps = 8.5 + (Math.random() * 1.5)
-                "Tokens: $tokenCount, TTFT: ${ttft}ms, TPS: ${"%.1f".format(tps)}"
-            } else null
+            content = message.content
+        )
+        is Message.Assistant.Ongoing -> AssistantMessageBubble(
+            formattedTime = message.formattedTime,
+            content = message.content,
+            isThinking = message.content.isBlank(),
+            isComplete = false,
+            metrics = null
+        )
+        is Message.Assistant.Completed -> AssistantMessageBubble(
+            formattedTime = message.formattedTime,
+            content = message.content,
+            isThinking = false,
+            isComplete = true,
+            metrics = message.metrics.text
         )
     }
 }
@@ -304,10 +304,10 @@ fun UserMessageBubble(content: String, formattedTime: String) {
 
 @Composable
 fun AssistantMessageBubble(
-    content: String,
     formattedTime: String,
-    isComplete: Boolean,
+    content: String,
     isThinking: Boolean,
+    isComplete: Boolean,
     metrics: String? = null
 ) {
     Row(
