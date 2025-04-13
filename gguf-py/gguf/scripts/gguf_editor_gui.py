@@ -1518,7 +1518,7 @@ class GGUFEditorWindow(QMainWindow):
             alignment = None
             field = self.reader.get_field(gguf.Keys.General.ALIGNMENT)
             if field:
-                alignment = self.decode_field(field)
+                alignment = field.contents()
                 if alignment is not None:
                     writer.data_alignment = alignment
 
