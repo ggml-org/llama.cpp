@@ -1,19 +1,20 @@
-#include "arg.h"
-#include "common.h"
-#include "log.h"
-#include "llama.h"
-
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <thread>
-#include <mutex>
-#include <vector>
 #include <fstream>
+#include <mutex>
+#include <numeric>
+#include <thread>
 #include <unordered_map>
-#include <algorithm>
+#include <vector>
+
+#include "arg.h"
+#include "common.h"
+#include "llama.h"
+#include "log.h"
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -33,10 +34,18 @@ struct Stats {
     int ncall = 0;
 };
 
-struct Tally {
+struct tensor_statistics {
     std::string tensor;
-    double bias = 0;
-    int count = 0;
+    float total = 0;
+    float mean = 0;
+    float max = 0;
+    float min = 0;
+    float stddev = 0;
+    float cv = 0;
+    float zd = 0;
+    float active = 0;
+    float entropy = 0;
+    int elements = 0;
 };
 
 class IMatrixCollector {
@@ -45,7 +54,7 @@ public:
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
-    bool load_imatrix(const char * fname, std::vector<Tally> * tally = nullptr);
+    bool load_imatrix(const char * fname, std::vector<tensor_statistics> * tstats = nullptr);
 private:
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
@@ -323,7 +332,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
 }
 
-bool IMatrixCollector::load_imatrix(const char * fname, std::vector<Tally> * tally) {
+bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_statistics> * ts) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
         LOG_ERR("%s: failed to open %s\n",__func__, fname);
@@ -370,21 +379,58 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<Tally> * tal
         }
 
         // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
-        double total = 0;
+        std::vector<float> activations;
+        activations.reserve(nval);
+
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
             e.counts[i] += ncall;
-            const double avg_sq = (1.0 * e.values[i]) / e.counts[i];
-            total += avg_sq;
+            activations.push_back(e.values[i] / static_cast<float>(e.counts[i]));
         }
         e.ncall += ncall;
 
-        if (tally) {
-            tally->emplace_back();
-            auto & [tensor, bias, count] = (*tally)[i];
+        if (ts) {
+            float total_bias = std::accumulate(activations.begin(), activations.end(), 0.0f);
+            float max_bias = * std::max_element(activations.begin(), activations.end());
+            float min_bias = * std::min_element(activations.begin(), activations.end());
+            float mean_bias = total_bias / activations.size();
+            float sq_total_bias = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
+            float dev = std::sqrt((sq_total_bias / activations.size()) - (mean_bias * mean_bias));
+            float rmsd = mean_bias > 0.0f ? dev / mean_bias : 0.0f;
+
+            float threshold = 1e-6f;
+            int inactive_count = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabs(v) < threshold; });
+            float active_ratio = 1 -  (static_cast<float>(inactive_count) / activations.size());
+
+            float ent = 0.0f;
+            if (total_bias > 0) {
+                for (auto act : activations) {
+                    if (float p = act / total_bias; p > 0) {
+                        ent -= p* std::log2(p);
+                    }
+                }
+            }
+
+            int z_score = 0;
+            for (auto act : activations) {
+                if (float p = (act - mean_bias) / dev; p > 1) {
+                    z_score++;
+                }
+            }
+
+            ts->emplace_back();
+            auto & [tensor, total, mean, max, min, stddev, cv, zd, active, entropy, elements] = (*ts)[i];
             tensor = name_as_vec.data();
-            bias = total;
-            count = nval;
+            total = total_bias;
+            mean = mean_bias;
+            max = max_bias;
+            min = min_bias;
+            stddev = dev;
+            cv = rmsd;
+            active = active_ratio;
+            entropy = ent;
+            elements = static_cast<int>(activations.size());
+            zd = static_cast<float>(z_score) / static_cast<float>(elements);
         }
     }
     return true;
@@ -633,42 +679,35 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    std::vector<Tally> tallies;
+    std::vector<tensor_statistics> ts;
 
     if (params.show_statistics) {
         if (params.in_files.empty() || params.in_files.size() > 1) {
             LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
             return 1;
         }
-        if (!g_collector.load_imatrix(params.in_files[0].c_str(), & tallies)) {
+        if (!g_collector.load_imatrix(params.in_files[0].c_str(), & ts)) {
             LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
             return 1;
         }
-        if (tallies.empty()) {
+        if (ts.empty()) {
             LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
             return 1;
         }
-        double total = 0;
-        for (const auto & tallie : tallies) {
-            total += tallie.bias;
-        }
 
-        struct tally_sort {
-            bool operator()(const Tally& x, const Tally & y) const {
-                return x.bias > y.bias;
-            }
-        };
-        std::sort(tallies.begin(), tallies.end(), tally_sort());
-
-        LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(tallies.size()));
-        LOG_INF("\n Layer\t               Tensor\t              Total Bias\tAvg Bias\t  Contribution\n");
-        LOG_INF("===============================================================================================\n");
-        for (const auto & [tensor, bias, count] : tallies) {
+        std::sort(ts.begin(), ts.end(), [](const tensor_statistics &a, const tensor_statistics &b) { return a.total > b.total; });
+        LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
+        LOG_INF("\n%5s\t%-20s\t%10s\t%7s\t%12s\t%9s\t%10s\t%9s\t%6s\t%12s\t%7s\t%10s\n",
+            "Layer", "Tensor", "Σ(Bias)", "Min", "Max", "μ", "σ", "% Active", "N", "Entropy", "E (norm)", "ZD Score");
+        LOG_INF("==========================================================================================================================================================================\n");
+        for (const auto & [tensor, total, mean, max, min, stddev, cv, zd, active, entropy, elements] : ts) {
             std::string layer, name;
             process_tensor_name(tensor, layer, name);
-            LOG_INF("%5s\t%30s\t%15.2f\t%15.4f\t%19.4f%%\n", layer.c_str(), name.c_str(), bias, bias / count, 100.0 * bias / total);
+            LOG_INF("%5s\t%-20s\t%10.2f\t%7.4f\t%12.4f\t%8.4f\t%9.4f\t%8.2f%%\t%6d\t%12.4f\t%7.2f%%\t%10.4f\n",
+                layer.c_str(), name.c_str(), total, min, max, mean, stddev, active * 100.0f, elements, entropy, 100.0f * (entropy / std::log2(elements)), 1000.0f * zd);
         }
         LOG_INF("\n");
+
         return 0;
     }
 
