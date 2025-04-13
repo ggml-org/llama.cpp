@@ -24,21 +24,9 @@ from PySide6.QtCore import Qt
 if "NO_LOCAL_GGUF" not in os.environ and (Path(__file__).parent.parent.parent.parent / 'gguf-py').exists():
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-try:
-    import gguf
-    from gguf import GGUFReader, GGUFWriter, GGUFValueType, ReaderField
-    from gguf.constants import TokenType, RopeScalingType, PoolingType, GGMLQuantizationType
-except ImportError as e:
-    if "sentencepiece" in str(e):
-        print("Error: Missing sentencepiece module")
-        print("Please install it with: pip install sentencepiece")
-        sys.exit(1)
-    elif "yaml" in str(e):
-        print("Error: Missing PyYAML module")
-        print("Please install it with: pip install PyYAML")
-        sys.exit(1)
-    else:
-        raise
+import gguf
+from gguf import GGUFReader, GGUFWriter, GGUFValueType, ReaderField
+from gguf.constants import TokenType, RopeScalingType, PoolingType, GGMLQuantizationType
 
 logger = logging.getLogger("gguf-editor-gui")
 
