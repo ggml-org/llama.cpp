@@ -1497,22 +1497,9 @@ class GGUFEditorWindow(QMainWindow):
             if field:
                 arch = field.contents()
 
-            # Determine endianness
-            if np.uint32(1) == np.uint32(1).newbyteorder("<"):
-                # Host is little endian
-                host_endian = gguf.GGUFEndian.LITTLE
-                swapped_endian = gguf.GGUFEndian.BIG
-            else:
-                host_endian = gguf.GGUFEndian.BIG
-                swapped_endian = gguf.GGUFEndian.LITTLE
-
-            if self.reader.byte_order == "S":
-                endianess = swapped_endian
-            else:
-                endianess = host_endian
-
             # Create writer
-            writer = GGUFWriter(file_path, arch=arch, endianess=endianess)
+            writer = GGUFWriter(file_path, arch=arch, endianess=self.reader.endianess)
+
 
             # Get alignment if present
             alignment = None
@@ -1593,31 +1580,6 @@ class GGUFEditorWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save file: {str(e)}")
             self.statusBar().showMessage("Error saving file")
-
-    def decode_field(self, field: ReaderField) -> Any:
-        if field and field.types:
-            main_type = field.types[0]
-
-            if main_type == GGUFValueType.ARRAY:
-                sub_type = field.types[-1]
-
-                if sub_type == GGUFValueType.STRING:
-                    return [str(bytes(field.parts[idx]), encoding='utf-8') for idx in field.data]
-                else:
-                    values = [pv for idx in field.data for pv in field.parts[idx].tolist()]
-
-                    # Special handling for token types
-                    if field.name == gguf.Keys.Tokenizer.TOKEN_TYPE and sub_type == GGUFValueType.INT32:
-                        # Return the raw values, they'll be converted to TokenType when needed
-                        return values
-                    return values
-
-            if main_type == GGUFValueType.STRING:
-                return str(bytes(field.parts[-1]), encoding='utf-8')
-            else:
-                return field.parts[-1][0]
-
-        return None
 
 
 def main() -> None:
