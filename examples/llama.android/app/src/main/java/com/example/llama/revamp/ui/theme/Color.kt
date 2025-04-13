@@ -66,5 +66,6 @@ val md_theme_dark_outlineVariant = Color(0xFF49454E)
 val md_theme_dark_scrim = Color(0xFF000000)
 
 // Additional app-specific colors
+val CriticalColor = Color(0xFFFF0000)
 val WarningColor = Color(0xFFFFA000)
 val SuccessColor = Color(0xFF388E3C)

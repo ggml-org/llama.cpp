@@ -120,14 +120,17 @@ fun ModelLoadingScreen(
                 .padding(paddingValues)
                 .padding(16.dp)
         ) {
-            // Mode selection cards
+            // Benchmark card
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 8.dp)
                     .selectable(
                         selected = selectedMode == Mode.BENCHMARK,
-                        onClick = { selectedMode = Mode.BENCHMARK },
+                        onClick = {
+                            selectedMode = Mode.BENCHMARK
+                            useSystemPrompt = false
+                        },
                         enabled = !isLoading,
                         role = Role.RadioButton
                     )
@@ -142,23 +145,24 @@ fun ModelLoadingScreen(
                     )
                     Text(
                         text = "Benchmark",
-                        style = MaterialTheme.typography.titleMedium,
+                        style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }
             }
 
-            // Conversation card with integrated system prompt
+            // Conversation card with integrated system prompt picker & editor
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 8.dp)
+                    .padding(bottom = 4.dp)
                     // Only use weight if system prompt is active, otherwise wrap content
                     .then(if (useSystemPrompt) Modifier.weight(1f) else Modifier)
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .padding(bottom = 12.dp)
                         // Only fill height if system prompt is active
                         .then(if (useSystemPrompt) Modifier.fillMaxSize() else Modifier)
                 ) {
@@ -172,7 +176,7 @@ fun ModelLoadingScreen(
                                 enabled = !isLoading,
                                 role = Role.RadioButton
                             )
-                            .padding(16.dp),
+                            .padding(top = 16.dp, start = 16.dp, end = 16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         RadioButton(
@@ -181,7 +185,7 @@ fun ModelLoadingScreen(
                         )
                         Text(
                             text = "Conversation",
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleLarge,
                             modifier = Modifier.padding(start = 8.dp)
                         )
                     }
@@ -190,11 +194,11 @@ fun ModelLoadingScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                            .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "System prompt",
+                            text = "Use system prompt",
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier
                                 .padding(start = 32.dp) // Align with radio text
@@ -222,10 +226,13 @@ fun ModelLoadingScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .fillMaxSize() // Fill remaining card space
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                                .fillMaxSize()
+                                .padding(start = 48.dp, end = 16.dp)
                         ) {
-                            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                            HorizontalDivider(
+                                modifier = Modifier
+                                    .padding(top = 4.dp, bottom = 8.dp)
+                            )
 
                             // Tab selector using SegmentedButton
                             SingleChoiceSegmentedButtonRow(
@@ -277,7 +284,7 @@ fun ModelLoadingScreen(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.height(16.dp))
+                            Spacer(modifier = Modifier.height(8.dp))
 
                             // Content based on selected tab
                             when (selectedTab) {
@@ -353,6 +360,8 @@ fun ModelLoadingScreen(
             // Flexible spacer when system prompt is not active
             if (!useSystemPrompt) {
                 Spacer(modifier = Modifier.weight(1f))
+            } else {
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // Start button
@@ -369,16 +378,20 @@ fun ModelLoadingScreen(
                                             viewModel.savePromptToRecents(prompt)
                                             prompt.content
                                         }
+
                                     SystemPromptTab.CUSTOM ->
-                                        customPromptText.takeIf { it.isNotBlank() }?.also { promptText ->
-                                            // Save custom prompt to database
-                                            viewModel.saveCustomPromptToRecents(promptText)
-                                        }
+                                        customPromptText.takeIf { it.isNotBlank() }
+                                            ?.also { promptText ->
+                                                // Save custom prompt to database
+                                                viewModel.saveCustomPromptToRecents(promptText)
+                                            }
                                 }
                             } else null
                             onConversationSelected(systemPrompt)
                         }
-                        null -> { /* No mode selected */ }
+
+                        null -> { /* No mode selected */
+                        }
                     }
                 },
                 modifier = Modifier
@@ -395,15 +408,16 @@ fun ModelLoadingScreen(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = when(engineState) {
+                        text = when (engineState) {
                             is InferenceEngine.State.LoadingModel -> "Loading model..."
                             is InferenceEngine.State.ProcessingSystemPrompt -> "Processing system prompt..."
                             is InferenceEngine.State.ModelLoaded -> "Preparing conversation..."
                             else -> "Processing..."
-                        }
+                        },
+                        style = MaterialTheme.typography.titleMedium
                     )
                 } else {
-                    Text("Start")
+                    Text(text = "Start", style = MaterialTheme.typography.titleMedium)
                 }
             }
         }
@@ -423,7 +437,7 @@ fun PromptList(
         modifier = Modifier
             .fillMaxWidth()
             .fillMaxSize(), // Fill available space
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(
             items = prompts,
@@ -480,7 +494,7 @@ fun PromptList(
 
                 if (prompt.id != prompts.last().id) {
                     HorizontalDivider(
-                        modifier = Modifier.padding(top = 8.dp, start = 40.dp)
+                        modifier = Modifier.padding(top = 8.dp, start = 32.dp)
                     )
                 }
             }

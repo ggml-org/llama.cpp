@@ -21,7 +21,7 @@ class PerformanceMonitor(private val context: Context) {
     /**
      * Provides a flow of memory usage information that updates at the specified interval.
      */
-    fun monitorMemoryUsage(intervalMs: Long = 5000): Flow<MemoryMetrics> = flow {
+    fun monitorMemoryUsage(intervalMs: Long = MEMORY_POLLING_INTERVAL): Flow<MemoryMetrics> = flow {
         while(true) {
             emit(getMemoryInfo())
             delay(intervalMs)
@@ -31,7 +31,7 @@ class PerformanceMonitor(private val context: Context) {
     /**
      * Provides a flow of battery information that updates at the specified interval.
      */
-    fun monitorBattery(intervalMs: Long = 10000): Flow<BatteryMetrics> = flow {
+    fun monitorBattery(intervalMs: Long = BATTERY_POLLING_INTERVAL): Flow<BatteryMetrics> = flow {
         while(true) {
             emit(getBatteryInfo())
             delay(intervalMs)
@@ -41,7 +41,7 @@ class PerformanceMonitor(private val context: Context) {
     /**
      * Provides a flow of temperature information that updates at the specified interval.
      */
-    fun monitorTemperature(intervalMs: Long = 10000): Flow<TemperatureMetrics> = flow {
+    fun monitorTemperature(intervalMs: Long = TEMP_POLLING_INTERVAL): Flow<TemperatureMetrics> = flow {
         while(true) {
             emit(getTemperatureInfo())
             delay(intervalMs)
@@ -121,6 +121,12 @@ class PerformanceMonitor(private val context: Context) {
         var multiplier = 1.0f
         repeat(decimals) { multiplier *= 10 }
         return (this * multiplier).roundToInt() / multiplier
+    }
+
+    companion object {
+        private const val MEMORY_POLLING_INTERVAL = 5000L
+        private const val BATTERY_POLLING_INTERVAL = 10000L
+        private const val TEMP_POLLING_INTERVAL = 10000L
     }
 }
 

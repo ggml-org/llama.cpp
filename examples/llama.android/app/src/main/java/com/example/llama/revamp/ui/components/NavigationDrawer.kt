@@ -154,7 +154,7 @@ private fun DrawerContent(
 
         DrawerNavigationItem(
             icon = Icons.Default.Folder,
-            label = "Models Management",
+            label = "Models",
             isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.MODELS_MANAGEMENT_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToModelsManagement() } }
         )

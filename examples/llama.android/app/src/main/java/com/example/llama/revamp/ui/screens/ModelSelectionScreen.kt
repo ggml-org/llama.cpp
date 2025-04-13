@@ -66,12 +66,6 @@ fun ModelSelectionScreen(
                 Text("Manage Models")
             }
 
-            Text(
-                text = "Downloaded Models",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(vertical = 8.dp)
-            )
-
             LazyColumn {
                 items(models) { model ->
                     ModelCard(

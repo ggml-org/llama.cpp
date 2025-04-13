@@ -90,7 +90,9 @@ fun SettingsGeneralScreen(
                     title = "Dark Theme",
                     description = "Use dark theme throughout the app",
                     checked = true, // This would be connected to theme state in a real app
-                    onCheckedChange = { /* TODO: Implement theme switching */ }
+                    onCheckedChange = {
+                        /* TODO-hyin: Implement theme switching between Auto, Light and Dark */
+                    }
                 )
             }
 

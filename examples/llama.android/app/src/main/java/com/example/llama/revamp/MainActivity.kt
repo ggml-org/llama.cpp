@@ -278,6 +278,7 @@ fun AppContent() {
     }
 
     // Model unload confirmation dialog
+    // TODO-han.yin: show a progress indicator until the model success unloads?
     if (showUnloadDialog) {
         UnloadModelConfirmationDialog(
             onConfirm = {

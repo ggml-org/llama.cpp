@@ -54,14 +54,11 @@ fun AppScaffold(
     val temperatureInfo by performanceViewModel.temperatureInfo.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
-    // Formatted memory usage
-    val memoryText = String.format("%.1f / %.1f GB", memoryUsage.availableGb, memoryUsage.totalGb)
-
     Scaffold(
         topBar = {
             SystemStatusTopBar(
                 title = title,
-                memoryUsage = memoryText,
+                memoryUsage = memoryUsage,
                 batteryLevel = batteryInfo.level,
                 temperature = temperatureInfo.temperature,
                 useFahrenheit = useFahrenheit,

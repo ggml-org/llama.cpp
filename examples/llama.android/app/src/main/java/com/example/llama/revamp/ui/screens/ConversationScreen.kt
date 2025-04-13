@@ -57,11 +57,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.repeatOnLifecycle
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AppScaffold
@@ -123,7 +121,7 @@ fun ConversationScreen(
     }
 
     AppScaffold(
-        title = selectedModel?.name ?: "Conversation",
+        title = "Chat",
         drawerState = drawerState,
         navigationActions = navigationActions,
         onBackPressed = onBackPressed
@@ -134,7 +132,7 @@ fun ConversationScreen(
                 .padding(paddingValues)
         ) {
             // System prompt display (collapsible)
-            AnimatedSystemPrompt(systemPrompt)
+            AnimatedSystemPrompt(selectedModel?.name, systemPrompt)
 
             // Messages list
             Box(
@@ -165,15 +163,19 @@ fun ConversationScreen(
 }
 
 @Composable
-fun AnimatedSystemPrompt(systemPrompt: String?) {
+fun AnimatedSystemPrompt(modelName: String?, systemPrompt: String?) {
     var expanded by remember { mutableStateOf(false) }
+
+    // TODO-han.yin: add model name into this card, on top of system prompt!
 
     if (!systemPrompt.isNullOrBlank()) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            onClick = { expanded = !expanded }
+            onClick = {
+                expanded = !expanded
+            }
         ) {
             Column(
                 modifier = Modifier.padding(16.dp)
@@ -369,7 +371,7 @@ fun AssistantMessageBubble(
                     Spacer(modifier = Modifier.width(4.dp))
 
                     Text(
-                        text = if (isThinking) "Thinking..." else "",
+                        text = if (isThinking) "Thinking" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
