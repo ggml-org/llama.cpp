@@ -87,12 +87,10 @@ class MainViewModel(
     /**
      * Prepares the engine for conversation mode.
      */
-    fun prepareForConversation(systemPrompt: String? = null) {
+    suspend fun prepareForConversation(systemPrompt: String? = null) {
         _systemPrompt.value = systemPrompt
-        viewModelScope.launch {
-            _selectedModel.value?.let { model ->
-                inferenceEngine.loadModel(model.path, systemPrompt)
-            }
+        _selectedModel.value?.let { model ->
+            inferenceEngine.loadModel(model.path, systemPrompt)
         }
     }
 
@@ -131,7 +129,8 @@ class MainViewModel(
                         val currentMessages = _messages.value.toMutableList()
                         if (currentMessages.size >= 2) {
                             val messageIndex = currentMessages.size - 1
-                            val currentAssistantMessage = currentMessages[messageIndex] as? Message.Assistant
+                            val currentAssistantMessage =
+                                currentMessages[messageIndex] as? Message.Assistant
                             if (currentAssistantMessage != null) {
                                 currentMessages[messageIndex] = currentAssistantMessage.copy(
                                     content = "${response}[Error: ${e.message}]",
@@ -146,7 +145,8 @@ class MainViewModel(
                         val currentMessages = _messages.value.toMutableList()
                         if (currentMessages.isNotEmpty()) {
                             val messageIndex = currentMessages.size - 1
-                            val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                            val currentAssistantMessage =
+                                currentMessages.getOrNull(messageIndex) as? Message.Assistant
                             if (currentAssistantMessage != null) {
                                 currentMessages[messageIndex] = currentAssistantMessage.copy(
                                     isComplete = true
@@ -162,7 +162,8 @@ class MainViewModel(
                         val currentMessages = _messages.value.toMutableList()
                         if (currentMessages.isNotEmpty()) {
                             val messageIndex = currentMessages.size - 1
-                            val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                            val currentAssistantMessage =
+                                currentMessages.getOrNull(messageIndex) as? Message.Assistant
                             if (currentAssistantMessage != null) {
                                 currentMessages[messageIndex] = currentAssistantMessage.copy(
                                     content = response.toString(),
@@ -177,7 +178,8 @@ class MainViewModel(
                 val currentMessages = _messages.value.toMutableList()
                 if (currentMessages.isNotEmpty()) {
                     val messageIndex = currentMessages.size - 1
-                    val currentAssistantMessage = currentMessages.getOrNull(messageIndex) as? Message.Assistant
+                    val currentAssistantMessage =
+                        currentMessages.getOrNull(messageIndex) as? Message.Assistant
                     if (currentAssistantMessage != null) {
                         currentMessages[messageIndex] = currentAssistantMessage.copy(
                             content = "${response}[Error: ${e.message}]",
@@ -204,13 +206,20 @@ class MainViewModel(
         inferenceEngine.unloadModel()
     }
 
+    fun isModelLoading() =
+        engineState.value.let {
+            it is InferenceEngine.State.LoadingModel
+                || it is InferenceEngine.State.ProcessingSystemPrompt
+        }
+
     /**
      * Checks if a model is currently loaded.
      */
-    fun isModelLoaded(): Boolean {
-        return engineState.value !is InferenceEngine.State.Uninitialized &&
-            engineState.value !is InferenceEngine.State.LibraryLoaded
-    }
+    fun isModelLoaded() =
+        engineState.value.let {
+            it !is InferenceEngine.State.Uninitialized
+                && it !is InferenceEngine.State.LibraryLoaded
+        }
 
     /**
      * Clean up resources when ViewModel is cleared.

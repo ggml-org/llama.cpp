@@ -22,7 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -42,6 +42,7 @@ import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
 import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.MainViewModel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -122,7 +123,10 @@ fun AppContent() {
 
     // Helper function to handle back press with model unloading check
     val handleBackWithModelCheck = {
-        if (viewModel.isModelLoaded()) {
+        if (viewModel.isModelLoading()) {
+            // If model is still loading, ignore the request
+            true // Mark as handled
+        } else if (viewModel.isModelLoaded()) {
             showUnloadDialog = true
             pendingNavigation = { navController.popBackStack() }
             true // Mark as handled
@@ -211,8 +215,19 @@ fun AppContent() {
                         navigationActions.navigateToBenchmark()
                     },
                     onConversationSelected = { systemPrompt ->
-                        viewModel.prepareForConversation(systemPrompt)
-                        navigationActions.navigateToConversation()
+                        // Store a reference to the loading job
+                        val loadingJob = coroutineScope.launch {
+                            viewModel.prepareForConversation(systemPrompt)
+                            // Check if the job wasn't cancelled before navigating
+                            if (isActive) {
+                                navigationActions.navigateToConversation()
+                            }
+                        }
+                        // Update the pendingNavigation handler to cancel any ongoing loading
+                        pendingNavigation = {
+                            loadingJob.cancel()
+                            navController.popBackStack()
+                        }
                     },
                     onBackPressed = {
                         // Need to unload model before going back

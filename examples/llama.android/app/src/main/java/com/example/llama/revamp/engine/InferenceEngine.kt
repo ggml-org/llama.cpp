@@ -57,7 +57,7 @@ class InferenceEngine {
             _state.value = State.LoadingModel
 
             // Simulate model loading
-            delay(1000)
+            delay(2000)
 
             _state.value = State.ModelLoaded
 
@@ -65,7 +65,7 @@ class InferenceEngine {
                 _state.value = State.ProcessingSystemPrompt
 
                 // Simulate processing system prompt
-                delay(500)
+                delay(3000)
             }
 
             _state.value = State.AwaitingUserPrompt
@@ -127,7 +127,7 @@ class InferenceEngine {
 
         try {
             // Simulate benchmark running
-            delay(2000)
+            delay(4000)
 
             // Generate fake benchmark results
             val modelDesc = "LlamaModel"
@@ -170,7 +170,7 @@ class InferenceEngine {
      */
     suspend fun unloadModel() {
         // Simulate model unloading time
-        delay(300)
+        delay(2000)
         _state.value = State.LibraryLoaded
         _benchmarkResults = null
         _benchmarkResultsFlow.value = null
