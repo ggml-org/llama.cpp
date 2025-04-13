@@ -293,21 +293,27 @@ fun AppContent() {
     }
 
     // Model unload confirmation dialog
-    // TODO-han.yin: show a progress indicator until the model success unloads?
+    var isUnloading by remember { mutableStateOf(false) }
+
     if (showUnloadDialog) {
         UnloadModelConfirmationDialog(
             onConfirm = {
-                showUnloadDialog = false
+                isUnloading = true
                 coroutineScope.launch {
                     viewModel.unloadModel()
+                    isUnloading = false
+                    showUnloadDialog = false
                     pendingNavigation?.invoke()
                     pendingNavigation = null
                 }
             },
             onDismiss = {
-                showUnloadDialog = false
-                pendingNavigation = null
-            }
+                if (!isUnloading) {
+                    showUnloadDialog = false
+                    pendingNavigation = null
+                }
+            },
+            isUnloading = isUnloading
         )
     }
 }
