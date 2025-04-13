@@ -1551,18 +1551,17 @@ class GGUFEditorWindow(QMainWindow):
                 
                 writer.add_key_value(key, value, value_type)
             
-            # Copy tensors
+            # Add tensors (including data)
             for tensor in self.reader.tensors:
-                writer.add_tensor_info(tensor.name, tensor.data.shape, tensor.data.dtype, tensor.data.nbytes, tensor.tensor_type)
+                writer.add_tensor(tensor.name, tensor.data, raw_shape=tensor.data.shape, raw_dtype=tensor.tensor_type)
             
             # Write header and metadata
+            writer.open_output_file(Path(file_path))
             writer.write_header_to_file()
             writer.write_kv_data_to_file()
-            writer.write_ti_data_to_file()
             
-            # Write tensor data
-            for tensor in self.reader.tensors:
-                writer.write_tensor_data(tensor.data)
+            # Write tensor data using the optimized method
+            writer.write_tensors_to_file(progress=False)
             
             writer.close()
             
