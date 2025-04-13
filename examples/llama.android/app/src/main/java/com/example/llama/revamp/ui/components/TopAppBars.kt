@@ -1,7 +1,6 @@
 package com.example.llama.revamp.ui.components
 
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -10,7 +9,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.SdStorage
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,11 +68,9 @@ fun DefaultTopBar(
 fun PerformanceTopBar(
     title: String,
     memoryMetrics: MemoryMetrics,
-    temperatureMetrics: TemperatureMetrics,
+    temperatureDisplay: Pair<TemperatureMetrics, Boolean>?,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
-    showTemperature: Boolean = false,
-    useFahrenheit: Boolean = false,
 ) {
     TopAppBar(
         title = { Text(title) },
@@ -100,9 +96,9 @@ fun PerformanceTopBar(
         },
         actions = {
             // Temperature indicator (optional)
-            if (showTemperature) {
+            temperatureDisplay?.let { (temperatureMetrics, useFahrenheit) ->
                 TemperatureIndicator(
-                    temperature = temperatureMetrics,
+                    temperatureMetrics = temperatureMetrics,
                     useFahrenheit = useFahrenheit
                 )
 
@@ -174,15 +170,15 @@ fun MemoryIndicator(memoryUsage: MemoryMetrics) {
 }
 
 @Composable
-fun TemperatureIndicator(temperature: TemperatureMetrics, useFahrenheit: Boolean) {
+fun TemperatureIndicator(temperatureMetrics: TemperatureMetrics, useFahrenheit: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
-            imageVector = when (temperature.warningLevel) {
+            imageVector = when (temperatureMetrics.warningLevel) {
                 TemperatureWarningLevel.HIGH -> Icons.Default.WarningAmber
                 else -> Icons.Default.Thermostat
             },
             contentDescription = "Device temperature",
-            tint = when (temperature.warningLevel) {
+            tint = when (temperatureMetrics.warningLevel) {
                 TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
                 TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.onSurface
@@ -191,12 +187,10 @@ fun TemperatureIndicator(temperature: TemperatureMetrics, useFahrenheit: Boolean
 
         Spacer(modifier = Modifier.width(2.dp))
 
-        val tempDisplay = if (useFahrenheit) temperature.fahrenheitDisplay else temperature.celsiusDisplay
-
         Text(
-            text = tempDisplay,
+            text = temperatureMetrics.getDisplay(useFahrenheit),
             style = MaterialTheme.typography.bodySmall,
-            color = when (temperature.warningLevel) {
+            color = when (temperatureMetrics.warningLevel) {
                 TemperatureWarningLevel.HIGH -> MaterialTheme.colorScheme.error
                 TemperatureWarningLevel.MEDIUM -> MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.onSurface

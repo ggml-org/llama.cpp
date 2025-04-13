@@ -32,8 +32,8 @@ class PerformanceViewModel(
     val batteryInfo: StateFlow<BatteryMetrics> = _batteryInfo.asStateFlow()
 
     // Temperature information
-    private val _temperatureInfo = MutableStateFlow(TemperatureMetrics(0f, TemperatureWarningLevel.NORMAL))
-    val temperatureInfo: StateFlow<TemperatureMetrics> = _temperatureInfo.asStateFlow()
+    private val _temperatureMetrics = MutableStateFlow(TemperatureMetrics(0f, TemperatureWarningLevel.NORMAL))
+    val temperatureMetrics: StateFlow<TemperatureMetrics> = _temperatureMetrics.asStateFlow()
 
     // User preferences
     private val _isMonitoringEnabled = MutableStateFlow(true)
@@ -79,7 +79,7 @@ class PerformanceViewModel(
 
         viewModelScope.launch {
             performanceMonitor.monitorTemperature(interval * 2).collect { metrics ->
-                _temperatureInfo.value = metrics
+                _temperatureMetrics.value = metrics
             }
         }
     }

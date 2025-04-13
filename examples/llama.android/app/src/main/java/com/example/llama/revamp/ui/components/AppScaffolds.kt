@@ -1,7 +1,6 @@
 package com.example.llama.revamp.ui.components
 
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -63,7 +62,7 @@ fun PerformanceAppScaffold(
 
     // Collect performance metrics
     val memoryUsage by performanceViewModel.memoryUsage.collectAsState()
-    val temperatureInfo by performanceViewModel.temperatureInfo.collectAsState()
+    val temperatureInfo by performanceViewModel.temperatureMetrics.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
     Scaffold(
@@ -71,11 +70,9 @@ fun PerformanceAppScaffold(
             PerformanceTopBar(
                 title = title,
                 memoryMetrics = memoryUsage,
-                temperatureMetrics = temperatureInfo,
+                temperatureDisplay = if (showTemperature) Pair(temperatureInfo, useFahrenheit) else null,
                 onNavigateBack = onNavigateBack,
                 onMenuOpen = onMenuOpen,
-                showTemperature = showTemperature,
-                useFahrenheit = useFahrenheit,
             )
         },
         snackbarHost = {
