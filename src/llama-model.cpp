@@ -10498,7 +10498,7 @@ struct llm_build_t5_enc : public llm_graph_context {
 
                 cur = build_attn(inp_attn, gf,
                         model.layers[il].wo_enc, nullptr,
-                        Qcur, Kcur, Vcur, nullptr, kq_b, 1.0f, il);
+                        Qcur, Kcur, Vcur, kq_b, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
             }
 
