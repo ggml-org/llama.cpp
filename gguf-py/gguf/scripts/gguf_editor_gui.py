@@ -1543,7 +1543,7 @@ class GGUFEditorWindow(QMainWindow):
                         writer.add_key_value(field.name, value, value_type)
                 else:
                     # Copy original value
-                    value = self.decode_field(field)
+                    value = field.contents()
                     if value is not None and field.types:
                         writer.add_key_value(field.name, value, field.types[0])
 
