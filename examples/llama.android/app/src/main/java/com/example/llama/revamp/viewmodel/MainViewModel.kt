@@ -261,24 +261,6 @@ class MainViewModel @Inject constructor (
     }
 
     /**
-     * Checks if a model is currently being loaded.
-     */
-    fun isModelLoading() =
-        engineState.value.let {
-            it is InferenceEngine.State.LoadingModel
-                || it is InferenceEngine.State.ProcessingSystemPrompt
-        }
-
-    /**
-     * Checks if a model has already been loaded.
-     */
-    fun isModelLoaded() =
-        engineState.value.let {
-            it !is InferenceEngine.State.Uninitialized
-                && it !is InferenceEngine.State.LibraryLoaded
-        }
-
-    /**
      * Clean up resources when ViewModel is cleared.
      */
     override fun onCleared() {
