@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.symbol.processing)
     alias(libs.plugins.jetbrains.kotlin.android)
     alias(libs.plugins.jetbrains.kotlin.compose.compiler)
+    alias(libs.plugins.hilt)
 }
 
 android {
@@ -55,6 +56,8 @@ dependencies {
     ksp(libs.androidx.room.compiler)
     implementation(libs.bundles.compose)
     implementation(libs.bundles.coroutines)
+    ksp(libs.hilt.android.compiler)
+    implementation(libs.bundles.hilt)
 
     // Individual dependencies
     implementation(libs.accompanist.systemuicontroller)
