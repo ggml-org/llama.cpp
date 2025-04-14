@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import javax.inject.Singleton
 
 /**
  * Main database for the application.
  */
+@Singleton
 @Database(entities = [SystemPromptEntity::class], version = 1, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 

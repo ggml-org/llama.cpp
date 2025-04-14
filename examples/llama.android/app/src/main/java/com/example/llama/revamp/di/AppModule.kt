@@ -1,8 +1,7 @@
 package com.example.llama.revamp.di
 
 import android.content.Context
-import com.example.llama.revamp.data.preferences.UserPreferences
-import com.example.llama.revamp.data.repository.SystemPromptRepository
+import com.example.llama.revamp.data.local.AppDatabase
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import dagger.Module
@@ -15,6 +14,7 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+
     @Provides
     @Singleton
     fun provideInferenceEngine() = InferenceEngine()
@@ -24,10 +24,8 @@ object AppModule {
     fun providePerformanceMonitor(@ApplicationContext context: Context) = PerformanceMonitor(context)
 
     @Provides
-    @Singleton
-    fun provideUserPreferences(@ApplicationContext context: Context) = UserPreferences(context)
+    fun provideAppDatabase(@ApplicationContext context: Context) = AppDatabase.getDatabase(context)
 
     @Provides
-    @Singleton
-    fun provideSystemPromptRepository(@ApplicationContext context: Context) = SystemPromptRepository(context)
+    fun providesSystemPromptDao(appDatabase: AppDatabase) = appDatabase.systemPromptDao()
 }

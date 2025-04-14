@@ -1,20 +1,22 @@
 package com.example.llama.revamp.data.repository
 
-import android.content.Context
-import com.example.llama.revamp.data.local.AppDatabase
+import com.example.llama.revamp.data.local.SystemPromptDao
 import com.example.llama.revamp.data.local.SystemPromptEntity
 import com.example.llama.revamp.data.model.SystemPrompt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Repository for managing system prompts.
  */
-class SystemPromptRepository(context: Context) {
-
-    private val systemPromptDao = AppDatabase.getDatabase(context).systemPromptDao()
+@Singleton
+class SystemPromptRepository @Inject constructor(
+    private val systemPromptDao: SystemPromptDao,
+) {
 
     /**
      * Get all preset prompts.
