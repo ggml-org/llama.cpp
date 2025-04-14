@@ -3,9 +3,11 @@
 #include <iomanip>
 #include <chrono>
 
-#define NR_DPUS 64
+#define NR_DPUS 512
 #define NR_LAYER 2
 #define DPU_BINARY "./dpu/gemv_dpu"
+
+int16_t mul_table_int4_int8[1<<4][1<<8];
 
 void fp_table_init(void) {
   for (int i = 0; i < (1 << 16); ++i) {
@@ -17,6 +19,14 @@ void fp_table_init(void) {
             }
 }
 
+void mul_table_int4_int8_init(void) {
+  for(int i = 0; i < (1 << 4); ++i){
+    for(int j = 0; j< (1 << 8); ++j){
+      mul_table_int4_int8[i][j] = (i - 8) * (j + INT8_MIN);
+    }
+  }
+}
+
 #ifdef PIM_KERNEL
 int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct ggml_tensor * in_q, struct ggml_tensor * res) {
   uint32_t pim_offset = 0;
@@ -24,6 +34,7 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   std::chrono::high_resolution_clock::time_point ex_tp1 = std::chrono::high_resolution_clock::now();
 
+  DPU_ASSERT(dpu_broadcast_to(context->dpu_set, "mul_table_int4_int8", 0, (void *)(mul_table_int4_int8), sizeof(mul_table_int4_int8), DPU_XFER_DEFAULT));
   //ggml_table_f32_f16 tbl is transferred to pim
   DPU_ASSERT(dpu_broadcast_to(context->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, (void *)(ggml_table_f32_f16), sizeof(ggml_table_f32_f16), DPU_XFER_DEFAULT));
   pim_offset += sizeof(ggml_table_f32_f16);
@@ -163,6 +174,7 @@ void gemv_cpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct
 int main(int argc, char** argv) {
   // init fp table for fp16 dump
   fp_table_init();
+  mul_table_int4_int8_init();
 
 #ifdef PIM_KERNEL
   // WQ-PIM allocate dpu

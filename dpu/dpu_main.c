@@ -29,6 +29,8 @@
 
 __mram_ptr float *ptable_f32_f16;
 
+__host int16_t mul_table_int4_int8[1<<4][1<<8];
+
 inline static float lookup_fp16_to_fp32(uint16_t f) {
     uint16_t s;
     memcpy(&s, &f, sizeof(uint16_t));
@@ -238,10 +240,12 @@ int main() {
                 for (int i = 0; i < segment_nb_size; i++) {
                     int sumi = 0;
                     for (int j = 0; j < qk/2; ++j) {
-                        const int v0 = (pweight_cache[i].qs[j] & 0x0F) - 8;
-                        const int v1 = (pweight_cache[i].qs[j] >>   4) - 8;
+                        const int8_t v0 = (pweight_cache[i].qs[j] & 0x0F) - 8;
+                        const int8_t v1 = (pweight_cache[i].qs[j] >>   4) - 8;
 
-                        sumi += (v0 * pinput_cache[i].qs[j]) + (v1 * pinput_cache[i].qs[j + qk/2]);
+                        // sumi += (v0 * pinput_cache[i].qs[j]) + (v1 * pinput_cache[i].qs[j + qk/2]);
+                        sumi += mul_table_int4_int8[v0 + 8][pinput_cache[i].qs[j] - INT8_MIN] + 
+                                mul_table_int4_int8[v1 + 8][pinput_cache[i].qs[j + qk/2] - INT8_MIN];
                     }
                     
                     int psumf_idx = l * weight_rows_cur_thread + k / SEGMENT_PER_ROW;

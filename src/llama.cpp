@@ -9342,6 +9342,16 @@ static struct ggml_tensor * llm_build_lora_mm(
 
 #ifdef PIM_KERNEL
 extern float ggml_table_f32_f16[1 << 16];
+extern int16_t mul_table_int4_int8[1<<4][1<<8];
+
+static void mul_table_int4_int8_init(void) {
+    for(int i = 0; i < (1 << 4); ++i){
+        for(int j = 0; j< (1 << 8); ++j){
+            mul_table_int4_int8[i][j] = (i - 8) * (j + INT8_MIN);
+        }
+    }
+}
+
 int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_model *model, struct pim_meta *pim_metadata, uint32_t offset_base) {
   GGML_ASSERT(w_id < WCNT);
   struct dpu_set_t dpu;
@@ -9392,6 +9402,9 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     memset(pqcontext,0,sizeof(struct pim_context));
     DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
     DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+
+    mul_table_int4_int8_init();
+    DPU_ASSERT(dpu_broadcast_to(pqcontext->dpu_set, "mul_table_int4_int8", 0, (void *)(mul_table_int4_int8), sizeof(mul_table_int4_int8), DPU_XFER_DEFAULT));
 
     for (int uuu=0;uuu<16;uuu++) {
         printf("ggml_table_f32_f16[%d]=%f\n",uuu,ggml_table_f32_f16[uuu]);

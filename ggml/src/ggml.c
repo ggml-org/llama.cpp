@@ -490,6 +490,10 @@ static ggml_fp16_t ggml_table_gelu_quick_f16[1 << 16];
 // precomputed f32 table for f16 (256 KB) (ggml-impl.h)
 float ggml_table_f32_f16[1 << 16];
 
+#ifdef PIM_KERNEL
+    int16_t mul_table_int4_int8[1<<4][1<<8];
+#endif
+
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int has_neon;
