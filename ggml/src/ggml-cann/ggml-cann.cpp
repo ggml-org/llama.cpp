@@ -160,28 +160,27 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
          * @brief The maximum reuse margin for a buffer.
          */
         static const size_t max_reuse_margin = 1ull << 22;  // 4MB
-    
+
         /**
          * @brief The minimum free margin for a buffer.
          */
         static const size_t min_free_margin = 1ull << 20;   // 1MB
-    
-    
+
         /**
          * @brief The alignment for buffer allocation.
          */
-       static const size_t alignment = 128;
-    
+        static const size_t alignment = 128;
+
         /**
          * @brief The device ID associated with this buffer pool.
          */
         int device;
-    
+
         /**
          * @brief Whether to disable clean during buffer allocation.
          */
         bool disable_clean = false;
-    
+
         /**
          * @brief Structure representing a CANN buffer.
          */
@@ -189,12 +188,12 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             void* ptr = nullptr;  ///< Pointer to the buffer.
             size_t size = 0;      ///< Size of the buffer.
             std::chrono::steady_clock::time_point last_used;  ///< Last used time.
-    
+
             bool operator>(const ggml_cann_buffer& other) const {
                 return size > other.size;
             }
         };
-    
+
         /**
          * @brief Array of CANN buffers in the pool.
          */
@@ -202,12 +201,12 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
         std::priority_queue<ggml_cann_buffer,
                             std::vector<ggml_cann_buffer>,
                             std::greater<>> free_buffers ;
-    
+
         /**
          * @brief Total size of all buffers in the pool.
          */
         size_t pool_size = 0;
-    
+
         /**
          * @brief Constructor to initialize the buffer pool for a specific device.
          *
@@ -216,7 +215,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
         explicit ggml_cann_pool_buf_prio(int device) : device(device) {
             disable_clean = getenv("GGML_CANN_DISABLE_BUF_POOL_CLEAN") != nullptr;
         }
-    
+
         /**
          * @brief Destructor to free all buffers in the pool.
          */
@@ -229,7 +228,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             buffer_pool.clear();
             GGML_ASSERT(pool_size == 0);
         }
-    
+
         /**
          * @brief Allocate a buffer of the given size.
          *
@@ -243,16 +242,16 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             if (size == 0) {
                 size = alignment;
             }
-    
+
             void* ptr = nullptr;
             auto now = std::chrono::steady_clock::now();
-    
+
             std::vector<ggml_cann_buffer> free_buffers_rest;
             free_buffers_rest.reserve(free_buffers.size());
             while (!free_buffers.empty()) {
                 auto b = free_buffers.top();
                 free_buffers.pop();
-    
+
                 if (b.size >= size) {
                     // reuse the buffer if the size is enough
                     const size_t margin = b.size - size;
@@ -273,7 +272,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
                         break;
                     }
                 }
-    
+
                 bool should_clean = !disable_clean &&
                                    b.size > min_free_margin &&
                                    std::chrono::duration_cast<std::chrono::milliseconds>(now - b.last_used).count() > 100;
@@ -298,14 +297,14 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             for (ggml_cann_buffer &b : free_buffers_rest) {
                 free_buffers.push(std::move(b));
             }
-    
+
     #ifdef DEBUG_CANN_MALLOC
             GGML_LOG_INFO("cann pool[%d] free pool_size = %5u MB\n\n", device, (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576));
     #endif
             if (ptr != nullptr) {
                 return ptr;
             }
-    
+
             // allocate a new buffer if no buffer can be reused
             ggml_cann_set_device(device);
             ACL_CHECK(aclrtMalloc(&ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
@@ -322,7 +321,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             buffer_pool.emplace(ptr, size);
             return ptr;
         }
-    
+
         /**
          * @brief Free a buffer and return it to the pool.
          *
@@ -334,7 +333,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
             if (it == buffer_pool.end()) {
                 GGML_ABORT("cann pool[%d]: buffer %p not found in pool\n", device, ptr);
             }
-    
+
             auto now = std::chrono::steady_clock::now();
             free_buffers.emplace(ggml_cann_buffer{ptr, it->second, now});
     #ifdef DEBUG_CANN_MALLOC
@@ -346,7 +345,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
     #endif
         }
     };
-    
+
 /**
  * @brief A pool of CANN buffers(segment buffer).
  *
