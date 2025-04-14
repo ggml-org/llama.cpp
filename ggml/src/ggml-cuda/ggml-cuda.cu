@@ -107,10 +107,10 @@ static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device)
 
         // fall back to cudaMalloc if not supported (e.g. on Windows)
         if (err == hipErrorNotSupported) {
-            static bool warnedUnsupported = false;
-            if (!warnedUnsupported) {
+            static bool warned_unsupported = false;
+            if (!warned_unsupported) {
                 GGML_LOG_WARN("hipMallocManaged unsupported, falling back to hipMalloc.\n");
-                warnedUnsupported = true;
+                warned_unsupported = true;
             }
 
             err = cudaMalloc(ptr, size);
