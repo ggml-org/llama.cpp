@@ -13,10 +13,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -24,7 +24,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.engine.InferenceEngine
-import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.MainViewModel
@@ -34,13 +33,15 @@ fun BenchmarkScreen(
     onBackPressed: () -> Unit,
     onRerunPressed: () -> Unit,
     onSharePressed: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions,
     viewModel: MainViewModel = hiltViewModel()
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
+
+    LaunchedEffect(selectedModel) {
+        viewModel.runBenchmark()
+    }
 
     PerformanceAppScaffold(
         title = "Chat",

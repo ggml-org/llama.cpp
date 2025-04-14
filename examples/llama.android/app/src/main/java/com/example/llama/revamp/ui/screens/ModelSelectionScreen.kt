@@ -14,7 +14,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,7 +26,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,8 +37,6 @@ fun ModelSelectionScreen(
     onModelSelected: (ModelInfo) -> Unit,
     onManageModelsClicked: () -> Unit,
     onMenuClicked: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions
 ) {
     // For demo purposes, we'll use sample models
     val models = remember { ModelInfo.getSampleModels() }

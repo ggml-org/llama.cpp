@@ -55,11 +55,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.MainViewModel
@@ -159,10 +159,11 @@ fun ConversationScreen(
 }
 
 @Composable
-fun AnimatedSystemPrompt(modelName: String?, systemPrompt: String?) {
+fun AnimatedSystemPrompt(
+    modelName: String?,     // TODO-han.yin: add model name into this card, on top of system prompt!
+    systemPrompt: String?
+) {
     var expanded by remember { mutableStateOf(false) }
-
-    // TODO-han.yin: add model name into this card, on top of system prompt!
 
     if (!systemPrompt.isNullOrBlank()) {
         Card(

@@ -97,18 +97,16 @@ fun AppContent(
 
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
-
-    // Helper function to handle back press with model unloading check
     val handleBackWithModelCheck = {
         if (isModelLoading) {
             // If model is still loading, ignore the request
             true // Mark as handled
         } else if (isModelLoaded) {
             showUnloadDialog = true
-            pendingNavigation = { navController.popBackStack() }
+            pendingNavigation = { navigationActions.navigateUp() }
             true // Mark as handled
         } else {
-            navController.popBackStack()
+            navigationActions.navigateUp()
             true // Mark as handled
         }
     }
@@ -138,14 +136,9 @@ fun AppContent(
     val drawerGesturesEnabled by remember(currentRoute, drawerState.currentValue) {
         derivedStateOf {
             // Always allow gesture dismissal when drawer is open
-            if (drawerState.currentValue == DrawerValue.Open) {
-                true
-            } else {
-                // Only enable drawer opening by gesture on these screens
-                currentRoute == AppDestinations.MODEL_SELECTION_ROUTE ||
-                    currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE ||
-                    currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE
-            }
+            if (drawerState.currentValue == DrawerValue.Open) true
+            // Only enable drawer opening by gesture on these screens
+            else currentRoute == AppDestinations.MODEL_SELECTION_ROUTE
         }
     }
 
@@ -191,8 +184,6 @@ fun AppContent(
                         navigationActions.navigateToModelsManagement()
                     },
                     onMenuClicked = openDrawer,
-                    drawerState = drawerState,
-                    navigationActions = navigationActions
                 )
             }
 
@@ -201,8 +192,21 @@ fun AppContent(
                 ModelLoadingScreen(
                     engineState = engineState,
                     onBenchmarkSelected = {
-                        mainVewModel.prepareForBenchmark()
-                        navigationActions.navigateToBenchmark()
+                        // Store a reference to the loading job
+                        val loadingJob = coroutineScope.launch {
+                            mainVewModel.prepareForBenchmark()
+                            // Check if the job wasn't cancelled before navigating
+                            if (isActive) {
+                                navigationActions.navigateToBenchmark()
+                            }
+                        }
+
+
+                        // Update the pendingNavigation handler to cancel any ongoing loading
+                        pendingNavigation = {
+                            loadingJob.cancel()
+                            navigationActions.navigateUp()
+                        }
                     },
                     onConversationSelected = { systemPrompt ->
                         // Store a reference to the loading job
@@ -216,15 +220,13 @@ fun AppContent(
                         // Update the pendingNavigation handler to cancel any ongoing loading
                         pendingNavigation = {
                             loadingJob.cancel()
-                            navController.popBackStack()
+                            navigationActions.navigateUp()
                         }
                     },
                     onBackPressed = {
                         // Need to unload model before going back
                         handleBackWithModelCheck()
                     },
-                    drawerState = drawerState,
-                    navigationActions = navigationActions
                 )
             }
 
@@ -252,8 +254,6 @@ fun AppContent(
                     onSharePressed = {
                         // Stub for sharing functionality
                     },
-                    drawerState = drawerState,
-                    navigationActions = navigationActions,
                     viewModel = mainVewModel
                 )
             }
@@ -261,9 +261,7 @@ fun AppContent(
             // Settings General Screen
             composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
                 SettingsGeneralScreen(
-                    onBackPressed = { navController.popBackStack() },
-                    drawerState = drawerState,
-                    navigationActions = navigationActions,
+                    onBackPressed = { navigationActions.navigateUp() },
                     onMenuClicked = openDrawer
                 )
             }
@@ -271,7 +269,7 @@ fun AppContent(
             // Models Management Screen
             composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
                 ModelsManagementScreen(
-                    onBackPressed = { navController.popBackStack() },
+                    onBackPressed = { navigationActions.navigateUp() },
                 )
             }
         }

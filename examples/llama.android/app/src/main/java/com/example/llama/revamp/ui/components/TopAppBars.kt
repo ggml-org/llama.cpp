@@ -26,7 +26,6 @@ import com.example.llama.revamp.monitoring.MemoryMetrics
 import com.example.llama.revamp.monitoring.TemperatureMetrics
 import com.example.llama.revamp.monitoring.TemperatureWarningLevel
 
-// TopAppBars.kt
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DefaultTopBar(

@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -22,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.DefaultAppScaffold
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
@@ -33,8 +31,6 @@ import com.example.llama.revamp.viewmodel.PerformanceViewModel
 fun SettingsGeneralScreen(
     performanceViewModel: PerformanceViewModel = hiltViewModel(),
     onBackPressed: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions,
     onMenuClicked: () -> Unit
 ) {
     // Collect state from ViewModel

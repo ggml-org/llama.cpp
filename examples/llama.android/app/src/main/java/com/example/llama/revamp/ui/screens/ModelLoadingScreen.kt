@@ -23,7 +23,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DrawerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,7 +49,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.InferenceEngine
-import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 
@@ -66,8 +64,6 @@ fun ModelLoadingScreen(
     onBenchmarkSelected: () -> Unit,
     onConversationSelected: (String?) -> Unit,
     onBackPressed: () -> Unit,
-    drawerState: DrawerState,
-    navigationActions: NavigationActions
 ) {
     val presetPrompts by viewModel.presetPrompts.collectAsState()
     val recentPrompts by viewModel.recentPrompts.collectAsState()

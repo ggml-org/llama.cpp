@@ -11,7 +11,6 @@ import androidx.compose.runtime.remember
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
-// DefaultAppScaffold.kt
 @Composable
 fun DefaultAppScaffold(
     title: String,
@@ -35,7 +34,6 @@ fun DefaultAppScaffold(
     )
 }
 
-// PerformanceAppScaffold.kt
 @Composable
 fun PerformanceAppScaffold(
     performanceViewModel: PerformanceViewModel = hiltViewModel(),
@@ -68,7 +66,6 @@ fun PerformanceAppScaffold(
     )
 }
 
-// StorageAppScaffold.kt
 @Composable
 fun StorageAppScaffold(
     title: String,

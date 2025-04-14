@@ -57,30 +57,21 @@ class MainViewModel @Inject constructor (
     /**
      * Prepares the engine for benchmark mode.
      */
-    fun prepareForBenchmark() {
-        viewModelScope.launch {
-            _selectedModel.value?.let { model ->
-                inferenceEngine.loadModel(model.path)
-                runBenchmark()
-            }
+    suspend fun prepareForBenchmark() {
+        _selectedModel.value?.let { model ->
+            inferenceEngine.loadModel(model.path)
         }
     }
 
     /**
      * Runs the benchmark with current parameters.
      */
-    private suspend fun runBenchmark() {
-        inferenceEngine.bench(512, 128, 1, 3)
-    }
+    suspend fun runBenchmark() = inferenceEngine.bench(512, 128, 1, 3)
 
     /**
      * Reruns the benchmark.
      */
-    fun rerunBenchmark() {
-        viewModelScope.launch {
-            runBenchmark()
-        }
-    }
+    fun rerunBenchmark() = viewModelScope.launch { runBenchmark() }
 
     /**
      * Prepares the engine for conversation mode.
