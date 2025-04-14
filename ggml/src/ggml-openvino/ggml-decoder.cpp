@@ -6,222 +6,66 @@
 #include <fstream>
 
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
+    std::string node_name;
+    if (node->op == GGML_OP_CPY) {
+        // CPY updates the input tensor in place. For later ov op that uses the
+        // input tensor of CPY, we need to make sure they get the updated tensor
+        // by putting the src tensor name in the tensor_map in
+        // <openvino>/src/frontends/ggml/src/translate_session.cpp
+        node_name = std::string(node->view_src->name);
+    } else {
+        node_name = std::string(node->name);
+    }
+
     std::string src0_name = std::string(node->src[0]->name);
-    std::string node_name = std::string(node->name);
+    inputs[src0_name] = node->src[0];
+    outputs[node_name] = node;
+    m_input_names.push_back(src0_name);
+    m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
+    if (node->op == GGML_OP_CPY && node->view_src) {
+        m_output_names.push_back(node->view_src->name);
+    } else {
+        m_output_names.push_back(node_name);
+    }
+
+    if (node->src[1]) {
+        std::string src1_name = std::string(node->src[1]->name);
+        inputs[src1_name] = node->src[1];
+        m_input_names.push_back(src1_name);
+        m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
+    }
+    if (node->src[2]) {
+        std::string src2_name = std::string(node->src[2]->name);
+        inputs[src2_name] = node->src[2];
+        m_input_names.push_back(src2_name);
+        m_op_node_name.emplace_back(src2_name, ggml_op_name(node->op));
+    }
 
     switch (node->op) {
-        // Unary OPs 
-        case GGML_OP_UNARY:
-        case GGML_OP_RESHAPE:
-        case GGML_OP_TRANSPOSE:
-        case GGML_OP_PERMUTE:
-        case GGML_OP_RMS_NORM:
-        {
-            inputs[src0_name] = node->src[0];
-            outputs[node_name] = node;
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_output_names.push_back(node_name);
-            break;
+    case GGML_OP_CONT: {
+        if (ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node) &&
+            (node->src[0]->ne[0] * node->src[0]->nb[0] == node->src[0]->nb[1])) {
+            m_continuous = true;
+        } else {
+            m_continuous = false;
         }
-        case GGML_OP_CONT:
-        {
-            if (ggml_is_contiguous(node->src[0])
-                && ggml_is_contiguous(node)
-                && (node->src[0]->ne[0] * node->src[0]->nb[0] == node->src[0]->nb[1])) {
-                inputs[src0_name] = node->src[0];
-                outputs[node_name] = node;
-                m_input_names.push_back(src0_name);
-                m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-                m_output_names.push_back(node_name);
-
-                ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
-                                            static_cast<size_t>(node->src[0]->ne[1]),
-                                            static_cast<size_t>(node->src[0]->ne[0])};
-                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
-                m_params.push_back(input_param);
-
-                m_continuous = true;
-                break;
-            }
-
-            if (node->src[0]->type == node->type && node->src[0]->ne[0] == node->ne[0] &&
-                node->src[0]->nb[0] == ggml_type_size(node->src[0]->type) &&
-                node->nb[0] == ggml_type_size(node->src[0]->type)) {
-
-                inputs[src0_name] = node->src[0];
-                outputs[node_name] = node;
-                m_input_names.push_back(src0_name);
-                m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-                m_output_names.push_back(node_name);
-
-                const size_t element_size = ggml_type_size(node->src[0]->type);
-                size_t valid_elems = static_cast<size_t>(node->src[0]->ne[0]); // 3072
-                size_t num_rows    = static_cast<size_t>(node->src[0]->ne[1]); // 7
-                size_t dim2        = static_cast<size_t>(node->src[0]->ne[2]);  // 1
-                size_t phys_stride = static_cast<size_t>(node->src[0]->nb[1]) / element_size; // 9216
-                // size_t total_phys = (num_rows - 1) * phys_stride + valid_elems; // 6*9216 + 3072 = 58368
-                size_t total_phys = num_rows * phys_stride; // 7 * 9216 = 64512
-                ov::Shape input_shape = { dim2, num_rows, phys_stride };
-                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
-                m_params.push_back(input_param);
-
-                m_continuous = false;
-                break;
-            }
-
-            if (ggml_is_contiguous(node)) {
-                inputs[src0_name] = node->src[0];
-                outputs[node_name] = node;
-                m_input_names.push_back(src0_name);
-                m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-                m_output_names.push_back(node_name);
-
-                ov::Shape input_shape = { static_cast<size_t>(node->src[0]->ne[2]),
-                                            static_cast<size_t>(node->src[0]->ne[1]),
-                                            static_cast<size_t>(node->src[0]->ne[0])};
-                auto input_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input_shape);
-                m_params.push_back(input_param);
-
-                m_continuous = false;
-                break;
-            }
+        break;
+    }
+    case GGML_OP_CPY: {
+        m_continuous = ggml_is_contiguous(node);
+        break;
+    }
+    case GGML_OP_MUL_MAT: {
+        if (!ggml_is_contiguous(node->src[1]) ||
+            node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
+            m_continuous = false;
+        } else {
+            m_continuous = true;
         }
-        case GGML_OP_CPY:
-        {
-            if (ggml_is_contiguous(node)) {
-                std::string src1_name = std::string(node->src[1]->name);
-                inputs[src0_name] = node->src[0];
-                src1_name = std::string(node->src[1]->view_src->name);
-                inputs[src1_name] = node->src[1];
-                node_name = std::string(node->view_src->name);
-                outputs[node_name] = node;
-                m_input_names.push_back(src0_name);
-                m_input_names.push_back(src1_name);
-                m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-                m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-                m_output_names.push_back(node_name);
-                m_continuous = true;
-
-                ov::Shape input1_shape = { static_cast<size_t>(node->src[0]->ne[2]),
-                                            static_cast<size_t>(node->src[0]->ne[1]),
-                                            static_cast<size_t>(node->src[0]->ne[0])};
-                auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input1_shape);
-                m_params.push_back(input1_param);
-                ov::Shape input2_shape = { static_cast<size_t>(node->src[1]->ne[2]),
-                                            static_cast<size_t>(node->src[1]->ne[1]),
-                                            static_cast<size_t>(node->src[1]->view_src->ne[0])};
-                auto input2_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, input2_shape);
-                m_params.push_back(input2_param);
-                break;
-            } else {
-                std::string src1_name = std::string(node->src[1]->name);
-                inputs[src0_name] = node->src[0];
-                src1_name = std::string(node->src[1]->view_src->name);
-                inputs[src1_name] = node->src[1];
-                node_name = std::string(node->view_src->name);
-                outputs[node_name] = node;
-                m_input_names.push_back(src0_name);
-                m_input_names.push_back(src1_name);
-                m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-                m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-                m_output_names.push_back(node_name);
-
-                ov::Shape input0_shape = { static_cast<size_t>(node->src[0]->ne[2]),
-                    static_cast<size_t>(node->src[0]->ne[1]),
-                    static_cast<size_t>(node->src[0]->ne[0])};
-                auto input0_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f32, input0_shape);
-                m_params.push_back(input0_param);
-                ov::Shape input1_shape = { 1, 1, static_cast<size_t>(node->src[1]->nb[2] / node->src[1]->nb[0])};
-                auto input1_param = std::make_shared<ov::op::v0::Parameter>(ov::element::f16, input1_shape);
-                m_params.push_back(input1_param);
-
-                m_continuous = false;
-
-                break;
-            }
-        }
-        // For view, input is node itself
-        case GGML_OP_VIEW:
-        {
-            inputs[src0_name] = node->src[0];
-            outputs[node_name] = node;
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_output_names.push_back(node_name);
-            break;
-        }
-        // SCALE
-        case GGML_OP_SCALE:
-        {
-            inputs[src0_name] = node->src[0];
-            outputs[node_name] = node;
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_output_names.push_back(node_name);
-            break;
-        }
-        case GGML_OP_MUL_MAT:
-        {
-            if (!ggml_is_contiguous(node->src[1]) || node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
-                m_continuous = false;
-            } else {
-                m_continuous = true;
-            }
-            std::string src1_name = std::string(node->src[1]->name);
-            inputs[src0_name] = node->src[0];
-            inputs[src1_name] = node->src[1];
-            outputs[node_name] = node;
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_input_names.push_back(src1_name);
-            m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-            m_output_names.push_back(node_name);
-            break;
-        }
-        // OPs with 2 inputs
-        case GGML_OP_ADD:
-        case GGML_OP_DIV:
-        case GGML_OP_MUL:
-        case GGML_OP_SUB:        
-        case GGML_OP_GET_ROWS:
-        case GGML_OP_SOFT_MAX:
-        {
-            inputs[src0_name] = node->src[0];
-            outputs[node_name] = node;
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_output_names.push_back(node_name);
-            if (node->src[1]) {
-                std::string src1_name = std::string(node->src[1]->name);
-                inputs[src1_name] = node->src[1];
-                m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-                m_input_names.push_back(src1_name);
-            }
-            break;
-        } 
-        // OPs with 3 inputs:
-        case GGML_OP_ROPE:
-        {
-            std::string src1_name = std::string(node->src[1]->name);
-            inputs[src0_name] = node->src[0];
-            inputs[src1_name] = node->src[1];
-            m_input_names.push_back(src0_name);
-            m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-            m_input_names.push_back(src1_name);
-            m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-            outputs[node_name] = node;
-            m_output_names.push_back(node_name);
-            if (node->src[2]) {
-                std::string src2_name = std::string(node->src[2]->name);
-                inputs[src2_name] = node->src[2];
-                m_input_names.push_back(src2_name);
-                m_op_node_name.emplace_back(src2_name, ggml_op_name(node->op));
-            }
-            break;
-        } 
-        default:
-            break;
+        break;
+    }
+    default:
+        break;
     }
 }
 
@@ -334,7 +178,6 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
     m_op_node_name.clear();
     m_decoders.clear();
 
-    // If first init 
     if (m_node) {
         set_input_output(m_node, m_inputs, m_outputs);
     } else {
@@ -353,7 +196,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
 
 ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
     ov::PartialShape input_shape;
-    // Use input_node->ne 
+    // Use input_node->ne
     ggml_tensor * node = m_inputs.at(name);
     std::vector<size_t> shape;
 
@@ -440,7 +283,6 @@ const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& GgmlOvDecoder::get_pa
 
 ov::PartialShape GgmlOvDecoder::get_output_shape(const std::string& name) const {
     ov::PartialShape output_shape;
-    // Use input_node->ne 
     ggml_tensor * node = m_outputs.at(name);
     std::vector<size_t> shape;
 
@@ -552,10 +394,10 @@ const std::string& GgmlOvDecoder::get_op_type() const {
             auto unary_it = unaryOpTypeMap.find(ggml_get_unary_op(m_node));
             if (unary_it != unaryOpTypeMap.end()) {
                 return unary_it->second;
-            } 
+            }
         }
         return it->second;
-    } 
+    }
     static const std::string unknown_op = "UNKNOWN_OP";
     return unknown_op;
 }
