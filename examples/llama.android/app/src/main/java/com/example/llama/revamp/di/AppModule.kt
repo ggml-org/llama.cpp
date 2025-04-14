@@ -4,6 +4,8 @@ import android.content.Context
 import com.example.llama.revamp.data.local.AppDatabase
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.ModelRepositoryImpl
+import com.example.llama.revamp.data.repository.SystemPromptRepository
+import com.example.llama.revamp.data.repository.SystemPromptRepositoryImpl
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import dagger.Binds
@@ -20,6 +22,9 @@ abstract class AppModule {
 
     @Binds
     abstract fun bindsModelsRepository(impl: ModelRepositoryImpl): ModelRepository
+
+    @Binds
+    abstract fun bindsSystemPromptRepository(impl: SystemPromptRepositoryImpl): SystemPromptRepository
 
     companion object {
         @Provides

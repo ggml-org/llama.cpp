@@ -13,15 +13,24 @@ import javax.inject.Singleton
 /**
  * Repository for managing system prompts.
  */
+interface SystemPromptRepository {
+    fun getPresetPrompts(): Flow<List<SystemPrompt>>
+    fun getRecentPrompts(): Flow<List<SystemPrompt>>
+    suspend fun savePromptToRecents(prompt: SystemPrompt)
+    suspend fun saveCustomPrompt(content: String): SystemPrompt
+    suspend fun deletePrompt(id: String)
+    suspend fun deleteAllPrompts()
+}
+
 @Singleton
-class SystemPromptRepository @Inject constructor(
+class SystemPromptRepositoryImpl @Inject constructor(
     private val systemPromptDao: SystemPromptDao,
-) {
+) : SystemPromptRepository {
 
     /**
      * Get all preset prompts.
      */
-    fun getPresetPrompts(): Flow<List<SystemPrompt>> {
+    override fun getPresetPrompts(): Flow<List<SystemPrompt>> {
         // For now, we'll just return the static list since we don't store presets in the database
         return kotlinx.coroutines.flow.flowOf(SystemPrompt.STUB_PRESETS)
     }
@@ -29,7 +38,7 @@ class SystemPromptRepository @Inject constructor(
     /**
      * Get recent prompts from the database.
      */
-    fun getRecentPrompts(): Flow<List<SystemPrompt>> {
+    override fun getRecentPrompts(): Flow<List<SystemPrompt>> {
         return systemPromptDao.getRecentPrompts(MAX_RECENT_PROMPTS)
             .map { entities ->
                 entities.map { it.toDomainModel() }
@@ -40,7 +49,7 @@ class SystemPromptRepository @Inject constructor(
      * Save a prompt to the recents list.
      * If it's already in recents, just update the timestamp.
      */
-    suspend fun savePromptToRecents(prompt: SystemPrompt) {
+    override suspend fun savePromptToRecents(prompt: SystemPrompt) {
         // Check if this prompt already exists
         val existingPrompt = systemPromptDao.getPromptById(prompt.id)
 
@@ -59,7 +68,7 @@ class SystemPromptRepository @Inject constructor(
     /**
      * Create and save a custom prompt.
      */
-    suspend fun saveCustomPrompt(content: String): SystemPrompt {
+    override suspend fun saveCustomPrompt(content: String): SystemPrompt {
         val customPrompt = SystemPrompt.Custom(
             id = UUID.randomUUID().toString(),
             content = content
@@ -94,16 +103,12 @@ class SystemPromptRepository @Inject constructor(
     /**
      * Delete a prompt by ID.
      */
-    suspend fun deletePrompt(id: String) {
-        systemPromptDao.deletePromptById(id)
-    }
+    override suspend fun deletePrompt(id: String) = systemPromptDao.deletePromptById(id)
 
     /**
      * Delete all prompts.
      */
-    suspend fun deleteAllPrompts() {
-        systemPromptDao.deleteAllPrompts()
-    }
+    override suspend fun deleteAllPrompts() = systemPromptDao.deleteAllPrompts()
 
     companion object {
         // Maximum number of recent prompts to keep
