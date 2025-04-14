@@ -13,6 +13,33 @@
 #include <thread>
 #include <unordered_map>
 
+// SmartQuant helper headers
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <errno.h>
+
+#define MAX_LINE_LENGTH 512
+#define MAX_KEY_LENGTH 256
+
+typedef struct {
+    char key[MAX_KEY_LENGTH];
+    int8_t value;
+} WeightEntry;
+
+typedef struct {
+    WeightEntry *entries;
+    size_t count;
+    size_t capacity;
+} WeightMap;
+
+void initWeightMap(WeightMap *map);
+int addWeightEntry(WeightMap *map, const char *key, int8_t value);
+int8_t getWeightValue(const WeightMap *map, const char *key, int *found);
+void freeWeightMap(WeightMap *map);
+
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -463,6 +490,51 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
+// SmartQuant map handlers
+// Initializes the WeightMap
+void initWeightMap(WeightMap *map) {
+    map->entries = NULL;
+    map->count = 0;
+    map->capacity = 0;
+}
+
+// Adds a new entry to the WeightMap
+int addWeightEntry(WeightMap *map, const char *key, int8_t value) {
+    if (map->count >= map->capacity) {
+        size_t new_capacity = (map->capacity == 0) ? 16 : map->capacity * 2;
+		WeightEntry *new_entries = static_cast<WeightEntry*>(realloc(map->entries, new_capacity * sizeof(WeightEntry)));
+        if (new_entries == NULL) {
+            perror("realloc failed");
+            return -1; // Indicate failure
+        }
+        map->entries = new_entries;
+        map->capacity = new_capacity;
+    }
+    strncpy(map->entries[map->count].key, key, MAX_KEY_LENGTH - 1);
+    map->entries[map->count].key[MAX_KEY_LENGTH - 1] = '\0'; // Ensure null termination
+    map->entries[map->count].value = value;
+    map->count++;
+    return 0; // Indicate success
+}
+
+// Retrieves the int8_t value associated with a key
+int8_t getWeightValue(const WeightMap *map, const char *key, int *found) {
+    for (size_t i = 0; i < map->count; ++i) {
+        if (strcmp(map->entries[i].key, key) == 0) {
+            *found = 1;
+            return map->entries[i].value;
+        }
+    }
+    *found = 0;
+    return 0; // Default value if not found
+}
+
+// Frees the memory allocated for the WeightMap
+void freeWeightMap(WeightMap *map) {
+    free(map->entries);
+    initWeightMap(map); // Reset the map
+}
+
 static void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params) {
     ggml_type default_type;
     llama_ftype ftype = params->ftype;
@@ -706,6 +778,52 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ::zeros(fout, meta_size);
     };
 
+	// As workaround, read SmartQuant json here.
+	// Should be read where the imatrix data is read and configurable via parameter
+    FILE *fp;
+    char line[MAX_LINE_LENGTH];
+    WeightMap weight_map;
+
+    initWeightMap(&weight_map);
+
+    const char *filename = "default.smartquant.json";
+
+    fp = fopen(filename, "r");
+    if (fp == NULL) {
+        printf("Error opening SmartQuant JSON file\n");
+    } else {
+		while (fgets(line, sizeof(line), fp) != NULL) {
+			// Basic parsing logic (assuming the file format is consistent)
+			char *token = strtok(line, "{},:\"");
+			char key[MAX_KEY_LENGTH];
+			char value_str[16];
+
+			while (token != NULL) {
+				// The keys are usually the tokens at even positions after the first '{'
+				if (strstr(token, "blk.")) {
+					strncpy(key, token, MAX_KEY_LENGTH - 1);
+					key[MAX_KEY_LENGTH - 1] = '\0';
+
+					token = strtok(NULL, "{},:\""); // Move to the value
+					if (token != NULL) {
+						// The value should be the next token
+						strncpy(value_str, token, sizeof(value_str) - 1);
+						value_str[sizeof(value_str) - 1] = '\0';
+						int value = atoi(value_str);
+						if (value >= INT8_MIN && value <= INT8_MAX) {
+							addWeightEntry(&weight_map, key, (int8_t)value);
+						} else {
+							fprintf(stderr, "Warning: Value '%d' for key '%s' is out of int8_t range and will be skipped.\n", value, key);
+						}
+					}
+				}
+				token = strtok(NULL, "{},:\"");
+			}
+		}
+		fclose(fp);
+		printf("SmartQuant JSON has %ld entries\n", weight_map.count);
+	}
+
     const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
     for (const auto * it : tensors) {
@@ -815,6 +933,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 } else {
                     if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                         imatrix = it->second.data();
+						
+						// if SmartQuant json data is available for tensor->name then set new_type
+						int found = 0;
+						char *search_key = tensor->name;
+						int8_t retrieved_value = getWeightValue(&weight_map, search_key, &found);
+						if (found) {
+							printf("SmartQuant .. ");
+							new_type = static_cast<ggml_type>(retrieved_value);
+						} else printf("SmartQuant Key '%s' not found.\n", search_key);
+
                     } else {
                         LLAMA_LOG_INFO("\n====== %s: imatrix size %d is different from tensor size %d for %s\n", __func__,
                                 int(it->second.size()), int(tensor->ne[0]*tensor->ne[2]), tensor->name);
@@ -896,7 +1024,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         zeros(fout, GGML_PAD(new_size, align) - new_size);
     }
     close_ofstream();
-
+	freeWeightMap(&weight_map); // free SmartQuant map
+		
     LLAMA_LOG_INFO("%s: model size  = %8.2f MB\n", __func__, total_size_org/1024.0/1024.0);
     LLAMA_LOG_INFO("%s: quant size  = %8.2f MB\n", __func__, total_size_new/1024.0/1024.0);
 
