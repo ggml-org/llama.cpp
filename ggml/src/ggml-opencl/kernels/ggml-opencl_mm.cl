@@ -847,8 +847,6 @@ float qcom_sub_group_reduce_add(float sum) {
     return sum;
 }
 #define sub_group_reduce_add qcom_sub_group_reduce_add
-#else
-#define sub_group_reduce_add sub_group_reduce_add
 #endif
 
 #undef THREADS_PER_BLK
