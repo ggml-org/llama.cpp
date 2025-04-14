@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.InferenceEngine
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,12 +16,14 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import javax.inject.Inject
 
 /**
  * Main ViewModel that handles the LLM engine state and operations.
  */
-class MainViewModel(
-    private val inferenceEngine: InferenceEngine = InferenceEngine()
+@HiltViewModel
+class MainViewModel @Inject constructor (
+    private val inferenceEngine: InferenceEngine
 ) : ViewModel() {
 
     // Expose the engine state

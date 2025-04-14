@@ -9,16 +9,19 @@ import com.example.llama.revamp.monitoring.MemoryMetrics
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import com.example.llama.revamp.monitoring.TemperatureMetrics
 import com.example.llama.revamp.monitoring.TemperatureWarningLevel
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * ViewModel that manages performance monitoring for the app.
  */
-class PerformanceViewModel(
+@HiltViewModel
+class PerformanceViewModel @Inject constructor(
     private val performanceMonitor: PerformanceMonitor,
     private val userPreferences: UserPreferences
 ) : ViewModel() {

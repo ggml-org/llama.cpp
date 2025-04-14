@@ -5,15 +5,18 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * ViewModel for handling system prompts.
  */
-class SystemPromptViewModel(
+@HiltViewModel
+class SystemPromptViewModel @Inject constructor(
     private val repository: SystemPromptRepository
 ) : ViewModel() {
 
