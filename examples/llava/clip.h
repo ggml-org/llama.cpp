@@ -58,10 +58,10 @@ CLIP_API const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 CLIP_API const int32_t * clip_image_grid(const struct clip_ctx * ctx);
 CLIP_API size_t get_clip_image_grid_size(const struct clip_ctx * ctx);
 
-CLIP_API int clip_n_patches           (const struct clip_ctx * ctx);
-CLIP_API int clip_n_patches_by_img    (const struct clip_ctx * ctx, struct clip_image_f32 * img);
-CLIP_API int clip_n_patches_by_img_u8 (const struct clip_ctx * ctx, struct clip_image_u8 * img);
-CLIP_API int clip_n_mmproj_embd       (const struct clip_ctx * ctx);
+CLIP_API int clip_get_n_output_tokens         (const struct clip_ctx * ctx);
+CLIP_API int clip_img_f32_get_n_output_tokens (const struct clip_ctx * ctx, struct clip_image_f32 * img);
+CLIP_API int clip_img_u8_get_n_output_tokens  (const struct clip_ctx * ctx, struct clip_image_u8 * img);
+CLIP_API int clip_n_mmproj_embd               (const struct clip_ctx * ctx);
 
 CLIP_API int clip_uhd_num_image_embeds_col(struct clip_ctx * ctx_clip);
 CLIP_API void clip_add_load_image_size(struct clip_ctx * ctx_clip, struct clip_image_size * load_image_size);

@@ -124,11 +124,11 @@ static bool eval_string(struct llama_context * ctx_llama, const char* str, int n
 
 static void process_eval_image_embed(struct llava_context * ctx_llava, const struct llava_image_embed * embeds, int n_batch, int * n_past, int idx) {
     float * image_embed = (float *)malloc(clip_embd_nbytes(ctx_llava->ctx_clip));
-    std::memcpy(image_embed, embeds->embed + idx * clip_n_patches(ctx_llava->ctx_clip) * clip_n_mmproj_embd(ctx_llava->ctx_clip), clip_embd_nbytes(ctx_llava->ctx_clip));
+    std::memcpy(image_embed, embeds->embed + idx * clip_get_n_output_tokens(ctx_llava->ctx_clip) * clip_n_mmproj_embd(ctx_llava->ctx_clip), clip_embd_nbytes(ctx_llava->ctx_clip));
 
     auto * slice_embed = (llava_image_embed*)malloc(sizeof(llava_image_embed));
     slice_embed->embed = image_embed;
-    slice_embed->n_image_pos = clip_n_patches(ctx_llava->ctx_clip);
+    slice_embed->n_image_pos = clip_get_n_output_tokens(ctx_llava->ctx_clip);
     llava_eval_image_embed(ctx_llava->ctx_llama, slice_embed, n_batch, n_past);
     llava_image_embed_free(slice_embed);
 }
@@ -136,7 +136,7 @@ static void process_eval_image_embed(struct llava_context * ctx_llava, const str
 static void process_image(struct llava_context * ctx_llava, struct llava_image_embed * embeds, common_params * params, int &n_past) {
     std::string system_prompt;
     int idx = 0;
-    int num_image_embeds = embeds->n_image_pos / clip_n_patches(ctx_llava->ctx_clip);
+    int num_image_embeds = embeds->n_image_pos / clip_get_n_output_tokens(ctx_llava->ctx_clip);
     int has_minicpmv_projector = clip_is_minicpmv(ctx_llava->ctx_clip);
     if (has_minicpmv_projector == 2) {
         system_prompt = "<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n";

@@ -2256,10 +2256,10 @@ void clip_free(clip_ctx * ctx) {
 
 size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
     int extra_tokens = ctx->has_glm_projector ? 2 : 0;
-    return (clip_n_patches(ctx) + extra_tokens) * clip_n_mmproj_embd(ctx) * sizeof(float);
+    return (clip_get_n_output_tokens(ctx) + extra_tokens) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
-static int clip_n_patches_by_img_dims(const struct clip_ctx * ctx, int x, int y) {
+static int clip_img_get_n_output_tokens_by_dims(const struct clip_ctx * ctx, int x, int y) {
     const auto & params = ctx->vision_model.hparams;
 
     int n_patches = (params.image_size / params.patch_size) * (params.image_size / params.patch_size);
@@ -2289,7 +2289,7 @@ static int clip_n_patches_by_img_dims(const struct clip_ctx * ctx, int x, int y)
 }
 
 size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_h, int img_w) {
-    return clip_n_patches_by_img_dims(ctx, img_w, img_h) * clip_n_mmproj_embd(ctx) * sizeof(float);
+    return clip_img_get_n_output_tokens_by_dims(ctx, img_w, img_h) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
 int32_t clip_get_image_size(const struct clip_ctx * ctx) {
@@ -2319,16 +2319,16 @@ size_t get_clip_image_grid_size(const struct clip_ctx * ctx) {
     return ctx->vision_model.hparams.image_grid_pinpoints.size();
 }
 
-int clip_n_patches(const struct clip_ctx * ctx) {
-    return clip_n_patches_by_img_dims(ctx, ctx->vision_model.hparams.image_size, ctx->vision_model.hparams.image_size);
+int clip_get_n_output_tokens(const struct clip_ctx * ctx) {
+    return clip_img_get_n_output_tokens_by_dims(ctx, ctx->vision_model.hparams.image_size, ctx->vision_model.hparams.image_size);
 }
 
-int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
-    return clip_n_patches_by_img_dims(ctx, img->nx, img->ny);
+int clip_img_f32_get_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+    return clip_img_get_n_output_tokens_by_dims(ctx, img->nx, img->ny);
 }
 
-int clip_n_patches_by_img_u8(const struct clip_ctx * ctx, struct clip_image_u8 * img) {
-    return clip_n_patches_by_img_dims(ctx, img->nx, img->ny);
+int clip_img_u8_get_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_u8 * img) {
+    return clip_img_get_n_output_tokens_by_dims(ctx, img->nx, img->ny);
 }
 
 static std::vector<std::vector<std::vector<float>>> get_1d_sincos_pos_embed_from_grid_new(int embed_dim, const std::vector<std::vector<float>> & pos) {

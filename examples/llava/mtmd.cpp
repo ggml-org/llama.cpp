@@ -149,7 +149,7 @@ mtmd_input_chunks * mtmd_tokenize(mtmd_context * ctx,
             }
 
             mtmd_image_tokens * image_tokens = new mtmd_image_tokens;
-            image_tokens->nx = clip_n_patches(ctx->ctx_clip); // TODO @ngxson : use clip_n_patches_by_image
+            image_tokens->nx = clip_get_n_output_tokens(ctx->ctx_clip); // TODO @ngxson : use clip_n_patches_by_image
             image_tokens->ny = 1; // TODO
             image_tokens->batch_f32 = std::move(batch_f32);
 

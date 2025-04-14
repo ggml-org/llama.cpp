@@ -175,7 +175,7 @@ static bool clip_llava_handle_patches(clip_ctx * ctx_clip, std::vector<float *> 
 
     model.ctx = ggml_init(params);
 
-    struct ggml_tensor * image_features = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32, clip_n_mmproj_embd(ctx_clip), clip_n_patches(ctx_clip), num_images - 1); // example: 4096 x 576 x 4
+    struct ggml_tensor * image_features = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32, clip_n_mmproj_embd(ctx_clip), clip_get_n_output_tokens(ctx_clip), num_images - 1); // example: 4096 x 576 x 4
     // ggml_tensor_printf(image_features,"image_features",__LINE__,false,false);
     // fill it with the image embeddings, ignoring the base
     for (size_t i = 1; i < num_images; i++) {
@@ -214,8 +214,8 @@ static bool clip_llava_handle_patches(clip_ctx * ctx_clip, std::vector<float *> 
 
     memcpy(image_embd_out, image_embd_v[0], clip_embd_nbytes(ctx_clip)); // main image as global context
     // append without newline tokens (default behavior in llava_arch when not using unpad ):
-    memcpy(image_embd_out + clip_n_patches(ctx_clip) * clip_n_mmproj_embd(ctx_clip), (float*)result->data, clip_embd_nbytes(ctx_clip) * (num_images-1)); // grid patches
-    *n_img_pos_out = static_cast<int>(result->ne[1]+clip_n_patches(ctx_clip));
+    memcpy(image_embd_out + clip_get_n_output_tokens(ctx_clip) * clip_n_mmproj_embd(ctx_clip), (float*)result->data, clip_embd_nbytes(ctx_clip) * (num_images-1)); // grid patches
+    *n_img_pos_out = static_cast<int>(result->ne[1]+clip_get_n_output_tokens(ctx_clip));
 
     // Debug: Test single segments
     // Current findings: sending base image, sending a segment embedding all works similar to python
@@ -313,7 +313,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
                 image_embd + n_img_pos_out * clip_n_mmproj_embd(ctx_clip),
                 image_embd_v[i],
                 clip_embd_nbytes_by_img(ctx_clip, nx, ny));
-            n_img_pos_out += clip_n_patches_by_img(ctx_clip, img_res);
+            n_img_pos_out += clip_img_f32_get_n_output_tokens(ctx_clip, img_res);
         }
         *n_img_pos = n_img_pos_out;
         for (size_t i = 0; i < image_embd_v.size(); i++) {
@@ -342,7 +342,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
     }
     else if (strcmp(mm_patch_merge_type, "spatial_unpad") != 0) {
         // flat / default llava-1.5 type embedding
-        *n_img_pos = clip_n_patches(ctx_clip);
+        *n_img_pos = clip_get_n_output_tokens(ctx_clip);
         clip_image_f32 * img_res = clip_image_f32_get_img(img_res_v.get(), 0);
         bool encoded = clip_image_encode(ctx_clip, n_threads, img_res, image_embd); // image_embd shape is 576 x 4096
         if (!encoded) {
