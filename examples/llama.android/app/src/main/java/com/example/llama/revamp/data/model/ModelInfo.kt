@@ -1,5 +1,7 @@
 package com.example.llama.revamp.data.model
 
+import java.util.Locale
+
 /**
  * Data class containing information about an LLM model.
  */
@@ -8,10 +10,10 @@ data class ModelInfo(
     val name: String,
     val path: String,
     val sizeInBytes: Long,
-    val parameters: String,
-    val quantization: String,
-    val type: String,
-    val contextLength: Int,
+    val parameters: String?,
+    val quantization: String?,
+    val type: String?,
+    val contextLength: Int?,
     val lastUsed: Long? = null
 ) {
     val formattedSize: String
@@ -19,15 +21,15 @@ data class ModelInfo(
             return when {
                 sizeInBytes >= 1_000_000_000 -> {
                     val sizeInGb = sizeInBytes / 1_000_000_000.0
-                    String.format("%.2f GB", sizeInGb)
+                    String.format(Locale.getDefault(), "%.2f GB", sizeInGb)
                 }
                 sizeInBytes >= 1_000_000 -> {
                     val sizeInMb = sizeInBytes / 1_000_000.0
-                    String.format("%.2f MB", sizeInMb)
+                    String.format(Locale.getDefault(), "%.2f MB", sizeInMb)
                 }
                 else -> {
                     val sizeInKb = sizeInBytes / 1_000.0
-                    String.format("%.2f KB", sizeInKb)
+                    String.format(Locale.getDefault(), "%.2f KB", sizeInKb)
                 }
             }
         }

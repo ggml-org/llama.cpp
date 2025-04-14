@@ -99,13 +99,13 @@ fun ModelCard(
 
             Row {
                 Text(
-                    text = model.parameters,
+                    text = model.parameters ?: " - ",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
 
                 Text(
-                    text = " • ${model.quantization}",
+                    text = " • ${model.quantization ?: " - "}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -120,7 +120,7 @@ fun ModelCard(
             Spacer(modifier = Modifier.height(4.dp))
 
             Text(
-                text = "Context Length: ${model.contextLength}",
+                text = "Context Length: ${model.contextLength ?: " - "}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

@@ -1,13 +1,13 @@
 package com.example.llama.revamp.viewmodel
 
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.StorageMetrics
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -76,15 +76,33 @@ class ModelsManagementViewModel @Inject constructor(
             modelRepository.deleteModels(models.keys)
         }
 
+    private val _importState = MutableStateFlow<ModelImportState>(ModelImportState.Idle)
+    val importState: StateFlow<ModelImportState> = _importState.asStateFlow()
+
     fun importLocalModel(uri: Uri) =
         viewModelScope.launch {
             try {
-                modelRepository.importModel(uri)
+                // Get filename for progress updates
+                val filename = uri.lastPathSegment ?: throw Exception("Model name unknown")
+                _importState.value = ModelImportState.Importing(0f, filename)
+
+                // Import with progress reporting
+                val model = modelRepository.importModel(uri) { progress ->
+                    _importState.value = ModelImportState.Importing(progress, filename)
+                }
+                _importState.value = ModelImportState.Success(model)
+
+                // Reset state after a delay
+                delay(1000)
+                _importState.value = ModelImportState.Idle
             } catch (e: Exception) {
-                // TODO-han.yin: add UI to prompt user about import failure!
-                Log.e(TAG, "Failed to import model from: $uri", e)
+                _importState.value = ModelImportState.Error(e.message ?: "Unknown error")
             }
         }
+
+    fun resetImportState() {
+        _importState.value = ModelImportState.Idle
+    }
 
     fun importFromHuggingFace() {
         // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
@@ -105,4 +123,9 @@ enum class ModelSortOrder {
     LAST_USED
 }
 
-
+sealed class ModelImportState {
+    object Idle : ModelImportState()
+    data class Importing(val progress: Float = 0f, val filename: String = "") : ModelImportState()
+    data class Success(val model: ModelInfo) : ModelImportState()
+    data class Error(val message: String) : ModelImportState()
+}

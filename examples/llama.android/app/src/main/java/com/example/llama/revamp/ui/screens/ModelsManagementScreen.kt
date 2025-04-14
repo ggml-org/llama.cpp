@@ -1,6 +1,11 @@
 package com.example.llama.revamp.ui.screens
 
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,7 +28,10 @@ import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -32,9 +40,11 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -45,6 +55,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.ModelInfo
@@ -55,6 +66,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.example.llama.R
+import com.example.llama.revamp.viewmodel.ModelImportState
 
 /**
  * Screen for managing LLM models (view, download, delete)
@@ -66,13 +78,24 @@ fun ModelsManagementScreen(
 ) {
     val storageMetrics by viewModel.storageMetrics.collectAsState()
     val sortedModels by viewModel.sortedModels.collectAsState()
+
+    // Model sorting
     val sortOrder by viewModel.sortOrder.collectAsState()
-
-    // UI: menu states
     var showSortMenu by remember { mutableStateOf(false) }
-    var showAddModelMenu by remember { mutableStateOf(false) }
 
-    // UI: multi-selection states
+    // Model importing
+    val importState by viewModel.importState.collectAsState()
+
+    var showImportModelMenu by remember { mutableStateOf(false) }
+    val fileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { viewModel.importLocalModel(it) } }
+
+    BackHandler(enabled = importState is ModelImportState.Importing) {
+        /* Ignore back press while importing model */
+    }
+
+    // Multi-selection
     var isMultiSelectionMode by remember { mutableStateOf(false) }
     val selectedModels = remember { mutableStateMapOf<String, ModelInfo>() }
     val exitSelectionMode = {
@@ -238,7 +261,7 @@ fun ModelsManagementScreen(
                             if (isMultiSelectionMode) {
                                 exitSelectionMode()
                             } else {
-                                showAddModelMenu = true
+                                showImportModelMenu = true
                             }
                         },
                         containerColor = MaterialTheme.colorScheme.primaryContainer
@@ -251,8 +274,8 @@ fun ModelsManagementScreen(
 
                     // Add model dropdown menu
                     DropdownMenu(
-                        expanded = showAddModelMenu,
-                        onDismissRequest = { showAddModelMenu = false }
+                        expanded = showImportModelMenu,
+                        onDismissRequest = { showImportModelMenu = false }
                     ) {
                         DropdownMenuItem(
                             text = { Text("Import local model") },
@@ -263,9 +286,8 @@ fun ModelsManagementScreen(
                                 )
                             },
                             onClick = {
-                                // TODO-han.yin: uncomment once file picker done
-                                // viewModel.importLocalModel()
-                                showAddModelMenu = false
+                                fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                                showImportModelMenu = false
                             }
                         )
                         DropdownMenuItem(
@@ -280,7 +302,7 @@ fun ModelsManagementScreen(
                             },
                             onClick = {
                                 viewModel.importFromHuggingFace()
-                                showAddModelMenu = false
+                                showImportModelMenu = false
                             }
                         )
                     }
@@ -288,38 +310,64 @@ fun ModelsManagementScreen(
             )
         },
     ) { paddingValues ->
-        // Main content
-        ModelList(
-            models = sortedModels,
-            isMultiSelectionMode = isMultiSelectionMode,
-            selectedModels = selectedModels,
-            onModelClick = { modelId ->
-                if (isMultiSelectionMode) {
-                    // Toggle selection
-                    if (selectedModels.contains(modelId)) {
-                        selectedModels.remove(modelId)
+        Box(modifier = Modifier.fillMaxSize()) {
+            // Model cards
+            ModelCardList(
+                models = sortedModels,
+                isMultiSelectionMode = isMultiSelectionMode,
+                selectedModels = selectedModels,
+                onModelClick = { modelId ->
+                    if (isMultiSelectionMode) {
+                        // Toggle selection
+                        if (selectedModels.contains(modelId)) {
+                            selectedModels.remove(modelId)
+                        } else {
+                            selectedModels.put(modelId, sortedModels.first { it.id == modelId } )
+                        }
                     } else {
-                        selectedModels.put(modelId, sortedModels.first { it.id == modelId } )
+                        // View model details
+                        viewModel.viewModelDetails(modelId)
                     }
-                } else {
-                    // View model details
+                },
+                onModelInfoClick = { modelId ->
                     viewModel.viewModelDetails(modelId)
+                },
+                onModelDeleteClick = { modelId ->
+                    viewModel.deleteModel(modelId)
+                },
+                modifier = Modifier.padding(paddingValues)
+            )
+
+            // Model import progress overlay
+            when (val state = importState) {
+                is ModelImportState.Importing -> {
+                    ImportProgressOverlay(
+                        progress = state.progress,
+                        filename = state.filename,
+                        onCancel = { /* Implement cancellation if needed */ }
+                    )
                 }
-            },
-            onModelInfoClick = { modelId ->
-                viewModel.viewModelDetails(modelId)
-            },
-            onModelDeleteClick = { modelId ->
-                viewModel.deleteModel(modelId)
-            },
-            modifier = Modifier.padding(paddingValues)
-        )
+                is ModelImportState.Error -> {
+                    ErrorDialog(
+                        message = state.message,
+                        onDismiss = { viewModel.resetImportState() }
+                    )
+                }
+                is ModelImportState.Success -> {
+                    LaunchedEffect(state) {
+                        // Show success snackbar or message
+                        // This will auto-dismiss after the delay in viewModel
+                    }
+                }
+                else -> { /* Idle state, nothing to show */ }
+            }
+        }
     }
 }
 
 
 @Composable
-private fun ModelList(
+private fun ModelCardList(
     models: List<ModelInfo>,
     isMultiSelectionMode: Boolean,
     selectedModels: Map<String, ModelInfo>,
@@ -337,13 +385,16 @@ private fun ModelList(
             items = models,
             key = { it.id }
         ) { model ->
-            ModelItem(
+            ModelCard(
                 model = model,
                 isMultiSelectionMode = isMultiSelectionMode,
                 isSelected = selectedModels.contains(model.id),
                 onClick = { onModelClick(model.id) },
                 onInfoClick = { onModelInfoClick(model.id) },
-                onDeleteClick = { onModelDeleteClick(model.id) }
+                onDeleteClick = {
+                    // TODO-han.yin: pop up an AlertDialog asking user for confirmation
+                    onModelDeleteClick(model.id)
+                }
             )
             Spacer(modifier = Modifier.height(8.dp))
         }
@@ -351,7 +402,7 @@ private fun ModelList(
 }
 
 @Composable
-private fun ModelItem(
+private fun ModelCard(
     model: ModelInfo,
     isMultiSelectionMode: Boolean,
     isSelected: Boolean,
@@ -423,4 +474,96 @@ private fun ModelItem(
             }
         }
     }
+}
+
+@Composable
+fun ImportProgressOverlay(
+    progress: Float,
+    filename: String,
+    onCancel: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.7f))
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Importing Model",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = filename,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "${(progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodyLarge
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "This may take several minutes for large models",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Button(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Text("Cancel")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ErrorDialog(
+    message: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Import Failed") },
+        text = { Text(message) },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("OK")
+            }
+        }
+    )
 }

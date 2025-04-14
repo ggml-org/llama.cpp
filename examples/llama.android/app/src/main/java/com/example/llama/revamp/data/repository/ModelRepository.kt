@@ -4,17 +4,31 @@ import android.content.Context
 import android.net.Uri
 import android.os.StatFs
 import android.provider.OpenableColumns
+import android.util.Log
 import com.example.llama.revamp.data.local.ModelDao
 import com.example.llama.revamp.data.local.ModelEntity
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.data.repository.ModelRepository.ImportProgressTracker
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.nio.ByteBuffer
+import java.nio.channels.Channels
+import java.nio.channels.ReadableByteChannel
+import java.nio.channels.WritableByteChannel
 import java.util.Locale
 import java.util.UUID
 import javax.inject.Inject
@@ -27,9 +41,14 @@ interface ModelRepository {
     fun getStorageMetrics(): Flow<StorageMetrics>
     fun getModels(): Flow<List<ModelInfo>>
 
-    suspend fun importModel(uri: Uri): ModelInfo
+    suspend fun importModel(uri: Uri, progressTracker: ImportProgressTracker? = null): ModelInfo
+
     suspend fun deleteModel(modelId: String)
     suspend fun deleteModels(modelIds: Collection<String>)
+
+    fun interface ImportProgressTracker {
+        fun onProgress(progress: Float) // 0.0f to 1.0f
+    }
 }
 
 @Singleton
@@ -67,38 +86,138 @@ class ModelRepositoryImpl @Inject constructor(
                 }
             }
 
-    override suspend fun importModel(uri: Uri): ModelInfo {
-        // Obtain the local model's file via provided URI
-        val fileName = getFileNameFromUri(uri)
+    override suspend fun importModel(
+        uri: Uri,
+        progressTracker: ImportProgressTracker?
+    ): ModelInfo = withContext(Dispatchers.IO) {
+        val fileName = getFileNameFromUri(uri) ?: throw FileNotFoundException("Filename N/A")
+        val fileSize = getFileSizeFromUri(uri) ?: throw FileNotFoundException("File size N/A")
         val modelFile = File(modelsDir, fileName)
 
-        // Copy file to app's internal storage
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            FileOutputStream(modelFile).use { outputStream ->
-                inputStream.copyTo(outputStream)
+        try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+                ?: throw IOException("Failed to open input stream")
+            val outputStream = FileOutputStream(modelFile)
+
+            if (fileSize > LARGE_MODEL_THRESHOLD_SIZE) {
+                Log.i(TAG, "Copying $fileName (size: $fileSize) via NIO...")
+
+                // Use NIO channels for large models
+                copyWithChannels(inputStream, outputStream, fileSize, progressTracker)
+            } else {
+                Log.i(TAG, "Copying $fileName (size: $fileSize) via buffer...")
+
+                // Default copy with buffer for small models
+                val bufferedInput = BufferedInputStream(inputStream, DEFAULT_BUFFER_SIZE)
+                val bufferedOutput = BufferedOutputStream(outputStream, DEFAULT_BUFFER_SIZE)
+                copyWithBuffer(bufferedInput, bufferedOutput, fileSize, progressTracker)
+
+                // Close streams
+                bufferedOutput.flush()
+                bufferedOutput.close()
+                bufferedInput.close()
             }
-        } ?: throw IOException("Failed to open input stream")
 
-        // Extract model parameters from filename
-        val modelType = extractModelTypeFromFilename(fileName) ?: "unknown"
-        val parameters = extractParametersFromFilename(fileName) ?: "unknown"
-        val quantization = extractQuantizationFromFilename(fileName) ?: "unknown"
+            // Extract model parameters from filename
+            val modelType = extractModelTypeFromFilename(fileName)
+            val parameters = extractParametersFromFilename(fileName)
+            val quantization = extractQuantizationFromFilename(fileName)
 
-        // Create model entity and save via DAO
-        val modelEntity = ModelEntity(
-            id = UUID.randomUUID().toString(),
-            name = fileName.substringBeforeLast('.'),
-            path = modelFile.absolutePath,
-            sizeInBytes = modelFile.length(),
-            parameters = parameters,
-            quantization = quantization,
-            type = modelType,
-            contextLength = DEFAULT_CONTEXT_SIZE,
-            lastUsed = null,
-            dateAdded = System.currentTimeMillis()
-        )
-        modelDao.insertModel(modelEntity)
-        return modelEntity.toModelInfo()
+            // Create model entity and save via DAO
+            ModelEntity(
+                id = UUID.randomUUID().toString(),
+                name = fileName.substringBeforeLast('.'),
+                path = modelFile.absolutePath,
+                sizeInBytes = modelFile.length(),
+                parameters = parameters,
+                quantization = quantization,
+                type = modelType,
+                contextLength = DEFAULT_CONTEXT_SIZE,
+                lastUsed = null,
+                dateAdded = System.currentTimeMillis()
+            ).let {
+                modelDao.insertModel(it)
+                it.toModelInfo()
+            }
+        } catch (e: Exception) {
+            // Clean up partially downloaded file if error occurs
+            if (modelFile.exists()) {
+                modelFile.delete()
+            }
+            throw e
+        }
+    }
+
+    private suspend fun copyWithChannels(
+        input: InputStream,
+        output: OutputStream,
+        totalSize: Long,
+        progressTracker: ImportProgressTracker?
+    ) {
+        val inChannel: ReadableByteChannel = Channels.newChannel(input)
+        val outChannel: WritableByteChannel = Channels.newChannel(output)
+
+        val buffer = ByteBuffer.allocateDirect(NIO_BUFFER_SIZE)
+        var totalBytesRead = 0L
+
+        while (inChannel.read(buffer) != -1) {
+            buffer.flip()
+            while (buffer.hasRemaining()) {
+                outChannel.write(buffer)
+            }
+            totalBytesRead += buffer.position()
+            buffer.clear()
+
+            // Report progress
+            progressTracker?.let {
+                val progress = totalBytesRead.toFloat() / totalSize
+                withContext(Dispatchers.Main) {
+                    it.onProgress(progress)
+                }
+            }
+
+            if (totalBytesRead % (NIO_YIELD_SIZE) == 0L) {
+                yield()
+            }
+        }
+
+        inChannel.close()
+        outChannel.close()
+        output.close()
+        input.close()
+    }
+
+    private suspend fun copyWithBuffer(
+        input: BufferedInputStream,
+        output: BufferedOutputStream,
+        totalSize: Long,
+        progressTracker: ImportProgressTracker?
+    ) {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+
+        var bytesRead: Int
+        var totalBytesRead = 0L
+
+        while (input.read(buffer).also { bytesRead = it } != -1) {
+            output.write(buffer, 0, bytesRead)
+            totalBytesRead += bytesRead
+
+            // Report progress
+            if (progressTracker != null) {
+                val progress = totalBytesRead.toFloat() / totalSize
+                withContext(Dispatchers.Main) {
+                    progressTracker.onProgress(progress)
+                }
+            }
+
+            // Yield less frequently with larger buffers
+            if (totalBytesRead % (DEFAULT_YIELD_SIZE) == 0L) { // Every 64MB
+                yield()
+            }
+        }
+
+        output.close()
+        input.close()
     }
 
     override suspend fun deleteModel(modelId: String) {
@@ -132,7 +251,7 @@ class ModelRepositoryImpl @Inject constructor(
     val totalSpaceBytes: Long
         get() = StatFs(context.filesDir.path).totalBytes
 
-    private fun getFileNameFromUri(uri: Uri): String =
+    private fun getFileNameFromUri(uri: Uri): String? =
         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             if (cursor.moveToFirst()) {
                 cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).let { nameIndex ->
@@ -141,7 +260,21 @@ class ModelRepositoryImpl @Inject constructor(
             } else {
                 null
             }
-        } ?: uri.lastPathSegment ?: "unknown_model.gguf"
+        } ?: uri.lastPathSegment
+
+    /**
+     * Gets the file size from a content URI, or returns 0 if size is unknown.
+     */
+    private fun getFileSizeFromUri(uri: Uri): Long? =
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                cursor.getColumnIndex(OpenableColumns.SIZE).let { sizeIndex ->
+                    if (sizeIndex != -1) cursor.getLong(sizeIndex) else null
+                }
+            } else {
+                null
+            }
+        }
 
     /**
      * Try to extract parameters by looking for patterns like 7B, 13B, etc.
@@ -182,8 +315,17 @@ class ModelRepositoryImpl @Inject constructor(
     }
 
     companion object {
+        private val TAG = ModelRepository::class.java.simpleName
+
         private const val INTERNAL_STORAGE_PATH = "models"
+
         private const val BYTES_IN_GB = 1024f * 1024f * 1024f
+
+        private const val LARGE_MODEL_THRESHOLD_SIZE = 1024 * 1024 * 1024
+        private const val NIO_BUFFER_SIZE = 32 * 1024 * 1024
+        private const val NIO_YIELD_SIZE = 128 * 1024 * 1024
+        private const val DEFAULT_BUFFER_SIZE = 4 * 1024 * 1024
+        private const val DEFAULT_YIELD_SIZE = 16 * 1024 * 1024
 
         private const val STORAGE_METRICS_UPDATE_INTERVAL = 5_000L
         private const val DEFAULT_CONTEXT_SIZE = 8192

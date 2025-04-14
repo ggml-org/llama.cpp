@@ -11,10 +11,10 @@ data class ModelEntity(
     val name: String,
     val path: String,
     val sizeInBytes: Long,
-    val parameters: String,
-    val quantization: String,
-    val type: String,
-    val contextLength: Int,
+    val parameters: String?,
+    val quantization: String?,
+    val type: String?,
+    val contextLength: Int?,
     val lastUsed: Long?,
     val dateAdded: Long
 ) {
