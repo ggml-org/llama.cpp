@@ -58,9 +58,10 @@ CLIP_API const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 CLIP_API const int32_t * clip_image_grid(const struct clip_ctx * ctx);
 CLIP_API size_t get_clip_image_grid_size(const struct clip_ctx * ctx);
 
-CLIP_API int clip_n_patches        (const struct clip_ctx * ctx);
-CLIP_API int clip_n_patches_by_img (const struct clip_ctx * ctx, struct clip_image_f32 * img);
-CLIP_API int clip_n_mmproj_embd    (const struct clip_ctx * ctx);
+CLIP_API int clip_n_patches(const struct clip_ctx * ctx);
+CLIP_API int clip_n_patches_by_img_f32(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+CLIP_API int clip_n_patches_by_img_u8(const struct clip_ctx * ctx, struct clip_image_u8 * img);
+CLIP_API int clip_n_mmproj_embd(const struct clip_ctx * ctx);
 
 CLIP_API int clip_uhd_num_image_embeds_col(struct clip_ctx * ctx_clip);
 CLIP_API void clip_add_load_image_size(struct clip_ctx * ctx_clip, struct clip_image_size * load_image_size);
@@ -74,10 +75,10 @@ CLIP_API struct clip_image_f32_batch * clip_image_f32_batch_init(); // only used
 // nx, ny are the output image dimensions
 CLIP_API unsigned char * clip_image_u8_get_data(struct clip_image_u8 * img, uint32_t * nx, uint32_t * ny);
 
-CLIP_API void clip_image_size_free (struct clip_image_size * img_size);
-CLIP_API void clip_image_u8_free (struct clip_image_u8  * img);
+CLIP_API void clip_image_size_free(struct clip_image_size * img_size);
+CLIP_API void clip_image_u8_free(struct clip_image_u8  * img);
 CLIP_API void clip_image_f32_free(struct clip_image_f32 * img);
-CLIP_API void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
+CLIP_API void clip_image_u8_batch_free(struct clip_image_u8_batch  * batch);
 CLIP_API void clip_image_f32_batch_free(struct clip_image_f32_batch * batch);
 
 // use for accessing underlay data of clip_image_f32_batch

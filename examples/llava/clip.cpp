@@ -2259,11 +2259,37 @@ size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
     return (clip_n_patches(ctx) + extra_tokens) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
+static int clip_n_patches_by_img_dims(const struct clip_ctx * ctx, int x, int y) {
+    const auto & params = ctx->vision_model.hparams;
+
+    int n_patches = (params.image_size / params.patch_size) * (params.image_size / params.patch_size);
+
+    if (ctx->proj_type == PROJECTOR_TYPE_LDP || ctx->proj_type == PROJECTOR_TYPE_LDPV2 || ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE) {
+        n_patches /= 4;
+    } else if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
+        if (ctx->minicpmv_version == 2) {
+            n_patches = 96;
+        }
+        else if (ctx->minicpmv_version == 3) {
+            n_patches = 64;
+        }
+        else if (ctx->minicpmv_version == 4) {
+            n_patches = 64;
+        }
+    } else if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
+        int patch_size = params.patch_size * 2;
+        int x_patch = x / patch_size + (int)(x % patch_size > 0);
+        int y_patch = y / patch_size + (int)(y % patch_size > 0);
+        n_patches = x_patch * y_patch;
+    } else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
+        n_patches = 256;
+    }
+
+    return n_patches;
+}
+
 size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_h, int img_w) {
-    clip_image_f32 img;
-    img.nx = img_w;
-    img.ny = img_h;
-    return clip_n_patches_by_img(ctx, &img) * clip_n_mmproj_embd(ctx) * sizeof(float);
+    return clip_n_patches_by_img_dims(ctx, img_w, img_h) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
 int32_t clip_get_image_size(const struct clip_ctx * ctx) {
@@ -2294,39 +2320,15 @@ size_t get_clip_image_grid_size(const struct clip_ctx * ctx) {
 }
 
 int clip_n_patches(const struct clip_ctx * ctx) {
-    clip_image_f32 img;
-    img.nx = ctx->vision_model.hparams.image_size;
-    img.ny = ctx->vision_model.hparams.image_size;
-    return clip_n_patches_by_img(ctx, &img);
+    return clip_n_patches_by_img_dims(ctx, ctx->vision_model.hparams.image_size, ctx->vision_model.hparams.image_size);
 }
 
-int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
-    const auto & params = ctx->vision_model.hparams;
+int clip_n_patches_by_img_f32(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+    return clip_n_patches_by_img_dims(ctx, img->nx, img->ny);
+}
 
-    int n_patches = (params.image_size / params.patch_size) * (params.image_size / params.patch_size);
-
-    if (ctx->proj_type == PROJECTOR_TYPE_LDP || ctx->proj_type == PROJECTOR_TYPE_LDPV2 || ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE) {
-        n_patches /= 4;
-    } else if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
-        if (ctx->minicpmv_version == 2) {
-            n_patches = 96;
-        }
-        else if (ctx->minicpmv_version == 3) {
-            n_patches = 64;
-        }
-        else if (ctx->minicpmv_version == 4) {
-            n_patches = 64;
-        }
-    } else if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
-        int patch_size = params.patch_size * 2;
-        int x_patch = img->nx / patch_size + (int)(img->nx % patch_size > 0);
-        int y_patch = img->ny / patch_size + (int)(img->ny % patch_size > 0);
-        n_patches = x_patch * y_patch;
-    } else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
-        n_patches = 256;
-    }
-
-    return n_patches;
+int clip_n_patches_by_img_u8(const struct clip_ctx * ctx, struct clip_image_u8 * img) {
+    return clip_n_patches_by_img_dims(ctx, img->nx, img->ny);
 }
 
 static std::vector<std::vector<std::vector<float>>> get_1d_sincos_pos_embed_from_grid_new(int embed_dim, const std::vector<std::vector<float>> & pos) {
