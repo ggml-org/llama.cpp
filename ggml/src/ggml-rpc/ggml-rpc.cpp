@@ -372,7 +372,7 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // RPC response: | response_size (8 bytes) | response_data (response_size bytes) |
-static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size) {
+static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cmd, const void * input, size_t input_size, void * output, size_t output_size, bool noresp = false) {
     uint8_t cmd_byte = cmd;
     if (!send_data(sock->fd, &cmd_byte, sizeof(cmd_byte))) {
         return false;
@@ -383,17 +383,19 @@ static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cm
     if (!send_data(sock->fd, input, input_size)) {
         return false;
     }
-    // TODO: currently the output_size is always known, do we need support for commands with variable output size?
-    // even if we do, we can skip sending output_size from the server for commands with known output size
-    uint64_t out_size;
-    if (!recv_data(sock->fd, &out_size, sizeof(out_size))) {
-        return false;
-    }
-    if (out_size != output_size) {
-        return false;
-    }
-    if (!recv_data(sock->fd, output, output_size)) {
-        return false;
+    if (!noresp) {
+        // TODO: currently the output_size is always known, do we need support for commands with variable output size?
+        // even if we do, we can skip sending output_size from the server for commands with known output size
+        uint64_t out_size;
+        if (!recv_data(sock->fd, &out_size, sizeof(out_size))) {
+            return false;
+        }
+        if (out_size != output_size) {
+            return false;
+        }
+        if (!recv_data(sock->fd, output, output_size)) {
+            return false;
+        }
     }
     return true;
 }
@@ -531,7 +533,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
     memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
     memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
     memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
-    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size(), nullptr, 0);
+    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size(), nullptr, 0, true);
     GGML_ASSERT(status);
 }
 
@@ -1374,9 +1376,6 @@ static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
                     return;
                 }
                 if (!server.set_tensor(input)) {
-                    return;
-                }
-                if (!send_msg(sockfd, nullptr, 0)) {
                     return;
                 }
                 break;
