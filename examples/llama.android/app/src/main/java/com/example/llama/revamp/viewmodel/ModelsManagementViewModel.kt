@@ -97,6 +97,10 @@ class ModelsManagementViewModel @Inject constructor(
         // TODO-han.yin: Stub for now. Would open file picker and import model
     }
 
+    fun importFromHuggingFace() {
+        // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
+    }
+
     private fun updateStorageMetrics() {
         // Recalculate storage metrics after model changes
         // TODO-han.yin: Stub for now. Would query actual storage

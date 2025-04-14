@@ -73,6 +73,7 @@ fun StorageAppScaffold(
     storageTotal: Float,
     onNavigateBack: (() -> Unit)? = null,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    bottomBar: @Composable () -> Unit = {},
     content: @Composable (PaddingValues) -> Unit
 ) {
     Scaffold(
@@ -87,6 +88,7 @@ fun StorageAppScaffold(
         snackbarHost = {
             SnackbarHost(hostState = snackbarHostState)
         },
+        bottomBar = bottomBar,
         content = content
     )
 }
