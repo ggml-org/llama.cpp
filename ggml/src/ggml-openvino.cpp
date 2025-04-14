@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml-openvino.h"
 #include "ggml-openvino/utils.h"
+#include "ggml.h"
 
 #include <string>
 #include <mutex>
@@ -1367,7 +1368,7 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
         {GGML_OP_REPEAT,                {"Tile"}},
         {GGML_OP_RESHAPE,               {"Reshape"}},
         {GGML_OP_RMS_NORM,              {"Multiply", "Divide", "Sqrt"}},
-        {GGML_OP_ROPE,                  {"Custom"}},
+        {GGML_OP_ROPE,                  {"Sin", "Cos", "Multiply", "Add", "Subtract", "Split", "StridedSlice", "Concat"}},
         {GGML_OP_SCALE,                 {"Multiply", "Constant"}},
         {GGML_OP_SET,                   {"Assign"}},
         {GGML_OP_SIN,                   {"Sin"}},
@@ -1383,23 +1384,38 @@ static const std::set<std::string>& openvino_ops = []() -> const std::set<std::s
         {GGML_OP_TRANSPOSE,             {"Transpose"}},
         {GGML_OP_UPSCALE,               {"Interpolate"}},
         {GGML_OP_VIEW,                  {"Reshape"}},
+        {GGML_OP_CONT,                  {"Reshape", "StridedSlice"}},
+        {GGML_OP_CPY,                   {"Reshape", "ScatterNDUpdate"}},
         {GGML_OP_WIN_PART,              {"StridedSlice", "Concat", "Reshape", "Custom"}},
         {GGML_OP_WIN_UNPART,            {"Reshape", "Transpose", "Custom"}},
     };
 
-    auto it = op_mapping.find(op->op);
-    if (it == op_mapping.end()) {
-        return false;
+    static const std::map<ggml_unary_op, std::vector<std::string>> op_mapping_unary = {
+        {GGML_UNARY_OP_SILU, {"Sigmoid", "Multiply"}},
+    };
+
+    std::vector<std::string> mapped_ops;
+    if (op->op == GGML_OP_UNARY) {
+        auto it = op_mapping_unary.find(ggml_get_unary_op(op));
+        if (it == op_mapping_unary.end()) {
+            return false;
+        }
+        mapped_ops = it->second;
+    } else {
+        auto it = op_mapping.find(op->op);
+        if (it == op_mapping.end()) {
+            return false;
+        }
+        mapped_ops = it->second;
     }
 
-    for (const std::string& op_name : it->second) {
+    for (const std::string& op_name : mapped_ops) {
         if (openvino_ops.count(op_name) == 0) {
             return false;
         }
     }
 
     return true;
-#endif
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
