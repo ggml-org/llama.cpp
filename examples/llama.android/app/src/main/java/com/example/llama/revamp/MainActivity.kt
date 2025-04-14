@@ -24,13 +24,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
+import com.example.llama.revamp.ui.components.AnimatedNavHost
 import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
@@ -70,6 +70,13 @@ fun AppContent(
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
 
+    // LLM Inference engine status
+    val engineState by mainVewModel.engineState.collectAsState()
+    val isModelLoading = engineState is InferenceEngine.State.LoadingModel
+        || engineState is InferenceEngine.State.ProcessingSystemPrompt
+    val isModelLoaded = engineState !is InferenceEngine.State.Uninitialized
+        && engineState !is InferenceEngine.State.LibraryLoaded
+
     // Navigation
     val navController = rememberNavController()
     val navigationActions = remember(navController) { NavigationActions(navController) }
@@ -78,13 +85,12 @@ fun AppContent(
         derivedStateOf { navBackStackEntry?.destination?.route ?: "" }
     }
     var pendingNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
-
-    // LLM Inference engine status
-    val engineState by mainVewModel.engineState.collectAsState()
-    val isModelLoading = engineState is InferenceEngine.State.LoadingModel
-        || engineState is InferenceEngine.State.ProcessingSystemPrompt
-    val isModelLoaded = engineState !is InferenceEngine.State.Uninitialized
-        && engineState !is InferenceEngine.State.LibraryLoaded
+    LaunchedEffect(navController) {
+        navController.addOnDestinationChangedListener { _, destination, _ ->
+            // Log navigation for debugging
+            println("Navigation: ${destination.route}")
+        }
+    }
 
     // Determine if current route requires model unloading
     val routeNeedsModelUnloading by remember(currentRoute) {
@@ -94,7 +100,6 @@ fun AppContent(
                 || currentRoute == AppDestinations.MODEL_LOADING_ROUTE
         }
     }
-
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
     val handleBackWithModelCheck = {
@@ -110,6 +115,18 @@ fun AppContent(
             true // Mark as handled
         }
     }
+
+    // Determine if drawer gestures should be enabled based on route
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val drawerGesturesEnabled by remember(currentRoute, drawerState.currentValue) {
+        derivedStateOf {
+            // Always allow gesture dismissal when drawer is open
+            if (drawerState.currentValue == DrawerValue.Open) true
+            // Only enable drawer opening by gesture on these screens
+            else currentRoute == AppDestinations.MODEL_SELECTION_ROUTE
+        }
+    }
+    val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
     // Register a system back handler for screens that need unload confirmation
     val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
@@ -130,37 +147,13 @@ fun AppContent(
             callback.remove()
         }
     }
-
-    // Determine if drawer gestures should be enabled based on route
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val drawerGesturesEnabled by remember(currentRoute, drawerState.currentValue) {
-        derivedStateOf {
-            // Always allow gesture dismissal when drawer is open
-            if (drawerState.currentValue == DrawerValue.Open) true
-            // Only enable drawer opening by gesture on these screens
-            else currentRoute == AppDestinations.MODEL_SELECTION_ROUTE
-        }
-    }
-
-    // Compose BackHandler for added protection (this handles Compose-based back navigation)
+    // Added protection to handle Compose-based back navigation
     BackHandler(
-        enabled = routeNeedsModelUnloading &&
-            isModelLoaded &&
-            drawerState.currentValue == DrawerValue.Closed
+        enabled = routeNeedsModelUnloading && isModelLoaded
+            && drawerState.currentValue == DrawerValue.Closed
     ) {
         handleBackWithModelCheck()
     }
-
-    // Observe back button
-    LaunchedEffect(navController) {
-        navController.addOnDestinationChangedListener { _, destination, _ ->
-            // Log navigation for debugging
-            println("Navigation: ${destination.route}")
-        }
-    }
-
-    // Handle drawer state
-    val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
     // Main Content with navigation drawer wrapper
     AppNavigationDrawer(
@@ -169,7 +162,7 @@ fun AppContent(
         gesturesEnabled = drawerGesturesEnabled,
         currentRoute = currentRoute
     ) {
-        NavHost(
+        AnimatedNavHost(
             navController = navController,
             startDestination = AppDestinations.MODEL_SELECTION_ROUTE
         ) {
