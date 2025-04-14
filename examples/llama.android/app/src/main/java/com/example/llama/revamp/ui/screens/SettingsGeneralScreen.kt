@@ -18,17 +18,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.llama.revamp.data.preferences.UserPreferences
-import com.example.llama.revamp.monitoring.PerformanceMonitor
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.DefaultAppScaffold
-import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
 /**
@@ -36,22 +31,12 @@ import com.example.llama.revamp.viewmodel.PerformanceViewModel
  */
 @Composable
 fun SettingsGeneralScreen(
+    performanceViewModel: PerformanceViewModel = hiltViewModel(),
     onBackPressed: () -> Unit,
     drawerState: DrawerState,
     navigationActions: NavigationActions,
     onMenuClicked: () -> Unit
 ) {
-    // Create dependencies for PerformanceViewModel
-    val context = LocalContext.current
-    val performanceMonitor = remember { PerformanceMonitor(context) }
-    val userPreferences = remember { UserPreferences(context) }
-
-    // Create factory for PerformanceViewModel
-    val factory = remember { ViewModelFactoryProvider.getPerformanceViewModelFactory(performanceMonitor, userPreferences) }
-
-    // Get ViewModel instance with factory
-    val performanceViewModel: PerformanceViewModel = viewModel(factory = factory)
-
     // Collect state from ViewModel
     val isMonitoringEnabled by performanceViewModel.isMonitoringEnabled.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()

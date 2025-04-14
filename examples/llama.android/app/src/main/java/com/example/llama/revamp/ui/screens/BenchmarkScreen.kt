@@ -22,7 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
@@ -36,7 +36,7 @@ fun BenchmarkScreen(
     onSharePressed: () -> Unit,
     drawerState: DrawerState,
     navigationActions: NavigationActions,
-    viewModel: MainViewModel = viewModel()
+    viewModel: MainViewModel = hiltViewModel()
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()

@@ -8,11 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.llama.revamp.data.preferences.UserPreferences
-import com.example.llama.revamp.monitoring.PerformanceMonitor
-import com.example.llama.revamp.util.ViewModelFactoryProvider
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
 // DefaultAppScaffold.kt
@@ -42,6 +38,7 @@ fun DefaultAppScaffold(
 // PerformanceAppScaffold.kt
 @Composable
 fun PerformanceAppScaffold(
+    performanceViewModel: PerformanceViewModel = hiltViewModel(),
     title: String,
     onNavigateBack: (() -> Unit)? = null,
     onMenuOpen: (() -> Unit)? = null,
@@ -49,17 +46,6 @@ fun PerformanceAppScaffold(
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     content: @Composable (PaddingValues) -> Unit
 ) {
-    // Create dependencies for PerformanceViewModel
-    val context = LocalContext.current
-    val performanceMonitor = remember { PerformanceMonitor(context) }
-    val userPreferences = remember { UserPreferences(context) }
-
-    // Create factory for PerformanceViewModel
-    val factory = remember { ViewModelFactoryProvider.getPerformanceViewModelFactory(performanceMonitor, userPreferences) }
-
-    // Get ViewModel instance with factory
-    val performanceViewModel: PerformanceViewModel = viewModel(factory = factory)
-
     // Collect performance metrics
     val memoryUsage by performanceViewModel.memoryUsage.collectAsState()
     val temperatureInfo by performanceViewModel.temperatureMetrics.collectAsState()

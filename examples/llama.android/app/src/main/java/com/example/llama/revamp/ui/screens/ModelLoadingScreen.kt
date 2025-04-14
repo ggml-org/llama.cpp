@@ -44,17 +44,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.SystemPrompt
-import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
-import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 
 enum class SystemPromptTab {
@@ -64,6 +61,7 @@ enum class SystemPromptTab {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ModelLoadingScreen(
+    viewModel: SystemPromptViewModel = hiltViewModel(),
     engineState: InferenceEngine.State,
     onBenchmarkSelected: () -> Unit,
     onConversationSelected: (String?) -> Unit,
@@ -71,12 +69,6 @@ fun ModelLoadingScreen(
     drawerState: DrawerState,
     navigationActions: NavigationActions
 ) {
-    // Set up SystemPromptViewModel
-    val context = LocalContext.current
-    val repository = remember { SystemPromptRepository(context) }
-    val factory = remember { ViewModelFactoryProvider.getSystemPromptViewModelFactory(repository) }
-    val viewModel: SystemPromptViewModel = viewModel(factory = factory)
-
     val presetPrompts by viewModel.presetPrompts.collectAsState()
     val recentPrompts by viewModel.recentPrompts.collectAsState()
 

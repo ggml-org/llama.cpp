@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.llama.revamp.engine.InferenceEngine
@@ -71,7 +72,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ConversationScreen(
     onBackPressed: () -> Unit,
-    viewModel: MainViewModel
+    viewModel: MainViewModel = hiltViewModel()
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()

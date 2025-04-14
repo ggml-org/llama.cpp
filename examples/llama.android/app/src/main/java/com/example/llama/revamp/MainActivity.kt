@@ -22,13 +22,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AppNavigationDrawer
@@ -40,11 +39,12 @@ import com.example.llama.revamp.ui.screens.ModelsManagementScreen
 import com.example.llama.revamp.ui.screens.ModelLoadingScreen
 import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
-import com.example.llama.revamp.util.ViewModelFactoryProvider
 import com.example.llama.revamp.viewmodel.MainViewModel
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -62,26 +62,19 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun AppContent() {
-    val navController = rememberNavController()
-    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+fun AppContent(
+    mainVewModel: MainViewModel = hiltViewModel()
+) {
     val coroutineScope = rememberCoroutineScope()
 
-    // Create inference engine
-    val inferenceEngine = remember { InferenceEngine() }
+    val navController = rememberNavController()
+    val navigationActions = remember(navController) { NavigationActions(navController) }
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    // Create factory for MainViewModel
-    val factory = remember { ViewModelFactoryProvider.getMainViewModelFactory(inferenceEngine) }
+    val engineState by mainVewModel.engineState.collectAsState()
+    // TODO-han.yin: Also use delegate for `isModelLoaded`:
+    val isModelLoaded = remember(engineState) { mainVewModel.isModelLoaded() }
 
-    // Get ViewModel instance with factory
-    val viewModel: MainViewModel = viewModel(factory = factory)
-
-    val engineState by viewModel.engineState.collectAsState()
-    val isModelLoaded = remember(engineState) { viewModel.isModelLoaded() }
-
-    val navigationActions = remember(navController) {
-        NavigationActions(navController)
-    }
 
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
@@ -123,10 +116,10 @@ fun AppContent() {
 
     // Helper function to handle back press with model unloading check
     val handleBackWithModelCheck = {
-        if (viewModel.isModelLoading()) {
+        if (mainVewModel.isModelLoading()) {
             // If model is still loading, ignore the request
             true // Mark as handled
-        } else if (viewModel.isModelLoaded()) {
+        } else if (mainVewModel.isModelLoaded()) {
             showUnloadDialog = true
             pendingNavigation = { navController.popBackStack() }
             true // Mark as handled
@@ -194,7 +187,7 @@ fun AppContent() {
             composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                 ModelSelectionScreen(
                     onModelSelected = { modelInfo ->
-                        viewModel.selectModel(modelInfo)
+                        mainVewModel.selectModel(modelInfo)
                         navigationActions.navigateToModelLoading()
                     },
                     onManageModelsClicked = {
@@ -211,13 +204,13 @@ fun AppContent() {
                 ModelLoadingScreen(
                     engineState = engineState,
                     onBenchmarkSelected = {
-                        viewModel.prepareForBenchmark()
+                        mainVewModel.prepareForBenchmark()
                         navigationActions.navigateToBenchmark()
                     },
                     onConversationSelected = { systemPrompt ->
                         // Store a reference to the loading job
                         val loadingJob = coroutineScope.launch {
-                            viewModel.prepareForConversation(systemPrompt)
+                            mainVewModel.prepareForConversation(systemPrompt)
                             // Check if the job wasn't cancelled before navigating
                             if (isActive) {
                                 navigationActions.navigateToConversation()
@@ -245,7 +238,7 @@ fun AppContent() {
                         // Need to unload model before going back
                         handleBackWithModelCheck()
                     },
-                    viewModel = viewModel
+                    viewModel = mainVewModel
                 )
             }
 
@@ -257,14 +250,14 @@ fun AppContent() {
                         handleBackWithModelCheck()
                     },
                     onRerunPressed = {
-                        viewModel.rerunBenchmark()
+                        mainVewModel.rerunBenchmark()
                     },
                     onSharePressed = {
                         // Stub for sharing functionality
                     },
                     drawerState = drawerState,
                     navigationActions = navigationActions,
-                    viewModel = viewModel
+                    viewModel = mainVewModel
                 )
             }
 
@@ -295,7 +288,7 @@ fun AppContent() {
             onConfirm = {
                 isUnloading = true
                 coroutineScope.launch {
-                    viewModel.unloadModel()
+                    mainVewModel.unloadModel()
                     isUnloading = false
                     showUnloadDialog = false
                     pendingNavigation?.invoke()
