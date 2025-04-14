@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
@@ -63,8 +64,9 @@ fun ModelsManagementScreen(
     onBackPressed: () -> Unit,
     viewModel: ModelsManagementViewModel = hiltViewModel()
 ) {
-    val sortedModels by viewModel.sortedModels.collectAsState()
     val storageMetrics by viewModel.storageMetrics.collectAsState()
+    val sortedModels by viewModel.sortedModels.collectAsState()
+    val sortOrder by viewModel.sortOrder.collectAsState()
 
     // UI: menu states
     var showSortMenu by remember { mutableStateOf(false) }
@@ -143,6 +145,13 @@ fun ModelsManagementScreen(
                         ) {
                             DropdownMenuItem(
                                 text = { Text("Name (A-Z)") },
+                                trailingIcon = {
+                                    if (sortOrder == ModelSortOrder.NAME_ASC)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sort by name in ascending order, selected"
+                                        )
+                                },
                                 onClick = {
                                     viewModel.setSortOrder(ModelSortOrder.NAME_ASC)
                                     showSortMenu = false
@@ -150,27 +159,55 @@ fun ModelsManagementScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("Name (Z-A)") },
+                                trailingIcon = {
+                                    if (sortOrder == ModelSortOrder.NAME_DESC)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sort by name in descending order, selected"
+                                        )
+                                },
                                 onClick = {
                                     viewModel.setSortOrder(ModelSortOrder.NAME_DESC)
                                     showSortMenu = false
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Size (Largest first)") },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.SIZE_DESC)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("Size (Smallest first)") },
+                                trailingIcon = {
+                                    if (sortOrder == ModelSortOrder.SIZE_ASC)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sort by size in ascending order, selected"
+                                        )
+                                },
                                 onClick = {
                                     viewModel.setSortOrder(ModelSortOrder.SIZE_ASC)
                                     showSortMenu = false
                                 }
                             )
                             DropdownMenuItem(
+                                text = { Text("Size (Largest first)") },
+                                trailingIcon = {
+                                    if (sortOrder == ModelSortOrder.SIZE_DESC)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sort by size in descending order, selected"
+                                        )
+                                },
+                                onClick = {
+                                    viewModel.setSortOrder(ModelSortOrder.SIZE_DESC)
+                                    showSortMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("Last used") },
+                                trailingIcon = {
+                                    if (sortOrder == ModelSortOrder.LAST_USED)
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = "Sort by last used, selected"
+                                        )
+                                },
                                 onClick = {
                                     viewModel.setSortOrder(ModelSortOrder.LAST_USED)
                                     showSortMenu = false
