@@ -1,5 +1,7 @@
 package com.example.llama.revamp.viewmodel
 
+import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
@@ -7,8 +9,11 @@ import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.StorageMetrics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -17,52 +22,41 @@ class ModelsManagementViewModel @Inject constructor(
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
-    // Sort order state
+    val storageMetrics: StateFlow<StorageMetrics?> = modelRepository.getStorageMetrics()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
+            initialValue = null
+        )
+
+    private val _availableModels: StateFlow<List<ModelInfo>> = modelRepository.getModels()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
+            initialValue = emptyList()
+        )
+
     private val _sortOrder = MutableStateFlow(ModelSortOrder.NAME_ASC)
     val sortOrder: StateFlow<ModelSortOrder> = _sortOrder.asStateFlow()
 
-    // Available models
-    private val _availableModels = MutableStateFlow<List<ModelInfo>>(emptyList())
-    val availableModels: StateFlow<List<ModelInfo>> = _availableModels.asStateFlow()
-
-    // Storage metrics
-    private val _storageMetrics = MutableStateFlow(StorageMetrics(0f, 0f))
-    val storageMetrics: StateFlow<StorageMetrics> = _storageMetrics.asStateFlow()
+    private val _sortedModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val sortedModels: StateFlow<List<ModelInfo>> = _sortedModels.asStateFlow()
 
     init {
-        // Initial data load
         viewModelScope.launch {
-            loadModels()
-            loadStorageMetrics()
-        }
-
-        // Observe sort order changes and apply sorting
-        viewModelScope.launch {
-            sortOrder.collect { order -> sortModels(order) }
+            combine(_availableModels, _sortOrder, ::sortModels)
+                .collect { _sortedModels.value = it }
         }
     }
 
-    private fun loadModels() {
-        // TODO-han.yin: Stub for now. Would load from the repository
-        _availableModels.value = ModelInfo.getSampleModels()
-        sortModels(_sortOrder.value)
-    }
-
-    private fun loadStorageMetrics() {
-        // TODO-han.yin: Stub for now. Would load from storage
-        _storageMetrics.value = StorageMetrics(14.6f, 32.0f)
-    }
-
-    private fun sortModels(order: ModelSortOrder) {
-        val sorted = when (order) {
-            ModelSortOrder.NAME_ASC -> _availableModels.value.sortedBy { it.name }
-            ModelSortOrder.NAME_DESC -> _availableModels.value.sortedByDescending { it.name }
-            ModelSortOrder.SIZE_ASC -> _availableModels.value.sortedBy { it.sizeInBytes }
-            ModelSortOrder.SIZE_DESC -> _availableModels.value.sortedByDescending { it.sizeInBytes }
-            ModelSortOrder.LAST_USED -> _availableModels.value.sortedByDescending { it.lastUsed ?: 0 }
+    private fun sortModels(models: List<ModelInfo>, order: ModelSortOrder) =
+        when (order) {
+            ModelSortOrder.NAME_ASC -> models.sortedBy { it.name }
+            ModelSortOrder.NAME_DESC -> models.sortedByDescending { it.name }
+            ModelSortOrder.SIZE_ASC -> models.sortedBy { it.sizeInBytes }
+            ModelSortOrder.SIZE_DESC -> models.sortedByDescending { it.sizeInBytes }
+            ModelSortOrder.LAST_USED -> models.sortedByDescending { it.lastUsed ?: 0 }
         }
-        _availableModels.value = sorted
-    }
 
     fun setSortOrder(order: ModelSortOrder) {
         _sortOrder.value = order
@@ -72,43 +66,34 @@ class ModelsManagementViewModel @Inject constructor(
         // TODO-han.yin: Stub for now. Would navigate to model details screen or show dialog
     }
 
-    fun deleteModel(modelId: String) {
-        // Remove model from list
-        _availableModels.value = _availableModels.value.filter { it.id != modelId }
-
+    fun deleteModel(modelId: String) =
         viewModelScope.launch {
-            // TODO-han.yin: Stub for now this would delete from storage
             modelRepository.deleteModel(modelId)
-            updateStorageMetrics()
         }
-    }
 
-    fun deleteModels(models: Map<String, ModelInfo>) {
-        val modelIds = models.keys
-        _availableModels.value = _availableModels.value.filter { !modelIds.contains(it.id) }
-
+    fun deleteModels(models: Map<String, ModelInfo>) =
         viewModelScope.launch {
-            modelRepository.deleteModels(modelIds)
-            updateStorageMetrics()
+            modelRepository.deleteModels(models.keys)
         }
-    }
 
-    fun importLocalModel() {
-        // TODO-han.yin: Stub for now. Would open file picker and import model
-    }
+    fun importLocalModel(uri: Uri) =
+        viewModelScope.launch {
+            try {
+                modelRepository.importModel(uri)
+            } catch (e: Exception) {
+                // TODO-han.yin: add UI to prompt user about import failure!
+                Log.e(TAG, "Failed to import model from: $uri", e)
+            }
+        }
 
     fun importFromHuggingFace() {
         // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
     }
 
-    private fun updateStorageMetrics() {
-        // Recalculate storage metrics after model changes
-        // TODO-han.yin: Stub for now. Would query actual storage
-        val totalSize = _availableModels.value.sumOf { it.sizeInBytes }
-        _storageMetrics.value = StorageMetrics(
-            (totalSize / 1_000_000_000.0).toFloat(),
-            32.0f
-        )
+    companion object {
+        private val TAG = ModelsManagementViewModel::class.java.simpleName
+
+        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
     }
 }
 

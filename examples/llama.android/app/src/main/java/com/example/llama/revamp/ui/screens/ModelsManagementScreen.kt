@@ -63,16 +63,16 @@ fun ModelsManagementScreen(
     onBackPressed: () -> Unit,
     viewModel: ModelsManagementViewModel = hiltViewModel()
 ) {
-    // For demo purposes, we'll use sample models
-    val models by viewModel.availableModels.collectAsState()
+    val sortedModels by viewModel.sortedModels.collectAsState()
     val storageMetrics by viewModel.storageMetrics.collectAsState()
 
-    // UI states
-    var isMultiSelectionMode by remember { mutableStateOf(false) }
-    val selectedModels = remember { mutableStateMapOf<String, ModelInfo>() }
+    // UI: menu states
     var showSortMenu by remember { mutableStateOf(false) }
     var showAddModelMenu by remember { mutableStateOf(false) }
 
+    // UI: multi-selection states
+    var isMultiSelectionMode by remember { mutableStateOf(false) }
+    val selectedModels = remember { mutableStateMapOf<String, ModelInfo>() }
     val exitSelectionMode = {
         isMultiSelectionMode = false
         selectedModels.clear()
@@ -80,8 +80,8 @@ fun ModelsManagementScreen(
 
     StorageAppScaffold(
         title = "Models Management",
-        storageUsed = storageMetrics.usedGB,
-        storageTotal = storageMetrics.totalGB,
+        storageUsed = storageMetrics?.usedGB ?: 0f,
+        storageTotal = storageMetrics?.totalGB ?: 0f,
         onNavigateBack = onBackPressed,
         bottomBar = {
             BottomAppBar(
@@ -90,7 +90,7 @@ fun ModelsManagementScreen(
                         // Multi-selection mode actions
                         IconButton(onClick = {
                             // Select all
-                            selectedModels.putAll(models.map { it.id to it })
+                            selectedModels.putAll(sortedModels.map { it.id to it })
                         }) {
                             Icon(
                                 imageVector = Icons.Default.SelectAll,
@@ -226,7 +226,8 @@ fun ModelsManagementScreen(
                                 )
                             },
                             onClick = {
-                                viewModel.importLocalModel()
+                                // TODO-han.yin: uncomment once file picker done
+                                // viewModel.importLocalModel()
                                 showAddModelMenu = false
                             }
                         )
@@ -252,7 +253,7 @@ fun ModelsManagementScreen(
     ) { paddingValues ->
         // Main content
         ModelList(
-            models = models,
+            models = sortedModels,
             isMultiSelectionMode = isMultiSelectionMode,
             selectedModels = selectedModels,
             onModelClick = { modelId ->
@@ -261,7 +262,7 @@ fun ModelsManagementScreen(
                     if (selectedModels.contains(modelId)) {
                         selectedModels.remove(modelId)
                     } else {
-                        selectedModels.put(modelId, models.first { it.id == modelId } )
+                        selectedModels.put(modelId, sortedModels.first { it.id == modelId } )
                     }
                 } else {
                     // View model details
