@@ -313,7 +313,7 @@ static bool encode_image_with_clip(clip_ctx * ctx_clip, int n_threads, const cli
                 image_embd + n_img_pos_out * clip_n_mmproj_embd(ctx_clip),
                 image_embd_v[i],
                 clip_embd_nbytes_by_img(ctx_clip, nx, ny));
-            n_img_pos_out += clip_n_patches_by_img_f32(ctx_clip, img_res);
+            n_img_pos_out += clip_n_patches_by_img(ctx_clip, img_res);
         }
         *n_img_pos = n_img_pos_out;
         for (size_t i = 0; i < image_embd_v.size(); i++) {

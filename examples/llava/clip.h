@@ -59,7 +59,7 @@ CLIP_API const int32_t * clip_image_grid(const struct clip_ctx * ctx);
 CLIP_API size_t get_clip_image_grid_size(const struct clip_ctx * ctx);
 
 CLIP_API int clip_n_patches(const struct clip_ctx * ctx);
-CLIP_API int clip_n_patches_by_img_f32(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+CLIP_API int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img);
 CLIP_API int clip_n_patches_by_img_u8(const struct clip_ctx * ctx, struct clip_image_u8 * img);
 CLIP_API int clip_n_mmproj_embd(const struct clip_ctx * ctx);
 

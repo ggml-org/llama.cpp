@@ -2323,7 +2323,7 @@ int clip_n_patches(const struct clip_ctx * ctx) {
     return clip_n_patches_by_img_dims(ctx, ctx->vision_model.hparams.image_size, ctx->vision_model.hparams.image_size);
 }
 
-int clip_n_patches_by_img_f32(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
     return clip_n_patches_by_img_dims(ctx, img->nx, img->ny);
 }
 
