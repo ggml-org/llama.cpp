@@ -39,6 +39,9 @@ abstract class AppModule {
         fun provideAppDatabase(@ApplicationContext context: Context) = AppDatabase.getDatabase(context)
 
         @Provides
+        fun providesModelDao(appDatabase: AppDatabase) = appDatabase.modelDao()
+
+        @Provides
         fun providesSystemPromptDao(appDatabase: AppDatabase) = appDatabase.systemPromptDao()
     }
 }

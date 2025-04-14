@@ -10,8 +10,14 @@ import javax.inject.Singleton
  * Main database for the application.
  */
 @Singleton
-@Database(entities = [SystemPromptEntity::class], version = 1, exportSchema = false)
+@Database(
+    entities = [ModelEntity::class, SystemPromptEntity::class],
+    version = 1,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
+
+    abstract fun modelDao(): ModelDao
 
     abstract fun systemPromptDao(): SystemPromptDao
 
