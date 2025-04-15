@@ -2374,6 +2374,8 @@ static bool ggml_metal_encode_node(
                 const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
                 const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
+// use this branch to test the ggml_metal_mem_pool functionality
+#if 0
                 // cpy to tmp buffer in MTLHeap
 
                 id<MTLBuffer> h_src0 = h_src0 = ggml_metal_mem_pool_alloc(mem_pool, ggml_nbytes(src0));
@@ -2381,6 +2383,8 @@ static bool ggml_metal_encode_node(
                     GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, ggml_nbytes(src0));
                     return false;
                 }
+
+                offs_src0 = 0;
 
                 ggml_metal_kargs_cpy args_cpy = {
                     /*.ne00 =*/ ne00,
@@ -2415,6 +2419,9 @@ static bool ggml_metal_encode_node(
 
                 [encoder dispatchThreadgroups:MTLSizeMake(ne01, ne02, ne03) threadsPerThreadgroup:MTLSizeMake(nth_cpy, 1, 1)];
 
+#else
+                id<MTLBuffer> h_src0 = id_src0;
+#endif
                 // softmax
 
                 ggml_metal_kargs_soft_max args = {
@@ -2429,11 +2436,11 @@ static bool ggml_metal_encode_node(
                 };
 
                 [encoder setComputePipelineState:pipeline];
-                [encoder setBuffer:h_src0 offset:0              atIndex:0];
+                [encoder setBuffer:h_src0 offset:offs_src0      atIndex:0];
                 if (id_src1) {
                     [encoder setBuffer:id_src1 offset:offs_src1 atIndex:1];
                 } else {
-                    [encoder setBuffer:h_src0 offset:0          atIndex:1];
+                    [encoder setBuffer:h_src0 offset:offs_src0  atIndex:1];
                 }
                 [encoder setBuffer:id_dst offset:offs_dst       atIndex:2];
                 [encoder setBytes:&args   length:sizeof(args)   atIndex:3];
