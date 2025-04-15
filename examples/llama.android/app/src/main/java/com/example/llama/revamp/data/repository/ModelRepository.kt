@@ -51,6 +51,8 @@ interface ModelRepository {
         progressTracker: ImportProgressTracker? = null
     ): ModelInfo
 
+    suspend fun updateModelLastUsed(modelId: String)
+
     suspend fun deleteModel(modelId: String)
     suspend fun deleteModels(modelIds: List<String>)
 
@@ -230,16 +232,20 @@ class ModelRepositoryImpl @Inject constructor(
         input.close()
     }
 
-    override suspend fun deleteModel(modelId: String) {
+    override suspend fun updateModelLastUsed(modelId: String) = withContext(Dispatchers.IO) {
+        modelDao.updateLastUsed(modelId, System.currentTimeMillis())
+    }
+
+    override suspend fun deleteModel(modelId: String) = withContext(Dispatchers.IO) {
         modelDao.getModelById(modelId)?.let { model ->
             File(model.path).let {
                 if (it.exists()) { it.delete() }
             }
             modelDao.deleteModel(model)
-        }
+        } ?: Unit
     }
 
-    override suspend fun deleteModels(modelIds: List<String>) {
+    override suspend fun deleteModels(modelIds: List<String>) = withContext(Dispatchers.IO) {
         modelDao.getModelsByIds(modelIds).let { models ->
             models.forEach { model ->
                 File(model.path).let {

@@ -1,17 +1,19 @@
 package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.engine.InferenceEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -23,7 +25,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class MainViewModel @Inject constructor (
-    private val inferenceEngine: InferenceEngine
+    private val inferenceEngine: InferenceEngine,
+    private val modelRepository: ModelRepository,
 ) : ViewModel() {
 
     // Expose the engine state
@@ -31,6 +34,14 @@ class MainViewModel @Inject constructor (
 
     // Benchmark results
     val benchmarkResults: StateFlow<String?> = inferenceEngine.benchmarkResults
+
+    // Available models for selection
+    val availableModels: StateFlow<List<ModelInfo>> = modelRepository.getModels()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
+            initialValue = emptyList()
+        )
 
     // Selected model information
     private val _selectedModel = MutableStateFlow<ModelInfo?>(null)
@@ -52,6 +63,10 @@ class MainViewModel @Inject constructor (
      */
     fun selectModel(modelInfo: ModelInfo) {
         _selectedModel.value = modelInfo
+
+        viewModelScope.launch {
+            modelRepository.updateModelLastUsed(modelInfo.id)
+        }
     }
 
     /**
@@ -238,16 +253,14 @@ class MainViewModel @Inject constructor (
     }
 
     /**
-     * Unloads the currently loaded model.
+     * Unloads the currently loaded model after cleanup chores:
+     * - Cancel any ongoing token collection
+     * - Clear messages
      */
     suspend fun unloadModel() {
-        // Cancel any ongoing token collection
         tokenCollectionJob?.cancel()
-
-        // Clear messages
         _messages.value = emptyList()
 
-        // Unload model
         inferenceEngine.unloadModel()
     }
 
@@ -259,17 +272,10 @@ class MainViewModel @Inject constructor (
         super.onCleared()
     }
 
-    /**
-     * Factory for creating MainViewModel instances.
-     */
-    class Factory(private val inferenceEngine: InferenceEngine) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-                return MainViewModel(inferenceEngine) as T
-            }
-            throw IllegalArgumentException("Unknown ViewModel class")
-        }
+    companion object {
+        private val TAG = MainViewModel::class.java.simpleName
+
+        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
     }
 }
 
