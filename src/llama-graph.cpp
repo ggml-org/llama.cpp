@@ -1235,18 +1235,17 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_reshape_2d(ctx0, cur, n_embd_head_v*n_head, n_tokens);
     } else {
         // for MQA (ie: GQA with 1 group) we don't need to use a batched matrix multiply
-        if (ggml_is_contiguous(q) && n_head_kv == 1) {
+        if (ggml_is_contiguous(k) && ggml_is_contiguous(q) && n_head_kv == 1) {
+            k = ggml_reshape_2d(ctx0, k, n_embd, n_tokens);
             q = ggml_reshape_2d(ctx0, q, n_embd, n_tokens*n_head);
-        }
-
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-
-        // note: this op tends to require high floating point range
-        //       while for some models F16 is enough, for others it is not, so we default to F32 here
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-        if (ggml_is_contiguous(q) && n_head_kv == 1) {
+            ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+            // note: this op tends to require high floating point range while for some models F16 is enough, for others it is not, so we default to F32 here
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
             kq = ggml_reshape_3d(ctx0, kq, n_kv, n_tokens, n_head);
+        } else {
+            ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
+            // note: this op tends to require high floating point range while for some models F16 is enough, for others it is not, so we default to F32 here
+            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
         }
 
         if (arch == LLM_ARCH_GROK) {
