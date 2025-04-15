@@ -578,7 +578,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 break;
             }
             params.delay = std::stoi(argv[i]);
-        } else if (arg == "-ot" || arg == "--override-tensors") {
+        } else if (arg == "-ot" || arg == "--override-tensor") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
