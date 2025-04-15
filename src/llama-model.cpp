@@ -10151,14 +10151,14 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, model.layers[il].wk_b, q_nope);
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
 
-                    // {kv_lora_rank, n_head, n_tokens}
-                    q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
-                    cb(q_nope_absorbed, "q_nope_absorbed_perm", il);
-
-                    // {n_embd_head_qk_rope + kv_lora_rank, n_head, n_tokens}
+                    // {n_embd_head_qk_rope + kv_lora_rank, n_tokens, n_head}
                     // note: rope must go first for in-place context shifting in build_rope_shift()
                     ggml_tensor * Qcur = ggml_concat(ctx0, q_pe, q_nope_absorbed, 0);
                     cb(Qcur, "Qcur", il);
+
+                    // {n_embd_head_qk_rope + kv_lora_rank, n_head, n_tokens}
+                    Qcur = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);
+                    cb(Qcur, "Qcur_perm", il);
 
                     kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
                     cb(kv_cmpr, "kv_cmpr_reshape", il);
