@@ -396,7 +396,7 @@ struct llama_model {
     const struct ggml_tensor * get_tensor(const char * name) const;
 
     // TODO: move this to new llm_arch_model_i interface
-    llama_memory_i * create_memory() const; // TODO: params
+    llama_memory_i * create_memory(const llama_memory_params & params) const;
 
     // TODO: move this to new llm_arch_model_i interface
     llm_graph_result_ptr build_graph(

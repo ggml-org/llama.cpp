@@ -15,18 +15,17 @@ struct llama_hparams;
 struct llama_ubatch;
 
 struct llama_kv_cache : public llama_memory_i {
+    // can be used to query data from the model if needed
+    struct callbacks {
+        std::function<ggml_tensor * (uint32_t n_ctx_per_seq, int il)> get_rope_factors;
+
+        // get the buffer type of layer il, can be used to offload KV cache layers to a different device
+        std::function<ggml_backend_buffer_type_t (int il)> get_buft;
+    };
+
     virtual ~llama_kv_cache() = default;
 
     using llama_memory_i::llama_memory_i;
-
-    // TODO: become constructor
-    virtual bool init(
-            const llama_model & model,   // TODO: do not reference the model
-          const llama_cparams & cparams,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                     uint32_t   kv_size,
-                         bool   offload) = 0;
 
     virtual void restore() = 0; // call if batch processing fails - restores the cache state
     virtual void commit() = 0;  // call after successful batch processing - clears any pending state
@@ -96,23 +95,13 @@ struct llama_kv_cell {
 // TODO: add notion of max sequences
 class llama_kv_cache_unified : public llama_kv_cache {
 public:
-    // can be used to query data from the model if needed
-    struct callbacks {
-        std::function<ggml_tensor * (uint32_t n_ctx_per_seq, int il)> get_rope_factors;
-    };
-
-    // TODO: become constructor
-    bool init(
-            const llama_model & model,   // TODO: do not reference the model
-          const llama_cparams & cparams,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                     uint32_t   kv_size,
-                         bool   offload) override;
-
     llama_kv_cache_unified(
             const llama_hparams & hparams,
-            callbacks             cbs);
+                      callbacks   cbs,
+                      ggml_type   type_k,
+                      ggml_type   type_v,
+                           bool   v_trans,
+                       uint32_t   kv_size);
 
     ~llama_kv_cache_unified() = default;
 
@@ -149,8 +138,7 @@ public:
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
 
-    // TODO: maybe not needed
-    uint32_t get_padding(const llama_cparams & cparams) const;
+    static uint32_t get_padding(const llama_cparams & cparams);
 
     // find how many cells are currently in use
     uint32_t cell_max() const;
@@ -229,25 +217,14 @@ private:
 
 class llama_kv_cache_recurrent : public llama_kv_cache {
 public:
-    // can be used to query data from the model if needed
-    struct callbacks {
-        std::function<ggml_tensor * (uint32_t n_ctx_per_seq, int il)> get_rope_factors;
-    };
-
     llama_kv_cache_recurrent(
             const llama_hparams & hparams,
-            callbacks             cbs);
+                      callbacks   cbs,
+                      ggml_type   type_k,
+                      ggml_type   type_v,
+                       uint32_t   kv_size);
 
     ~llama_kv_cache_recurrent() = default;
-
-    // TODO: become constructor
-    bool init(
-            const llama_model & model,   // TODO: do not reference the model
-          const llama_cparams & cparams,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                     uint32_t   kv_size,
-                         bool   offload) override;
 
     int32_t get_n_tokens()   const override;
     int32_t get_used_cells() const override;
@@ -281,9 +258,6 @@ public:
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
-
-    // TODO: maybe not needed
-    uint32_t get_padding(const llama_cparams & cparams) const;
 
     // find how many cells are currently in use
     uint32_t cell_max() const;

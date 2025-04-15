@@ -184,12 +184,9 @@ llama_context::llama_context(
         ggml_type type_v = params.type_v;
 
         if (!llama_model_is_recurrent(&model)) {
-            //kv_self.reset(static_cast<llama_kv_cache_unified *>(model.create_memory()));
-            auto * kv = static_cast<llama_kv_cache_unified *>(model.create_memory());
-
             LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
 
-            cparams.n_ctx = GGML_PAD(cparams.n_ctx, kv->get_padding(cparams));
+            cparams.n_ctx = GGML_PAD(cparams.n_ctx, llama_kv_cache_unified::get_padding(cparams));
 
             LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
@@ -197,26 +194,37 @@ llama_context::llama_context(
             type_k = params.type_k;
             type_v = params.type_v;
 
+            llama_memory_params params_mem = {
+                /*.type_k       =*/ type_k,
+                /*.type_v       =*/ type_v,
+                /*.v_trans      =*/ !cparams.flash_attn,
+                /*.offload_kqv  =*/ cparams.offload_kqv,
+                /*.kv_size      =*/ kv_size,
+            };
+
+            auto * kv = static_cast<llama_kv_cache_unified *>(model.create_memory(params_mem));
+
             kv_self.reset(kv);
         } else {
-            auto * kv = static_cast<llama_kv_cache_recurrent *>(model.create_memory());
-
-            LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
-
             // Mamba needs at least as many KV cells as there are sequences kept at any time
             kv_size = std::max((uint32_t) 1, params.n_seq_max);
             // it's probably best to keep as much precision as possible for the states
             type_k = GGML_TYPE_F32; // required by ggml_ssm_conv for Mamba's conv_states
             type_v = GGML_TYPE_F32; // required by ggml_ssm_scan for Mamba's ssm_states
 
+            llama_memory_params params_mem = {
+                /*.type_k       =*/ type_k,
+                /*.type_v       =*/ type_v,
+                /*.v_trans      =*/ false, // unused
+                /*.offload_kqv  =*/ params.offload_kqv,
+                /*.kv_size      =*/ kv_size,
+            };
+
+            auto * kv = static_cast<llama_kv_cache_recurrent *>(model.create_memory(params_mem));
+
+            LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
+
             kv_self.reset(kv);
-        }
-
-        GGML_ASSERT(hparams.n_embd_head_k % ggml_blck_size(type_k) == 0);
-        GGML_ASSERT(hparams.n_embd_head_v % ggml_blck_size(type_v) == 0);
-
-        if (!kv_self->init(model, cparams, type_k, type_v, kv_size, cparams.offload_kqv)) {
-            throw std::runtime_error("failed to initialize self-attention cache");
         }
 
         {

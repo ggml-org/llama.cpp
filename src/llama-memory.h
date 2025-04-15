@@ -2,6 +2,20 @@
 
 #include "llama.h"
 
+struct llama_memory_params {
+    // kv cache
+    ggml_type type_k;
+    ggml_type type_v;
+
+    bool v_trans;
+    bool offload_kqv;
+
+    uint32_t kv_size;
+
+    // other types of memory
+    // ...
+};
+
 // general concept of LLM memory
 // the KV cache is a type of LLM memory, but there can be other types
 class llama_memory_i {

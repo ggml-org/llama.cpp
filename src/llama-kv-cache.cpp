@@ -15,27 +15,22 @@
 // llama_kv_cache_unified
 //
 
-llama_kv_cache_unified::llama_kv_cache_unified(const llama_hparams & hparams, callbacks cbs) : hparams(hparams), cbs(std::move(cbs)) {
-}
+llama_kv_cache_unified::llama_kv_cache_unified(
+        const llama_hparams & hparams,
+                  callbacks   cbs,
+                  ggml_type   type_k,
+                  ggml_type   type_v,
+                       bool   v_trans,
+                   uint32_t   kv_size) : hparams(hparams), cbs(std::move(cbs)), v_trans(v_trans) {
 
-bool llama_kv_cache_unified::init(
-        const llama_model & model,
-      const llama_cparams & cparams,
-                ggml_type   type_k,
-                ggml_type   type_v,
-                 uint32_t   kv_size,
-                     bool   offload) {
     const int32_t n_layer = hparams.n_layer;
 
     has_shift = false;
 
-    GGML_ASSERT(!llama_model_is_recurrent(&model));
-
-    v_trans   = !cparams.flash_attn;
     can_shift = true;
 
-    LLAMA_LOG_INFO("%s: kv_size = %d, offload = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d\n",
-            __func__, kv_size, offload, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift);
+    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d\n",
+            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift);
 
     head = 0;
     size = kv_size;
@@ -79,25 +74,11 @@ bool llama_kv_cache_unified::init(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        const char * dev_name = "CPU";
-
-        ggml_backend_buffer_type_t buft;
-        if (offload) {
-            auto * dev = model.dev_layer(i);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
-        } else {
-            buft = ggml_backend_cpu_buffer_type();
-        }
-
-        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k_gqa = %d, n_embd_v_gqa = %d, dev = %s\n", __func__,
-                i, n_embd_k_gqa, n_embd_v_gqa, dev_name);
+        ggml_backend_buffer_type_t buft = cbs.get_buft(i);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
-            LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
-            return false;
+            throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
@@ -115,15 +96,12 @@ bool llama_kv_cache_unified::init(
 
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
         if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate buffer for kv cache\n", __func__);
-            return false;
+            throw std::runtime_error("failed to allocate buffer for kv cache");
         }
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
         bufs.emplace_back(buf);
     }
-
-    return true;
 }
 
 int32_t llama_kv_cache_unified::get_n_tokens() const {
@@ -480,7 +458,7 @@ bool llama_kv_cache_unified::find_slot(
     return true;
 }
 
-uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) const {
+uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) {
     // the FA kernels require padding to avoid extra runtime boundary checks
     return cparams.flash_attn ? 256u : 32u;
 }
@@ -1021,24 +999,16 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t cell
 // llama_kv_cache_recurrent
 //
 
-llama_kv_cache_recurrent::llama_kv_cache_recurrent(const llama_hparams & hparams, callbacks cbs) : hparams(hparams), cbs(std::move(cbs)) {
-}
-
-bool llama_kv_cache_recurrent::init(
-        const llama_model & model,
-      const llama_cparams & cparams,
-                ggml_type   type_k,
-                ggml_type   type_v,
-                 uint32_t   kv_size,
-                     bool   offload) {
-    GGML_UNUSED(cparams);
-
+llama_kv_cache_recurrent::llama_kv_cache_recurrent(
+        const llama_hparams & hparams,
+                  callbacks   cbs,
+                  ggml_type   type_k,
+                  ggml_type   type_v,
+                   uint32_t   kv_size) : hparams(hparams), cbs(std::move(cbs)) {
     const int32_t n_layer = hparams.n_layer;
 
-    GGML_ASSERT(llama_model_is_recurrent(&model));
-
-    LLAMA_LOG_INFO("%s: kv_size = %d, offload = %d, type_k = '%s', type_v = '%s', n_layer = %d\n",
-            __func__, kv_size, offload, ggml_type_name(type_k), ggml_type_name(type_v), n_layer);
+    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d\n",
+            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer);
 
     head = 0;
     size = kv_size;
@@ -1082,25 +1052,11 @@ bool llama_kv_cache_recurrent::init(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        const char * dev_name = "CPU";
-
-        ggml_backend_buffer_type_t buft;
-        if (offload) {
-            auto * dev = model.dev_layer(i);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
-        } else {
-            buft = ggml_backend_cpu_buffer_type();
-        }
-
-        LLAMA_LOG_DEBUG("%s: layer %3d: n_embd_k_gqa = %d, n_embd_v_gqa = %d, dev = %s\n", __func__,
-                i, n_embd_k_gqa, n_embd_v_gqa, dev_name);
+        ggml_backend_buffer_type_t buft = cbs.get_buft(i);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
-            LLAMA_LOG_ERROR("%s: failed to create ggml context for kv cache\n", __func__);
-            return false;
+            throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
@@ -1118,15 +1074,12 @@ bool llama_kv_cache_recurrent::init(
 
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
         if (!buf) {
-            LLAMA_LOG_ERROR("%s: failed to allocate buffer for kv cache\n", __func__);
-            return false;
+            throw std::runtime_error("failed to allocate buffer for kv cache");
         }
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
         bufs.emplace_back(buf);
     }
-
-    return true;
 }
 
 int32_t llama_kv_cache_recurrent::get_n_tokens() const {
@@ -1556,11 +1509,6 @@ bool llama_kv_cache_recurrent::find_slot(
 
     // sanity check
     return n >= n_seqs;
-}
-
-uint32_t llama_kv_cache_recurrent::get_padding(const llama_cparams & cparams) const {
-    // the FA kernels require padding to avoid extra runtime boundary checks
-    return cparams.flash_attn ? 256u : 32u;
 }
 
 uint32_t llama_kv_cache_recurrent::cell_max() const {
