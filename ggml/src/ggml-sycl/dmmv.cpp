@@ -1105,8 +1105,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q4_0:
             if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+                GGML_SYCL_DEBUG("Calling dequantize_mul_mat_vec_q4_0_sycl_reorder\n");
                 dequantize_mul_mat_vec_q4_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             } else {
+                GGML_SYCL_DEBUG("Calling dequantize_mul_mat_vec_q4_0_sycl\n");
                 dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             }
             break;

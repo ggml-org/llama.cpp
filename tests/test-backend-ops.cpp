@@ -36,6 +36,8 @@
 #include <thread>
 #include <vector>
 
+#include <iostream>
+
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
@@ -47,8 +49,8 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
             std::random_device rd;
             std::vector<std::default_random_engine> vec;
             vec.reserve(n_threads);
-            //for (size_t i = 0; i < n_threads; i++) { vec.emplace_back(1234 + i); } // fixed seed
-            for (size_t i = 0; i < n_threads; i++) { vec.emplace_back(rd()); }
+            for (size_t i = 0; i < n_threads; i++) { vec.emplace_back(1234 + i); } // fixed seed
+            //for (size_t i = 0; i < n_threads; i++) { vec.emplace_back(rd()); }
             return vec;
         }();
 
@@ -550,6 +552,54 @@ struct test_case {
                     }
                 }
             }
+
+            struct err_t {
+                float a_val, b_val, err;
+                size_t i;
+            };
+            std::vector<err_t> top_k_abs_err;
+            std::vector<err_t> top_k_rel_err;
+            size_t k = 10;
+            auto a = f1.data();
+            auto b = f2.data(); // ref (cpu backend)
+            auto save_top_k_err = [=](size_t i, float a_i, float b_i, float err, std::vector<err_t>& top_k_err) {
+                if (top_k_err.size() < k) {
+                    top_k_err.push_back({a_i, b_i, err, i});
+                    if (top_k_err.size() == k) {
+                        std::sort(top_k_err.begin(), top_k_err.end(), [](const err_t& x, const err_t& y) {
+                            return x.err > y.err;
+                        });
+                    }
+                } else if (top_k_err.back().err < err) {
+                    top_k_err.back() = {a_i, b_i, err, i};
+                    std::sort(top_k_err.begin(), top_k_err.end(), [](const err_t& x, const err_t& y) {
+                        return x.err > y.err;
+                    });
+                }
+            };
+            double avg_abs_err = 0.f;
+            double avg_rel_err = 0.f;
+            for (size_t i = 0; i < f1.size(); i++) {
+                float a_i = a[i];
+                float b_i = b[i];
+                float abs_err = std::fabs(a_i - b_i);
+                float rel_err = (a_i - b_i) / std::fabs(b_i);
+                save_top_k_err(i, a_i, b_i, abs_err, top_k_abs_err);
+                save_top_k_err(i, a_i, b_i, rel_err, top_k_rel_err);
+                avg_abs_err += abs_err;
+                avg_rel_err += rel_err;
+            }
+            avg_abs_err /= f1.size();
+            avg_rel_err /= f1.size();
+            std::cout << "\nAvg abs err=" << avg_abs_err << " Top " << k << " abs err:\n";
+            for (const auto& err : top_k_abs_err) {
+                std::cout << "i=" << err.i << " a=" << err.a_val << " b=" << err.b_val << " abs err=" << err.err << "\n";
+            }
+            std::cout << "\nAvg rel err=" << avg_rel_err << " Top " << k << " rel err:\n";
+            for (const auto& err : top_k_rel_err) {
+                std::cout << "i=" << err.i << " a=" << err.a_val << " b=" << err.b_val << " rel err=" << err.err << "\n";
+            }
+            std::cout << std::endl;
 
             double err = nmse(f1.data(), f2.data(), f1.size());
             if (err > ud->max_err) {
@@ -4134,6 +4184,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 256, { 1,  1}, {1, 1}));
         }
     }
+    //TODO: Romain
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 11008,  1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 11008,  2, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096,  1, 11008, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096,  1, 4096, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096,  2, 11008, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 4096,  2, 4096, {1, 1}, {1, 1}));
 
 #if 1
     for (ggml_type type_a : base_types) {

@@ -48,6 +48,7 @@ static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
 int g_ggml_sycl_disable_optimize = 0;
 int g_ggml_sycl_disable_graph = 0;
+int g_ggml_sycl_disable_mmvq = 0;
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -194,11 +195,13 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_disable_optimize= get_sycl_env("GGML_SYCL_DISABLE_OPT", 1);
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
+        g_ggml_sycl_disable_mmvq = get_sycl_env("GGML_SYCL_DISABLE_MMVQ", 0);
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_OPT: %d\n", g_ggml_sycl_disable_optimize);
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
+        GGML_LOG_INFO("  GGML_SYCL_DISABLE_MMVQ: %d\n", g_ggml_sycl_disable_mmvq);
         GGML_LOG_INFO("Build with Macros:\n");
 #if defined(GGML_SYCL_FORCE_MMQ)
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
@@ -2917,6 +2920,7 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                               ggml_tensor * dst) {
+    GGML_SYCL_DEBUG("call %s\n", __func__);
     const bool split                  = ggml_backend_buffer_is_sycl_split(src0->buffer);
     int64_t    min_compute_capability = INT_MAX;
 
@@ -2961,13 +2965,16 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
                          static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra)->optimized_feature.reorder;
 
     // mmvq path is faster in the CUDA backend.
-    if (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
+    if (!g_ggml_sycl_disable_mmvq && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
         // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
         // is enabled takes precedence over DMMV, the current if-else implementation
         // requires disabling DMMV if both conditions are met
-        || (reorder && ggml_sycl_supports_reorder_mmvq(src0->type))) {
+        || (reorder && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
+
+    // TODO: Romain
+    GGML_SYCL_DEBUG("mul_mat use_dequantize_mul_mat_vec=%d use_mul_mat_vec_q=%d use_mul_mat_q=%d reorder=%d split=%d m=%ld n=%ld k=%ld batch0=%ld batch1=%ld\n", use_dequantize_mul_mat_vec, use_mul_mat_vec_q, use_mul_mat_q, reorder, split, src0->ne[1], src1->ne[1], src0->ne[0], src0->ne[3], src1->ne[3]);
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
         // TODO: Refactor and cleanup of mul mat dispatching.
@@ -2998,6 +3005,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         constexpr bool convert_src1_to_q8_1 = false;
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, convert_src1_to_q8_1);
     }
+    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 
