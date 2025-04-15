@@ -49,6 +49,7 @@ static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
 int g_ggml_sycl_disable_optimize = 0;
 int g_ggml_sycl_disable_graph = 0;
+int g_ggml_sycl_disable_dnn = 0;
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -195,11 +196,21 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_disable_optimize= get_sycl_env("GGML_SYCL_DISABLE_OPT", 1);
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
+        g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_OPT: %d\n", g_ggml_sycl_disable_optimize);
+#ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
+#endif
+#if GGML_SYCL_DNNL
+        GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: %d\n", g_ggml_sycl_disable_dnn);
+#else
+        GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
+#endif
         GGML_LOG_INFO("Build with Macros:\n");
 #if defined(GGML_SYCL_FORCE_MMQ)
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
@@ -1982,19 +1993,18 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne10 = src1->ne[0];
-
+    GGML_ASSERT(ne00 == ne10);
 
     const int64_t row_diff = row_high - row_low;
 
     int id;
     SYCL_CHECK(
         CHECK_TRY_ERROR(id = get_current_device_id()));
-#if !GGML_SYCL_DNNL
-    const int64_t ne0 = dst->ne[0];
+
+    const int64_t ne0 = dst->ne[0]; // used by MKL only
     // the main device has a larger memory buffer to hold the results from all GPUs
     // ldc == nrows of the matrix that cuBLAS writes into
-    int ldc = id == ctx.device ? ne0 : row_diff;
-#endif
+    int ldc = id == ctx.device ? ne0 : row_diff; // used by MKL only
 
 #ifdef GGML_SYCL_F16
     bool use_fp16 = true;  // TODO(Yu) SYCL capability check
@@ -2030,25 +2040,29 @@ inline void ggml_sycl_op_mul_mat_sycl(
                                          : src1_as_f16.get();
         ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool(), row_diff * src1_ncols);
 
-#if !GGML_SYCL_DNNL
-        const sycl::half alpha_f16 = 1.0f;
-        const sycl::half beta_f16  = 0.0f;
-        SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm(
-            *stream, oneapi::math::transpose::trans,
-            oneapi::math::transpose::nontrans, row_diff, src1_ncols, ne10,
-            &alpha_f16, src0_ptr, dpct::library_data_t::real_half, ne00,
-            src1_ptr, dpct::library_data_t::real_half, ne10, &beta_f16,
-            dst_f16.get(), dpct::library_data_t::real_half, ldc,
-            dpct::library_data_t::real_half)));
-        const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
-        to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
-#else
-        DnnlGemmWrapper::row_gemm(ctx, false, true, src1_ncols, row_diff, ne10, src1_ptr,
-                                  DnnlGemmWrapper::to_dt<sycl::half>(), src0_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                  dst_f16.get(), DnnlGemmWrapper::to_dt<sycl::half>(), stream);
-        const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
-        to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff* src1_ncols, stream);
+#if GGML_SYCL_DNNL
+        if (!g_ggml_sycl_disable_dnn) {
+            DnnlGemmWrapper::row_gemm(ctx, src1_ncols, row_diff, ne10, src1_ptr,
+                                      DnnlGemmWrapper::to_dt<sycl::half>(), src0_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                      dst_f16.get(), DnnlGemmWrapper::to_dt<sycl::half>(), stream);
+            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
+            to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff* src1_ncols, stream);
+        }
+        else
 #endif
+        {
+            const sycl::half alpha_f16 = 1.0f;
+            const sycl::half beta_f16  = 0.0f;
+            SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm(
+                *stream, oneapi::math::transpose::trans,
+                oneapi::math::transpose::nontrans, row_diff, src1_ncols, ne10,
+                &alpha_f16, src0_ptr, dpct::library_data_t::real_half, ne00,
+                src1_ptr, dpct::library_data_t::real_half, ne10, &beta_f16,
+                dst_f16.get(), dpct::library_data_t::real_half, ldc,
+                dpct::library_data_t::real_half)));
+            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
+            to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
+        }
     }
     else {
         // GGML_SYCL_DEBUG("ggml_sycl_op_mul_mat_sycl - fp32 path\n");
@@ -2069,18 +2083,22 @@ inline void ggml_sycl_op_mul_mat_sycl(
         const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd_i : src0_ddq_as_f32.get();
         const float * src1_ddf1_i = src1->type == GGML_TYPE_F32 ? (const float *) src1_ddf_i : src1_ddq_as_f32.get();
 
-#if !GGML_SYCL_DNNL
-        const float alpha = 1.0f;
-        const float beta  = 0.0f;
-        SYCL_CHECK(CHECK_TRY_ERROR(oneapi::math::blas::column_major::gemm(
-            get_onemath_backend(*stream), oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, row_diff,
-            src1_ncols, ne10, dpct::get_value(&alpha, *stream), src0_ddf_i, ne00, src1_ddf1_i, ne10,
-            dpct::get_value(&beta, *stream), dst_dd_i, ldc)));
-#else
-        DnnlGemmWrapper::row_gemm(ctx, false, true, src1_ncols, row_diff, ne10, src1_ddf1_i,
-                                  DnnlGemmWrapper::to_dt<float>(), src0_ddf_i, DnnlGemmWrapper::to_dt<float>(),
-                                  dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
+#if GGML_SYCL_DNNL
+        if (!g_ggml_sycl_disable_dnn) {
+            DnnlGemmWrapper::row_gemm(ctx, src1_ncols, row_diff, ne10, src1_ddf1_i,
+                                      DnnlGemmWrapper::to_dt<float>(), src0_ddf_i, DnnlGemmWrapper::to_dt<float>(),
+                                      dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
+        }
+        else
 #endif
+        {
+            const float alpha = 1.0f;
+            const float beta  = 0.0f;
+            SYCL_CHECK(CHECK_TRY_ERROR(oneapi::math::blas::column_major::gemm(
+                get_onemath_backend(*stream), oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, row_diff,
+                src1_ncols, ne10, dpct::get_value(&alpha, *stream), src0_ddf_i, ne00, src1_ddf1_i, ne10,
+                dpct::get_value(&beta, *stream), dst_dd_i, ldc)));
+        }
     }
     GGML_UNUSED(dst);
     GGML_UNUSED(src1_ddq_i);
@@ -2695,7 +2713,7 @@ catch (sycl::exception const &exc) {
 }
 
 static void k_compute_batched_ptrs(const sycl::half *src0_as_f16,
-                                   const sycl::half *src1_as_f16, char *dst,
+                                   const sycl::half *src1_as_f16, float *dst,
                                    const void **ptrs_src, void **ptrs_dst,
                                    int64_t ne12, int64_t ne13, int64_t ne23,
                                    size_t nb02, size_t nb03, size_t nb12,
@@ -2727,9 +2745,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     GGML_ASSERT(!ggml_is_transposed(src1));
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
-
 
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();;
@@ -2751,14 +2769,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     sycl::half *src1_f16 = src1->type == GGML_TYPE_F16 ? (sycl::half *)src1_ddf
                                                        : src1_f16_alloc.get();
 
-    char * dst_t;
-
-    dpct::library_data_t cu_compute_type = dpct::library_data_t::real_float;
-    dpct::library_data_t cu_data_type = dpct::library_data_t::real_float;
-
-    // dst strides
-    size_t nbd2 = dst->nb[2];
-    size_t nbd3 = dst->nb[3];
+    const dpct::library_data_t cu_compute_type = dpct::library_data_t::real_float;
+    const dpct::library_data_t cu_data_type = dpct::library_data_t::real_float;
 
     const float alpha_f32 = 1.0f;
     const float beta_f32 = 0.0f;
@@ -2766,60 +2778,106 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     const void * alpha = &alpha_f32;
     const void * beta  = &beta_f32;
 
-    dst_t = (char *) dst_ddf;
-
     GGML_ASSERT(ne12 % ne02 == 0);
     GGML_ASSERT(ne13 % ne03 == 0);
+    GGML_ASSERT(ne01 == static_cast<int64_t>(nb1/nb0));
+    GGML_ASSERT(ne10 == ne00);
 
     // broadcast factors
-    const int64_t r2 = ne12/ne02;
-    const int64_t r3 = ne13/ne03;
+    const auto r2 = ne12/ne02;
+    const auto r3 = ne13/ne03;
 
-    if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
-        // there is no broadcast and src0, src1 are contiguous across dims 2, 3
-        SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
-            *main_stream, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
-            (const char *) src0_as_f16, dpct::library_data_t::real_half, nb01 / nb00, nb02 / nb00,
-            (const char *) src1_f16, dpct::library_data_t::real_half, nb11 / nb10, nb12 / nb10, beta, (char *) dst_t,
-            cu_data_type, ne01, nb2 / nb0, ne12 * ne13, cu_compute_type)));
-    } else {
-        const int ne23 = ne12*ne13;
+#if GGML_SYCL_DNNL
+    if (!g_ggml_sycl_disable_dnn) {
+        auto dnn_gemm = [&ctx, main_stream, ne11, ne01, ne10, nb00, nb01, nb02, nb10, nb11, nb12]
+            (const sycl::half* src1, const sycl::half* src0, float* dst, const dnnl_dim_t batches_a, const dnnl_dim_t batches_b) {
 
-        ggml_sycl_pool_alloc<const void *> ptrs_src(ctx.pool(), 2*ne23);
-        ggml_sycl_pool_alloc<      void *> ptrs_dst(ctx.pool(), 1*ne23);
-        ggml_sycl_pool_alloc<matrix_info_t<float>> matrix_info(ctx.host_pool(), 1);
+            DnnlGemmWrapper::gemm(ctx, ne11,ne01, ne10,
+                            src1, DnnlGemmWrapper::to_dt<sycl::half>(), nb11/nb10, 1, nb12/nb10,
+                            src0, DnnlGemmWrapper::to_dt<sycl::half>(), 1, nb01/nb00, nb02/nb00,
+                            dst, DnnlGemmWrapper::to_dt<float>(), main_stream, batches_a, batches_b);
+        };
 
-        sycl::range<3> block_dims(1, ne12, ne13);
-        /*
-        DPCT1049:47: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(main_stream->get_device(),
-                                         {sycl::aspect::fp16});
+        if (r2 == 1 && r3 == 1) {
+            if (ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
+                dnn_gemm(src1_f16, src0_as_f16, dst_ddf, ne12*ne13, ne02 * ne03);
+            }
+            else {
+                const auto nb13_scaled = src1->type == GGML_TYPE_F16 ? nb13 : nb13 / 2;
 
-            main_stream->submit([&](sycl::handler &cgh) {
-                const void **ptrs_src_get = ptrs_src.get();
-                void **ptrs_dst_get = ptrs_dst.get();
-                size_t nb12_scaled = src1->type == GGML_TYPE_F16 ? nb12 : nb12 / 2;
-                size_t nb13_scaled = src1->type == GGML_TYPE_F16 ? nb13 : nb13 / 2;
-                cgh.parallel_for(sycl::nd_range<3>(block_dims, block_dims),
-                                 [=](sycl::nd_item<3> item_ct1) {
-                                     k_compute_batched_ptrs(
-                                         src0_as_f16, src1_f16,
-                                         dst_t, ptrs_src_get,
-                                         ptrs_dst_get, ne12, ne13, ne23,
-                                         nb02, nb03, nb12_scaled, nb13_scaled,
-                                         nbd2, nbd3, r2, r3, item_ct1);
-                                 });
-            });
+                for (int64_t ie03 = 0; ie03 < ne03; ++ie03) {
+                    const sycl::half* src0_f16_shifted = src0_as_f16 + ((ie03*nb03)/2); // div2 cuz nb is in bytes and pointer is in f16 (2 bytes)
+                    const sycl::half* src1_f16_shifted = src1_f16 + ((ie03*nb13_scaled)/2);
+                    float* dst_shifted = dst_ddf + ((ie03*nb3)/4); // div4 cuz nb is in bytes and pointer is float (4 bytes)
+                    dnn_gemm(src1_f16_shifted, src0_f16_shifted, dst_shifted, ne12, ne02);
+                }
+            }
+        } else {
+            // nb1X_scaled is in bytes as if matrix 1 type would be sycl::half (it may be already such or it may be 4-bytes)
+            const auto nb12_scaled = src1->type == GGML_TYPE_F16 ? nb12 : nb12 / 2;
+            const auto nb13_scaled = src1->type == GGML_TYPE_F16 ? nb13 : nb13 / 2;
+
+            // iterate over batches from smaller set of matrices (matrix 0)
+            for (int64_t ie02 = 0; ie02 < ne02; ++ie02) {
+                for (int64_t ie03 = 0; ie03 < ne03; ++ie03) {
+                    const sycl::half* src0_f16_shifted = src0_as_f16 + ((ie02*nb02 + ie03*nb03)/2); // div2 cuz nb is in bytes and pointer is in f16 (2 bytes)
+                    const sycl::half* src1_f16_shifted = src1_f16 + ((ie02*nb12_scaled*r2 + ie03*nb13_scaled*r3)/2);
+                    float* dst_shifted = dst_ddf + ((ie02*nb2*r2 + ie03*nb3*r3)/4); // div4 cuz nb is in bytes and pointer is float (4 bytes)
+                    dnn_gemm(src1_f16_shifted, src0_f16_shifted, dst_shifted, r2*r3, 1);
+                }
+            }
         }
-        SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
-            *main_stream, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
-            (const void **) (ptrs_src.get() + 0 * ne23), dpct::library_data_t::real_half, nb01 / nb00,
-            (const void **) (ptrs_src.get() + 1 * ne23), dpct::library_data_t::real_half, nb11 / nb10, beta,
-            (void **) (ptrs_dst.get() + 0 * ne23), cu_data_type, ne01, ne23, cu_compute_type, matrix_info.get())));
+    }
+    else
+#endif
+    {
+        const auto ne23 = ne12*ne13;
+        if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
+            // there is no broadcast and src0, src1 are contiguous across dims 2, 3
+
+            SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
+                *main_stream, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
+                (const char *) src0_as_f16, dpct::library_data_t::real_half, nb01 / nb00, nb02 / nb00,
+                (const char *) src1_f16, dpct::library_data_t::real_half, nb11 / nb10, nb12 / nb10, beta, (char *) dst_ddf,
+                cu_data_type, ne01, nb2 / nb0, ne23, cu_compute_type)));
+        } else {
+
+            ggml_sycl_pool_alloc<const void *> ptrs_src(ctx.pool(), 2*ne23);
+            ggml_sycl_pool_alloc<      void *> ptrs_dst(ctx.pool(), 1*ne23);
+            ggml_sycl_pool_alloc<matrix_info_t<float>> matrix_info(ctx.host_pool(), 1);
+
+            sycl::range<3> block_dims(1, ne12, ne13);
+            /*
+            DPCT1049:47: The work-group size passed to the SYCL kernel may exceed
+            the limit. To get the device limit, query
+            info::device::max_work_group_size. Adjust the work-group size if needed.
+            */
+            {
+                dpct::has_capability_or_fail(main_stream->get_device(),
+                                             {sycl::aspect::fp16});
+
+                main_stream->submit([&](sycl::handler &cgh) {
+                    const void **ptrs_src_get = ptrs_src.get();
+                    void **ptrs_dst_get = ptrs_dst.get();
+                    size_t nb12_scaled = src1->type == GGML_TYPE_F16 ? nb12 : nb12 / 2;
+                    size_t nb13_scaled = src1->type == GGML_TYPE_F16 ? nb13 : nb13 / 2;
+                    cgh.parallel_for(sycl::nd_range<3>(block_dims, block_dims),
+                                     [=](sycl::nd_item<3> item_ct1) {
+                                         k_compute_batched_ptrs(
+                                             src0_as_f16, src1_f16,
+                                             dst_ddf, ptrs_src_get,
+                                             ptrs_dst_get, ne12, ne13, ne23,
+                                             nb02, nb03, nb12_scaled, nb13_scaled,
+                                             nb2, nb3, r2, r3, item_ct1);
+                                     });
+                });
+            }
+            SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
+                *main_stream, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
+                (const void **) (ptrs_src.get() + 0 * ne23), dpct::library_data_t::real_half, nb01 / nb00,
+                (const void **) (ptrs_src.get() + 1 * ne23), dpct::library_data_t::real_half, nb11 / nb10, beta,
+                (void **) (ptrs_dst.get() + 0 * ne23), cu_data_type, ne01, ne23, cu_compute_type, matrix_info.get())));
+        }
     }
 }
 catch (sycl::exception const &exc) {
@@ -3651,7 +3709,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             return GGML_STATUS_SUCCESS;
         }
 
-        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()));
+        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
+
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
         model_sycl_graph.end_recording();
