@@ -36,6 +36,7 @@ import javax.inject.Singleton
 interface ModelRepository {
     fun getStorageMetrics(): Flow<StorageMetrics>
     fun getModels(): Flow<List<ModelInfo>>
+    suspend fun getModelById(id: String): ModelInfo?
 
     suspend fun importModel(
         uri: Uri,
@@ -88,6 +89,9 @@ class ModelRepositoryImpl @Inject constructor(
                     it.toModelInfo()
                 }
             }
+
+    override suspend fun getModelById(id: String) =
+        modelDao.getModelById(id)?.toModelInfo()
 
     override suspend fun importModel(
         uri: Uri,
