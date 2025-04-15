@@ -113,10 +113,15 @@ fun ModelsManagementScreen(
     }
 
     BackHandler(
-        enabled = managementState is Importation.Importing
+        enabled = managementState is Importation.Importing || isMultiSelectionMode
             || managementState is Deletion.Deleting
     ) {
-        /* Ignore back press while processing model management requests */
+        if (isMultiSelectionMode) {
+            // Exit selection mode if in selection mode
+            exitSelectionMode()
+        } else {
+            /* Ignore back press while processing model management requests */
+        }
     }
 
     StorageAppScaffold(
