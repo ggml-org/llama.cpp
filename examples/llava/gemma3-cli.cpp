@@ -317,6 +317,6 @@ int main(int argc, char ** argv) {
             is_first_msg = false;
         }
     }
-
+    llama_perf_context_print(ctx.lctx);
     return 0;
 }
