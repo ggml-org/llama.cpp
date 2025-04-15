@@ -1,4 +1,4 @@
-#include "llama-model.h"
+dee#include "llama-model.h"
 
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -10143,6 +10143,10 @@ struct llm_build_deepseek2 : public llm_graph_context {
                 cb(kv_cmpr, "kv_cmpr", il);
 
                 if (is_mla) {
+                    // {n_embd_head_qk_rope, n_tokens, n_head}
+                    q_pe = ggml_permute(ctx0, q_pe, 0, 2, 1, 3);
+                    cb(q_pe, "q_pe_perm", il);
+
                     // {n_embd_head_qk_nope, n_tokens, n_head}
                     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
                     cb(q_nope, "q_nope_perm", il);
