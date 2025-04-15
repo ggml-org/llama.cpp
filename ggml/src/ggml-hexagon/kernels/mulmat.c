@@ -274,5 +274,4 @@ int ggmlop_dsp_mulmat(remote_handle64 h, const struct dsptensor * src0, const st
     } else {
         return ggmlop_dsp_mulmat_singlethread(h, src0, src1, dst);
     }
-    return 0;
 }
