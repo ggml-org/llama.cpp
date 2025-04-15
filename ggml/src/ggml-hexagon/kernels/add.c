@@ -4,7 +4,6 @@ inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float 
     HVX_Vector * va;
     HVX_Vector * vb;
     HVX_Vector * vc;
-    HVX_Vector qf32;
     const int FLOATS_PER_VECTOR = 128 / sizeof(float);
     const int block  = n / FLOATS_PER_VECTOR;
     const int left   = n % FLOATS_PER_VECTOR;
@@ -29,9 +28,7 @@ inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float 
     vb = (HVX_Vector *)y;
     vc = (HVX_Vector *)z;
     for (size_t i = 0; i < block; ++i) {
-        qf32 = Q6_Vqf32_vadd_VsfVsf(*va++, *vb++);
-        *vc = Q6_Vsf_equals_Vqf32(qf32);
-        vc++;
+        *vc++ = Q6_Vsf_vadd_VsfVsf(*va++, *vb++);
     }
 
     if (left > 0) {
