@@ -73,7 +73,7 @@ class ModelsManagementViewModel @Inject constructor(
 
     fun deleteModels(models: Map<String, ModelInfo>) =
         viewModelScope.launch {
-            modelRepository.deleteModels(models.keys)
+            modelRepository.deleteModels(models.keys.toList())
         }
 
     private val _importState = MutableStateFlow<ModelImportState>(ModelImportState.Idle)

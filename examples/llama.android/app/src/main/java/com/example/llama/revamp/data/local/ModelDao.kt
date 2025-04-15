@@ -16,7 +16,7 @@ interface ModelDao {
     suspend fun getModelById(id: String): ModelEntity?
 
     @Query("SELECT * FROM models WHERE id IN (:ids)")
-    suspend fun getModelsByIds(ids: Collection<String>): List<ModelEntity>
+    suspend fun getModelsByIds(ids: List<String>): List<ModelEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertModel(model: ModelEntity)

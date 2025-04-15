@@ -44,7 +44,7 @@ interface ModelRepository {
     suspend fun importModel(uri: Uri, progressTracker: ImportProgressTracker? = null): ModelInfo
 
     suspend fun deleteModel(modelId: String)
-    suspend fun deleteModels(modelIds: Collection<String>)
+    suspend fun deleteModels(modelIds: List<String>)
 
     fun interface ImportProgressTracker {
         fun onProgress(progress: Float) // 0.0f to 1.0f
@@ -229,7 +229,7 @@ class ModelRepositoryImpl @Inject constructor(
         }
     }
 
-    override suspend fun deleteModels(modelIds: Collection<String>) {
+    override suspend fun deleteModels(modelIds: List<String>) {
         modelDao.getModelsByIds(modelIds).let { models ->
             models.forEach { model ->
                 File(model.path).let {

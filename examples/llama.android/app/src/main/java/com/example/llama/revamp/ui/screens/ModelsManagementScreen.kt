@@ -137,6 +137,7 @@ fun ModelsManagementScreen(
                             onClick = {
                                 // Delete selected
                                 if (selectedModels.isNotEmpty()) {
+                                    // TODO-han.yin: pop up an AlertDialog asking user for confirmation
                                     viewModel.deleteModels(selectedModels)
                                     exitSelectionMode()
                                 }
