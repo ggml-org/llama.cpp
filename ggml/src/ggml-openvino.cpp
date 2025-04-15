@@ -1,18 +1,14 @@
 #include "ggml-backend-impl.h"
-#include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "ggml-openvino.h"
 #include "ggml-openvino/utils.h"
 #include "ggml.h"
 
-#include <string>
 #include <mutex>
-#include <vector>
 #include <openvino/openvino.hpp>
-#include <openvino/op/op.hpp>
-#include <openvino/op/add.hpp>
-#include <openvino/op/subtract.hpp>
-#include <openvino/opsets/opset1.hpp>
+#include <set>
+#include <string>
+#include <vector>
 
 #define GGML_OPENVINO_MAX_STREAMS 8
 
@@ -55,10 +51,10 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_get_default_buffer_type(
     GGML_UNUSED(backend);
 }
 
-static void ggml_backend_openvino_add_forward(ggml_tensor * dst) {
-    // Step 1: get the input tensor src0 和 src1
-    const struct ggml_tensor *src0 = dst->src[0];
-    const struct ggml_tensor *src1 = dst->src[1];
+static enum ggml_status
+ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph *cgraph) {
+  int end_node = cgraph->n_nodes - 1;
+  openvino_frontend_compute(backend, cgraph, 0, end_node);
 
     ov::Core core;
 
@@ -1265,17 +1261,6 @@ static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(g
     GGML_UNUSED(size);
     GGML_UNUSED(max_tensor_size);
     return nullptr;
-}
-
-std::set<std::string> get_openvino_available_opsets() {
-    ov::Core core;
-    std::set<std::string> unique_ops;
-    for (const auto& opset  : ov::get_available_opsets()) {
-        for (const auto& op : opset.second().get_type_info_set()) {
-            unique_ops.insert(op.name);
-        }
-    }
-    return unique_ops;
 }
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
