@@ -4018,8 +4018,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 return ggml_is_contiguous(op->src[0]);
             }
         case GGML_OP_IM2COL:
-            // TODO: add support for the new F32 operations
-            return op->src[0]->type == GGML_TYPE_F16;
+            return true;
         case GGML_OP_UPSCALE:
             return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
         case GGML_OP_POOL_2D:
