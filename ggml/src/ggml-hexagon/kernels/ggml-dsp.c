@@ -273,7 +273,9 @@ void ggmlhexagon_log_internal(int level, const char *file, const char *func, int
 }
 
 void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor) {
-    //return;
+#if !GGMLHEXAGON_DEBUG
+    return;
+#endif
     float value = 0;
     char tmpbuf[GGMLHEXAGON_LOGBUF_LEN];
     size_t buflen = 0;
