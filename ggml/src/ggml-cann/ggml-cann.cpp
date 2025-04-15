@@ -329,6 +329,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
          * @param size Size of the buffer to free.
          */
         void free(void* ptr, size_t size) override {
+            GGML_UNUSED(size);
             auto it = buffer_pool.find(ptr);
             if (it == buffer_pool.end()) {
                 GGML_ABORT("cann pool[%d]: buffer %p not found in pool\n", device, ptr);
@@ -531,6 +532,7 @@ struct ggml_cann_pool_buf : public ggml_cann_pool {
      * @param size Size of the buffer to free.
      */
     void free(void* ptr, size_t size) override {
+        GGML_UNUSED(size);
         for (int i = 0; i < MAX_BUFFERS; ++i) {
             ggml_cann_buffer& b = buffer_pool[i];
             if (b.ptr != ptr) {
