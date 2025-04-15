@@ -4009,6 +4009,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ROPE:
             {
                 const int mode = ((const int32_t *) op->op_params)[2];
+                // mode is not used as a bitmask in practice, the various rope type modes are independent implementations
                 if (mode == GGML_ROPE_TYPE_MROPE) {
                     return false;
                 }
