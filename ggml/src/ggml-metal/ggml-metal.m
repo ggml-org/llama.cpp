@@ -468,16 +468,21 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_COUNT
 };
 
+//
+// ggml_metal_heap
+//
+
 struct ggml_metal_heap {
     int n_unused; // number of times the heap was unused
 
-    int64_t n_alloc;
+    int64_t n_alloc; // total number of buffer allocations in this heap across all computes
 
+    // current offset in the heap - we reset this after each node in order to reuse the memory
     size_t offs;
 
     id<MTLHeap> obj;
 
-    NSMutableArray * bufs;
+    NSMutableArray * bufs; // the currently allocated MTLBuffer objects in this heap
 };
 
 static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_t size) {
@@ -511,6 +516,7 @@ static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_
 static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
     heap->offs = 0;
 
+    // count how many graph computes the heap ended up being unused
     if ([heap->bufs count] > 0) {
         heap->n_unused = 0;
     } else {
@@ -522,6 +528,8 @@ static void ggml_metal_heap_reset(struct ggml_metal_heap * heap) {
     }
     [heap->bufs removeAllObjects];
 
+    // tell the OS that it can reuse this memory if needed
+    // ref: https://developer.apple.com/documentation/metal/mtlpurgeablestate?language=objc
     [heap->obj setPurgeableState:MTLPurgeableStateVolatile];
 }
 
@@ -538,45 +546,6 @@ static void ggml_metal_heap_free(struct ggml_metal_heap * heap) {
     free(heap);
 }
 
-struct ggml_metal_command_buffer {
-    id<MTLCommandBuffer> obj;
-
-    struct ggml_metal_mem_pool * mem_pool;
-};
-
-struct ggml_backend_metal_context {
-    id<MTLDevice>       device;
-    id<MTLCommandQueue> queue;
-
-    dispatch_queue_t d_queue;
-
-    struct ggml_metal_kernel kernels[GGML_METAL_KERNEL_TYPE_COUNT];
-
-    // capture state
-    bool capture_next_compute;
-    bool capture_started;
-
-    id<MTLCaptureScope> capture_scope;
-
-    // command buffer state
-    int n_cb;           // number of extra threads used to submit the command buffers
-    int n_nodes_0;      // number of nodes submitted by the main thread
-    int n_nodes_1;      // remaining number of nodes submitted by the n_cb threads
-    int n_nodes_per_cb;
-
-    struct ggml_cgraph * gf;
-
-    // the callback given to the thread pool
-    void (^encode_async)(size_t ith);
-
-    // n_cb command buffers + 1 used by the main thread
-    struct ggml_metal_command_buffer cmd_bufs[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
-
-    // abort ggml_metal_graph_compute if callback returns true
-    ggml_abort_callback abort_callback;
-    void *              abort_callback_data;
-};
-
 @interface ggml_metal_heap_ptr : NSObject
 
 @property (nonatomic, assign) struct ggml_metal_heap * data;
@@ -584,11 +553,16 @@ struct ggml_backend_metal_context {
 @end
 
 @implementation ggml_metal_heap_ptr
-
 @end
+
+//
+// ggml_metal_mem_pool
+//
 
 struct ggml_metal_mem_pool {
     id<MTLDevice> device;
+
+    int n_heaps; // total number of heaps ever created (including those that were removed)
 
     NSMutableArray * heaps;
     NSMutableArray * heaps_to_remove;
@@ -597,6 +571,8 @@ struct ggml_metal_mem_pool {
 static struct ggml_metal_mem_pool * ggml_metal_mem_pool_init(void) {
     struct ggml_metal_mem_pool * mem_pool = calloc(1, sizeof(struct ggml_metal_mem_pool));
 
+    mem_pool->n_heaps = 0;
+
     mem_pool->heaps           = [[NSMutableArray alloc] init];
     mem_pool->heaps_to_remove = [[NSMutableArray alloc] init];
 
@@ -604,7 +580,7 @@ static struct ggml_metal_mem_pool * ggml_metal_mem_pool_init(void) {
 }
 
 static void ggml_metal_mem_pool_free(struct ggml_metal_mem_pool * mem_pool) {
-    GGML_LOG_DEBUG("%s: freeing memory pool, num heaps = %zu\n", __func__, [mem_pool->heaps count]);
+    GGML_LOG_DEBUG("%s: freeing memory pool, num heaps = %zu (total = %d)\n", __func__, [mem_pool->heaps count], mem_pool->n_heaps);
 
     size_t size_all = 0;
     size_t size_cur = 0;
@@ -679,6 +655,9 @@ static id<MTLBuffer> ggml_metal_mem_pool_alloc(struct ggml_metal_mem_pool * mem_
     for (ggml_metal_heap_ptr * ptr in mem_pool->heaps) {
         struct ggml_metal_heap * heap = ptr.data;
         if (heap->offs + size_aligned <= [heap->obj size]) {
+            // if this is the first buffer in the heap for the current command buffer, tell the OS that
+            //   it cannot free the memory used by the heap
+            // ref: https://developer.apple.com/documentation/metal/mtlpurgeablestate?language=objc
             if ([heap->bufs count] == 0) {
                 [heap->obj setPurgeableState:MTLPurgeableStateNonVolatile];
             }
@@ -702,11 +681,15 @@ static id<MTLBuffer> ggml_metal_mem_pool_alloc(struct ggml_metal_mem_pool * mem_
     ggml_metal_heap_ptr * heap_ptr = [ggml_metal_heap_ptr new];
 
     struct ggml_metal_heap * heap = ggml_metal_heap_init(mem_pool->device, size_aligned);
+    if (heap == NULL) {
+        GGML_LOG_ERROR("%s: error: failed to create heap of size %zu\n", __func__, size_aligned);
+        return NULL;
+    }
+
+    //GGML_LOG_DEBUG("%s: creating new heap of size %zu, got %zu\n", __func__, size_aligned, [heap->obj size]);
+
     heap_ptr.data = heap;
-
-    GGML_LOG_DEBUG("%s: creating new heap of size %zu, got %zu\n", __func__, size_aligned, [heap->obj size]);
-
-    ggml_metal_heap_reset(heap_ptr.data);
+    ggml_metal_heap_reset(heap);
 
     [heap->obj setPurgeableState:MTLPurgeableStateNonVolatile];
     id<MTLBuffer> buf = [heap->obj newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate offset:heap->offs];
@@ -721,9 +704,50 @@ static id<MTLBuffer> ggml_metal_mem_pool_alloc(struct ggml_metal_mem_pool * mem_
     [heap->bufs addObject:buf];
 
     [mem_pool->heaps addObject:heap_ptr];
+    mem_pool->n_heaps++;
 
     return buf;
 }
+
+struct ggml_metal_command_buffer {
+    id<MTLCommandBuffer> obj;
+
+    // each command buffer has a memory pool from which it can allocate temporary buffers during the compute
+    struct ggml_metal_mem_pool * mem_pool;
+};
+
+struct ggml_backend_metal_context {
+    id<MTLDevice>       device;
+    id<MTLCommandQueue> queue;
+
+    dispatch_queue_t d_queue;
+
+    struct ggml_metal_kernel kernels[GGML_METAL_KERNEL_TYPE_COUNT];
+
+    // capture state
+    bool capture_next_compute;
+    bool capture_started;
+
+    id<MTLCaptureScope> capture_scope;
+
+    // command buffer state
+    int n_cb;           // number of extra threads used to submit the command buffers
+    int n_nodes_0;      // number of nodes submitted by the main thread
+    int n_nodes_1;      // remaining number of nodes submitted by the n_cb threads
+    int n_nodes_per_cb;
+
+    struct ggml_cgraph * gf;
+
+    // the callback given to the thread pool
+    void (^encode_async)(size_t ith);
+
+    // n_cb command buffers + 1 used by the main thread
+    struct ggml_metal_command_buffer cmd_bufs[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
+
+    // abort ggml_metal_graph_compute if callback returns true
+    ggml_abort_callback abort_callback;
+    void *              abort_callback_data;
+};
 
 // MSL code
 // TODO: move the contents here when ready
