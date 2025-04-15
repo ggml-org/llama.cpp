@@ -108,6 +108,35 @@ class ModelsManagementViewModel @Inject constructor(
         // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
     }
 
+    fun batchDeletionClicked(models: Map<String, ModelInfo>) {
+        _managementState.value = Deletion.Confirming(models)
+    }
+
+    fun deleteModels(models: Map<String, ModelInfo>) = viewModelScope.launch {
+        val total = models.size
+        if (total == 0) return@launch
+
+        try {
+            // Delete models one by one
+            _managementState.value = Deletion.Deleting(0f, models)
+            var deleted = 0
+            models.keys.toList().forEach {
+                modelRepository.deleteModel(it)
+                deleted++
+                _managementState.value = Deletion.Deleting(deleted.toFloat() / total, models)
+            }
+            _managementState.value = Deletion.Success(models.values.toList())
+
+            // Reset state after a delay
+            delay(SUCCESS_RESET_TIMEOUT_MS)
+            _managementState.value = ModelManagementState.Idle
+        } catch (e: Exception) {
+            _managementState.value = Deletion.Error(
+                message = e.message ?: "Error deleting $total models"
+            )
+        }
+    }
+
     companion object {
         private val TAG = ModelsManagementViewModel::class.java.simpleName
 
