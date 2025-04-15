@@ -2022,6 +2022,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                     return true;
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
+#ifdef ASCEND_310P
+                    // Q4 && Q8 per group is not suppor on 310p device
+                    return false;
+#endif
                     // only support contiguous for quantized types.
                     return ggml_is_contiguous(op->src[0]) &&
                             ggml_is_contiguous(op->src[1]);
@@ -2107,6 +2111,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_POOL_2D: {
             const int32_t * opts = (const int32_t *) op->op_params;
+#ifdef ASCEND_310P
+            enum ggml_op_pool opt = static_cast<ggml_op_pool>(opts[0]);
+            if(opt == GGML_OP_POOL_MAX){
+                return false;
+            }
+#endif
             const int       k0   = opts[1];
             const int       k1   = opts[2];
             const int       p0   = opts[5];
