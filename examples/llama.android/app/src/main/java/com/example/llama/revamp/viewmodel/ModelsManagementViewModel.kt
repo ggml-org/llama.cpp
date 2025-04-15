@@ -81,43 +81,56 @@ class ModelsManagementViewModel @Inject constructor(
         _managementState.value = ModelManagementState.Idle
     }
 
-    fun importLocalModel(uri: Uri) =
-        viewModelScope.launch {
-            try {
-                val fileName = getFileNameFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
-                val fileSize = getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File name N/A")
-                _managementState.value = Importation.Importing(0f, fileName)
-
-                // Import with progress reporting
-                val model = modelRepository.importModel(uri, fileName, fileSize) { progress ->
-                    _managementState.value = Importation.Importing(progress, fileName)
-                }
-                _managementState.value = Importation.Success(model)
-
-                // Reset state after a delay
-                delay(SUCCESS_RESET_TIMEOUT_MS)
-                _managementState.value = ModelManagementState.Idle
-            } catch (e: Exception) {
-                _managementState.value = Importation.Error(
-                    message = e.message ?: "Unknown error importing $uri",
-                )
-            }
+    /**
+     * First show confirmation instead of starting import immediately
+     */
+    fun localModelFileSelected(uri: Uri) = viewModelScope.launch {
+        try {
+            val fileName = getFileNameFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
+            val fileSize = getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File name N/A")
+            _managementState.value = Importation.Confirming(uri, fileName, fileSize)
+        } catch (e: Exception) {
+            _managementState.value = Importation.Error(
+                message = e.message ?: "Unknown error preparing import"
+            )
         }
-
-    fun importFromHuggingFace() {
-        // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
     }
 
+    /**
+     * Import a local model file from device storage while updating UI states with realtime progress
+     */
+    fun importLocalModelFile(uri: Uri, fileName: String, fileSize: Long) = viewModelScope.launch {
+        try {
+            _managementState.value = Importation.Importing(0f, fileName, fileSize)
+            val model = modelRepository.importModel(uri, fileName, fileSize) { progress ->
+                _managementState.value = Importation.Importing(progress, fileName, fileSize)
+            }
+            _managementState.value = Importation.Success(model)
+        } catch (e: Exception) {
+            _managementState.value = Importation.Error(
+                message = e.message ?: "Unknown error importing $uri",
+            )
+        }
+    }
+
+    // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
+    fun importFromHuggingFace() {}
+
+    /**
+     * First show confirmation instead of starting deletion immediately
+     */
     fun batchDeletionClicked(models: Map<String, ModelInfo>) {
         _managementState.value = Deletion.Confirming(models)
     }
 
+    /**
+     * Delete multiple models one by one while updating UI states with realtime progress
+     */
     fun deleteModels(models: Map<String, ModelInfo>) = viewModelScope.launch {
         val total = models.size
         if (total == 0) return@launch
 
         try {
-            // Delete models one by one
             _managementState.value = Deletion.Deleting(0f, models)
             var deleted = 0
             models.keys.toList().forEach {
@@ -157,7 +170,8 @@ sealed class ModelManagementState {
     object Idle : ModelManagementState()
 
     sealed class Importation : ModelManagementState() {
-        data class Importing(val progress: Float = 0f, val filename: String = "") : Importation()
+        data class Confirming(val uri: Uri, val fileName: String, val fileSize: Long) : Importation()
+        data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long) : Importation()
         data class Success(val model: ModelInfo) : Importation()
         data class Error(val message: String) : Importation()
     }

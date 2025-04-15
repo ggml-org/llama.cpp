@@ -3,7 +3,6 @@ package com.example.llama.revamp.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,7 +32,6 @@ import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
@@ -62,6 +60,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -69,6 +69,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.R
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.StorageAppScaffold
+import com.example.llama.revamp.util.formatSize
+import com.example.llama.revamp.viewmodel.ModelManagementState
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
 import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
 import com.example.llama.revamp.viewmodel.ModelSortOrder
@@ -102,7 +104,7 @@ fun ModelsManagementScreen(
     var showImportModelMenu by remember { mutableStateOf(false) }
     val fileLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { viewModel.importLocalModel(it) } }
+    ) { uri -> uri?.let { viewModel.localModelFileSelected(it) } }
 
     // UI state: multi-selecting
     var isMultiSelectionMode by remember { mutableStateOf(false) }
@@ -359,11 +361,30 @@ fun ModelsManagementScreen(
 
             // Model import progress overlay
             when (val state = managementState) {
+                is Importation.Confirming -> {
+                    ImportProgressDialog(
+                        fileName = state.fileName,
+                        fileSize = state.fileSize,
+                        isImporting = false,
+                        progress = 0.0f,
+                        onConfirm = {
+                            viewModel.importLocalModelFile(state.uri, state.fileName, state.fileSize)
+                        },
+                        onCancel = {
+                            viewModel.resetManagementState()
+                        }
+                    )
+                }
                 is Importation.Importing -> {
-                    ImportProgressOverlay(
+                    ImportProgressDialog(
+                        fileName = state.fileName,
+                        fileSize = state.fileSize,
+                        isImporting = true,
                         progress = state.progress,
-                        filename = state.filename,
-                        onCancel = { /* Implement cancellation if needed */ }
+                        onConfirm = {},
+                        onCancel = {
+                            // TODO-han.yin:  viewModel.cancelImport()
+                        },
                     )
                 }
                 is Importation.Error -> {
@@ -381,6 +402,7 @@ fun ModelsManagementScreen(
                                 duration = SnackbarDuration.Short
                             )
                         }
+                        viewModel.resetManagementState()
                     }
                 }
                 is Deletion.Confirming -> {
@@ -419,7 +441,7 @@ fun ModelsManagementScreen(
 
                     }
                 }
-                else -> { /* Idle state, nothing to show */ }
+                is ModelManagementState.Idle -> { /* Idle state, nothing to show */  }
             }
         }
     }
@@ -521,80 +543,97 @@ private fun ModelCard(
     }
 }
 
-// TODO-han.yin: Rewrite into
 @Composable
-fun ImportProgressOverlay(
+fun ImportProgressDialog(
+    fileName: String,
+    fileSize: Long,
+    isImporting: Boolean,
     progress: Float,
-    filename: String,
+    onConfirm: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.7f))
-            .padding(32.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
-        ) {
+    AlertDialog(
+        onDismissRequest = {
+            if (!isImporting) onCancel()
+        },
+        properties = DialogProperties(
+            dismissOnBackPress = !isImporting,
+            dismissOnClickOutside = !isImporting
+        ),
+        title = {
+            Text(if (isImporting) "Importing Model" else "Confirm Import")
+        },
+        text = {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Filename
                 Text(
-                    text = "Importing Model",
-                    style = MaterialTheme.typography.headlineSmall
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Text(
-                    text = filename,
+                    text = fileName,
                     style = MaterialTheme.typography.bodyMedium,
+                    fontStyle = FontStyle.Italic,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                LinearProgressIndicator(
-                    progress = { progress },
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                if (isImporting) {
+                    Spacer(modifier = Modifier.height(24.dp))
 
-                Text(
-                    text = "${(progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                    // Progress bar
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Percentage text
+                    Text(
+                        text = "${(progress * 100).toInt()}%",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                } else {
+                    // Show confirmation text
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Are you sure you want to import this model (${formatSize(fileSize)})? " +
+                            "This may take up to several minutes.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text(
-                    text = "This may take several minutes for large models",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
-
-                Button(
-                    onClick = onCancel,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer,
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                // Informational text
+                if (isImporting) {
+                    Text(
+                        text = "This may take several minutes for large models",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
                     )
-                ) {
-                    Text("Cancel")
+                }
+            }
+        },
+        confirmButton = {
+            // Only show confirm button in confirmation state
+            if (!isImporting) {
+                TextButton(onClick = onConfirm) { Text("Import") }
+            }
+        },
+        dismissButton = {
+            if (!isImporting || progress < 0.7f) {
+                TextButton(onClick = onCancel, enabled = !isImporting) {
+                    Text(if (isImporting) "Cancel" else "Back")
                 }
             }
         }
-    }
+    )
 }
 
 @Composable
