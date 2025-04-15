@@ -1,12 +1,18 @@
 package com.example.llama.revamp.viewmodel
 
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.StorageMetrics
+import com.example.llama.revamp.util.getFileNameFromUri
+import com.example.llama.revamp.util.getFileSizeFromUri
+import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
+import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -15,10 +21,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.io.FileNotFoundException
 import javax.inject.Inject
 
 @HiltViewModel
 class ModelsManagementViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
@@ -66,43 +74,35 @@ class ModelsManagementViewModel @Inject constructor(
         // TODO-han.yin: Stub for now. Would navigate to model details screen or show dialog
     }
 
-    fun deleteModel(modelId: String) =
-        viewModelScope.launch {
-            modelRepository.deleteModel(modelId)
-        }
+    private val _managementState = MutableStateFlow<ModelManagementState>(ModelManagementState.Idle)
+    val managementState: StateFlow<ModelManagementState> = _managementState.asStateFlow()
 
-    fun deleteModels(models: Map<String, ModelInfo>) =
-        viewModelScope.launch {
-            modelRepository.deleteModels(models.keys.toList())
-        }
-
-    private val _importState = MutableStateFlow<ModelImportState>(ModelImportState.Idle)
-    val importState: StateFlow<ModelImportState> = _importState.asStateFlow()
+    fun resetManagementState() {
+        _managementState.value = ModelManagementState.Idle
+    }
 
     fun importLocalModel(uri: Uri) =
         viewModelScope.launch {
             try {
-                // Get filename for progress updates
-                val filename = uri.lastPathSegment ?: throw Exception("Model name unknown")
-                _importState.value = ModelImportState.Importing(0f, filename)
+                val fileName = getFileNameFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
+                val fileSize = getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File name N/A")
+                _managementState.value = Importation.Importing(0f, fileName)
 
                 // Import with progress reporting
-                val model = modelRepository.importModel(uri) { progress ->
-                    _importState.value = ModelImportState.Importing(progress, filename)
+                val model = modelRepository.importModel(uri, fileName, fileSize) { progress ->
+                    _managementState.value = Importation.Importing(progress, fileName)
                 }
-                _importState.value = ModelImportState.Success(model)
+                _managementState.value = Importation.Success(model)
 
                 // Reset state after a delay
-                delay(1000)
-                _importState.value = ModelImportState.Idle
+                delay(SUCCESS_RESET_TIMEOUT_MS)
+                _managementState.value = ModelManagementState.Idle
             } catch (e: Exception) {
-                _importState.value = ModelImportState.Error(e.message ?: "Unknown error")
+                _managementState.value = Importation.Error(
+                    message = e.message ?: "Unknown error importing $uri",
+                )
             }
         }
-
-    fun resetImportState() {
-        _importState.value = ModelImportState.Idle
-    }
 
     fun importFromHuggingFace() {
         // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
@@ -112,6 +112,7 @@ class ModelsManagementViewModel @Inject constructor(
         private val TAG = ModelsManagementViewModel::class.java.simpleName
 
         private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
+        private const val SUCCESS_RESET_TIMEOUT_MS = 1000L
     }
 }
 
@@ -123,9 +124,19 @@ enum class ModelSortOrder {
     LAST_USED
 }
 
-sealed class ModelImportState {
-    object Idle : ModelImportState()
-    data class Importing(val progress: Float = 0f, val filename: String = "") : ModelImportState()
-    data class Success(val model: ModelInfo) : ModelImportState()
-    data class Error(val message: String) : ModelImportState()
+sealed class ModelManagementState {
+    object Idle : ModelManagementState()
+
+    sealed class Importation : ModelManagementState() {
+        data class Importing(val progress: Float = 0f, val filename: String = "") : Importation()
+        data class Success(val model: ModelInfo) : Importation()
+        data class Error(val message: String) : Importation()
+    }
+
+    sealed class Deletion : ModelManagementState() {
+        data class Confirming(val models: Map<String, ModelInfo>): ModelManagementState()
+        data class Deleting(val progress: Float = 0f, val models: Map<String, ModelInfo>) : ModelManagementState()
+        data class Success(val models: List<ModelInfo>) : Deletion()
+        data class Error(val message: String) : Deletion()
+    }
 }
