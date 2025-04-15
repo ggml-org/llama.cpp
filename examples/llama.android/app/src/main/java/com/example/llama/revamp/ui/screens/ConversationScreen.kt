@@ -62,7 +62,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
-import com.example.llama.revamp.viewmodel.MainViewModel
+import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.Message
 import kotlinx.coroutines.launch
 
@@ -72,7 +72,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ConversationScreen(
     onBackPressed: () -> Unit,
-    viewModel: MainViewModel = hiltViewModel()
+    viewModel: ConversationViewModel = hiltViewModel()
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()

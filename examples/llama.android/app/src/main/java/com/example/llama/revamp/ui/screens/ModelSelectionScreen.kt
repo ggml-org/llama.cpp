@@ -30,7 +30,7 @@ import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.ModelCardActions
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
-import com.example.llama.revamp.viewmodel.MainViewModel
+import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,9 +38,14 @@ fun ModelSelectionScreen(
     onModelSelected: (ModelInfo) -> Unit,
     onManageModelsClicked: () -> Unit,
     onMenuClicked: () -> Unit,
-    viewModel: MainViewModel = hiltViewModel(),
+    viewModel: ModelSelectionViewModel = hiltViewModel(),
 ) {
     val models by viewModel.availableModels.collectAsState()
+
+    val handleModelSelection = { model: ModelInfo ->
+        viewModel.selectModel(model)
+        onModelSelected(model)
+    }
 
     PerformanceAppScaffold(
         title = "Models",
@@ -60,11 +65,13 @@ fun ModelSelectionScreen(
                     items(models) { model ->
                         ModelCard(
                             model = model,
-                            onClick = { onModelSelected(model) },
+                            onClick = { handleModelSelection(model) },
                             modifier = Modifier.padding(vertical = 4.dp),
                             isSelected = null, // Not in selection mode
                             actionButton = {
-                                ModelCardActions.PlayButton(onClick = { onModelSelected(model) })
+                                ModelCardActions.PlayButton {
+                                    handleModelSelection(model)
+                                }
                             }
                         )
                         Spacer(modifier = Modifier.height(8.dp))

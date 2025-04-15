@@ -26,14 +26,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
+import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 import com.example.llama.revamp.viewmodel.MainViewModel
 
 @Composable
 fun BenchmarkScreen(
     onBackPressed: () -> Unit,
-    onRerunPressed: () -> Unit,
-    onSharePressed: () -> Unit,
-    viewModel: MainViewModel = hiltViewModel()
+    viewModel: BenchmarkViewModel = hiltViewModel()
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()

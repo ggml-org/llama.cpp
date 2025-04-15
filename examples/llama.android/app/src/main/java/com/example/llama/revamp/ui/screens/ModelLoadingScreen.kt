@@ -40,6 +40,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +51,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
+import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 import com.example.llama.revamp.viewmodel.SystemPromptViewModel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 
 enum class SystemPromptTab {
     PRESETS, CUSTOM, RECENTS
@@ -59,14 +63,17 @@ enum class SystemPromptTab {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ModelLoadingScreen(
-    viewModel: SystemPromptViewModel = hiltViewModel(),
     engineState: InferenceEngine.State,
-    onBenchmarkSelected: () -> Unit,
-    onConversationSelected: (String?) -> Unit,
+    onBenchmarkSelected: (prepareJob: Job) -> Unit,
+    onConversationSelected: (systemPrompt: String?, prepareJob: Job) -> Unit,
     onBackPressed: () -> Unit,
+    modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
+    systemPromptViewModel: SystemPromptViewModel = hiltViewModel(),
 ) {
-    val presetPrompts by viewModel.presetPrompts.collectAsState()
-    val recentPrompts by viewModel.recentPrompts.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val presetPrompts by systemPromptViewModel.presetPrompts.collectAsState()
+    val recentPrompts by systemPromptViewModel.recentPrompts.collectAsState()
 
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
@@ -95,6 +102,21 @@ fun ModelLoadingScreen(
     val isLoading = engineState !is InferenceEngine.State.Uninitialized &&
         engineState !is InferenceEngine.State.LibraryLoaded &&
         engineState !is InferenceEngine.State.AwaitingUserPrompt
+
+    // Mode selection callbacks
+    val handleBenchmarkSelected = {
+        val prepareJob = coroutineScope.launch {
+            modelLoadingViewModel.prepareForBenchmark()
+        }
+        onBenchmarkSelected(prepareJob)
+    }
+
+    val handleConversationSelected = { systemPrompt: String? ->
+        val prepareJob = coroutineScope.launch {
+            modelLoadingViewModel.prepareForConversation(systemPrompt)
+        }
+        onConversationSelected(systemPrompt, prepareJob)
+    }
 
     PerformanceAppScaffold(
         title = "Load Model",
@@ -143,7 +165,7 @@ fun ModelLoadingScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(bottom = 4.dp)
-                    // Only use weight if system prompt is active, otherwise wrap content
+                    // Only fill height if system prompt is active
                     .then(if (useSystemPrompt) Modifier.weight(1f) else Modifier)
             ) {
                 Column(
@@ -355,14 +377,15 @@ fun ModelLoadingScreen(
             Button(
                 onClick = {
                     when (selectedMode) {
-                        Mode.BENCHMARK -> onBenchmarkSelected()
+                        Mode.BENCHMARK -> handleBenchmarkSelected()
+
                         Mode.CONVERSATION -> {
                             val systemPrompt = if (useSystemPrompt) {
                                 when (selectedTab) {
                                     SystemPromptTab.PRESETS, SystemPromptTab.RECENTS ->
                                         selectedPrompt?.let { prompt ->
                                             // Save the prompt to recent prompts database
-                                            viewModel.savePromptToRecents(prompt)
+                                            systemPromptViewModel.savePromptToRecents(prompt)
                                             prompt.content
                                         }
 
@@ -370,15 +393,15 @@ fun ModelLoadingScreen(
                                         customPromptText.takeIf { it.isNotBlank() }
                                             ?.also { promptText ->
                                                 // Save custom prompt to database
-                                                viewModel.saveCustomPromptToRecents(promptText)
+                                                systemPromptViewModel.saveCustomPromptToRecents(promptText)
                                             }
                                 }
                             } else null
-                            onConversationSelected(systemPrompt)
+
+                            handleConversationSelected(systemPrompt)
                         }
 
-                        null -> { /* No mode selected */
-                        }
+                        null -> { /* No mode selected */ }
                     }
                 },
                 modifier = Modifier

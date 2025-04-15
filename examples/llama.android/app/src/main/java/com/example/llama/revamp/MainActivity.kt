@@ -170,7 +170,6 @@ fun AppContent(
             composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                 ModelSelectionScreen(
                     onModelSelected = { modelInfo ->
-                        mainVewModel.selectModel(modelInfo)
                         navigationActions.navigateToModelLoading()
                     },
                     onManageModelsClicked = {
@@ -184,34 +183,28 @@ fun AppContent(
             composable(AppDestinations.MODEL_LOADING_ROUTE) {
                 ModelLoadingScreen(
                     engineState = engineState,
-                    onBenchmarkSelected = {
-                        // Store a reference to the loading job
+                    onBenchmarkSelected = { prepareJob ->
+                        // Wait for preparation to complete, then navigate if still active
                         val loadingJob = coroutineScope.launch {
-                            mainVewModel.prepareForBenchmark()
-                            // Check if the job wasn't cancelled before navigating
-                            if (isActive) {
-                                navigationActions.navigateToBenchmark()
-                            }
+                            prepareJob.join()
+                            if (isActive) { navigationActions.navigateToBenchmark() }
                         }
 
-
-                        // Update the pendingNavigation handler to cancel any ongoing loading
                         pendingNavigation = {
+                            prepareJob.cancel()
                             loadingJob.cancel()
                             navigationActions.navigateUp()
                         }
                     },
-                    onConversationSelected = { systemPrompt ->
-                        // Store a reference to the loading job
+                    onConversationSelected = { systemPrompt, prepareJob ->
+                        // Wait for preparation to complete, then navigate if still active
                         val loadingJob = coroutineScope.launch {
-                            mainVewModel.prepareForConversation(systemPrompt)
-                            // Check if the job wasn't cancelled before navigating
-                            if (isActive) {
-                                navigationActions.navigateToConversation()
-                            }
+                            prepareJob.join()
+                            if (isActive) { navigationActions.navigateToConversation() }
                         }
-                        // Update the pendingNavigation handler to cancel any ongoing loading
+
                         pendingNavigation = {
+                            prepareJob.cancel()
                             loadingJob.cancel()
                             navigationActions.navigateUp()
                         }
@@ -229,8 +222,7 @@ fun AppContent(
                     onBackPressed = {
                         // Need to unload model before going back
                         handleBackWithModelCheck()
-                    },
-                    viewModel = mainVewModel
+                    }
                 )
             }
 
@@ -240,14 +232,7 @@ fun AppContent(
                     onBackPressed = {
                         // Need to unload model before going back
                         handleBackWithModelCheck()
-                    },
-                    onRerunPressed = {
-                        mainVewModel.rerunBenchmark()
-                    },
-                    onSharePressed = {
-                        // Stub for sharing functionality
-                    },
-                    viewModel = mainVewModel
+                    }
                 )
             }
 
