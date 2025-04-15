@@ -1,5 +1,6 @@
 package com.example.llama.revamp.engine
 
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -13,7 +14,9 @@ import kotlinx.coroutines.flow.flow
  */
 class InferenceEngine {
     companion object {
-        const val DEFAULT_PREDICT_LENGTH = 1024
+        private val TAG = InferenceEngine::class.java.simpleName
+
+        private const val DEFAULT_PREDICT_LENGTH = 1024
     }
 
     sealed class State {
@@ -45,6 +48,8 @@ class InferenceEngine {
     val benchmarkResults: StateFlow<String?> = _benchmarkResultsFlow
 
     init {
+        Log.i(TAG, "Initiated!")
+
         // Simulate library loading
         _state.value = State.LibraryLoaded
     }
@@ -53,6 +58,8 @@ class InferenceEngine {
      * Loads a model from the given path with an optional system prompt.
      */
     suspend fun loadModel(pathToModel: String, systemPrompt: String? = null) {
+        Log.i(TAG, "loadModel! state: ${_state.value}")
+
         try {
             _state.value = State.LoadingModel
 
@@ -81,6 +88,8 @@ class InferenceEngine {
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String> {
+        Log.i(TAG, "sendUserPrompt! state: ${_state.value}")
+
         _state.value = State.ProcessingUserPrompt
 
         // This would be replaced with actual token generation logic
@@ -123,6 +132,8 @@ class InferenceEngine {
      * Runs a benchmark with the specified parameters.
      */
     suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
+        Log.i(TAG, "bench! state: ${_state.value}")
+
         _state.value = State.Benchmarking
 
         try {
@@ -169,6 +180,8 @@ class InferenceEngine {
      * Unloads the currently loaded model.
      */
     suspend fun unloadModel() {
+        Log.i(TAG, "unloadModel! state: ${_state.value}")
+
         // Simulate model unloading time
         delay(2000)
         _state.value = State.LibraryLoaded
@@ -180,6 +193,8 @@ class InferenceEngine {
      * Cleans up resources when the engine is no longer needed.
      */
     fun destroy() {
-        // In a real implementation, this would release native resources
+        Log.i(TAG, "destroy! state: ${_state.value}")
+
+        _state.value = State.Uninitialized
     }
 }
