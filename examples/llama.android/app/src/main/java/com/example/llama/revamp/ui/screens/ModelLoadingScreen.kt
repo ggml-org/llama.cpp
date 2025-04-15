@@ -52,7 +52,6 @@ import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
-import com.example.llama.revamp.viewmodel.SystemPromptViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
@@ -68,12 +67,12 @@ fun ModelLoadingScreen(
     onConversationSelected: (systemPrompt: String?, prepareJob: Job) -> Unit,
     onBackPressed: () -> Unit,
     modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
-    systemPromptViewModel: SystemPromptViewModel = hiltViewModel(),
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    val presetPrompts by systemPromptViewModel.presetPrompts.collectAsState()
-    val recentPrompts by systemPromptViewModel.recentPrompts.collectAsState()
+    val selectedModel by modelLoadingViewModel.selectedModel.collectAsState() // TODO-han.yin: USE IT
+    val presetPrompts by modelLoadingViewModel.presetPrompts.collectAsState()
+    val recentPrompts by modelLoadingViewModel.recentPrompts.collectAsState()
 
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
@@ -385,7 +384,7 @@ fun ModelLoadingScreen(
                                     SystemPromptTab.PRESETS, SystemPromptTab.RECENTS ->
                                         selectedPrompt?.let { prompt ->
                                             // Save the prompt to recent prompts database
-                                            systemPromptViewModel.savePromptToRecents(prompt)
+                                            modelLoadingViewModel.savePromptToRecents(prompt)
                                             prompt.content
                                         }
 
@@ -393,7 +392,7 @@ fun ModelLoadingScreen(
                                         customPromptText.takeIf { it.isNotBlank() }
                                             ?.also { promptText ->
                                                 // Save custom prompt to database
-                                                systemPromptViewModel.saveCustomPromptToRecents(promptText)
+                                                modelLoadingViewModel.saveCustomPromptToRecents(promptText)
                                             }
                                 }
                             } else null
