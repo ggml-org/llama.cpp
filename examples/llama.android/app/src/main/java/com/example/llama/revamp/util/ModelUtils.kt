@@ -1,37 +1,7 @@
 package com.example.llama.revamp.util
 
-import android.content.Context
-import android.net.Uri
-import android.provider.OpenableColumns
 import java.util.Locale
 
-/**
- * Gets the file name from a content URI
- */
-fun getFileNameFromUri(context: Context, uri: Uri): String? =
-    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).let { nameIndex ->
-                if (nameIndex != -1) cursor.getString(nameIndex) else null
-            }
-        } else {
-            null
-        }
-    } ?: uri.lastPathSegment
-
-/**
- * Gets the file size from a content URI
- */
-fun getFileSizeFromUri(context: Context, uri: Uri): Long? =
-    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            cursor.getColumnIndex(OpenableColumns.SIZE).let { sizeIndex ->
-                if (sizeIndex != -1) cursor.getLong(sizeIndex) else null
-            }
-        } else {
-            null
-        }
-    }
 
 /**
  * Convert bytes into human readable sizes
