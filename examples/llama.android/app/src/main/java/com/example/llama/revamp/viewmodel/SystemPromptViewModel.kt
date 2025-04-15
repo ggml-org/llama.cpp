@@ -1,7 +1,6 @@
 package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
@@ -24,7 +23,7 @@ class SystemPromptViewModel @Inject constructor(
     val presetPrompts: StateFlow<List<SystemPrompt>> = repository.getPresetPrompts()
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
             initialValue = emptyList()
         )
 
@@ -32,7 +31,7 @@ class SystemPromptViewModel @Inject constructor(
     val recentPrompts: StateFlow<List<SystemPrompt>> = repository.getRecentPrompts()
         .stateIn(
             scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
+            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
             initialValue = emptyList()
         )
 
@@ -72,18 +71,9 @@ class SystemPromptViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Factory for creating SystemPromptViewModel instances.
-     */
-    class Factory(
-        private val repository: SystemPromptRepository
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            if (modelClass.isAssignableFrom(SystemPromptViewModel::class.java)) {
-                return SystemPromptViewModel(repository) as T
-            }
-            throw IllegalArgumentException("Unknown ViewModel class")
-        }
+    companion object {
+        private val TAG = SystemPromptViewModel::class.java.simpleName
+
+        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
     }
 }
