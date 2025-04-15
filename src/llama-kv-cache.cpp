@@ -22,11 +22,9 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                   ggml_type   type_v,
                        bool   v_trans,
                    uint32_t   kv_size) : hparams(hparams), cbs(std::move(cbs)), v_trans(v_trans) {
-
     const int32_t n_layer = hparams.n_layer;
 
     has_shift = false;
-
     can_shift = true;
 
     LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d\n",
@@ -74,7 +72,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        ggml_backend_buffer_type_t buft = cbs.get_buft(i);
+        ggml_backend_buffer_type_t buft = this->cbs.get_buft(i);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -1052,7 +1050,7 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        ggml_backend_buffer_type_t buft = cbs.get_buft(i);
+        ggml_backend_buffer_type_t buft = this->cbs.get_buft(i);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
