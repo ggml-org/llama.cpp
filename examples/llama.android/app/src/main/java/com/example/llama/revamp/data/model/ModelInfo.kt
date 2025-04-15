@@ -1,6 +1,6 @@
 package com.example.llama.revamp.data.model
 
-import java.util.Locale
+import com.example.llama.revamp.util.formatSize
 
 /**
  * Data class containing information about an LLM model.
@@ -17,22 +17,7 @@ data class ModelInfo(
     val lastUsed: Long? = null
 ) {
     val formattedSize: String
-        get() {
-            return when {
-                sizeInBytes >= 1_000_000_000 -> {
-                    val sizeInGb = sizeInBytes / 1_000_000_000.0
-                    String.format(Locale.getDefault(), "%.2f GB", sizeInGb)
-                }
-                sizeInBytes >= 1_000_000 -> {
-                    val sizeInMb = sizeInBytes / 1_000_000.0
-                    String.format(Locale.getDefault(), "%.2f MB", sizeInMb)
-                }
-                else -> {
-                    val sizeInKb = sizeInBytes / 1_000.0
-                    String.format(Locale.getDefault(), "%.2f KB", sizeInKb)
-                }
-            }
-        }
+        get() = formatSize(sizeInBytes)
 
     companion object {
         /**

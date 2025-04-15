@@ -34,6 +34,24 @@ fun getFileSizeFromUri(context: Context, uri: Uri): Long? =
     }
 
 /**
+ * Convert bytes into human readable sizes
+ */
+fun formatSize(sizeInBytes: Long) = when {
+    sizeInBytes >= 1_000_000_000 -> {
+        val sizeInGb = sizeInBytes / 1_000_000_000.0
+        String.format(Locale.getDefault(), "%.2f GB", sizeInGb)
+    }
+    sizeInBytes >= 1_000_000 -> {
+        val sizeInMb = sizeInBytes / 1_000_000.0
+        String.format(Locale.getDefault(), "%.2f MB", sizeInMb)
+    }
+    else -> {
+        val sizeInKb = sizeInBytes / 1_000.0
+        String.format(Locale.getDefault(), "%.2f KB", sizeInKb)
+    }
+}
+
+/**
  * Try to extract parameters by looking for patterns like 7B, 13B, etc.
  */
 fun extractParametersFromFilename(filename: String): String? =
