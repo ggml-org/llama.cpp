@@ -10175,6 +10175,9 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     ggml_tensor * Vcur = kv_cmpr;
                     cb(Vcur, "Vcur", il);
 
+                    Vcur = ggml_cont(ctx0, Vcur);
+                    cb(Vcur, "Vcur_cont", il);
+
                     // note: MLA with the absorption optimzation converts into MQA (ie: GQA with 1 group)
                     cur = build_attn(inp_attn, gf,
                             model.layers[il].wo, NULL,
