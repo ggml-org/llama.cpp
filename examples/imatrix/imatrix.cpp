@@ -695,7 +695,16 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        std::sort(ts.begin(), ts.end(), [](const tensor_statistics &a, const tensor_statistics &b) { return a.total > b.total; });
+        struct tensor_comparer {
+            bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
+                std::string layer, name_a, name_b;;
+                process_tensor_name(a.tensor, layer, name_a);
+                process_tensor_name(b.tensor, layer, name_b);
+                return name_a < name_b || (name_a == name_b && a.total > b.total);
+            }
+        };
+        std::sort(ts.begin(), ts.end(), tensor_comparer());
+
         LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
         LOG_INF("\n%5s\t%-20s\t%10s\t%7s\t%12s\t%9s\t%10s\t%9s\t%6s\t%12s\t%7s\t%10s\n",
             "Layer", "Tensor", "Σ(Bias)", "Min", "Max", "μ", "σ", "% Active", "N", "Entropy", "E (norm)", "ZD Score");
@@ -703,8 +712,8 @@ int main(int argc, char ** argv) {
         for (const auto & [tensor, total, mean, max, min, stddev, cv, zd, active, entropy, elements] : ts) {
             std::string layer, name;
             process_tensor_name(tensor, layer, name);
-            LOG_INF("%5s\t%-20s\t%10.2f\t%7.4f\t%12.4f\t%8.4f\t%9.4f\t%8.2f%%\t%6d\t%12.4f\t%7.2f%%\t%10.4f\n",
-                layer.c_str(), name.c_str(), total, min, max, mean, stddev, active * 100.0f, elements, entropy, 100.0f * (entropy / std::log2(elements)), 1000.0f * zd);
+            LOG_INF("%5s\t%-20s\t%10.2f\t%7.4f\t%12.4f\t%8.4f\t%9.4f\t%8.2f%%\t%6d\t%12.4f\t%7.2f%%\t%9.2f%%\n",
+                layer.c_str(), name.c_str(), total, min, max, mean, stddev, active * 100.0f, elements, entropy, 100.0f * (entropy / std::log2(elements)), 100.0f * zd);
         }
         LOG_INF("\n");
 
