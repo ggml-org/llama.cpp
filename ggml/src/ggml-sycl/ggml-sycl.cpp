@@ -1986,7 +1986,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne10 = src1->ne[0];
-
+    GGML_ASSERT(ne00 == ne10);
 
     const int64_t row_diff = row_high - row_low;
 
@@ -2737,9 +2737,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     GGML_ASSERT(!ggml_is_transposed(src1));
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
-
 
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     queue_ptr main_stream = ctx.stream();;
@@ -2761,14 +2761,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     sycl::half *src1_f16 = src1->type == GGML_TYPE_F16 ? (sycl::half *)src1_ddf
                                                        : src1_f16_alloc.get();
 
-    char * dst_t;
-
-    dpct::library_data_t cu_compute_type = dpct::library_data_t::real_float;
-    dpct::library_data_t cu_data_type = dpct::library_data_t::real_float;
-
-    // dst strides
-    size_t nbd2 = dst->nb[2];
-    size_t nbd3 = dst->nb[3];
+    const dpct::library_data_t cu_compute_type = dpct::library_data_t::real_float;
+    const dpct::library_data_t cu_data_type = dpct::library_data_t::real_float;
 
     const float alpha_f32 = 1.0f;
     const float beta_f32 = 0.0f;
@@ -2776,24 +2770,36 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     const void * alpha = &alpha_f32;
     const void * beta  = &beta_f32;
 
-    dst_t = (char *) dst_ddf;
+    char * dst_t = (char *) dst_ddf;
 
     GGML_ASSERT(ne12 % ne02 == 0);
     GGML_ASSERT(ne13 % ne03 == 0);
+    GGML_ASSERT(ne01 == static_cast<int64_t>(nb1/nb0));
+    GGML_ASSERT(ne10 == ne00);
 
     // broadcast factors
-    const int64_t r2 = ne12/ne02;
-    const int64_t r3 = ne13/ne03;
+    const auto r2 = ne12/ne02;
+    const auto r3 = ne13/ne03;
+    const auto ne23 = ne12*ne13;
 
     if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
+#ifdef GGML_SYCL_DNNL
+        // TODO: use strided dnnl::memory::desc ctor in row_gemm to relax below assertions
+        GGML_ASSERT(nb11/nb10 == ne10);
+        GGML_ASSERT(nb01/nb00 == ne00);
+
+        DnnlGemmWrapper::row_gemm(ctx, false, true, ne11, ne01, ne10, src1_f16,
+                                          DnnlGemmWrapper::to_dt<sycl::half>(), src0_as_f16, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                          dst_t, DnnlGemmWrapper::to_dt<float>(), main_stream, ne23);
+#else
         SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(
             *main_stream, oneapi::math::transpose::trans, oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
             (const char *) src0_as_f16, dpct::library_data_t::real_half, nb01 / nb00, nb02 / nb00,
             (const char *) src1_f16, dpct::library_data_t::real_half, nb11 / nb10, nb12 / nb10, beta, (char *) dst_t,
-            cu_data_type, ne01, nb2 / nb0, ne12 * ne13, cu_compute_type)));
+            cu_data_type, ne01, nb2 / nb0, ne23, cu_compute_type)));
+#endif
     } else {
-        const int ne23 = ne12*ne13;
 
         ggml_sycl_pool_alloc<const void *> ptrs_src(ctx.pool(), 2*ne23);
         ggml_sycl_pool_alloc<      void *> ptrs_dst(ctx.pool(), 1*ne23);
@@ -2821,7 +2827,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
                                          dst_t, ptrs_src_get,
                                          ptrs_dst_get, ne12, ne13, ne23,
                                          nb02, nb03, nb12_scaled, nb13_scaled,
-                                         nbd2, nbd3, r2, r3, item_ct1);
+                                         nb2, nb3, r2, r3, item_ct1);
                                  });
             });
         }
@@ -3660,7 +3666,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             return GGML_STATUS_SUCCESS;
         }
 
-        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()));
+        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
+
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
         ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
         model_sycl_graph.end_recording();
