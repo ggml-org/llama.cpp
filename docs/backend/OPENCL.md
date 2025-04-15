@@ -145,8 +145,13 @@ A Snapdragon X Elite device with Windows 11 Arm64 is used. Make sure the followi
 * Clang 19
 * Ninja
 * Visual Studio 2022
+* Powershell 7
 
-Powershell is used for the following instructions.
+Visual Studio provides necessary headers and libraries although it is not directly used for building.
+Alternatively, Visual Studio Build Tools can be installed instead of the full Visual Studio.
+
+Powershell 7 is used for the following commands.
+If an older version of Powershell is used, these commands may not work as they are.
 
 ### I. Setup Environment
 
@@ -196,10 +201,9 @@ ninja
 
 ## Known Issues
 
-- Qwen2.5 0.5B model produces gibberish output with Adreno kernels.
+- Currently OpenCL backend does not work on Adreno 6xx GPUs.
 
 ## TODO
 
-- Fix Qwen2.5 0.5B
 - Optimization for Q6_K
 - Support and optimization for Q4_K

@@ -324,6 +324,21 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def bert_bge_small_with_fa() -> ServerProcess:
+        server = ServerProcess()
+        server.model_hf_repo = "ggml-org/models"
+        server.model_hf_file = "bert-bge-small/ggml-model-f16.gguf"
+        server.model_alias = "bert-bge-small"
+        server.n_ctx = 1024
+        server.n_batch = 300
+        server.n_ubatch = 300
+        server.n_slots = 2
+        server.fa = True
+        server.seed = 42
+        server.server_embeddings = True
+        return server
+
+    @staticmethod
     def tinyllama_infill() -> ServerProcess:
         server = ServerProcess()
         server.model_hf_repo = "ggml-org/models"
