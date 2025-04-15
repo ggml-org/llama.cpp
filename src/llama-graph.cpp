@@ -1203,8 +1203,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     // note: for MLA with the absorption optimization, the final embedding size will be changed via v_mla
     const auto n_embd_head_v = v_mla == nullptr ? v_trans ? v->ne[1] : v->ne[0] : v_mla->ne[1];
 
+    const auto n_embd    = q->ne[0];
     const auto n_tokens  = q->ne[1];
     const auto n_head    = q->ne[2];
+
     const auto n_kv      = k->ne[1];
     const auto n_head_kv = k->ne[2];
 
@@ -1237,7 +1239,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         // for MQA (ie: GQA with 1 group) we don't need to use a batched matrix multiply
         ggml_tensor * kq = nullptr;
         if (ggml_is_contiguous(k) && ggml_is_contiguous(q) && n_head_kv == 1) {
-            k = ggml_reshape_2d(ctx0, k, n_embd, n_tokens);
+            k = ggml_reshape_2d(ctx0, k, n_embd, n_kv);
             q = ggml_reshape_2d(ctx0, q, n_embd, n_tokens*n_head);
             kq = ggml_mul_mat(ctx0, k, q);
             // note: this op tends to require high floating point range while for some models F16 is enough, for others it is not, so we default to F32 here
