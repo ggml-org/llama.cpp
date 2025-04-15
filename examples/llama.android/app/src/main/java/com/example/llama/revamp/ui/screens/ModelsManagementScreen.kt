@@ -3,7 +3,6 @@ package com.example.llama.revamp.ui.screens
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,14 +26,10 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -68,6 +63,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.R
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.ui.components.ModelCard
+import com.example.llama.revamp.ui.components.ModelCardActions
 import com.example.llama.revamp.ui.components.StorageAppScaffold
 import com.example.llama.revamp.util.formatSize
 import com.example.llama.revamp.viewmodel.ModelManagementState
@@ -76,9 +73,6 @@ import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
 import com.example.llama.revamp.viewmodel.ModelSortOrder
 import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 /**
  * Screen for managing LLM models (view, download, delete)
@@ -336,28 +330,39 @@ fun ModelsManagementScreen(
     ) { paddingValues ->
         Box(modifier = Modifier.fillMaxSize()) {
             // Model cards
-            ModelCardList(
-                models = sortedModels,
-                isMultiSelectionMode = isMultiSelectionMode,
-                selectedModels = selectedModels,
-                onModelClick = { modelId ->
-                    if (isMultiSelectionMode) {
-                        // Toggle selection
-                        if (selectedModels.contains(modelId)) {
-                            selectedModels.remove(modelId)
-                        } else {
-                            selectedModels.put(modelId, sortedModels.first { it.id == modelId } )
-                        }
-                    } else {
-                        // View model details
-                        viewModel.viewModelDetails(modelId)
-                    }
-                },
-                onModelInfoClick = { modelId ->
-                    viewModel.viewModelDetails(modelId)
-                },
-                modifier = Modifier.padding(paddingValues)
-            )
+            LazyColumn(
+                modifier = Modifier.padding(paddingValues).fillMaxSize().padding(16.dp)
+            ) {
+                items(items = sortedModels, key = { it.id }) { model ->
+                    ModelCard(
+                        model = model,
+                        onClick = {
+                            if (isMultiSelectionMode) {
+                                // Toggle selection
+                                if (selectedModels.contains(model.id)) {
+                                    selectedModels.remove(model.id)
+                                } else {
+                                    selectedModels.put(model.id, sortedModels.first { it.id == model.id } )
+                                }
+                            } else {
+                                // View model details
+                                viewModel.viewModelDetails(model.id)
+                            }
+                        },
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        isSelected =
+                            if (isMultiSelectionMode) selectedModels.contains(model.id) else null,
+                        actionButton =
+                            if (!isMultiSelectionMode) {
+                                {
+                                    ModelCardActions.InfoButton(
+                                        onClick = { viewModel.viewModelDetails(model.id) }
+                                    )
+                                }
+                            } else null
+                    )
+                }
+            }
 
             // Model import progress overlay
             when (val state = managementState) {
@@ -368,13 +373,16 @@ fun ModelsManagementScreen(
                         isImporting = false,
                         progress = 0.0f,
                         onConfirm = {
-                            viewModel.importLocalModelFile(state.uri, state.fileName, state.fileSize)
+                            viewModel.importLocalModelFile(
+                                state.uri, state.fileName, state.fileSize
+                            )
                         },
                         onCancel = {
                             viewModel.resetManagementState()
                         }
                     )
                 }
+
                 is Importation.Importing -> {
                     ImportProgressDialog(
                         fileName = state.fileName,
@@ -387,6 +395,7 @@ fun ModelsManagementScreen(
                         },
                     )
                 }
+
                 is Importation.Error -> {
                     ErrorDialog(
                         title = "Import Failed",
@@ -394,6 +403,7 @@ fun ModelsManagementScreen(
                         onDismiss = { viewModel.resetManagementState() }
                     )
                 }
+
                 is Importation.Success -> {
                     LaunchedEffect(state) {
                         coroutineScope.launch {
@@ -405,6 +415,7 @@ fun ModelsManagementScreen(
                         viewModel.resetManagementState()
                     }
                 }
+
                 is Deletion.Confirming -> {
                     BatchDeleteConfirmationDialog(
                         count = state.models.size,
@@ -413,6 +424,7 @@ fun ModelsManagementScreen(
                         isDeleting = false
                     )
                 }
+
                 is Deletion.Deleting -> {
                     BatchDeleteConfirmationDialog(
                         count = state.models.size,
@@ -421,6 +433,7 @@ fun ModelsManagementScreen(
                         isDeleting = true
                     )
                 }
+
                 is Deletion.Error -> {
                     ErrorDialog(
                         title = "Deletion Failed",
@@ -428,6 +441,7 @@ fun ModelsManagementScreen(
                         onDismiss = { viewModel.resetManagementState() }
                     )
                 }
+
                 is Deletion.Success -> {
                     LaunchedEffect(state) {
                         exitSelectionMode()
@@ -441,103 +455,8 @@ fun ModelsManagementScreen(
 
                     }
                 }
+
                 is ModelManagementState.Idle -> { /* Idle state, nothing to show */  }
-            }
-        }
-    }
-}
-
-
-@Composable
-private fun ModelCardList(
-    models: List<ModelInfo>,
-    isMultiSelectionMode: Boolean,
-    selectedModels: Map<String, ModelInfo>,
-    onModelClick: (String) -> Unit,
-    onModelInfoClick: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    LazyColumn(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp)
-    ) {
-        items(
-            items = models,
-            key = { it.id }
-        ) { model ->
-            ModelCard(
-                model = model,
-                isMultiSelectionMode = isMultiSelectionMode,
-                isSelected = selectedModels.contains(model.id),
-                onClick = { onModelClick(model.id) },
-                onInfoClick = { onModelInfoClick(model.id) },
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-    }
-}
-
-@Composable
-private fun ModelCard(
-    model: ModelInfo,
-    isMultiSelectionMode: Boolean,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    onInfoClick: () -> Unit,
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = if (isSelected && isMultiSelectionMode)
-            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-        else
-            CardDefaults.cardColors()
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Show checkbox in selection mode
-            if (isMultiSelectionMode) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
-            }
-
-            // Model info
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = model.name,
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                Text(
-                    text = "${model.parameters} • ${model.quantization} • ${model.formattedSize}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                model.lastUsed?.let { lastUsed ->
-                    val dateFormat = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-                    Text(
-                        text = "Last used: ${dateFormat.format(Date(lastUsed))}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Only show action buttons in non-selection mode
-            if (!isMultiSelectionMode) {
-                IconButton(onClick = onInfoClick) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = "Model details"
-                    )
-                }
             }
         }
     }
