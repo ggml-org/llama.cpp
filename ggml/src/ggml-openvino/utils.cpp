@@ -1,6 +1,7 @@
 #include "utils.h"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+#include "ggml.h"
 #include <cstdlib>
 #include <fstream>
 #include <openvino/core/graph_util.hpp>
@@ -13,7 +14,7 @@ std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, con
     return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, start_index, end_index);
 }
 
-std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder, bool flag) {
+std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
     std::vector<std::pair<std::string, ov::Tensor>> input_tensors;
     auto input_names = ggml_decoder->get_input_names();
     size_t op_iter = 0;
@@ -77,10 +78,13 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     return front_end;
 }
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index, bool flag) {
+enum ggml_status openvino_frontend_compute(ggml_backend_t backend,
+                                           struct ggml_cgraph *cgraph,
+                                           const int32_t start_index,
+                                           const int32_t end_index) {
     static ov::Core core;
+
     // auto devices = core.get_available_devices();
-    // Get GGML Frontend
     static auto front_end = get_ggml_frontend();
     if (!front_end) {
         GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
@@ -90,6 +94,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
             GGML_LOG_INFO("GGML FrontEnd is initialized \n");
         #endif
     }
+
     auto ggml_decoder = get_ggml_decoder(cgraph, start_index, end_index);
     std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
     // Load GraphIterator -> InputModel
@@ -123,26 +128,18 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     }
 
     ov::CompiledModel compiled_model = core.compile_model(model);
-
-    // Create infer request
     ov::InferRequest infer_request = compiled_model.create_infer_request();
 
-    // Get input tensor
     auto input_names = ggml_decoder->get_input_names();
-    auto input_tensors = get_ggml_graph_input_tensors(ggml_decoder, flag);
-
+    auto input_tensors = get_ggml_graph_input_tensors(ggml_decoder);
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
         infer_request.set_input_tensor(i, get_ggml_graph_input_tensor(ggml_decoder, param_name));
     }
-    // for (size_t i = 0; i < input_names.size(); i++) {
-    //     infer_request.set_input_tensor(i, input_tensors.at(i).second);
-    // }
 
     infer_request.infer();
 
-    // Set dst data for outputs
     auto output_names = ggml_decoder->get_output_names();
     auto output_tensors = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < output_names.size(); i++) {
