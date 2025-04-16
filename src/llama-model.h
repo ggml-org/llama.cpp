@@ -86,6 +86,8 @@ enum llm_type {
     LLM_TYPE_57B_A14B,
     LLM_TYPE_27B,
     LLM_TYPE_290B,
+    LLM_TYPE_17B_16E, // llama4 Scout
+    LLM_TYPE_17B_128E, // llama4 Maverick
 };
 
 struct llama_layer_posnet {
@@ -169,6 +171,8 @@ struct llama_layer {
     struct ggml_tensor * wq_b      = nullptr;
     struct ggml_tensor * wkv_a_mqa = nullptr;
     struct ggml_tensor * wkv_b     = nullptr;
+    struct ggml_tensor * wk_b      = nullptr;
+    struct ggml_tensor * wv_b      = nullptr;
     struct ggml_tensor * wq_cross  = nullptr;
     struct ggml_tensor * wk_cross  = nullptr;
     struct ggml_tensor * wv_cross  = nullptr;

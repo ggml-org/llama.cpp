@@ -100,6 +100,23 @@ public:
     const int64_t n_pos_per_token = 1;
 };
 
+// temperature tuning, used by llama4
+class llm_graph_input_attn_temp : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_temp(int64_t n_pos_per_token, uint32_t n_attn_temp_floor_scale, float f_attn_temp_scale)
+        : n_pos_per_token(n_pos_per_token), n_attn_temp_floor_scale(n_attn_temp_floor_scale), f_attn_temp_scale(f_attn_temp_scale) {}
+    virtual ~llm_graph_input_attn_temp() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * attn_scale = nullptr; // F32 [n_batch]
+
+    const int64_t n_pos_per_token = 1;
+
+    const uint32_t n_attn_temp_floor_scale;
+    const float    f_attn_temp_scale;
+};
+
 class llm_graph_input_pos_bucket : public llm_graph_input_i {
 public:
     llm_graph_input_pos_bucket(const llama_hparams & hparams) : hparams(hparams) {}
@@ -470,6 +487,7 @@ struct llm_graph_context {
 
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_pos() const;
+    ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
@@ -487,11 +505,12 @@ struct llm_graph_context {
 
     ggml_tensor * build_attn_mha(
              ggml_cgraph * gf,
-             ggml_tensor * q, // [n_embd_head_q, n_tokens, n_head_q]
-             ggml_tensor * k, // [n_embd_head_k, n_tokens, n_head_k]
-             ggml_tensor * v, // [n_embd_head_v, n_tokens, n_head_v] (v_trans == false)
+             ggml_tensor * q,     // [n_embd_head_q, n_tokens, n_head_q]
+             ggml_tensor * k,     // [n_embd_head_k, n_tokens, n_head_k]
+             ggml_tensor * v,     // [n_embd_head_v, n_tokens, n_head_v] (v_trans == false)
              ggml_tensor * kq_b,
              ggml_tensor * kq_mask,
+             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                     bool   v_trans,
                    float   kq_scale) const;
 
@@ -506,6 +525,7 @@ struct llm_graph_context {
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
             ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
 
@@ -520,6 +540,7 @@ struct llm_graph_context {
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
             ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
 
@@ -534,6 +555,7 @@ struct llm_graph_context {
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
             ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
                     int   il) const;
 

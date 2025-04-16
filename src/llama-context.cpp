@@ -10,6 +10,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <cinttypes>
+#include <cmath>
 
 //
 // llama_context
@@ -473,7 +474,6 @@ ggml_tensor * llama_context::build_rope_shift(
     const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
 
     const auto & yarn_ext_factor  = cparams.yarn_ext_factor;
-    const auto & yarn_attn_factor = cparams.yarn_attn_factor;
     const auto & yarn_beta_fast   = cparams.yarn_beta_fast;
     const auto & yarn_beta_slow   = cparams.yarn_beta_slow;
 
@@ -481,6 +481,10 @@ ggml_tensor * llama_context::build_rope_shift(
 
     const auto & n_rot     = hparams.n_rot;
     const auto & rope_type = hparams.rope_type;
+
+    // See llm_build_deepseek2() for why attn_factor has to be scaled for YaRN RoPE to work correctly.
+    // See https://github.com/ggerganov/llama.cpp/discussions/7416 for detailed explanation.
+    const float yarn_attn_factor_scaled = model.arch == LLM_ARCH_DEEPSEEK2 ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale)) : cparams.yarn_attn_factor;
 
     ggml_tensor * tmp;
 
@@ -500,14 +504,14 @@ ggml_tensor * llama_context::build_rope_shift(
 
         tmp = ggml_rope_ext_inplace(ctx0, tmp,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+                yarn_ext_factor, yarn_attn_factor_scaled, yarn_beta_fast, yarn_beta_slow);
 
         tmp = ggml_cpy(ctx0, tmp, cur);
     } else {
         // we rotate only the first n_rot dimensions
         tmp = ggml_rope_ext_inplace(ctx0, cur,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
+                yarn_ext_factor, yarn_attn_factor_scaled, yarn_beta_fast, yarn_beta_slow);
     }
 
     return tmp;
@@ -2292,6 +2296,11 @@ llama_context * llama_init_from_model(
         params.flash_attn = false;
     }
 
+    if (params.flash_attn && model->arch == LLM_ARCH_DEEPSEEK2) {
+        LLAMA_LOG_WARN("%s: flash_attn is not compatible with Deepseek2 - forcing off\n", __func__);
+        params.flash_attn = false;
+    }
+
     if (ggml_is_quantized(params.type_v) && !params.flash_attn) {
         LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
         return nullptr;
@@ -2492,7 +2501,12 @@ int32_t llama_get_kv_cache_token_count(const llama_context * ctx) {
 }
 
 int32_t llama_kv_self_n_tokens(const llama_context * ctx) {
-    return llama_kv_cache_n_tokens(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->get_n_tokens();
 }
 
 // deprecated
@@ -2501,7 +2515,12 @@ int32_t llama_get_kv_cache_used_cells(const llama_context * ctx) {
 }
 
 int32_t llama_kv_self_used_cells(const llama_context * ctx) {
-    return llama_kv_cache_used_cells(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->get_used_cells();
 }
 
 // deprecated
@@ -2510,7 +2529,12 @@ void llama_kv_cache_clear(llama_context * ctx) {
 }
 
 void llama_kv_self_clear(llama_context * ctx) {
-    llama_kv_cache_clear(ctx->get_kv_self());
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    kv->clear();
 }
 
 // deprecated
@@ -2527,7 +2551,12 @@ bool llama_kv_self_seq_rm(
          llama_seq_id   seq_id,
             llama_pos   p0,
             llama_pos   p1) {
-    return llama_kv_cache_seq_rm(ctx->get_kv_self(), seq_id, p0, p1);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return true;
+    }
+
+    return kv->seq_rm(seq_id, p0, p1);
 }
 
 // deprecated
@@ -2546,7 +2575,12 @@ void llama_kv_self_seq_cp(
          llama_seq_id   seq_id_dst,
             llama_pos   p0,
             llama_pos   p1) {
-    return llama_kv_cache_seq_cp(ctx->get_kv_self(), seq_id_src, seq_id_dst, p0, p1);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 // deprecated
@@ -2557,7 +2591,12 @@ void llama_kv_cache_seq_keep(
 }
 
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_kv_cache_seq_keep(ctx->get_kv_self(), seq_id);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_keep(seq_id);
 }
 
 // deprecated
@@ -2576,7 +2615,12 @@ void llama_kv_self_seq_add(
             llama_pos   p0,
             llama_pos   p1,
             llama_pos   delta) {
-    return llama_kv_cache_seq_add(ctx->get_kv_self(), seq_id, p0, p1, delta);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_add(seq_id, p0, p1, delta);
 }
 
 // deprecated
@@ -2595,7 +2639,12 @@ void llama_kv_self_seq_div(
             llama_pos   p0,
             llama_pos   p1,
                   int   d) {
-    return llama_kv_cache_seq_div(ctx->get_kv_self(), seq_id, p0, p1, d);
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->seq_div(seq_id, p0, p1, d);
 }
 
 // deprecated
@@ -2604,7 +2653,12 @@ llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 }
 
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_kv_cache_seq_pos_max(ctx->get_kv_self(), seq_id);
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return 0;
+    }
+
+    return kv->seq_pos_max(seq_id);
 }
 
 // deprecated
@@ -2613,7 +2667,12 @@ void llama_kv_cache_defrag(llama_context * ctx) {
 }
 
 void llama_kv_self_defrag(llama_context * ctx) {
-    llama_kv_cache_defrag(ctx->get_kv_self());
+    auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return;
+    }
+
+    return kv->defrag();
 }
 
 // deprecated
@@ -2622,7 +2681,12 @@ bool llama_kv_cache_can_shift(const llama_context * ctx) {
 }
 
 bool llama_kv_self_can_shift(const llama_context * ctx) {
-    return llama_kv_cache_can_shift(ctx->get_kv_self());
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return false;
+    }
+
+    return kv->get_can_shift();
 }
 
 // deprecated
