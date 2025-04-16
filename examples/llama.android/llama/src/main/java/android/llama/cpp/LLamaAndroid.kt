@@ -3,6 +3,7 @@ package android.llama.cpp
 import android.llama.cpp.InferenceEngine.State
 import android.llama.cpp.LLamaAndroid.Companion.instance
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -134,24 +135,34 @@ class LLamaAndroid private constructor() : InferenceEngine {
             "User prompt discarded due to: ${_state.value}"
         }
 
-        Log.i(TAG, "Sending user prompt...")
-        _state.value = State.ProcessingUserPrompt
-        processUserPrompt(message, predictLength).let { result ->
-            if (result != 0) {
-                Log.e(TAG, "Failed to process user prompt: $result")
-                return@flow
+        try {
+            Log.i(TAG, "Sending user prompt...")
+            _state.value = State.ProcessingUserPrompt
+            processUserPrompt(message, predictLength).let { result ->
+                if (result != 0) {
+                    Log.e(TAG, "Failed to process user prompt: $result")
+                    return@flow
+                }
             }
-        }
 
-        Log.i(TAG, "User prompt processed! Generating assistant prompt...")
-        _state.value = State.Generating
-        while (true) {
-            generateNextToken()?.let { utf8token ->
-                if (utf8token.isNotEmpty()) emit(utf8token)
-            } ?: break
+            Log.i(TAG, "User prompt processed. Generating assistant prompt...")
+            _state.value = State.Generating
+            while (true) {
+                generateNextToken()?.let { utf8token ->
+                    if (utf8token.isNotEmpty()) emit(utf8token)
+                } ?: break
+            }
+            Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
+            _state.value = State.AwaitingUserPrompt
+        } catch (e: CancellationException) {
+            Log.i(TAG, "Generation cancelled by user.")
+            _state.value = State.AwaitingUserPrompt
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during generation!", e)
+            _state.value = State.Error(e.message ?: "Unknown error")
+            throw e
         }
-        Log.i(TAG, "Assistant generation complete! Awaiting user prompt...")
-        _state.value = State.AwaitingUserPrompt
     }.flowOn(llamaDispatcher)
 
     /**
