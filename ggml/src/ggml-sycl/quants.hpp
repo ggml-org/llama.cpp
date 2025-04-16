@@ -37,7 +37,7 @@ template <ggml_type type> struct block_q_t;
 // qr number of weights in a byte (described as 'before dequantization')
 //    for quantization types that has low and high bits split, qr is calculated with
 //    using the lower bits, e.g for Q6 quants QR6 is 2
-// qi size of a block in 32 bit integers
+// qi number of 32 bit integers needed to represent all the quants from a block (`qs` field)
 // See ggml-common.h to see how these are calculated
 template <> struct block_q_t<GGML_TYPE_Q4_0> {
     struct traits {
