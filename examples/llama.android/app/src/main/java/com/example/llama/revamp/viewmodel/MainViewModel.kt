@@ -1,7 +1,6 @@
 package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.ViewModel
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.engine.InferenceService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject

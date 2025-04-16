@@ -5,18 +5,21 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
+import javax.inject.Singleton
 import kotlin.math.roundToInt
 
 /**
  * Service that monitors device performance metrics such as memory usage,
  * battery level, and temperature.
  */
-class PerformanceMonitor(private val context: Context) {
+@Singleton
+class PerformanceMonitor(@ApplicationContext private val context: Context) {
 
     /**
      * Provides a flow of memory usage information that updates at the specified interval.

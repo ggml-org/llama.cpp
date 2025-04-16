@@ -1,5 +1,7 @@
 package android.llama.cpp
 
+import android.llama.cpp.InferenceEngine.State
+import android.llama.cpp.LLamaAndroid.Companion.instance
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,7 +40,7 @@ annotation class RequiresCleanup(val message: String = "Remember to call this me
  *
  * @see llama-android.cpp for the native implementation details
  */
-class LLamaAndroid private constructor() {
+class LLamaAndroid private constructor() : InferenceEngine {
     /**
      * JNI methods
      * @see llama-android.cpp
@@ -57,32 +59,8 @@ class LLamaAndroid private constructor() {
     private external fun unload()
     private external fun shutdown()
 
-
-    /**
-     * Fine-grained state management
-     */
-    sealed class State {
-        object Uninitialized : State()
-        object LibraryLoaded : State()
-
-        object LoadingModel : State()
-        object ModelLoaded : State()
-
-        object ProcessingSystemPrompt : State()
-        object AwaitingUserPrompt : State()
-
-        object ProcessingUserPrompt : State()
-        object Generating : State()
-
-        object Benchmarking : State()
-
-        data class Error(
-            val errorMessage: String = ""
-        ) : State()
-    }
-
     private val _state = MutableStateFlow<State>(State.Uninitialized)
-    val state: StateFlow<State> = _state
+    override val state: StateFlow<State> = _state
 
     /**
      * Single-threaded coroutine dispatcher & scope for LLama asynchronous operations
@@ -108,7 +86,7 @@ class LLamaAndroid private constructor() {
     /**
      * Load the LLM, then process the plain text system prompt if provided
      */
-    suspend fun loadModel(pathToModel: String, systemPrompt: String? = null) =
+    override suspend fun loadModel(pathToModel: String, systemPrompt: String?) =
         withContext(llamaDispatcher) {
             check(_state.value is State.LibraryLoaded) { "Cannot load model in ${_state.value}!" }
             File(pathToModel).let {
@@ -147,9 +125,9 @@ class LLamaAndroid private constructor() {
     /**
      * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
      */
-    fun sendUserPrompt(
+    override fun sendUserPrompt(
         message: String,
-        predictLength: Int = DEFAULT_PREDICT_LENGTH,
+        predictLength: Int,
     ): Flow<String> = flow {
         require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
         check(_state.value is State.AwaitingUserPrompt) {
@@ -179,7 +157,7 @@ class LLamaAndroid private constructor() {
     /**
      * Benchmark the model
      */
-    suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String =
+    override suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int): String =
         withContext(llamaDispatcher) {
             check(_state.value is State.AwaitingUserPrompt) {
                 "Benchmark request discarded due to: $state"
@@ -194,7 +172,7 @@ class LLamaAndroid private constructor() {
     /**
      * Unloads the model and frees resources
      */
-    suspend fun unloadModel() =
+    override suspend fun unloadModel() =
         withContext(llamaDispatcher) {
             when(_state.value) {
                 is State.AwaitingUserPrompt, is State.Error -> {
@@ -202,6 +180,7 @@ class LLamaAndroid private constructor() {
                     unload()
                     _state.value = State.LibraryLoaded
                     Log.i(TAG, "Model unloaded!")
+                    Unit
                 }
                 else -> throw IllegalStateException("Cannot unload model in ${_state.value}")
             }
@@ -211,7 +190,7 @@ class LLamaAndroid private constructor() {
      * Cancel all ongoing coroutines and free GGML backends
      */
     @RequiresCleanup("Call from `ViewModel.onCleared()` to prevent resource leaks!")
-    fun destroy() {
+    override fun destroy() {
         llamaScope.cancel()
         when(_state.value) {
             is State.Uninitialized -> {}

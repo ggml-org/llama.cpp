@@ -1,5 +1,7 @@
 package com.example.llama.revamp.engine
 
+import android.llama.cpp.InferenceEngine
+import android.llama.cpp.InferenceEngine.State
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -8,44 +10,29 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
+import org.jetbrains.annotations.TestOnly
+import org.jetbrains.annotations.VisibleForTesting
+import javax.inject.Singleton
 
 /**
- * LLM inference engine that handles model loading and text generation.
+ * A stub [InferenceEngine] for agile development & testing
  */
-class InferenceEngine {
+@VisibleForTesting
+@TestOnly
+@Singleton
+class StubInferenceEngine : InferenceEngine {
     companion object {
-        private val TAG = InferenceEngine::class.java.simpleName
+        private val TAG = StubInferenceEngine::class.java.simpleName
 
-        private const val DEFAULT_PREDICT_LENGTH = 1024
-    }
-
-    sealed class State {
-        object Uninitialized : State()
-        object LibraryLoaded : State()
-
-        object LoadingModel : State()
-        object ModelLoaded : State()
-
-        object ProcessingSystemPrompt : State()
-        object AwaitingUserPrompt : State()
-
-        object ProcessingUserPrompt : State()
-        object Generating : State()
-
-        object Benchmarking : State()
-
-        data class Error(
-            val errorMessage: String = ""
-        ) : State()
+        private const val STUB_MODEL_LOADING_TIME = 2000L
+        private const val STUB_BENCHMARKING_TIME = 4000L
+        private const val STUB_SYSTEM_PROMPT_PROCESSING_TIME = 3000L
+        private const val STUB_USER_PROMPT_PROCESSING_TIME = 1500L
+        private const val STUB_TOKEN_GENERATION_TIME = 200L
     }
 
     private val _state = MutableStateFlow<State>(State.Uninitialized)
-    val state: StateFlow<State> = _state
-
-    // Keep track of current benchmark results
-    private var _benchmarkResults: String? = null
-    private val _benchmarkResultsFlow = MutableStateFlow<String?>(null)
-    val benchmarkResults: StateFlow<String?> = _benchmarkResultsFlow
+    override val state: StateFlow<State> = _state
 
     init {
         Log.i(TAG, "Initiated!")
@@ -57,14 +44,14 @@ class InferenceEngine {
     /**
      * Loads a model from the given path with an optional system prompt.
      */
-    suspend fun loadModel(pathToModel: String, systemPrompt: String? = null) {
+    override suspend fun loadModel(pathToModel: String, systemPrompt: String?) {
         Log.i(TAG, "loadModel! state: ${_state.value}")
 
         try {
             _state.value = State.LoadingModel
 
             // Simulate model loading
-            delay(2000)
+            delay(STUB_MODEL_LOADING_TIME)
 
             _state.value = State.ModelLoaded
 
@@ -72,7 +59,7 @@ class InferenceEngine {
                 _state.value = State.ProcessingSystemPrompt
 
                 // Simulate processing system prompt
-                delay(3000)
+                delay(STUB_SYSTEM_PROMPT_PROCESSING_TIME)
             }
 
             _state.value = State.AwaitingUserPrompt
@@ -87,7 +74,7 @@ class InferenceEngine {
     /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
-    fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String> {
+    override fun sendUserPrompt(message: String, predictLength: Int): Flow<String> {
         Log.i(TAG, "sendUserPrompt! state: ${_state.value}")
 
         _state.value = State.ProcessingUserPrompt
@@ -96,18 +83,15 @@ class InferenceEngine {
         return flow {
             try {
                 // Simulate longer processing time (1.5 seconds)
-                delay(1500)
+                delay(STUB_USER_PROMPT_PROCESSING_TIME)
 
                 _state.value = State.Generating
 
                 // Simulate token generation
                 val response = "This is a simulated response from the LLM model. The actual implementation would generate tokens one by one based on the input: $message"
-                val words = response.split(" ")
-
-                for (word in words) {
-                    emit(word + " ")
-                    // Slower token generation (200ms per token instead of 50ms)
-                    delay(200)
+                response.split(" ").forEach {
+                    emit("$it ")
+                    delay(STUB_TOKEN_GENERATION_TIME)
                 }
 
                 _state.value = State.AwaitingUserPrompt
@@ -131,26 +115,26 @@ class InferenceEngine {
     /**
      * Runs a benchmark with the specified parameters.
      */
-    suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int = 1): String {
+    override suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int): String {
         Log.i(TAG, "bench! state: ${_state.value}")
 
         _state.value = State.Benchmarking
 
         try {
             // Simulate benchmark running
-            delay(4000)
+            delay(STUB_BENCHMARKING_TIME)
 
             // Generate fake benchmark results
-            val modelDesc = "LlamaModel"
+            val modelDesc = "Kleidi Llama"
             val model_size = "7"
             val model_n_params = "7"
             val backend = "CPU"
 
             // Random values for benchmarks
-            val pp_avg = (15.0 + Math.random() * 10.0).toFloat()
-            val pp_std = (0.5 + Math.random() * 2.0).toFloat()
-            val tg_avg = (20.0 + Math.random() * 15.0).toFloat()
-            val tg_std = (0.7 + Math.random() * 3.0).toFloat()
+            val pp_avg = (51.4 + Math.random() * 5.14).toFloat()
+            val pp_std = (5.14 + Math.random() * 0.514).toFloat()
+            val tg_avg = (11.4 + Math.random() * 1.14).toFloat()
+            val tg_std = (1.14 + Math.random() * 0.114).toFloat()
 
             val result = StringBuilder()
             result.append("| model | size | params | backend | test | t/s |\n")
@@ -160,12 +144,9 @@ class InferenceEngine {
             result.append("| $modelDesc | ${model_size}GiB | ${model_n_params}B | ")
             result.append("$backend | tg $tg | $tg_avg ± $tg_std |\n")
 
-            _benchmarkResults = result.toString()
-            _benchmarkResultsFlow.value = _benchmarkResults
-
             _state.value = State.AwaitingUserPrompt
 
-            return _benchmarkResults ?: ""
+            return result.toString()
         } catch (e: CancellationException) {
             // If coroutine is cancelled, propagate cancellation
             _state.value = State.AwaitingUserPrompt
@@ -179,20 +160,18 @@ class InferenceEngine {
     /**
      * Unloads the currently loaded model.
      */
-    suspend fun unloadModel() {
+    override suspend fun unloadModel() {
         Log.i(TAG, "unloadModel! state: ${_state.value}")
 
         // Simulate model unloading time
         delay(2000)
         _state.value = State.LibraryLoaded
-        _benchmarkResults = null
-        _benchmarkResultsFlow.value = null
     }
 
     /**
      * Cleans up resources when the engine is no longer needed.
      */
-    fun destroy() {
+    override fun destroy() {
         Log.i(TAG, "destroy! state: ${_state.value}")
 
         _state.value = State.Uninitialized

@@ -1,10 +1,10 @@
 package com.example.llama.revamp.viewmodel
 
+import android.llama.cpp.InferenceEngine.State
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.BenchmarkService
-import com.example.llama.revamp.engine.InferenceEngine
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -15,8 +15,8 @@ class BenchmarkViewModel @Inject constructor(
     private val benchmarkService: BenchmarkService
 ) : ViewModel() {
 
-    val engineState: StateFlow<InferenceEngine.State> = benchmarkService.engineState
-    val benchmarkResults: StateFlow<String?> = benchmarkService.results
+    val engineState: StateFlow<State> = benchmarkService.engineState
+    val benchmarkResults: StateFlow<String?> = benchmarkService.benchmarkResults
     val selectedModel: StateFlow<ModelInfo?> = benchmarkService.currentSelectedModel
 
     /**

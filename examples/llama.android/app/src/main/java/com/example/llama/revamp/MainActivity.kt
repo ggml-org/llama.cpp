@@ -1,5 +1,6 @@
 package com.example.llama.revamp
 
+import android.llama.cpp.InferenceEngine.State
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -27,7 +28,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AnimatedNavHost
@@ -35,9 +35,9 @@ import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
+import com.example.llama.revamp.ui.screens.ModelLoadingScreen
 import com.example.llama.revamp.ui.screens.ModelSelectionScreen
 import com.example.llama.revamp.ui.screens.ModelsManagementScreen
-import com.example.llama.revamp.ui.screens.ModelLoadingScreen
 import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
 import com.example.llama.revamp.viewmodel.MainViewModel
@@ -72,10 +72,10 @@ fun AppContent(
 
     // LLM Inference engine status
     val engineState by mainVewModel.engineState.collectAsState()
-    val isModelLoading = engineState is InferenceEngine.State.LoadingModel
-        || engineState is InferenceEngine.State.ProcessingSystemPrompt
-    val isModelLoaded = engineState !is InferenceEngine.State.Uninitialized
-        && engineState !is InferenceEngine.State.LibraryLoaded
+    val isModelLoading = engineState is State.LoadingModel
+        || engineState is State.ProcessingSystemPrompt
+    val isModelLoaded = engineState !is State.Uninitialized
+        && engineState !is State.LibraryLoaded
 
     // Navigation
     val navController = rememberNavController()

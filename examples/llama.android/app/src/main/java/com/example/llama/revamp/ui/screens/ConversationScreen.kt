@@ -1,16 +1,12 @@
 package com.example.llama.revamp.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
+import android.llama.cpp.InferenceEngine.State
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,7 +29,6 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -61,8 +56,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ConversationViewModel
@@ -82,8 +75,8 @@ fun ConversationScreen(
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
 
-    val isProcessing = engineState is InferenceEngine.State.ProcessingUserPrompt
-    val isGenerating = engineState is InferenceEngine.State.Generating
+    val isProcessing = engineState is State.ProcessingUserPrompt
+    val isGenerating = engineState is State.Generating
 
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }

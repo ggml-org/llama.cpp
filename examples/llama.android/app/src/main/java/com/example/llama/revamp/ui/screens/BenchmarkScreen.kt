@@ -1,5 +1,6 @@
 package com.example.llama.revamp.ui.screens
 
+import android.llama.cpp.InferenceEngine.State
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,12 +24,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
-import com.example.llama.revamp.viewmodel.MainViewModel
 
 @Composable
 fun BenchmarkScreen(
@@ -67,7 +66,7 @@ fun BenchmarkScreen(
 
             // Benchmark results or loading indicator
             when {
-                engineState is InferenceEngine.State.Benchmarking -> {
+                engineState is State.Benchmarking -> {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()

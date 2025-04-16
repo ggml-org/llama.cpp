@@ -1,6 +1,8 @@
 package com.example.llama.revamp.di
 
 import android.content.Context
+import android.llama.cpp.InferenceEngine
+import android.llama.cpp.LLamaAndroid
 import com.example.llama.revamp.data.local.AppDatabase
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.ModelRepositoryImpl
@@ -8,7 +10,7 @@ import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.data.repository.SystemPromptRepositoryImpl
 import com.example.llama.revamp.engine.BenchmarkService
 import com.example.llama.revamp.engine.ConversationService
-import com.example.llama.revamp.engine.InferenceEngine
+import com.example.llama.revamp.engine.StubInferenceEngine
 import com.example.llama.revamp.engine.InferenceService
 import com.example.llama.revamp.engine.InferenceServiceImpl
 import com.example.llama.revamp.engine.ModelLoadingService
@@ -46,10 +48,12 @@ internal abstract class AppModule {
     companion object {
         @Provides
         @Singleton
-        fun provideInferenceEngine() = InferenceEngine()
+        fun provideInferenceEngine(): InferenceEngine {
+            val useRealEngine = true
+            return if (useRealEngine) LLamaAndroid.instance() else StubInferenceEngine()
+        }
 
         @Provides
-        @Singleton
         fun providePerformanceMonitor(@ApplicationContext context: Context) = PerformanceMonitor(context)
 
         @Provides

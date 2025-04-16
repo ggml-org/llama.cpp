@@ -1,5 +1,6 @@
 package com.example.llama.revamp.ui.screens
 
+import android.llama.cpp.InferenceEngine.State
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -49,7 +50,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.SystemPrompt
-import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
@@ -63,7 +63,7 @@ enum class SystemPromptTab {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ModelLoadingScreen(
-    engineState: InferenceEngine.State,
+    engineState: State,
     onBenchmarkSelected: (prepareJob: Job) -> Unit,
     onConversationSelected: (systemPrompt: String?, prepareJob: Job) -> Unit,
     onBackPressed: () -> Unit,
@@ -99,9 +99,9 @@ fun ModelLoadingScreen(
     }
 
     // Check if we're in a loading state
-    val isLoading = engineState !is InferenceEngine.State.Uninitialized &&
-        engineState !is InferenceEngine.State.LibraryLoaded &&
-        engineState !is InferenceEngine.State.AwaitingUserPrompt
+    val isLoading = engineState !is State.Uninitialized &&
+        engineState !is State.LibraryLoaded &&
+        engineState !is State.AwaitingUserPrompt
 
     // Mode selection callbacks
     val handleBenchmarkSelected = {
@@ -429,9 +429,9 @@ fun ModelLoadingScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = when (engineState) {
-                            is InferenceEngine.State.LoadingModel -> "Loading model..."
-                            is InferenceEngine.State.ProcessingSystemPrompt -> "Processing system prompt..."
-                            is InferenceEngine.State.ModelLoaded -> "Preparing conversation..."
+                            is State.LoadingModel -> "Loading model..."
+                            is State.ProcessingSystemPrompt -> "Processing system prompt..."
+                            is State.ModelLoaded -> "Preparing conversation..."
                             else -> "Processing..."
                         },
                         style = MaterialTheme.typography.titleMedium

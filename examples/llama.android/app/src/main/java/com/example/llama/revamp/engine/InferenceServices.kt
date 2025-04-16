@@ -1,5 +1,7 @@
 package com.example.llama.revamp.engine
 
+import android.llama.cpp.InferenceEngine
+import android.llama.cpp.InferenceEngine.State
 import android.util.Log
 import com.example.llama.revamp.data.model.ModelInfo
 import kotlinx.coroutines.flow.Flow
@@ -14,7 +16,7 @@ interface InferenceService {
     /**
      * Expose engine state
      */
-    val engineState: StateFlow<InferenceEngine.State>
+    val engineState: StateFlow<State>
 
     /**
      * Currently selected model
@@ -51,14 +53,14 @@ interface BenchmarkService : InferenceService {
      * @param pp: Prompt Processing size
      * @param tg: Token Generation size
      * @param pl: Parallel sequences
-     * @param nr: repetitions (Number of Runs)
+     * @param nr: Number of Runs, i.e. repetitions
      */
     suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int): String
 
     /**
      * Benchmark results
      */
-    val results: StateFlow<String?>
+    val benchmarkResults: StateFlow<String?>
 }
 
 interface ConversationService : InferenceService {
@@ -108,7 +110,7 @@ internal class InferenceServiceImpl @Inject internal constructor(
 
     /* InferenceService implementation */
 
-    override val engineState: StateFlow<InferenceEngine.State> = inferenceEngine.state
+    override val engineState: StateFlow<State> = inferenceEngine.state
 
     private val _currentModel = MutableStateFlow<ModelInfo?>(null)
     override val currentSelectedModel: StateFlow<ModelInfo?> = _currentModel.asStateFlow()
@@ -156,9 +158,15 @@ internal class InferenceServiceImpl @Inject internal constructor(
     /* BenchmarkService implementation */
 
     override suspend fun benchmark(pp: Int, tg: Int, pl: Int, nr: Int): String =
-        inferenceEngine.bench(pp, tg, pl, nr)
+        inferenceEngine.bench(pp, tg, pl, nr).also {
+            _benchmarkResults.value = it
+        }
 
-    override val results: StateFlow<String?> = inferenceEngine.benchmarkResults
+    /**
+     * Benchmark results if available
+     */
+    private val _benchmarkResults = MutableStateFlow<String?>(null)
+    override val benchmarkResults: StateFlow<String?> = _benchmarkResults
 
 
     /* ConversationService implementation */
