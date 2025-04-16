@@ -840,6 +840,21 @@ std::string fs_get_cache_directory() {
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
+
+// llama-server-one START
+#elif defined(COSMOCC)
+        // We don't know what OS we are running on at compile time, just CPU architecture.
+        // try various environment variables, fall back to ~/.cache.
+        // FUTURE: Checkj if the directories actually exist.
+        cache_directory = std::getenv("LOCALAPPDATA");
+        if (cache_directory == "") {
+            cache_directory = std::getenv("XDG_CACHE_HOME");
+        }
+        if (cache_directory == "") {
+            cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        }
+        
+// llama-server-one END        
 #else
 #  error Unknown architecture
 #endif

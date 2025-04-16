@@ -1024,7 +1024,10 @@ OBJ_GGML = \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-quants.o \
 	$(DIR_GGML)/src/ggml-cpu/ggml-cpu-traits.o \
 	$(DIR_GGML)/src/ggml-cpu/binary-ops.o \
+	$(DIR_GGML)/src/ggml-cpu/cpu-feats-x86.o \
+	$(DIR_GGML)/src/ggml-cpu/ops.o \
 	$(DIR_GGML)/src/ggml-cpu/unary-ops.o \
+	$(DIR_GGML)/src/ggml-cpu/vec.o \
 	$(DIR_GGML)/src/gguf.o \
 	$(OBJ_GGML_EXT)
 
