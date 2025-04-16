@@ -4,17 +4,11 @@ inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float 
     HVX_Vector * va;
     HVX_Vector * vb;
     HVX_Vector * vc;
+    HVX_Vector qf32;
     const int FLOATS_PER_VECTOR = 128 / sizeof(float);
     const int block  = n / FLOATS_PER_VECTOR;
     const int left   = n % FLOATS_PER_VECTOR;
     const int blocks = block * FLOATS_PER_VECTOR;
-
-    if (0 == block) {
-        for (size_t i = 0; i < n; ++i)
-            z[i] = x[i] + y[i];
-
-        return;
-    }
 
     if ((((uintptr_t)z | (uintptr_t)x | (uintptr_t)y) % ALIGN_128_BYTE) != 0) {
         GGMLHEXAGON_LOG_DEBUG("memaddress mismatch alignment 128 bytes z:%p x:%p y:%p", z, x, y);
@@ -28,7 +22,10 @@ inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float 
     vb = (HVX_Vector *)y;
     vc = (HVX_Vector *)z;
     for (size_t i = 0; i < block; ++i) {
-        *vc++ = Q6_Vsf_vadd_VsfVsf(*va++, *vb++);
+        //*vc++ = Q6_Vsf_vadd_VsfVsf(*va++, *vb++);
+        qf32 = Q6_Vqf32_vadd_VsfVsf(*va++, *vb++);
+        *vc = Q6_Vsf_equals_Vqf32(qf32);
+        vc++;
     }
 
     if (left > 0) {
