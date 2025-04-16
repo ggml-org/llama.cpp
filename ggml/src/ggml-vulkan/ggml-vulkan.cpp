@@ -1736,19 +1736,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_warptile_mmq = { 128,  64,  64, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32, 32, 32, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
-        const uint32_t tm_int_l = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_m = device->coopmat_int_support ? device->coopmat_int_m : 4;
-        const uint32_t tm_int_s = device->coopmat_int_support ? device->coopmat_int_m : 2;
-        const uint32_t tn_int_l = device->coopmat_int_support ? device->coopmat_int_n : 4;
-        const uint32_t tn_int_m = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tn_int_s = device->coopmat_int_support ? device->coopmat_int_n : 2;
-        const uint32_t tk_int_l = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_m = device->coopmat_int_support ? device->coopmat_int_k : 1;
-        const uint32_t tk_int_s = device->coopmat_int_support ? device->coopmat_int_k : 1;
-
-        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_int_l, tn_int_l, tk_int_l, subgroup_size_8 };
-        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8, 32, 2,     tm_int_m, tn_int_m, tk_int_m, subgroup_size_8 };
-        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32, 32, 2,       tm_int_s, tn_int_s, tk_int_s, subgroup_size_8 };
+        l_warptile_mmq_int = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
+        m_warptile_mmq_int = { 128,  64,  64, 32, subgroup_size_8,     32, 2, 2, 2, 1, subgroup_size_8 };
+        s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32,       32, 2, 2, 1, 1, subgroup_size_8 };
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
@@ -1843,6 +1833,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // can't use 256 for D==80.
             uint32_t wg_size = (small_rows && (D % 32) == 0) ? 256 : 128;
             auto rows_cols = fa_rows_cols(D, clamp, type, small_rows);
+            // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
+            GGML_ASSERT((GGML_KQ_MASK_PAD % rows_cols[0]) == 0);
             return {wg_size, rows_cols[0], rows_cols[1], (D), clamp};
         };
 
@@ -4202,6 +4194,12 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, int m, int 
             if (split_k == 3) {
                 split_k = 2;
             }
+            if (ctx->device->coopmat2) {
+                // coopmat2 shader expects splits to be aligned to 256
+                while (split_k > 1 && ((k / split_k) % 256) != 0) {
+                    split_k /= 2;
+                }
+            }
         }
     }
 
@@ -5521,6 +5519,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                    // the "aligned" shader variant will forcibly align strides, for performance
                    (q_stride & 7) == 0 && (k_stride & 7) == 0 && (v_stride & 7) == 0;
 
+    // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
+    GGML_ASSERT((nem1 % GGML_KQ_MASK_PAD) == 0);
+
     vk_pipeline pipeline = pipelines[aligned];
     assert(pipeline);
 
@@ -5748,7 +5749,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_UPSCALE:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && dst->op_params[0] == GGML_SCALE_MODE_NEAREST) {
             return ctx->device->pipeline_upscale_f32;
         }
         return nullptr;
@@ -7922,7 +7923,7 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx) {
         128, 49, 49,
         4096, 49, 4096,
     };
-    const size_t num_it = 1;
+    const size_t num_it = 100;
 
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 0, GGML_TYPE_Q4_0);
     ggml_vk_test_dequant_matmul(ctx, 4096, 512, 4096, 2, num_it, 1, 1, GGML_TYPE_Q4_0);
@@ -9403,9 +9404,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_UPSCALE:
+            return op->op_params[0] == GGML_SCALE_MODE_NEAREST;
         case GGML_OP_ACC:
         case GGML_OP_CONCAT:
-        case GGML_OP_UPSCALE:
         case GGML_OP_SCALE:
         case GGML_OP_PAD:
         case GGML_OP_DIAG_MASK_INF:
@@ -9773,7 +9775,7 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
     } else if (tensor->op == GGML_OP_CONCAT) {
         tensor_clone = ggml_concat(ggml_ctx, src_clone[0], src_clone[1], *(int *)tensor->op_params);
     } else if (tensor->op == GGML_OP_UPSCALE) {
-        tensor_clone = ggml_upscale_ext(ggml_ctx, src_clone[0], tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+        tensor_clone = ggml_upscale_ext(ggml_ctx, src_clone[0], tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3], tensor->op_params[0], tensor->op_params[1], (ggml_scale_mode) tensor->op_params[0]);
     } else if (tensor->op == GGML_OP_SCALE) {
         const float * params = (const float *)tensor->op_params;
         tensor_clone = ggml_scale(ggml_ctx, src_clone[0], params[0]);

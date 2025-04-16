@@ -88,7 +88,7 @@ static struct clip_ctx * clip_init_context(common_params * params) {
     }
     struct clip_context_params clip_params = {
         /* use_gpu */   params->n_gpu_layers != 0,
-        /* verbosity */ params->verbosity,
+        /* verbosity */ GGML_LOG_LEVEL_INFO, // TODO: make this configurable
     };
     auto * ctx_clip = clip_init(clip_path, clip_params);
     return ctx_clip;
