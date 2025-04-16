@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.InferenceEngine
+import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 import kotlinx.coroutines.Job
@@ -70,7 +71,7 @@ fun ModelLoadingScreen(
 ) {
     val coroutineScope = rememberCoroutineScope()
 
-    val selectedModel by modelLoadingViewModel.selectedModel.collectAsState() // TODO-han.yin: USE IT
+    val selectedModel by modelLoadingViewModel.selectedModel.collectAsState()
     val presetPrompts by modelLoadingViewModel.presetPrompts.collectAsState()
     val recentPrompts by modelLoadingViewModel.recentPrompts.collectAsState()
 
@@ -128,6 +129,22 @@ fun ModelLoadingScreen(
                 .padding(paddingValues)
                 .padding(16.dp)
         ) {
+            // Selected model card
+            selectedModel?.let { model ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {
+                    ModelCard(
+                        model = model,
+                        onClick = { /* TODO-han.yin: expand & shrink */ },
+                        isSelected = null,
+                        modifier = Modifier.padding(vertical = 0.dp)
+                    )
+                }
+            }
+
             // Benchmark card
             Card(
                 modifier = Modifier
