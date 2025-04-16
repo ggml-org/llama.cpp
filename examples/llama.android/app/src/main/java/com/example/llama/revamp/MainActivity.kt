@@ -40,6 +40,7 @@ import com.example.llama.revamp.ui.screens.ModelSelectionScreen
 import com.example.llama.revamp.ui.screens.ModelsManagementScreen
 import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
+import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.MainViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.isActive
@@ -64,18 +65,27 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppContent(
-    mainVewModel: MainViewModel = hiltViewModel()
+    mainViewModel: MainViewModel = hiltViewModel(),
+    conversationViewModel: ConversationViewModel = hiltViewModel(),
 ) {
-    // Lifecycle and Coroutine scope
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
 
-    // LLM Inference engine status
-    val engineState by mainVewModel.engineState.collectAsState()
-    val isModelLoading = engineState is State.LoadingModel
-        || engineState is State.ProcessingSystemPrompt
-    val isModelLoaded = engineState !is State.Uninitialized
-        && engineState !is State.LibraryLoaded
+    // Inference engine state
+    val engineState by mainViewModel.engineState.collectAsState()
+    val isModelUninterruptible by remember(engineState) {
+        derivedStateOf {
+            engineState is State.LoadingModel
+                || engineState is State.Benchmarking
+                || engineState is State.ProcessingUserPrompt
+                || engineState is State.ProcessingSystemPrompt
+        }
+    }
+    val isModelLoaded by remember(engineState) {
+        derivedStateOf {
+            engineState !is State.Uninitialized && engineState !is State.LibraryLoaded
+        }
+    }
 
     // Navigation
     val navController = rememberNavController()
@@ -103,16 +113,20 @@ fun AppContent(
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
     val handleBackWithModelCheck = {
-        if (isModelLoading) {
-            // If model is still loading, ignore the request
-            true // Mark as handled
-        } else if (isModelLoaded) {
-            showUnloadDialog = true
-            pendingNavigation = { navigationActions.navigateUp() }
-            true // Mark as handled
-        } else {
-            navigationActions.navigateUp()
-            true // Mark as handled
+        when {
+            isModelUninterruptible -> {
+                // If model is non-interruptible at all, ignore the request
+                true // Mark as handled
+            }
+            isModelLoaded -> {
+                showUnloadDialog = true
+                pendingNavigation = { navigationActions.navigateUp() }
+                true // Mark as handled
+            }
+            else -> {
+                navigationActions.navigateUp()
+                true // Mark as handled
+            }
         }
     }
 
@@ -216,16 +230,6 @@ fun AppContent(
                 )
             }
 
-            // Conversation Screen
-            composable(AppDestinations.CONVERSATION_ROUTE) {
-                ConversationScreen(
-                    onBackPressed = {
-                        // Need to unload model before going back
-                        handleBackWithModelCheck()
-                    }
-                )
-            }
-
             // Benchmark Screen
             composable(AppDestinations.BENCHMARK_ROUTE) {
                 BenchmarkScreen(
@@ -233,6 +237,17 @@ fun AppContent(
                         // Need to unload model before going back
                         handleBackWithModelCheck()
                     }
+                )
+            }
+
+            // Conversation Screen
+            composable(AppDestinations.CONVERSATION_ROUTE) {
+                ConversationScreen(
+                    onBackPressed = {
+                        // Need to unload model before going back
+                        handleBackWithModelCheck()
+                    },
+                    viewModel = conversationViewModel
                 )
             }
 
@@ -261,7 +276,15 @@ fun AppContent(
             onConfirm = {
                 isUnloading = true
                 coroutineScope.launch {
-                    mainVewModel.unloadModel()
+                    // Handle screen specific cleanups
+                    when(engineState) {
+                        is State.Benchmarking -> {}
+                        is State.Generating -> conversationViewModel.clearConversation()
+                        else -> {}
+                    }
+
+                    // Unload model
+                    mainViewModel.unloadModel()
                     isUnloading = false
                     showUnloadDialog = false
                     pendingNavigation?.invoke()

@@ -3,12 +3,15 @@ package com.example.llama.revamp.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.engine.ConversationService
+import com.example.llama.revamp.engine.GenerationUpdate
 import com.example.llama.revamp.engine.TokenMetrics
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,18 +32,17 @@ class ConversationViewModel @Inject constructor(
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
-    // Token generation job
+    // Keep track of token generation job
     private var tokenCollectionJob: Job? = null
 
     /**
-     * Send a message with the provided content.
-     * Note: This matches the existing UI which manages input state outside the ViewModel.
+     * Send a message with the provided content
      */
     fun sendMessage(content: String) {
         if (content.isBlank()) return
 
         // Cancel ongoing collection
-        tokenCollectionJob?.cancel()
+        stopGeneration()
 
         // Add user message
         val userMessage = Message.User(
@@ -60,39 +62,45 @@ class ConversationViewModel @Inject constructor(
         tokenCollectionJob = viewModelScope.launch {
             try {
                 conversationService.generateResponse(content)
-                    .collect { (text, isComplete) ->
-                        updateAssistantMessage(text, isComplete)
-                    }
+                    .onCompletion { tokenCollectionJob = null }
+                    .collect(::updateAssistantMessage)
+
+            } catch (_: CancellationException) {
+                handleCancellation()
+                tokenCollectionJob = null
+
             } catch (e: Exception) {
-                // Handle error
                 handleResponseError(e)
+                tokenCollectionJob = null
             }
         }
     }
 
     /**
-     * Handle updating the assistant message
+     * Stop ongoing generation
      */
-    private fun updateAssistantMessage(text: String, isComplete: Boolean) {
+    fun stopGeneration() {
+        tokenCollectionJob?.let { job ->
+            // handled by the catch blocks
+            if (job.isActive) { job.cancel() }
+        }
+    }
+
+    /**
+     * Handle the case when generation is explicitly cancelled
+     */
+    private fun handleCancellation() {
         val currentMessages = _messages.value.toMutableList()
         val lastIndex = currentMessages.size - 1
         val currentAssistantMessage = currentMessages.getOrNull(lastIndex) as? Message.Assistant.Ongoing
 
         if (currentAssistantMessage != null) {
-            if (isComplete) {
-                // Final message with metrics
-                currentMessages[lastIndex] = Message.Assistant.Completed(
-                    content = text,
-                    timestamp = currentAssistantMessage.timestamp,
-                    metrics = conversationService.createTokenMetrics()
-                )
-            } else {
-                // Ongoing message update
-                currentMessages[lastIndex] = Message.Assistant.Ongoing(
-                    content = text,
-                    timestamp = currentAssistantMessage.timestamp
-                )
-            }
+            // Replace with completed message, adding note that it was interrupted
+            currentMessages[lastIndex] = Message.Assistant.Completed(
+                content = currentAssistantMessage.content + " [Generation stopped]",
+                timestamp = currentAssistantMessage.timestamp,
+                metrics = conversationService.createTokenMetrics()
+            )
             _messages.value = currentMessages
         }
     }
@@ -107,7 +115,7 @@ class ConversationViewModel @Inject constructor(
 
         if (currentAssistantMessage != null) {
             currentMessages[lastIndex] = Message.Assistant.Completed(
-                content = "${currentAssistantMessage.content}[Error: ${e.message}]",
+                content = currentAssistantMessage.content + " [Error: ${e.message}]",
                 timestamp = currentAssistantMessage.timestamp,
                 metrics = conversationService.createTokenMetrics()
             )
@@ -116,15 +124,42 @@ class ConversationViewModel @Inject constructor(
     }
 
     /**
+     * Handle updating the assistant message
+     */
+    private fun updateAssistantMessage(update: GenerationUpdate) {
+        val currentMessages = _messages.value.toMutableList()
+        val lastIndex = currentMessages.size - 1
+        val currentAssistantMessage = currentMessages.getOrNull(lastIndex) as? Message.Assistant.Ongoing
+
+        if (currentAssistantMessage != null) {
+            if (update.isComplete) {
+                // Final message with metrics
+                currentMessages[lastIndex] = Message.Assistant.Completed(
+                    content = update.text,
+                    timestamp = currentAssistantMessage.timestamp,
+                    metrics = conversationService.createTokenMetrics()
+                )
+            } else {
+                // Ongoing message update
+                currentMessages[lastIndex] = Message.Assistant.Ongoing(
+                    content = update.text,
+                    timestamp = currentAssistantMessage.timestamp
+                )
+            }
+            _messages.value = currentMessages
+        }
+    }
+
+    /**
      * Clear conversation
      */
     fun clearConversation() {
-        tokenCollectionJob?.cancel()
+        stopGeneration()
         _messages.value = emptyList()
     }
 
     override fun onCleared() {
-        tokenCollectionJob?.cancel()
+        stopGeneration()
         super.onCleared()
     }
 }

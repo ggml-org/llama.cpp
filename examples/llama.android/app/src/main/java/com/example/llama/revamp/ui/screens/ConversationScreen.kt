@@ -68,7 +68,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ConversationScreen(
     onBackPressed: () -> Unit,
-    viewModel: ConversationViewModel = hiltViewModel()
+    viewModel: ConversationViewModel
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()
