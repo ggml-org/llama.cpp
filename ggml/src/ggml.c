@@ -490,6 +490,10 @@ static ggml_fp16_t ggml_table_gelu_quick_f16[1 << 16];
 // precomputed f32 table for f16 (256 KB) (ggml-impl.h)
 float ggml_table_f32_f16[1 << 16];
 
+#ifdef PIM_KERNEL
+    int16_t mul_table_int4_int8[1<<4][1<<8];
+#endif
+
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
     int has_neon;
@@ -12481,6 +12485,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+#ifdef PIM_KERNEL
 static int dpu_launch_gemv_async(
         const struct ggml_tensor * input,
         char* wdata,
@@ -12491,6 +12496,11 @@ static int dpu_launch_gemv_async(
 static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set);
 
 static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res);
+#define PIM_DEBUG_PERF_PRINT 0
+static uint64_t get_time_us();
+#endif
+
+#define TENSOR_EXPORT 0
 
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
@@ -12540,6 +12550,7 @@ static void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
+#if TENSOR_EXPORT
     // export the first gemv's tensor
     if (dst->flags & GGML_TENSOR_FLAG_PIM &&
         type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32 &&
@@ -12553,6 +12564,7 @@ static void ggml_compute_forward_mul_mat(
       tensor_export(src0, filenamea);
       tensor_export(src1, filenameb);
     }
+#endif
 
 
 #if GGML_USE_LLAMAFILE
@@ -12582,7 +12594,9 @@ static void ggml_compute_forward_mul_mat(
 UseGgmlGemm1:;
 #endif
 
+#if TENSOR_EXPORT
     struct ggml_tensor * pim_res = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
+#endif
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -12613,10 +12627,22 @@ UseGgmlGemm1:;
             }
         }
 
-	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
+#ifdef PIM_KERNEL
+        if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t t_start = get_time_us();
+#endif
+          if (ith > 0) {
+            // for non-master thread, exit directly
+            return;
+          }
           dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
-
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t t_us = get_time_us() - t_start;
+          printf("\n%s: PIM launch time = %ld  \n", __FUNCTION__, t_us);
+#endif
+#if TENSOR_EXPORT
           pim_res->type = dst->type;
           pim_res->dpu_set = dst->dpu_set;
           pim_res->inout_offset = dst->inout_offset;
@@ -12631,14 +12657,25 @@ UseGgmlGemm1:;
           pim_res->data = malloc(ggml_nbytes(pim_res));
           GGML_ASSERT(pim_res->data != NULL);
           dpu_get_gemv_res(src1, src0, pim_res);
-          dpu_get_gemv_res(src1, src0, dst);
 
+#endif // TENSOR_EXPORT
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t tt_start = get_time_us();
+#endif
+          dpu_get_gemv_res(src1, src0, dst);
+#if PIM_DEBUG_PERF_PRINT
+          uint64_t tt_us = get_time_us() - tt_start;
+          printf("\n%s: PIM get gemv res time = %ld  \n", __FUNCTION__, tt_us);
+#endif
+#if TENSOR_EXPORT
           if (to_export && !exported) {
             tensor_export(dst, filenamec_pim);
           }
+#else
           return;
+#endif // TENSOR_EXPORT
         }
-
+#if TENSOR_EXPORT
         if (to_export && !exported) {
           struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
           const char* quant_name = "token_quantified";
@@ -12658,6 +12695,8 @@ UseGgmlGemm1:;
           quant_src1->data = wdata;
           tensor_export(quant_src1, filenamebq);
         }
+#endif // TENSOR_EXPORT
+#endif // PIM_KERNEL
     }
 
     if (ith == 0) {
@@ -12775,6 +12814,7 @@ UseGgmlGemm2:;
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
     }
+#if TENSOR_EXPORT
     if (to_export && !exported) {
       tensor_export(dst, filenamec);
       exported = true;
@@ -12784,6 +12824,7 @@ UseGgmlGemm2:;
       struct tensor_differ td = max_diff(pim_res, dst);
       printf("Diff - max_abs = %f, diff_sum = %f, diff_abs_sum = %f\n", td.max_abs_diff, td.diff_sum, td.diff_abs_sum);
     }
+#endif
 }
 
 // ggml_compute_forward_mul_mat_id
@@ -17349,6 +17390,16 @@ static void ggml_compute_forward_opt_step_adamw(
 }
 
 #ifdef PIM_KERNEL
+
+// utils
+#include <sys/time.h>
+
+static uint64_t get_time_us() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (((uint64_t)tv.tv_sec) * 1000000) + tv.tv_usec;
+}
+
 static int dpu_launch_gemv_async(
         const struct ggml_tensor * input,
         char* wdata,
@@ -17366,12 +17417,23 @@ static int dpu_launch_gemv_async(
     uint32_t input_offset = res->inout_offset;
     dpu_set = *(res->dpu_set);
     // broadcast input metadata
+
+#if PIM_DEBUG_PERF_PRINT
+    uint64_t t_start = get_time_us();
+#endif
+
     DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, &input_descript, sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
     input_offset += sizeof(pim_matrix_des);
 
     // broadcast input data
     uint32_t bclen = ggml_row_size(vec_dot_type, input->ne[0])*input->ne[1]*input->ne[2]*input->ne[3];
     DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, wdata, bclen, DPU_XFER_DEFAULT));
+
+#if PIM_DEBUG_PERF_PRINT
+    uint64_t t_us = get_time_us() - t_start;
+    printf("\n%s: PIM broadcast time = %ld  \n", __FUNCTION__, t_us);
+#endif
+
     input_offset += bclen;
 
     res->inout_offset = input_offset;
@@ -17386,9 +17448,9 @@ static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set) {
     struct dpu_set_t dpu;
     dpu_sync(dpu_set);
     //打印dpu log
-    DPU_FOREACH(dpu_set, dpu) {
-        DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
-    }
+    // DPU_FOREACH(dpu_set, dpu) {
+    //     DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
+    // }
     return;
 }
 
@@ -17396,11 +17458,13 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     struct dpu_set_t dpu_set, dpu;
     float *mul_mat_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
+
     static bool offset_printed = false;
     if( !offset_printed) {
       printf("%s: offset = %d  ", __FUNCTION__, output_offset);
       offset_printed = true;
     }
+
     dpu_set = *(res->dpu_set);
     int nr_dpus;
     dpu_get_nr_dpus(dpu_set, &nr_dpus);

@@ -3,11 +3,11 @@
 #include <iomanip>
 #include <chrono>
 
-#include <vector>
-
-#define NR_DPUS 2048
+#define NR_DPUS 512
 #define NR_LAYER 2
 #define DPU_BINARY "./dpu/gemv_dpu"
+
+int16_t mul_table_int4_int8[1<<4][1<<8];
 
 void fp_table_init(void) {
   for (int i = 0; i < (1 << 16); ++i) {
@@ -19,12 +19,22 @@ void fp_table_init(void) {
             }
 }
 
+void mul_table_int4_int8_init(void) {
+  for(int i = 0; i < (1 << 4); ++i){
+    for(int j = 0; j< (1 << 8); ++j){
+      mul_table_int4_int8[i][j] = (i - 8) * (j + INT8_MIN);
+    }
+  }
+}
+
+#ifdef PIM_KERNEL
 int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct ggml_tensor * in_q, struct ggml_tensor * res) {
   uint32_t pim_offset = 0;
   struct dpu_set_t dpu;
 
   std::chrono::high_resolution_clock::time_point ex_tp1 = std::chrono::high_resolution_clock::now();
 
+  DPU_ASSERT(dpu_broadcast_to(context->dpu_set, "mul_table_int4_int8", 0, (void *)(mul_table_int4_int8), sizeof(mul_table_int4_int8), DPU_XFER_DEFAULT));
   //ggml_table_f32_f16 tbl is transferred to pim
   DPU_ASSERT(dpu_broadcast_to(context->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, (void *)(ggml_table_f32_f16), sizeof(ggml_table_f32_f16), DPU_XFER_DEFAULT));
   pim_offset += sizeof(ggml_table_f32_f16);
@@ -104,8 +114,8 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   dur = ex_tp2 - ex_tp1;
 
-  std::cout << "dpu: 执行用时：" << std::chrono::duration_cast<std::chrono::milliseconds>(dur).count() << " ms" << std::endl;
-  std::cout << "dpu: 执行用时：" << std::chrono::duration_cast<std::chrono::microseconds>(dur).count() << " us" << std::endl;
+  // std::cout << "执行用时：" << std::chrono::duration_cast<std::chrono::milliseconds>(dur).count() << " ms" << std::endl;
+  std::cout << "执行用时：" << std::chrono::duration_cast<std::chrono::microseconds>(dur).count() << " us" << std::endl;
 
   // Check results
   float *mul_mat_res = (float *)res->data;
@@ -116,6 +126,7 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   return 0;
 }
+#endif
 
 
 void gemv_cpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct ggml_tensor * in_q, struct ggml_tensor * res_comp) {
@@ -163,7 +174,9 @@ void gemv_cpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct
 int main(int argc, char** argv) {
   // init fp table for fp16 dump
   fp_table_init();
+  mul_table_int4_int8_init();
 
+#ifdef PIM_KERNEL
   // WQ-PIM allocate dpu
   struct pim_context *pqcontext = (struct pim_context *)malloc(sizeof(struct pim_context));
   memset(pqcontext,0,sizeof(struct pim_context));
@@ -213,6 +226,6 @@ int main(int argc, char** argv) {
   // float first_res = mul_add_q4_0_q8_0(ts_a, ts_bq);
   // std::cout<<"first element: "<<std::fixed << std::setprecision(6)<<first_res<<std::endl;
 
-  
+#endif
   return 0;
 }
