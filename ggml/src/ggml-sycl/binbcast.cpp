@@ -1,5 +1,6 @@
 #include "binbcast.hpp"
 #include <sycl/sycl.hpp>
+#include "ggml.h"
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
@@ -263,16 +264,16 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
 
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         op()(ctx, src0, src1, dst, (const float *)src0->data, (const float *)src1->data, (float *)dst->data, main_stream);
-    } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-        op()(ctx, src0, src1, dst, (const sycl::half *)src0->data, (const float *)src1->data,
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+        op()(ctx, src0, src1, dst, (const sycl::half *)src0->data, (const sycl::half *)src1->data,
              (sycl::half *)dst->data, main_stream);
-    } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-        op()(ctx, src0, src1, dst, (const sycl::half *)src0->data, (const float *)src1->data, (float *)dst->data,
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
+        op()(ctx, src0, src1, dst, (const sycl::half *)src0->data, (const float *)src1->data, (sycl::half *)dst->data,
              main_stream);
-    } else if (src0->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_I32) {
+    } else if (src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_I32) {
         op()(ctx, src0, src1, dst, (const int32_t *)src0->data, (const int32_t *)src1->data, (int32_t *)dst->data,
              main_stream);
-    } else if (src0->type == GGML_TYPE_I16 && dst->type == GGML_TYPE_I16) {
+    } else if (src0->type == GGML_TYPE_I16 && src1->type == GGML_TYPE_I16 && dst->type == GGML_TYPE_I16) {
         op()(ctx, src0, src1, dst, (const int16_t *)src0->data, (const int16_t *)src1->data, (int16_t *)dst->data,
              main_stream);
     } else {
