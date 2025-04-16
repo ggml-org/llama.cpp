@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +61,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.InferenceEngine
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ConversationViewModel
@@ -128,7 +130,9 @@ fun ConversationScreen(
                 .padding(paddingValues)
         ) {
             // System prompt display (collapsible)
-            AnimatedSystemPrompt(selectedModel?.name, systemPrompt)
+            selectedModel?.let {
+                ModelCardWithSystemPrompt(it, systemPrompt)
+            }
 
             // Messages list
             Box(
@@ -159,24 +163,52 @@ fun ConversationScreen(
 }
 
 @Composable
-fun AnimatedSystemPrompt(
-    modelName: String?,     // TODO-han.yin: add model name into this card, on top of system prompt!
+private fun ModelCardWithSystemPrompt(
+    selectedModel: ModelInfo,
     systemPrompt: String?
 ) {
     var expanded by remember { mutableStateOf(false) }
 
-    if (!systemPrompt.isNullOrBlank()) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            onClick = {
-                expanded = !expanded
-            }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        onClick = {
+            expanded = !expanded
+        }
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
+            // Show model info first
+            Text(
+                text = selectedModel.name,
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Text(
+                text = "${selectedModel.parameters ?: ""} ${selectedModel.quantization ?: ""} • ${selectedModel.formattedSize}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (selectedModel.contextLength != null) {
+                Text(
+                    text = "Context: ${selectedModel.contextLength}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // Add divider between model info and system prompt
+            if (!systemPrompt.isNullOrBlank()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+
+            // Only show system prompt section if one exists
+            if (!systemPrompt.isNullOrBlank()) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
