@@ -36,7 +36,7 @@ static uint64_t get_time_ns() {
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
 }
 
-bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
+static bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
     if (a.pattern != b.pattern) {
         // cString comparison that may be null
         if (a.pattern == nullptr || b.pattern == nullptr) {
@@ -52,7 +52,7 @@ bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const
     return true;
 }
 
-bool vec_tensor_buft_override_equal(const std::vector<llama_model_tensor_buft_override>& a, const std::vector<llama_model_tensor_buft_override>& b) {
+static bool vec_tensor_buft_override_equal(const std::vector<llama_model_tensor_buft_override>& a, const std::vector<llama_model_tensor_buft_override>& b) {
     if (a.size() != b.size()) {
         return false;
     }
@@ -64,7 +64,7 @@ bool vec_tensor_buft_override_equal(const std::vector<llama_model_tensor_buft_ov
     return true;
 }
 
-bool vec_vec_tensor_buft_override_equal(const std::vector<std::vector<llama_model_tensor_buft_override>>& a, const std::vector<std::vector<llama_model_tensor_buft_override>>& b) {
+static bool vec_vec_tensor_buft_override_equal(const std::vector<std::vector<llama_model_tensor_buft_override>>& a, const std::vector<std::vector<llama_model_tensor_buft_override>>& b) {
     if (a.size() != b.size()) {
         return false;
     }
@@ -1148,7 +1148,7 @@ struct test {
                 tensor_split_str += "/";
             }
         }
-        for (int i = 0; i < tensor_buft_overrides.size()-1; i++) {
+        for (size_t i = 0; i < tensor_buft_overrides.size()-1; i++) {
             // Last element of tensor_buft_overrides is always a null pattern
             if (tensor_buft_overrides[i].pattern == nullptr) {
                 tensor_buft_overrides_str += "none";
