@@ -5584,7 +5584,7 @@ static bool ggmlhexagon_can_handle_op_through_qnn(ggml_backend_dev_t dev, const 
 
     struct ggml_tensor * src0 = op_tensor->src[0];
     struct ggml_tensor * src1 = op_tensor->src[1];
-    const int64_t ne00        = src0->ne[0];;
+    const int64_t ne00        = src0->ne[0];
     const int src0_rank       = ggml_n_dims(src0);
     int src1_rank             = 0;
     if (nullptr != src1) {
