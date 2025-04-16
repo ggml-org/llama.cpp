@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
-import com.example.llama.revamp.engine.InferenceManager
+import com.example.llama.revamp.engine.ModelLoadingService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -14,14 +14,14 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ModelLoadingViewModel @Inject constructor(
-    private val inferenceManager: InferenceManager,
+    private val modelLoadingService: ModelLoadingService,
     private val repository: SystemPromptRepository
 ) : ViewModel() {
 
     /**
      * Currently selected model to be loaded
      */
-    val selectedModel = inferenceManager.currentModel
+    val selectedModel = modelLoadingService.currentSelectedModel
 
     /**
      * Preset prompts
@@ -83,13 +83,13 @@ class ModelLoadingViewModel @Inject constructor(
      * Prepares the engine for benchmark mode.
      */
     suspend fun prepareForBenchmark() =
-        inferenceManager.loadModelForBenchmark()
+        modelLoadingService.loadModelForBenchmark()
 
     /**
      * Prepare for conversation
      */
     suspend fun prepareForConversation(systemPrompt: String? = null) =
-        inferenceManager.loadModelForConversation(systemPrompt)
+        modelLoadingService.loadModelForConversation(systemPrompt)
 
 
     companion object {

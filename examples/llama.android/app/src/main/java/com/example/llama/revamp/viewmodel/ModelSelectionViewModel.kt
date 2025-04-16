@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository
-import com.example.llama.revamp.engine.InferenceManager
+import com.example.llama.revamp.engine.InferenceService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -15,7 +15,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class ModelSelectionViewModel @Inject constructor(
-    private val inferenceManager: InferenceManager,
+    private val inferenceService: InferenceService,
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
@@ -30,25 +30,15 @@ class ModelSelectionViewModel @Inject constructor(
         )
 
     /**
-     * Access to currently selected model
-     */
-    val selectedModel = inferenceManager.currentModel
-
-    /**
      * Select a model and update its last used timestamp
      */
     fun selectModel(modelInfo: ModelInfo) {
-        inferenceManager.setCurrentModel(modelInfo)
+        inferenceService.setCurrentModel(modelInfo)
 
         viewModelScope.launch {
             modelRepository.updateModelLastUsed(modelInfo.id)
         }
     }
-
-    /**
-     * Unload model when navigating away
-     */
-    suspend fun unloadModel() = inferenceManager.unloadModel()
 
     companion object {
         private val TAG = ModelSelectionViewModel::class.java.simpleName

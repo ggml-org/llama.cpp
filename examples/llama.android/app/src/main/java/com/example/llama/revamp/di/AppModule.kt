@@ -6,7 +6,12 @@ import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.ModelRepositoryImpl
 import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.data.repository.SystemPromptRepositoryImpl
+import com.example.llama.revamp.engine.BenchmarkService
+import com.example.llama.revamp.engine.ConversationService
 import com.example.llama.revamp.engine.InferenceEngine
+import com.example.llama.revamp.engine.InferenceService
+import com.example.llama.revamp.engine.InferenceServiceImpl
+import com.example.llama.revamp.engine.ModelLoadingService
 import com.example.llama.revamp.monitoring.PerformanceMonitor
 import dagger.Binds
 import dagger.Module
@@ -18,7 +23,19 @@ import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class AppModule {
+internal abstract class AppModule {
+
+    @Binds
+    abstract fun bindInferenceService(impl: InferenceServiceImpl) : InferenceService
+
+    @Binds
+    abstract fun bindModelLoadingService(impl: InferenceServiceImpl) : ModelLoadingService
+
+    @Binds
+    abstract fun bindBenchmarkService(impl: InferenceServiceImpl) : BenchmarkService
+
+    @Binds
+    abstract fun bindConversationService(impl: InferenceServiceImpl) : ConversationService
 
     @Binds
     abstract fun bindsModelsRepository(impl: ModelRepositoryImpl): ModelRepository

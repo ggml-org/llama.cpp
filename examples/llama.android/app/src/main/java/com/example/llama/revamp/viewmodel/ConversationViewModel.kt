@@ -2,7 +2,7 @@ package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.llama.revamp.engine.InferenceManager
+import com.example.llama.revamp.engine.ConversationService
 import com.example.llama.revamp.engine.TokenMetrics
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -14,17 +14,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
-import kotlin.getValue
 
 
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
-    private val inferenceManager: InferenceManager
+    private val conversationService: ConversationService
 ) : ViewModel() {
 
-    val engineState = inferenceManager.engineState
-    val selectedModel = inferenceManager.currentModel
-    val systemPrompt = inferenceManager.systemPrompt
+    val engineState = conversationService.engineState
+    val selectedModel = conversationService.currentSelectedModel
+    val systemPrompt = conversationService.systemPrompt
 
     // Messages in conversation
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
@@ -60,7 +59,7 @@ class ConversationViewModel @Inject constructor(
         // Collect response
         tokenCollectionJob = viewModelScope.launch {
             try {
-                inferenceManager.generateResponse(content)
+                conversationService.generateResponse(content)
                     .collect { (text, isComplete) ->
                         updateAssistantMessage(text, isComplete)
                     }
@@ -85,7 +84,7 @@ class ConversationViewModel @Inject constructor(
                 currentMessages[lastIndex] = Message.Assistant.Completed(
                     content = text,
                     timestamp = currentAssistantMessage.timestamp,
-                    metrics = inferenceManager.createTokenMetrics()
+                    metrics = conversationService.createTokenMetrics()
                 )
             } else {
                 // Ongoing message update
@@ -110,7 +109,7 @@ class ConversationViewModel @Inject constructor(
             currentMessages[lastIndex] = Message.Assistant.Completed(
                 content = "${currentAssistantMessage.content}[Error: ${e.message}]",
                 timestamp = currentAssistantMessage.timestamp,
-                metrics = inferenceManager.createTokenMetrics()
+                metrics = conversationService.createTokenMetrics()
             )
             _messages.value = currentMessages
         }
