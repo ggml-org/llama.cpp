@@ -63,6 +63,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.InferenceEngine
+import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.Message
@@ -158,89 +159,6 @@ fun ConversationScreen(
                 },
                 isEnabled = !isProcessing && !isGenerating
             )
-        }
-    }
-}
-
-@Composable
-private fun ModelCardWithSystemPrompt(
-    selectedModel: ModelInfo,
-    systemPrompt: String?
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        onClick = {
-            expanded = !expanded
-        }
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            // Show model info first
-            Text(
-                text = selectedModel.name,
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Text(
-                text = "${selectedModel.parameters ?: ""} ${selectedModel.quantization ?: ""} • ${selectedModel.formattedSize}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            if (selectedModel.contextLength != null) {
-                Text(
-                    text = "Context: ${selectedModel.contextLength}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // Add divider between model info and system prompt
-            if (!systemPrompt.isNullOrBlank()) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-
-            // Only show system prompt section if one exists
-            if (!systemPrompt.isNullOrBlank()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "System Prompt",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-
-                    Text(
-                        text = if (expanded) "Hide" else "Show",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-
-                AnimatedVisibility(
-                    visible = expanded,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    Text(
-                        text = systemPrompt,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp)
-                    )
-                }
-            }
         }
     }
 }

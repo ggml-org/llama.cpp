@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.engine.InferenceEngine
+import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
@@ -54,28 +55,14 @@ fun BenchmarkScreen(
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            // Model info
+            // Selected model card
             selectedModel?.let { model ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = model.name,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-
-                        Text(
-                            text = "${model.parameters} [${model.quantization}]",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                ModelCard(
+                    model = model,
+                    onClick = { /* No action on click */ },
+                    modifier = Modifier.padding(bottom = 16.dp),
+                    isSelected = null
+                )
             }
 
             // Benchmark results or loading indicator

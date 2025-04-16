@@ -131,18 +131,12 @@ fun ModelLoadingScreen(
         ) {
             // Selected model card
             selectedModel?.let { model ->
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp)
-                ) {
-                    ModelCard(
-                        model = model,
-                        onClick = { /* TODO-han.yin: expand & shrink */ },
-                        isSelected = null,
-                        modifier = Modifier.padding(vertical = 0.dp)
-                    )
-                }
+                ModelCard(
+                    model = model,
+                    onClick = { /* No action on click */ },
+                    modifier = Modifier.padding(bottom = 16.dp),
+                    isSelected = null
+                )
             }
 
             // Benchmark card
