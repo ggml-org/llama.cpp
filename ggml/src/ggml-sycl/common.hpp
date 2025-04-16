@@ -777,7 +777,7 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
 
 bool gpu_has_xmx(sycl::device &dev);
 
-constexpr size_t safe_div(const size_t m, const size_t n) {
+constexpr size_t ceil_div(const size_t m, const size_t n) {
     return (m + n - 1) / n;
 }
 

@@ -22,7 +22,7 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     }
 
     const int     blocks_per_row              = ncols / block_traits::qk;
-    constexpr int blocks_per_subgroup         = safe_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
+    constexpr int blocks_per_subgroup         = ceil_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
     constexpr int block_elements_per_subgroup = block_traits::qi / block_traits::vdr_mmvq;
 
     static_assert(blocks_per_subgroup > 0);
@@ -536,7 +536,7 @@ static void mul_mat_vec_q_iq4_xs_q8_1(const void *__restrict__ vx,
 static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
                                                     const int nrows, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
-    const int        block_num_y   = safe_div(nrows, GGML_SYCL_MMV_Y);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
     GGML_ASSERT(block_num_y % num_subgroups == 0);
 
