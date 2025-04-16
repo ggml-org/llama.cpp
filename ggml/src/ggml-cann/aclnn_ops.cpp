@@ -625,6 +625,10 @@ static void ggml_cann_avg_pool2d(ggml_backend_cann_context& ctx,
     bool count_include_pad = true;
     int64_t divisor_override = 0;
     int8_t cube_math_type = 0;
+#ifdef ASCEND_310P
+    cube_math_type = 1;
+#endif
+
     GGML_CANN_CALL_ACLNN_OP(AvgPool2d, acl_src, kernel_size, strides, paddings_avg,
                     ceil_mode, count_include_pad, divisor_override,
                     cube_math_type, acl_dst);
@@ -2589,6 +2593,10 @@ void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* ds
     bool transposed = true;
     int64_t groups = 1;
     int8_t cubeMathType = 0;
+
+#ifdef ASCEND_310P
+    cubeMathType = 1;
+#endif
 
     GGML_CANN_CALL_ACLNN_OP(Convolution, acl_input, acl_weight, nullptr, stride,
         padding, dilation, transposed, padding, groups, acl_dst, cubeMathType);
