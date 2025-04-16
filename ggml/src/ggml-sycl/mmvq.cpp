@@ -25,8 +25,8 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     constexpr int blocks_per_subgroup         = safe_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
     constexpr int block_elements_per_subgroup = block_traits::qi / block_traits::vdr_mmvq;
 
-    assert(blocks_per_subgroup > 0);
-    assert(block_elements_per_subgroup > 0);
+    static_assert(blocks_per_subgroup > 0);
+    static_assert(block_elements_per_subgroup > 0);
 
     const block_q8_1 * y = (const block_q8_1 *) vy;
 
