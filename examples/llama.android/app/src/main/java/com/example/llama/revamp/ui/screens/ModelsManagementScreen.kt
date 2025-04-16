@@ -255,7 +255,7 @@ fun ModelsManagementScreen(
                         }
 
                         IconButton(
-                            onClick = {/* TODO-han.yin: implement filtering */ }
+                            onClick = {/* TODO-han.yin: implement filtering once metadata ready */ }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.FilterAlt,
@@ -377,9 +377,7 @@ fun ModelsManagementScreen(
                                 state.uri, state.fileName, state.fileSize
                             )
                         },
-                        onCancel = {
-                            viewModel.resetManagementState()
-                        }
+                        onCancel = { viewModel.resetManagementState() }
                     )
                 }
 
@@ -388,11 +386,10 @@ fun ModelsManagementScreen(
                         fileName = state.fileName,
                         fileSize = state.fileSize,
                         isImporting = true,
+                        isCancelling = state.isCancelling,
                         progress = state.progress,
                         onConfirm = {},
-                        onCancel = {
-                            // TODO-han.yin:  viewModel.cancelImport()
-                        },
+                        onCancel = { viewModel.cancelOngoingLocalModelImport() },
                     )
                 }
 
@@ -467,6 +464,7 @@ fun ImportProgressDialog(
     fileName: String,
     fileSize: Long,
     isImporting: Boolean,
+    isCancelling: Boolean = false,
     progress: Float,
     onConfirm: () -> Unit,
     onCancel: () -> Unit
@@ -528,13 +526,19 @@ fun ImportProgressDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Informational text
+                // Additional information
                 if (isImporting) {
                     Text(
                         text = "This may take several minutes for large models",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
+                    )
+                } else if (isCancelling) {
+                    Text(
+                        text = "Cancelling ongoing import...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
                     )
                 }
             }
@@ -546,9 +550,9 @@ fun ImportProgressDialog(
             }
         },
         dismissButton = {
-            if (!isImporting || progress < 0.7f) {
-                TextButton(onClick = onCancel, enabled = !isImporting) {
-                    Text(if (isImporting) "Cancel" else "Back")
+            if (!isImporting || (progress < 0.7f && !isCancelling)) {
+                TextButton(onClick = onCancel, enabled = !isCancelling) {
+                    Text("Cancel")
                 }
             }
         }

@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.FileNotFoundException
 import javax.inject.Inject
@@ -113,6 +114,29 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
+    fun cancelOngoingLocalModelImport() = viewModelScope.launch {
+        viewModelScope.launch {
+            // First update UI to show we're attempting to cancel
+            _managementState.update { current ->
+                if (current is Importation.Importing) {
+                    current.copy(isCancelling = true)
+                } else {
+                    current
+                }
+            }
+
+            // Attempt to cancel
+            when (modelRepository.cancelImport()) {
+                null, true -> { _managementState.value = ModelManagementState.Idle }
+                false -> {
+                    _managementState.value = Importation.Error(
+                        message = "Failed to cancel import. Try again later."
+                    )
+                }
+            }
+        }
+    }
+
     // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
     fun importFromHuggingFace() {}
 
@@ -171,7 +195,7 @@ sealed class ModelManagementState {
 
     sealed class Importation : ModelManagementState() {
         data class Confirming(val uri: Uri, val fileName: String, val fileSize: Long) : Importation()
-        data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long) : Importation()
+        data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long, val isCancelling: Boolean = false) : Importation()
         data class Success(val model: ModelInfo) : Importation()
         data class Error(val message: String) : Importation()
     }
