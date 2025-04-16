@@ -138,16 +138,11 @@ constexpr const bool kQnnSupportedOps[] = {
 
     false,  // GGML_OP_UNARY
 
-    false,  // GGML_OP_MAP_UNARY
-    false,  // GGML_OP_MAP_BINARY
-
-    false,  // GGML_OP_MAP_CUSTOM1_F32
-    false,  // GGML_OP_MAP_CUSTOM2_F32
-    false,  // GGML_OP_MAP_CUSTOM3_F32
-
     false,  // GGML_OP_MAP_CUSTOM1
     false,  // GGML_OP_MAP_CUSTOM2
     false,  // GGML_OP_MAP_CUSTOM3
+
+    false,  // GGML_OP_CUSTOM
 
     false,  // GGML_OP_CROSS_ENTROPY_LOSS
     false,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK

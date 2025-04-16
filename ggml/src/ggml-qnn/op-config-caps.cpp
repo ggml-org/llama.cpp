@@ -184,16 +184,11 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
 
     {}, // GGML_OP_UNARY
 
-    {}, // GGML_OP_MAP_UNARY
-    {}, // GGML_OP_MAP_BINARY
-
-    {}, // GGML_OP_MAP_CUSTOM1_F32
-    {}, // GGML_OP_MAP_CUSTOM2_F32
-    {}, // GGML_OP_MAP_CUSTOM3_F32
-
     {}, // GGML_OP_MAP_CUSTOM1
     {}, // GGML_OP_MAP_CUSTOM2
     {}, // GGML_OP_MAP_CUSTOM3
+
+    {}, // GGML_OP_CUSTOM
 
     {}, // GGML_OP_CROSS_ENTROPY_LOSS
     {}, // GGML_OP_CROSS_ENTROPY_LOSS_BACK
@@ -354,16 +349,11 @@ constexpr const op_constructor_t kOpConstructors[] = {
 
     nullptr,  // GGML_OP_UNARY
 
-    nullptr,  // GGML_OP_MAP_UNARY
-    nullptr,  // GGML_OP_MAP_BINARY
-
-    nullptr,  // GGML_OP_MAP_CUSTOM1_F32
-    nullptr,  // GGML_OP_MAP_CUSTOM2_F32
-    nullptr,  // GGML_OP_MAP_CUSTOM3_F32
-
     nullptr,  // GGML_OP_MAP_CUSTOM1
     nullptr,  // GGML_OP_MAP_CUSTOM2
     nullptr,  // GGML_OP_MAP_CUSTOM3
+
+    nullptr,  // GGML_OP_CUSTOM
 
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK
