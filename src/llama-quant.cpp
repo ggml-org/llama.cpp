@@ -796,7 +796,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                             for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
                                 if (tensor_name.find(allowed) != std::string::npos) {
                                     if  (qtype != new_type) {
-                                        LLAMA_LOG_DEBUG("(overriding %s), ", ggml_type_name(new_type));
+                                        LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
                                         new_type = qtype;
                                         break;
                                     }
