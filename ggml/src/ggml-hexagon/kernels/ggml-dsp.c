@@ -198,7 +198,8 @@ int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
     GGMLHEXAGON_LOG_DEBUG("aheap.heap_base=0x%x, aheap.heap_limit=0x%x", aheap.heap_base, aheap.heap_limit);
     qurt_sysenv_max_hthreads_t mhwt;
     qurt_sysenv_get_max_hw_threads(&mhwt);
-    GGMLHEXAGON_LOG_DEBUG("max hardware threads=%d", mhwt.max_hthreads);
+    GGMLHEXAGON_LOG_DEBUG("max hardware threads counts=%d", mhwt.max_hthreads);
+    g_thread_counts = mhwt.max_hthreads;
 
     return 0;
 }
@@ -211,13 +212,18 @@ int ggmlop_dsp_close(remote_handle64 handle) {
 }
 
 AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled, int32 thread_counts) {
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     HAP_power_request_t request;
     memset(&request, 0, sizeof(HAP_power_request_t));
     request.type = HAP_power_set_apptype;
     request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
 
-    g_thread_counts = thread_counts;
+    GGMLHEXAGON_LOG_DEBUG("user specified thread_counts %d", thread_counts);
+    if (thread_counts > 1)
+        g_thread_counts = (thread_counts > g_thread_counts) ? g_thread_counts : thread_counts;
+    else
+        g_thread_counts = 1;
+    GGMLHEXAGON_LOG_DEBUG("real thread_counts %d", g_thread_counts);
 
     void * ggmop_ctx = (void*)(handle);
     int retval = HAP_power_set(ggmop_ctx, &request);
