@@ -9261,6 +9261,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case 112:
                 case 128:
                 case 256:
+                case 575: // DeepSeek MLA
                     break;
                 default:
                     return false;
