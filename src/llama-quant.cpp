@@ -790,17 +790,25 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 // unless the user specifies a type
                 if (params->tensor_types) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
+                    const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
-                        if (std::regex pattern(tname); std::regex_search(tensor->name, pattern)) {
-                            if (qtype != new_type) {
-                                LLAMA_LOG_DEBUG("(overriding %s -> %s), ", ggml_type_name(new_type), ggml_type_name(qtype));
+                        if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
+                            for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
+                                if (tensor_name.find(allowed) != std::string::npos) {
+                                    if  (qtype != new_type) {
+                                        LLAMA_LOG_DEBUG("(overriding %s), ", ggml_type_name(new_type));
+                                        new_type = qtype;
+                                        break;
+                                    }
+                                }
                             }
-                            new_type = qtype;
-                            break;
+                            goto loop_exit; // if two or more types are specified for the tensor, first match wins
                         }
                     }
                 }
+                loop_exit:;
             }
+
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = params->token_embedding_type;
             }

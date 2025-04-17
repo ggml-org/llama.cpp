@@ -261,7 +261,6 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
         printf("\n%s: missing tensor name\n\n", __func__);
         return false;
     }
-
     if (const size_t qt_len = strlen(sep); qt_len == 1) {
         printf("\n%s: missing quantization type\n\n", __func__);
         return false;
@@ -270,37 +269,15 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     std::string tn(data, tn_len);
     std::transform(tn.begin(), tn.end(), tn.begin(), tolower);
     sep++;
-    const std::string qt(sep);
-
-    bool found = false;
-    for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
-        std::string tensor;
-        tensor = tn.rfind('.') != std::string::npos ? tn.substr(tn.rfind('.') + 1) : tn;
-        // handle special case of cls.output
-        std::string cls_output = "cls.output";
-        if (tn.find(cls_output) != std::string::npos) {
-            tensor = "cls.output";
-        }
-        // check if an allowed tensor exists and it's at the end of the kv string
-        if (tensor == allowed) {
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        printf("\n%s: invalid tensor name '%s'\n\n", __func__, tn.c_str());
-        return false;
-    }
-
-    if (parse_ggml_type(qt.c_str()) == GGML_TYPE_COUNT) {
-        printf("\n%s: invalid quantization type '%s'\n\n", __func__, qt.c_str());
-        return false;
-    }
-
     tensor_quantization tqz;
     tqz.name = tn;
-    tqz.quant = parse_ggml_type(qt.c_str());
+    tqz.quant = parse_ggml_type(sep);
     tensor_type.emplace_back(std::move(tqz));
+    if (tqz.quant == GGML_TYPE_COUNT) {
+        printf("\n%s: invalid quantization type '%s'\n\n", __func__, sep);
+        return false;
+    }
+
     return true;
 }
 
