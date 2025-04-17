@@ -1,5 +1,6 @@
 #include "common.h"
 #include "llama.h"
+#include "llama-quant.h"
 
 #include <cstdio>
 #include <cstring>
@@ -247,52 +248,6 @@ static ggml_type parse_ggml_type(const char * arg) {
     fprintf(stderr, "%s: invalid ggml_type '%s'\n", __func__, arg);
     return GGML_TYPE_COUNT;
 }
-
-// Allowed tensors for arbitrary quantization with --tensor-type option
-static const std::vector<std::string> ALLOWED_TENSOR_TYPE = {
-    "attn_k",
-    "attn_kv_a_mqa",
-    "attn_kv_b",
-    "attn_o",
-    "attn_output",
-    "attn_q",
-    "attn_q_a",
-    "attn_q_b",
-    "attn_qkv",
-    "attn_v",
-    "channel_mix_key",
-    "channel_mix_receptance",
-    "channel_mix_value",
-    "cls",
-    "cls.output",
-    "cross_attn_k",
-    "cross_attn_o",
-    "cross_attn_q",
-    "cross_attn_v",
-    "ffn_act",
-    "ffn_down",
-    "ffn_down_exps",
-    "ffn_down_shexp",
-    "ffn_gate",
-    "ffn_gate_exps",
-    "ffn_gate_shexp",
-    "ffn_up",
-    "ffn_up_exps",
-    "ffn_up_shexp",
-    "ssm_in",
-    "ssm_out",
-    "time_mix_gate",
-    "time_mix_key",
-    "time_mix_output",
-    "time_mix_receptance",
-    "time_mix_value",
-};
-
-// changes to this struct must be replicated in llama-quant.cpp
-struct tensor_quantization {
-    std::string name;
-    ggml_type quant = GGML_TYPE_COUNT;
-};
 
 static bool parse_tensor_type(const char * data, std::vector<tensor_quantization> & tensor_type) {
     const char * sep = strchr(data, '=');
