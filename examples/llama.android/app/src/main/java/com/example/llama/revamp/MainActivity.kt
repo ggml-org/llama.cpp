@@ -4,17 +4,22 @@ import android.llama.cpp.InferenceEngine.State
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.OnBackPressedDispatcher
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -24,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -32,6 +38,10 @@ import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AnimatedNavHost
 import com.example.llama.revamp.ui.components.AppNavigationDrawer
+import com.example.llama.revamp.ui.components.AppScaffold
+import com.example.llama.revamp.ui.components.BottomBarConfig
+import com.example.llama.revamp.ui.components.ScaffoldEvent
+import com.example.llama.revamp.ui.components.TopBarConfig
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
@@ -42,6 +52,8 @@ import com.example.llama.revamp.ui.screens.SettingsGeneralScreen
 import com.example.llama.revamp.ui.theme.LlamaTheme
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.MainViewModel
+import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
+import com.example.llama.revamp.viewmodel.PerformanceViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -66,10 +78,13 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun AppContent(
     mainViewModel: MainViewModel = hiltViewModel(),
+    performanceViewModel: PerformanceViewModel = hiltViewModel(),
+    modelsManagementViewModel: ModelsManagementViewModel = hiltViewModel(),
     conversationViewModel: ConversationViewModel = hiltViewModel(),
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Inference engine state
     val engineState by mainViewModel.engineState.collectAsState()
@@ -87,45 +102,34 @@ fun AppContent(
         }
     }
 
+    // Metric states for scaffolds
+    val memoryUsage by performanceViewModel.memoryUsage.collectAsState()
+    val temperatureInfo by performanceViewModel.temperatureMetrics.collectAsState()
+    val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
+    val storageMetrics by performanceViewModel.storageMetrics.collectAsState()
+
     // Navigation
     val navController = rememberNavController()
     val navigationActions = remember(navController) { NavigationActions(navController) }
     val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute by remember {
+    val currentRoute by remember(navBackStackEntry) {
         derivedStateOf { navBackStackEntry?.destination?.route ?: "" }
     }
     var pendingNavigation by remember { mutableStateOf<(() -> Unit)?>(null) }
-    LaunchedEffect(navController) {
-        navController.addOnDestinationChangedListener { _, destination, _ ->
-            // Log navigation for debugging
-            println("Navigation: ${destination.route}")
-        }
-    }
 
-    // Determine if current route requires model unloading
-    val routeNeedsModelUnloading by remember(currentRoute) {
-        derivedStateOf {
-            currentRoute == AppDestinations.CONVERSATION_ROUTE
-                || currentRoute == AppDestinations.BENCHMARK_ROUTE
-                || currentRoute == AppDestinations.MODEL_LOADING_ROUTE
-        }
-    }
     // Model unloading confirmation
     var showUnloadDialog by remember { mutableStateOf(false) }
     val handleBackWithModelCheck = {
         when {
             isModelUninterruptible -> {
                 // If model is non-interruptible at all, ignore the request
-                true // Mark as handled
             }
             isModelLoaded -> {
                 showUnloadDialog = true
                 pendingNavigation = { navigationActions.navigateUp() }
-                true // Mark as handled
             }
             else -> {
                 navigationActions.navigateUp()
-                true // Mark as handled
             }
         }
     }
@@ -142,128 +146,260 @@ fun AppContent(
     }
     val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
-    // Register a system back handler for screens that need unload confirmation
-    val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
-    DisposableEffect(lifecycleOwner, backDispatcher, currentRoute, isModelLoaded) {
-        val callback = object : OnBackPressedCallback(
-            // Only enable for screens that need model unloading confirmation
-            routeNeedsModelUnloading && isModelLoaded
-        ) {
-            override fun handleOnBackPressed() {
-                handleBackWithModelCheck()
+    // Create scaffold's top & bottom bar configs based on current route
+    val topBarConfig = when (currentRoute) {
+        // (Home) Model selection screen
+        AppDestinations.MODEL_SELECTION_ROUTE -> {
+            TopBarConfig.Default(
+                title = "Models",
+                navigationIcon = TopBarConfig.NavigationIcon.Menu(openDrawer)
+            )
+        }
+
+        // Settings screen
+        AppDestinations.SETTINGS_GENERAL_ROUTE -> {
+            TopBarConfig.Default(
+                title = "Settings",
+                navigationIcon = TopBarConfig.NavigationIcon.Back { navigationActions.navigateUp() }
+            )
+        }
+
+        // Storage management screen
+        AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
+            TopBarConfig.Storage(
+                title = "Models Management",
+                navigationIcon = TopBarConfig.NavigationIcon.Back { navigationActions.navigateUp() },
+                storageMetrics = storageMetrics
+            )
+        }
+
+        // Model loading screen
+        AppDestinations.MODEL_LOADING_ROUTE -> {
+            TopBarConfig.Performance(
+                title = "Load Model",
+                navigationIcon = TopBarConfig.NavigationIcon.Back(handleBackWithModelCheck),
+                memoryMetrics = memoryUsage,
+                temperatureInfo = null
+            )
+        }
+
+        // Benchmark and Conversation screens
+        AppDestinations.BENCHMARK_ROUTE, AppDestinations.CONVERSATION_ROUTE -> {
+            TopBarConfig.Performance(
+                title = when(currentRoute) {
+                    AppDestinations.CONVERSATION_ROUTE -> "Chat"
+                    AppDestinations.BENCHMARK_ROUTE -> "Benchmark"
+                    else -> "LlamaAndroid"
+                },
+                navigationIcon = TopBarConfig.NavigationIcon.Back(handleBackWithModelCheck),
+                memoryMetrics = memoryUsage,
+                temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+            )
+        }
+
+        // Fallback for unknown routes
+        else -> {
+            TopBarConfig.Default(
+                title = "LlamaAndroid",
+                navigationIcon = TopBarConfig.NavigationIcon.None
+            )
+        }
+    }
+
+    val bottomBarConfig = when (currentRoute) {
+        AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
+            // Collect the needed states
+            val sortOrder by modelsManagementViewModel.sortOrder.collectAsState()
+            val isMultiSelectionMode by modelsManagementViewModel.isMultiSelectionMode.collectAsState()
+            val selectedModels by modelsManagementViewModel.selectedModels.collectAsState()
+            val showSortMenu by modelsManagementViewModel.showSortMenu.collectAsState()
+            val showImportModelMenu by modelsManagementViewModel.showImportModelMenu.collectAsState()
+
+            // Create file launcher for importing local models
+            val fileLauncher = rememberLauncherForActivityResult(
+                contract = ActivityResultContracts.OpenDocument()
+            ) { uri -> uri?.let { modelsManagementViewModel.localModelFileSelected(it) } }
+
+            BottomBarConfig.ModelsManagement(
+                isMultiSelectionMode = isMultiSelectionMode,
+                selectedModels = selectedModels,
+                onSelectAll = { modelsManagementViewModel.selectAllModels() },
+                onDeselectAll = { modelsManagementViewModel.clearSelectedModels() },
+                onDeleteSelected = {
+                    if (selectedModels.isNotEmpty()) {
+                        modelsManagementViewModel.batchDeletionClicked(selectedModels.toMap())
+                    }
+                },
+                onSortClicked = { modelsManagementViewModel.toggleSortMenu(true) },
+                onFilterClicked = { /* TODO: implement filtering */ },
+                onDeleteModeClicked = { modelsManagementViewModel.setMultiSelectionMode(true) },
+                onAddModelClicked = { modelsManagementViewModel.toggleImportMenu(true) },
+                onExitSelectionMode = { modelsManagementViewModel.setMultiSelectionMode(false) },
+                showSortMenu = showSortMenu,
+                onSortMenuDismissed = { modelsManagementViewModel.toggleSortMenu(false) },
+                currentSortOrder = sortOrder,
+                onSortOptionSelected = {
+                    modelsManagementViewModel.setSortOrder(it)
+                    modelsManagementViewModel.toggleSortMenu(false)
+                },
+                showImportModelMenu = showImportModelMenu,
+                onImportMenuDismissed = { modelsManagementViewModel.toggleImportMenu(false) },
+                onImportLocalModelClicked = {
+                    fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                    modelsManagementViewModel.toggleImportMenu(false)
+                },
+                onImportHuggingFaceClicked = {
+                    modelsManagementViewModel.importFromHuggingFace()
+                    modelsManagementViewModel.toggleImportMenu(false)
+                }
+            )
+        }
+        else -> BottomBarConfig.None
+    }
+
+    // Handle child screens' scaffold events
+    val handleScaffoldEvent: (ScaffoldEvent) -> Unit = { event ->
+        when (event) {
+            is ScaffoldEvent.ShowSnackbar -> {
+                coroutineScope.launch {
+                    if (event.actionLabel != null && event.onAction != null) {
+                        val result = snackbarHostState.showSnackbar(
+                            message = event.message,
+                            actionLabel = event.actionLabel,
+                            withDismissAction = event.withDismissAction,
+                            duration = event.duration
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            event.onAction()
+                        }
+                    } else {
+                        snackbarHostState.showSnackbar(
+                            message = event.message,
+                            withDismissAction = event.withDismissAction,
+                            duration = event.duration
+                        )
+                    }
+                }
+            }
+            is ScaffoldEvent.ChangeTitle -> {
+                // TODO-han.yin: TBD
             }
         }
-
-        backDispatcher?.addCallback(lifecycleOwner, callback)
-
-        // Remove the callback when the effect leaves the composition
-        onDispose {
-            callback.remove()
-        }
-    }
-    // Added protection to handle Compose-based back navigation
-    BackHandler(
-        enabled = routeNeedsModelUnloading && isModelLoaded
-            && drawerState.currentValue == DrawerValue.Closed
-    ) {
-        handleBackWithModelCheck()
     }
 
-    // Main Content with navigation drawer wrapper
+    // Register system back handler
+    BackHandlerSetup(
+        lifecycleOwner = lifecycleOwner,
+        backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher,
+        currentRoute = currentRoute,
+        isModelLoaded = isModelLoaded,
+        handleBackWithModelCheck = handleBackWithModelCheck
+    )
+
+    // Main UI hierarchy
     AppNavigationDrawer(
         drawerState = drawerState,
         navigationActions = navigationActions,
         gesturesEnabled = drawerGesturesEnabled,
         currentRoute = currentRoute
     ) {
-        AnimatedNavHost(
-            navController = navController,
-            startDestination = AppDestinations.MODEL_SELECTION_ROUTE
-        ) {
-            // Model Selection Screen
-            composable(AppDestinations.MODEL_SELECTION_ROUTE) {
-                ModelSelectionScreen(
-                    onModelSelected = { modelInfo ->
-                        navigationActions.navigateToModelLoading()
-                    },
-                    onManageModelsClicked = {
-                        navigationActions.navigateToModelsManagement()
-                    },
-                    onMenuClicked = openDrawer,
-                )
-            }
+        // The AppScaffold now uses the config we created
+        AppScaffold(
+            topBarconfig = topBarConfig,
+            bottomBarConfig = bottomBarConfig,
+            snackbarHostState = snackbarHostState,
+        ) { paddingValues ->
+            // AnimatedNavHost inside the scaffold content
+            AnimatedNavHost(
+                navController = navController,
+                startDestination = AppDestinations.MODEL_SELECTION_ROUTE,
+                modifier = Modifier.padding(paddingValues)
+            ) {
+                // Model Selection Screen
+                composable(AppDestinations.MODEL_SELECTION_ROUTE) {
+                    ModelSelectionScreen(
+                        onModelSelected = { modelInfo ->
+                            navigationActions.navigateToModelLoading()
+                        },
+                        onManageModelsClicked = {
+                            navigationActions.navigateToModelsManagement()
+                        },
+                    )
+                }
 
-            // Mode Selection Screen
-            composable(AppDestinations.MODEL_LOADING_ROUTE) {
-                ModelLoadingScreen(
-                    engineState = engineState,
-                    onBenchmarkSelected = { prepareJob ->
-                        // Wait for preparation to complete, then navigate if still active
-                        val loadingJob = coroutineScope.launch {
-                            prepareJob.join()
-                            if (isActive) { navigationActions.navigateToBenchmark() }
+                // Mode Selection Screen
+                composable(AppDestinations.MODEL_LOADING_ROUTE) {
+                    ModelLoadingScreen(
+                        engineState = engineState,
+                        onBenchmarkSelected = { prepareJob ->
+                            // Wait for preparation to complete, then navigate if still active
+                            val loadingJob = coroutineScope.launch {
+                                prepareJob.join()
+                                if (isActive) { navigationActions.navigateToBenchmark() }
+                            }
+
+                            pendingNavigation = {
+                                prepareJob.cancel()
+                                loadingJob.cancel()
+                                navigationActions.navigateUp()
+                            }
+                        },
+                        onConversationSelected = { systemPrompt, prepareJob ->
+                            // Wait for preparation to complete, then navigate if still active
+                            val loadingJob = coroutineScope.launch {
+                                prepareJob.join()
+                                if (isActive) { navigationActions.navigateToConversation() }
+                            }
+
+                            pendingNavigation = {
+                                prepareJob.cancel()
+                                loadingJob.cancel()
+                                navigationActions.navigateUp()
+                            }
+                        },
+                        onBackPressed = {
+                            // Need to unload model before going back
+                            handleBackWithModelCheck()
+                        },
+                    )
+                }
+
+                // Benchmark Screen
+                composable(AppDestinations.BENCHMARK_ROUTE) {
+                    BenchmarkScreen(
+                        onBackPressed = {
+                            // Need to unload model before going back
+                            handleBackWithModelCheck()
                         }
+                    )
+                }
 
-                        pendingNavigation = {
-                            prepareJob.cancel()
-                            loadingJob.cancel()
-                            navigationActions.navigateUp()
-                        }
-                    },
-                    onConversationSelected = { systemPrompt, prepareJob ->
-                        // Wait for preparation to complete, then navigate if still active
-                        val loadingJob = coroutineScope.launch {
-                            prepareJob.join()
-                            if (isActive) { navigationActions.navigateToConversation() }
-                        }
+                // Conversation Screen
+                composable(AppDestinations.CONVERSATION_ROUTE) {
+                    ConversationScreen(
+                        onBackPressed = {
+                            // Need to unload model before going back
+                            handleBackWithModelCheck()
+                        },
+                        viewModel = conversationViewModel
+                    )
+                }
 
-                        pendingNavigation = {
-                            prepareJob.cancel()
-                            loadingJob.cancel()
-                            navigationActions.navigateUp()
-                        }
-                    },
-                    onBackPressed = {
-                        // Need to unload model before going back
-                        handleBackWithModelCheck()
-                    },
-                )
-            }
+                // Settings General Screen
+                composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
+                    SettingsGeneralScreen(
+                        onBackPressed = { navigationActions.navigateUp() },
+                    )
+                }
 
-            // Benchmark Screen
-            composable(AppDestinations.BENCHMARK_ROUTE) {
-                BenchmarkScreen(
-                    onBackPressed = {
-                        // Need to unload model before going back
-                        handleBackWithModelCheck()
-                    }
-                )
-            }
-
-            // Conversation Screen
-            composable(AppDestinations.CONVERSATION_ROUTE) {
-                ConversationScreen(
-                    onBackPressed = {
-                        // Need to unload model before going back
-                        handleBackWithModelCheck()
-                    },
-                    viewModel = conversationViewModel
-                )
-            }
-
-            // Settings General Screen
-            composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
-                SettingsGeneralScreen(
-                    onBackPressed = { navigationActions.navigateUp() },
-                    onMenuClicked = openDrawer
-                )
-            }
-
-            // Models Management Screen
-            composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
-                ModelsManagementScreen(
-                    onBackPressed = { navigationActions.navigateUp() },
-                )
+                // Models Management Screen
+                composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
+                    ModelsManagementScreen(
+                        onBackPressed = { navigationActions.navigateUp() },
+                        onScaffoldEvent = handleScaffoldEvent,
+                        viewModel = modelsManagementViewModel
+                    )
+                }
             }
         }
     }
@@ -276,6 +412,7 @@ fun AppContent(
             onConfirm = {
                 isUnloading = true
                 coroutineScope.launch {
+                    // TODO-han.yin: Clear conversation upon normal exiting
                     // Handle screen specific cleanups
                     when(engineState) {
                         is State.Benchmarking -> {}
@@ -299,5 +436,41 @@ fun AppContent(
             },
             isUnloading = isUnloading
         )
+    }
+}
+
+@Composable
+private fun BackHandlerSetup(
+    lifecycleOwner: LifecycleOwner,
+    backDispatcher: OnBackPressedDispatcher?,
+    currentRoute: String,
+    isModelLoaded: Boolean,
+    handleBackWithModelCheck: () -> Unit
+) {
+    val routeNeedsModelUnloading = currentRoute in listOf(
+        AppDestinations.CONVERSATION_ROUTE,
+        AppDestinations.BENCHMARK_ROUTE,
+        AppDestinations.MODEL_LOADING_ROUTE
+    )
+
+    DisposableEffect(lifecycleOwner, backDispatcher, currentRoute, isModelLoaded) {
+        android.util.Log.w("JOJO", "BackHandlerSetup: currentRoute: $currentRoute")
+
+        val callback = object : OnBackPressedCallback(
+            routeNeedsModelUnloading && isModelLoaded
+        ) {
+            override fun handleOnBackPressed() {
+                handleBackWithModelCheck()
+            }
+        }
+
+        backDispatcher?.addCallback(lifecycleOwner, callback)
+        onDispose { callback.remove() }
+    }
+
+    BackHandler(
+        enabled = routeNeedsModelUnloading && isModelLoaded
+    ) {
+        handleBackWithModelCheck()
     }
 }

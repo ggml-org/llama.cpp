@@ -52,12 +52,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
-import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.Message
 import kotlinx.coroutines.launch
@@ -113,46 +111,39 @@ fun ConversationScreen(
         }
     }
 
-    PerformanceAppScaffold(
-        title = "Chat",
-        onNavigateBack = onBackPressed,
-        showTemperature = true
-    ) { paddingValues ->
-        Column(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+    ) {
+        // System prompt display (collapsible)
+        selectedModel?.let {
+            ModelCardWithSystemPrompt(it, systemPrompt)
+        }
+
+        // Messages list
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
+                .weight(1f)
+                .fillMaxWidth()
         ) {
-            // System prompt display (collapsible)
-            selectedModel?.let {
-                ModelCardWithSystemPrompt(it, systemPrompt)
-            }
-
-            // Messages list
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                ConversationMessageList(
-                    messages = messages,
-                    listState = listState,
-                )
-            }
-
-            // Input area
-            ConversationInputField(
-                value = inputText,
-                onValueChange = { inputText = it },
-                onSendClick = {
-                    if (inputText.isNotBlank()) {
-                        viewModel.sendMessage(inputText)
-                        inputText = ""
-                    }
-                },
-                isEnabled = !isProcessing && !isGenerating
+            ConversationMessageList(
+                messages = messages,
+                listState = listState,
             )
         }
+
+        // Input area
+        ConversationInputField(
+            value = inputText,
+            onValueChange = { inputText = it },
+            onSendClick = {
+                if (inputText.isNotBlank()) {
+                    viewModel.sendMessage(inputText)
+                    inputText = ""
+                }
+            },
+            isEnabled = !isProcessing && !isGenerating
+        )
     }
 }
 
@@ -187,6 +178,7 @@ fun MessageBubble(message: Message) {
             formattedTime = message.formattedTime,
             content = message.content
         )
+
         is Message.Assistant.Ongoing -> AssistantMessageBubble(
             formattedTime = message.formattedTime,
             content = message.content,
@@ -194,6 +186,7 @@ fun MessageBubble(message: Message) {
             isComplete = false,
             metrics = null
         )
+
         is Message.Assistant.Completed -> AssistantMessageBubble(
             formattedTime = message.formattedTime,
             content = message.content,
@@ -301,7 +294,9 @@ fun AssistantMessageBubble(
 
             // Show metrics or generation status below the bubble
             Row(
-                modifier = Modifier.height(20.dp).padding(top = 4.dp),
+                modifier = Modifier
+                    .height(20.dp)
+                    .padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (!isComplete) {

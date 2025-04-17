@@ -1,8 +1,6 @@
 package com.example.llama.revamp.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,63 +14,33 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ClearAll
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteSweep
-import androidx.compose.material.icons.filled.FilterAlt
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
-import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.llama.R
-import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.ModelCardActions
-import com.example.llama.revamp.ui.components.StorageAppScaffold
+import com.example.llama.revamp.ui.components.ScaffoldEvent
 import com.example.llama.revamp.util.formatSize
 import com.example.llama.revamp.viewmodel.ModelManagementState
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
 import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
-import com.example.llama.revamp.viewmodel.ModelSortOrder
 import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
-import kotlinx.coroutines.launch
 
 /**
  * Screen for managing LLM models (view, download, delete)
@@ -80,381 +48,150 @@ import kotlinx.coroutines.launch
 @Composable
 fun ModelsManagementScreen(
     onBackPressed: () -> Unit,
-    viewModel: ModelsManagementViewModel = hiltViewModel()
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
+    viewModel: ModelsManagementViewModel,
 ) {
-    val coroutineScope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
-
     // ViewModel states
-    val storageMetrics by viewModel.storageMetrics.collectAsState()
-    val sortOrder by viewModel.sortOrder.collectAsState()
     val sortedModels by viewModel.sortedModels.collectAsState()
     val managementState by viewModel.managementState.collectAsState()
 
-    // UI state: sorting
-    var showSortMenu by remember { mutableStateOf(false) }
-
-    // UI state: importing
-    var showImportModelMenu by remember { mutableStateOf(false) }
-    val fileLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri -> uri?.let { viewModel.localModelFileSelected(it) } }
-
-    // UI state: multi-selecting
-    var isMultiSelectionMode by remember { mutableStateOf(false) }
-    val selectedModels = remember { mutableStateMapOf<String, ModelInfo>() }
-    val exitSelectionMode = {
-        isMultiSelectionMode = false
-        selectedModels.clear()
-    }
+    // Selection state from ViewModel
+    val isMultiSelectionMode by viewModel.isMultiSelectionMode.collectAsState()
+    val selectedModels by viewModel.selectedModels.collectAsState()
 
     BackHandler(
-        enabled = managementState is Importation.Importing || isMultiSelectionMode
+        enabled = isMultiSelectionMode
+            || managementState is Importation.Importing
             || managementState is Deletion.Deleting
     ) {
         if (isMultiSelectionMode) {
             // Exit selection mode if in selection mode
-            exitSelectionMode()
+            viewModel.setMultiSelectionMode(false)
         } else {
             /* Ignore back press while processing model management requests */
         }
     }
 
-    StorageAppScaffold(
-        title = "Models Management",
-        storageUsed = storageMetrics?.usedGB ?: 0f,
-        storageTotal = storageMetrics?.totalGB ?: 0f,
-        onNavigateBack = onBackPressed,
-        snackbarHostState = snackbarHostState,
-        bottomBar = {
-            BottomAppBar(
-                actions = {
-                    if (isMultiSelectionMode) {
-                        // Multi-selection mode actions
-                        IconButton(onClick = {
-                            // Select all
-                            selectedModels.putAll(sortedModels.map { it.id to it })
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.SelectAll,
-                                contentDescription = "Select all"
-                            )
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Model cards
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+        ) {
+            items(items = sortedModels, key = { it.id }) { model ->
+                ModelCard(
+                    model = model,
+                    onClick = {
+                        if (isMultiSelectionMode) {
+                            viewModel.toggleModelSelection(model.id)
+                        } else {
+                            viewModel.viewModelDetails(model.id)
                         }
-
-                        IconButton(onClick = {
-                            // Deselect all
-                            selectedModels.clear()
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.ClearAll,
-                                contentDescription = "Deselect all"
-                            )
-                        }
-
-                        IconButton(
-                            onClick = {
-                                if (selectedModels.isNotEmpty()) {
-                                    viewModel.batchDeletionClicked(selectedModels.toMap())
-                                }
-                            },
-                            enabled = selectedModels.isNotEmpty()
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Delete,
-                                contentDescription = "Delete selected",
-                                tint = if (selectedModels.isNotEmpty())
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                            )
-                        }
-                    } else {
-                        // Default mode actions
-                        IconButton(onClick = { showSortMenu = true }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.Sort,
-                                contentDescription = "Sort models"
-                            )
-                        }
-
-                        // Sort dropdown menu
-                        DropdownMenu(
-                            expanded = showSortMenu,
-                            onDismissRequest = { showSortMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Name (A-Z)") },
-                                trailingIcon = {
-                                    if (sortOrder == ModelSortOrder.NAME_ASC)
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sort by name in ascending order, selected"
-                                        )
-                                },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.NAME_ASC)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Name (Z-A)") },
-                                trailingIcon = {
-                                    if (sortOrder == ModelSortOrder.NAME_DESC)
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sort by name in descending order, selected"
-                                        )
-                                },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.NAME_DESC)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Size (Smallest first)") },
-                                trailingIcon = {
-                                    if (sortOrder == ModelSortOrder.SIZE_ASC)
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sort by size in ascending order, selected"
-                                        )
-                                },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.SIZE_ASC)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Size (Largest first)") },
-                                trailingIcon = {
-                                    if (sortOrder == ModelSortOrder.SIZE_DESC)
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sort by size in descending order, selected"
-                                        )
-                                },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.SIZE_DESC)
-                                    showSortMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Last used") },
-                                trailingIcon = {
-                                    if (sortOrder == ModelSortOrder.LAST_USED)
-                                        Icon(
-                                            imageVector = Icons.Default.Check,
-                                            contentDescription = "Sort by last used, selected"
-                                        )
-                                },
-                                onClick = {
-                                    viewModel.setSortOrder(ModelSortOrder.LAST_USED)
-                                    showSortMenu = false
-                                }
-                            )
-                        }
-
-                        IconButton(
-                            onClick = {/* TODO-han.yin: implement filtering once metadata ready */ }
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.FilterAlt,
-                                contentDescription = "Filter models"
-                            )
-                        }
-
-                        IconButton(onClick = {
-                            isMultiSelectionMode = true
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteSweep,
-                                contentDescription = "Delete models"
-                            )
-                        }
-                    }
-                },
-                floatingActionButton = {
-                    FloatingActionButton(
-                        onClick = {
-                            if (isMultiSelectionMode) {
-                                exitSelectionMode()
-                            } else {
-                                showImportModelMenu = true
-                            }
-                        },
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Icon(
-                            imageVector = if (isMultiSelectionMode) Icons.Default.Close else Icons.Default.Add,
-                            contentDescription = if (isMultiSelectionMode) "Exit selection mode" else "Add model"
-                        )
-                    }
-
-                    // Add model dropdown menu
-                    DropdownMenu(
-                        expanded = showImportModelMenu,
-                        onDismissRequest = { showImportModelMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Import local model") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.FolderOpen,
-                                    contentDescription = "Import a local model on the device"
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp),
+                    isSelected =
+                        if (isMultiSelectionMode) selectedModels.contains(model.id) else null,
+                    actionButton =
+                        if (!isMultiSelectionMode) {
+                            {
+                                ModelCardActions.InfoButton(
+                                    onClick = { viewModel.viewModelDetails(model.id) }
                                 )
-                            },
-                            onClick = {
-                                fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
-                                showImportModelMenu = false
                             }
+                        } else null
+                )
+            }
+        }
+
+        // Model import progress overlay
+        when (val state = managementState) {
+            is Importation.Confirming -> {
+                ImportProgressDialog(
+                    fileName = state.fileName,
+                    fileSize = state.fileSize,
+                    isImporting = false,
+                    progress = 0.0f,
+                    onConfirm = {
+                        viewModel.importLocalModelFile(state.uri, state.fileName, state.fileSize)
+                    },
+                    onCancel = { viewModel.resetManagementState() }
+                )
+            }
+
+            is Importation.Importing -> {
+                ImportProgressDialog(
+                    fileName = state.fileName,
+                    fileSize = state.fileSize,
+                    isImporting = true,
+                    isCancelling = state.isCancelling,
+                    progress = state.progress,
+                    onConfirm = {},
+                    onCancel = { viewModel.cancelOngoingLocalModelImport() },
+                )
+            }
+
+            is Importation.Error -> {
+                ErrorDialog(
+                    title = "Import Failed",
+                    message = state.message,
+                    onDismiss = { viewModel.resetManagementState() }
+                )
+            }
+
+            is Importation.Success -> {
+                LaunchedEffect(state) {
+                    onScaffoldEvent(
+                        ScaffoldEvent.ShowSnackbar(
+                            message = "Imported model: ${state.model.name}"
                         )
-                        DropdownMenuItem(
-                            text = { Text("Download from HuggingFace") },
-                            leadingIcon = {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.logo_huggingface),
-                                    contentDescription = "Browse and download a model from HuggingFace",
-                                    modifier = Modifier.size(24.dp),
-                                    tint = Color.Unspecified,
-                                )
-                            },
-                            onClick = {
-                                viewModel.importFromHuggingFace()
-                                showImportModelMenu = false
-                            }
-                        )
-                    }
+                    )
+
+                    viewModel.resetManagementState()
                 }
-            )
-        },
-    ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize()) {
-            // Model cards
-            LazyColumn(
-                modifier = Modifier.padding(paddingValues).fillMaxSize().padding(16.dp)
-            ) {
-                items(items = sortedModels, key = { it.id }) { model ->
-                    ModelCard(
-                        model = model,
-                        onClick = {
-                            if (isMultiSelectionMode) {
-                                // Toggle selection
-                                if (selectedModels.contains(model.id)) {
-                                    selectedModels.remove(model.id)
-                                } else {
-                                    selectedModels.put(model.id, sortedModels.first { it.id == model.id } )
-                                }
-                            } else {
-                                // View model details
-                                viewModel.viewModelDetails(model.id)
-                            }
-                        },
-                        modifier = Modifier.padding(bottom = 8.dp),
-                        isSelected =
-                            if (isMultiSelectionMode) selectedModels.contains(model.id) else null,
-                        actionButton =
-                            if (!isMultiSelectionMode) {
-                                {
-                                    ModelCardActions.InfoButton(
-                                        onClick = { viewModel.viewModelDetails(model.id) }
-                                    )
-                                }
-                            } else null
+            }
+
+            is Deletion.Confirming -> {
+                BatchDeleteConfirmationDialog(
+                    count = state.models.size,
+                    onConfirm = { viewModel.deleteModels(state.models) },
+                    onDismiss = { viewModel.resetManagementState() },
+                    isDeleting = false
+                )
+            }
+
+            is Deletion.Deleting -> {
+                BatchDeleteConfirmationDialog(
+                    count = state.models.size,
+                    onConfirm = { /* No-op during processing */ },
+                    onDismiss = { /* No-op during processing */ },
+                    isDeleting = true
+                )
+            }
+
+            is Deletion.Error -> {
+                ErrorDialog(
+                    title = "Deletion Failed",
+                    message = state.message,
+                    onDismiss = { viewModel.resetManagementState() }
+                )
+            }
+
+            is Deletion.Success -> {
+                LaunchedEffect(state) {
+                    viewModel.setMultiSelectionMode(false)
+
+                    val count = state.models.size
+                    onScaffoldEvent(
+                        ScaffoldEvent.ShowSnackbar(
+                            message = "Deleted $count ${if (count > 1) "models" else "model"}.",
+                            duration = SnackbarDuration.Long
+                        )
                     )
                 }
             }
 
-            // Model import progress overlay
-            when (val state = managementState) {
-                is Importation.Confirming -> {
-                    ImportProgressDialog(
-                        fileName = state.fileName,
-                        fileSize = state.fileSize,
-                        isImporting = false,
-                        progress = 0.0f,
-                        onConfirm = {
-                            viewModel.importLocalModelFile(
-                                state.uri, state.fileName, state.fileSize
-                            )
-                        },
-                        onCancel = { viewModel.resetManagementState() }
-                    )
-                }
-
-                is Importation.Importing -> {
-                    ImportProgressDialog(
-                        fileName = state.fileName,
-                        fileSize = state.fileSize,
-                        isImporting = true,
-                        isCancelling = state.isCancelling,
-                        progress = state.progress,
-                        onConfirm = {},
-                        onCancel = { viewModel.cancelOngoingLocalModelImport() },
-                    )
-                }
-
-                is Importation.Error -> {
-                    ErrorDialog(
-                        title = "Import Failed",
-                        message = state.message,
-                        onDismiss = { viewModel.resetManagementState() }
-                    )
-                }
-
-                is Importation.Success -> {
-                    LaunchedEffect(state) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar(
-                                message = "Imported model: ${state.model.name}",
-                                duration = SnackbarDuration.Short
-                            )
-                        }
-                        viewModel.resetManagementState()
-                    }
-                }
-
-                is Deletion.Confirming -> {
-                    BatchDeleteConfirmationDialog(
-                        count = state.models.size,
-                        onConfirm = { viewModel.deleteModels(state.models) },
-                        onDismiss = { viewModel.resetManagementState() },
-                        isDeleting = false
-                    )
-                }
-
-                is Deletion.Deleting -> {
-                    BatchDeleteConfirmationDialog(
-                        count = state.models.size,
-                        onConfirm = { /* No-op during processing */ },
-                        onDismiss = { /* No-op during processing */ },
-                        isDeleting = true
-                    )
-                }
-
-                is Deletion.Error -> {
-                    ErrorDialog(
-                        title = "Deletion Failed",
-                        message = state.message,
-                        onDismiss = { viewModel.resetManagementState() }
-                    )
-                }
-
-                is Deletion.Success -> {
-                    LaunchedEffect(state) {
-                        exitSelectionMode()
-                        coroutineScope.launch {
-                            val count = state.models.size
-                            snackbarHostState.showSnackbar(
-                                message = "Deleted $count ${if (count > 1) "models" else "model"}.",
-                                duration = SnackbarDuration.Long
-                            )
-                        }
-
-                    }
-                }
-
-                is ModelManagementState.Idle -> { /* Idle state, nothing to show */  }
-            }
+            is ModelManagementState.Idle -> { /* Idle state, nothing to show */ }
         }
     }
 }

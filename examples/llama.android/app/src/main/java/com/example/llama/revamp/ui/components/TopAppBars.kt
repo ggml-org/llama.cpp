@@ -22,9 +22,47 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.llama.revamp.data.repository.StorageMetrics
 import com.example.llama.revamp.monitoring.MemoryMetrics
 import com.example.llama.revamp.monitoring.TemperatureMetrics
 import com.example.llama.revamp.monitoring.TemperatureWarningLevel
+import java.util.Locale
+
+/**
+ * [TopAppBar] configurations
+ */
+sealed class TopBarConfig {
+    abstract val title: String
+    abstract val navigationIcon: NavigationIcon
+
+    // Data class for performance monitoring scaffolds
+    data class Performance(
+        override val title: String,
+        override val navigationIcon: NavigationIcon,
+        val memoryMetrics: MemoryMetrics,
+        val temperatureInfo: Pair<TemperatureMetrics, Boolean>?,
+    ) : TopBarConfig()
+
+    // Data class for storage management scaffolds
+    data class Storage(
+        override val title: String,
+        override val navigationIcon: NavigationIcon,
+        val storageMetrics: StorageMetrics?
+    ) : TopBarConfig()
+
+    // Data class for default/simple scaffolds
+    data class Default(
+        override val title: String,
+        override val navigationIcon: NavigationIcon
+    ) : TopBarConfig()
+
+    // Helper class for navigation icon configuration
+    sealed class NavigationIcon {
+        data class Menu(val onMenuOpen: () -> Unit) : NavigationIcon()
+        data class Back(val onNavigateBack: () -> Unit) : NavigationIcon()
+        object None : NavigationIcon()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,8 +156,7 @@ fun PerformanceTopBar(
 @Composable
 fun StorageTopBar(
     title: String,
-    storageUsed: Float,
-    storageTotal: Float,
+    storageMetrics: StorageMetrics?,
     onNavigateBack: (() -> Unit)? = null,
 ) {
     TopAppBar(
@@ -135,7 +172,7 @@ fun StorageTopBar(
             }
         },
         actions = {
-            StorageIndicator(usedGB = storageUsed, totalGB = storageTotal)
+            StorageIndicator(storageMetrics = storageMetrics)
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -159,10 +196,10 @@ fun MemoryIndicator(memoryUsage: MemoryMetrics) {
 
         Spacer(modifier = Modifier.width(4.dp))
 
-        val memoryText = String.format("%.1f / %.1f GB", memoryUsage.availableGb, memoryUsage.totalGb)
-
         Text(
-            text = memoryText,
+            text = String.format(
+                Locale.getDefault(), "%.1f / %.1f GB", memoryUsage.availableGb, memoryUsage.totalGb
+            ),
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -199,14 +236,23 @@ fun TemperatureIndicator(temperatureMetrics: TemperatureMetrics, useFahrenheit: 
 }
 
 @Composable
-fun StorageIndicator(usedGB: Float, totalGB: Float) {
+fun StorageIndicator(storageMetrics: StorageMetrics?) {
+    val usedGb = storageMetrics?.usedGB
+    val totalGb = storageMetrics?.totalGB
+    val usedRatio = if (usedGb != null && totalGb != null && totalGb > 0.0f) {
+        usedGb / totalGb
+    } else {
+        null
+    }
+
     Row(modifier = Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = Icons.Default.SdStorage,
             contentDescription = "Storage",
             tint = when {
-                usedGB / totalGB > 0.9f -> MaterialTheme.colorScheme.error
-                usedGB / totalGB > 0.7f -> MaterialTheme.colorScheme.tertiary
+                usedRatio == null -> MaterialTheme.colorScheme.onSurface
+                usedRatio > 0.9f -> MaterialTheme.colorScheme.error
+                usedRatio > 0.7f -> MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.onSurface
             }
         )
@@ -214,7 +260,9 @@ fun StorageIndicator(usedGB: Float, totalGB: Float) {
         Spacer(modifier = Modifier.width(2.dp))
 
         Text(
-            text = String.format("%.1f / %.1f GB", usedGB, totalGB),
+            text = storageMetrics?.let {
+                String.format(Locale.getDefault(), "%.1f / %.1f GB", it.usedGB, it.totalGB)
+            } ?: String.format(Locale.getDefault(), " - / - GB"),
             style = MaterialTheme.typography.bodySmall
         )
     }

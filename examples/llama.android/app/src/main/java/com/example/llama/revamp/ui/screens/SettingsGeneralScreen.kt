@@ -21,7 +21,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.llama.revamp.ui.components.DefaultAppScaffold
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
 /**
@@ -31,76 +30,68 @@ import com.example.llama.revamp.viewmodel.PerformanceViewModel
 fun SettingsGeneralScreen(
     performanceViewModel: PerformanceViewModel = hiltViewModel(),
     onBackPressed: () -> Unit,
-    onMenuClicked: () -> Unit
 ) {
     // Collect state from ViewModel
     val isMonitoringEnabled by performanceViewModel.isMonitoringEnabled.collectAsState()
     val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
 
-    DefaultAppScaffold(
-        title = "Settings",
-        onNavigateBack = onBackPressed,
-        onMenuOpen = onMenuClicked
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            SettingsCategory(title = "Performance Monitoring") {
-                SettingsSwitch(
-                    title = "Enable Monitoring",
-                    description = "Display memory, battery and temperature information",
-                    checked = isMonitoringEnabled,
-                    onCheckedChange = { performanceViewModel.setMonitoringEnabled(it) }
-                )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        SettingsCategory(title = "Performance Monitoring") {
+            SettingsSwitch(
+                title = "Enable Monitoring",
+                description = "Display memory, battery and temperature information",
+                checked = isMonitoringEnabled,
+                onCheckedChange = { performanceViewModel.setMonitoringEnabled(it) }
+            )
 
-                SettingsSwitch(
-                    title = "Use Fahrenheit",
-                    description = "Display temperature in Fahrenheit instead of Celsius",
-                    checked = useFahrenheit,
-                    onCheckedChange = { performanceViewModel.setUseFahrenheitUnit(it) }
-                )
-            }
+            SettingsSwitch(
+                title = "Use Fahrenheit",
+                description = "Display temperature in Fahrenheit instead of Celsius",
+                checked = useFahrenheit,
+                onCheckedChange = { performanceViewModel.setUseFahrenheitUnit(it) }
+            )
+        }
 
-            SettingsCategory(title = "Theme") {
-                SettingsSwitch(
-                    title = "Dark Theme",
-                    description = "Use dark theme throughout the app",
-                    checked = true, // This would be connected to theme state in a real app
-                    onCheckedChange = {
-                        /* TODO-hyin: Implement theme switching between Auto, Light and Dark */
-                    }
-                )
-            }
+        SettingsCategory(title = "Theme") {
+            SettingsSwitch(
+                title = "Dark Theme",
+                description = "Use dark theme throughout the app",
+                checked = true, // This would be connected to theme state in a real app
+                onCheckedChange = {
+                    /* TODO-hyin: Implement theme switching between Auto, Light and Dark */
+                }
+            )
+        }
 
-            SettingsCategory(title = "About") {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
+        SettingsCategory(title = "About") {
+            Card(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp)
-                    ) {
-                        Text(
-                            text = "Kleidi LLaMA",
-                            style = MaterialTheme.typography.titleLarge
-                        )
+                    Text(
+                        text = "Kleidi LLaMA",
+                        style = MaterialTheme.typography.titleLarge
+                    )
 
-                        Text(
-                            text = "Version 1.0.0",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    Text(
+                        text = "Version 1.0.0",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
-                            text = "Local inference for LLM models on your device.",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                    Text(
+                        text = "Local inference for LLM models on your device.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
                 }
             }
         }

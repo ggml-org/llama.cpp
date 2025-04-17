@@ -325,7 +325,7 @@ class ModelRepositoryImpl @Inject constructor(
 
         private const val INTERNAL_STORAGE_PATH = "models"
 
-        private const val STORAGE_METRICS_UPDATE_INTERVAL = 5_000L
+        private const val STORAGE_METRICS_UPDATE_INTERVAL = 10_000L
         private const val BYTES_IN_GB = 1024f * 1024f * 1024f
 
         private const val MODEL_IMPORT_SPACE_BUFFER_SCALE = 1.2f

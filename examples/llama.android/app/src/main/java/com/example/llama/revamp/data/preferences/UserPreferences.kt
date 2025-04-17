@@ -71,6 +71,8 @@ class UserPreferences @Inject constructor (
 
     /**
      * Gets the monitoring interval in milliseconds.
+     *
+     * TODO-han.yin: replace with Enum value instead of millisecond value
      */
     fun getMonitoringInterval(): Flow<Long> {
         return context.dataStore.data.map { preferences ->

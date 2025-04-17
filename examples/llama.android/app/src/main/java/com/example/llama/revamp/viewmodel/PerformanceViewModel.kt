@@ -1,9 +1,10 @@
 package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.preferences.UserPreferences
+import com.example.llama.revamp.data.repository.ModelRepository
+import com.example.llama.revamp.data.repository.StorageMetrics
 import com.example.llama.revamp.monitoring.BatteryMetrics
 import com.example.llama.revamp.monitoring.MemoryMetrics
 import com.example.llama.revamp.monitoring.PerformanceMonitor
@@ -22,9 +23,14 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class PerformanceViewModel @Inject constructor(
+    private val userPreferences: UserPreferences,
     private val performanceMonitor: PerformanceMonitor,
-    private val userPreferences: UserPreferences
+    private val modelRepository: ModelRepository,
 ) : ViewModel() {
+
+    // Storage usage metrics
+    private val _storageMetrics = MutableStateFlow<StorageMetrics?>(null)
+    val storageMetrics: StateFlow<StorageMetrics?> = _storageMetrics.asStateFlow()
 
     // Memory usage metrics
     private val _memoryUsage = MutableStateFlow(MemoryMetrics(0, 0, 0, 0f, 0f))
@@ -67,6 +73,12 @@ class PerformanceViewModel @Inject constructor(
      */
     private fun startMonitoring() {
         val interval = _monitoringInterval.value
+
+        viewModelScope.launch {
+            modelRepository.getStorageMetrics().collect { metrics ->
+                _storageMetrics.value = metrics
+            }
+        }
 
         viewModelScope.launch {
             performanceMonitor.monitorMemoryUsage(interval).collect { metrics ->
@@ -131,21 +143,5 @@ class PerformanceViewModel @Inject constructor(
      */
     private fun isMonitoringActive(): Boolean {
         return _isMonitoringEnabled.value
-    }
-
-    /**
-     * Factory for creating PerformanceViewModel instances.
-     */
-    class Factory(
-        private val performanceMonitor: PerformanceMonitor,
-        private val userPreferences: UserPreferences
-    ) : ViewModelProvider.Factory {
-        @Suppress("UNCHECKED_CAST")
-        override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            if (modelClass.isAssignableFrom(PerformanceViewModel::class.java)) {
-                return PerformanceViewModel(performanceMonitor, userPreferences) as T
-            }
-            throw IllegalArgumentException("Unknown ViewModel class")
-        }
     }
 }

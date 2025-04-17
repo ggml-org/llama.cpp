@@ -29,7 +29,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.ModelCardActions
-import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,7 +36,6 @@ import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 fun ModelSelectionScreen(
     onModelSelected: (ModelInfo) -> Unit,
     onManageModelsClicked: () -> Unit,
-    onMenuClicked: () -> Unit,
     viewModel: ModelSelectionViewModel = hiltViewModel(),
 ) {
     val models by viewModel.availableModels.collectAsState()
@@ -47,35 +45,28 @@ fun ModelSelectionScreen(
         onModelSelected(model)
     }
 
-    PerformanceAppScaffold(
-        title = "Models",
-        onMenuOpen = onMenuClicked,
-        showTemperature = false
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp)
-        ) {
-            if (models.isEmpty()) {
-                EmptyModelsView(onManageModelsClicked)
-            } else {
-                LazyColumn {
-                    items(models) { model ->
-                        ModelCard(
-                            model = model,
-                            onClick = { handleModelSelection(model) },
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            isSelected = null, // Not in selection mode
-                            actionButton = {
-                                ModelCardActions.PlayButton {
-                                    handleModelSelection(model)
-                                }
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+    ) {
+        if (models.isEmpty()) {
+            EmptyModelsView(onManageModelsClicked)
+        } else {
+            LazyColumn {
+                items(models) { model ->
+                    ModelCard(
+                        model = model,
+                        onClick = { handleModelSelection(model) },
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        isSelected = null, // Not in selection mode
+                        actionButton = {
+                            ModelCardActions.PlayButton {
+                                handleModelSelection(model)
                             }
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
+                        }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
             }
         }

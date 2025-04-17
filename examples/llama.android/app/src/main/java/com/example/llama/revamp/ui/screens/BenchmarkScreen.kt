@@ -25,7 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.ui.components.ModelCard
-import com.example.llama.revamp.ui.components.PerformanceAppScaffold
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 
@@ -42,83 +41,76 @@ fun BenchmarkScreen(
         viewModel.runBenchmark()
     }
 
-    PerformanceAppScaffold(
-        title = "Chat",
-        onNavigateBack = onBackPressed,
-        showTemperature = true
-    ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Selected model card
-            selectedModel?.let { model ->
-                ModelCard(
-                    model = model,
-                    onClick = { /* No action on click */ },
-                    modifier = Modifier.padding(bottom = 16.dp),
-                    isSelected = null
-                )
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        // Selected model card
+        selectedModel?.let { model ->
+            ModelCard(
+                model = model,
+                onClick = { /* No action on click */ },
+                modifier = Modifier.padding(bottom = 16.dp),
+                isSelected = null
+            )
+        }
+
+        // Benchmark results or loading indicator
+        when {
+            engineState is State.Benchmarking -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Running benchmark...",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                }
             }
 
-            // Benchmark results or loading indicator
-            when {
-                engineState is State.Benchmarking -> {
+            benchmarkResults != null -> {
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(200.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            CircularProgressIndicator()
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = "Running benchmark...",
-                                style = MaterialTheme.typography.bodyMedium
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp)
                             )
-                        }
-                    }
-                }
-
-                benchmarkResults != null -> {
-                    Card(
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(16.dp)
-                        ) {
-                            Text(
-                                text = benchmarkResults ?: "",
-                                style = MonospacedTextStyle,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                else -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
-                        contentAlignment = Alignment.Center
+                            .padding(16.dp)
                     ) {
                         Text(
-                            text = "Benchmark results will appear here",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = benchmarkResults ?: "",
+                            style = MonospacedTextStyle,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+            }
+
+            else -> {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(200.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "Benchmark results will appear here",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         }

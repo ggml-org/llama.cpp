@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
-import com.example.llama.revamp.data.repository.StorageMetrics
 import com.example.llama.revamp.util.getFileNameFromUri
 import com.example.llama.revamp.util.getFileSizeFromUri
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
@@ -32,13 +31,7 @@ class ModelsManagementViewModel @Inject constructor(
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
-    val storageMetrics: StateFlow<StorageMetrics?> = modelRepository.getStorageMetrics()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
-            initialValue = null
-        )
-
+    // Data: available models
     private val _availableModels: StateFlow<List<ModelInfo>> = modelRepository.getModels()
         .stateIn(
             scope = viewModelScope,
@@ -46,11 +39,68 @@ class ModelsManagementViewModel @Inject constructor(
             initialValue = emptyList()
         )
 
+    private val _sortedModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val sortedModels: StateFlow<List<ModelInfo>> = _sortedModels.asStateFlow()
+
+    // UI state: multi-selection mode
+    private val _isMultiSelectionMode = MutableStateFlow(false)
+    val isMultiSelectionMode: StateFlow<Boolean> = _isMultiSelectionMode.asStateFlow()
+
+    fun setMultiSelectionMode(enabled: Boolean) {
+        _isMultiSelectionMode.value = enabled
+        if (!enabled) {
+            clearSelectedModels()
+        }
+    }
+
+    // UI state: models selected in multi-selection
+    private val _selectedModels = MutableStateFlow<Map<String, ModelInfo>>(emptyMap())
+    val selectedModels: StateFlow<Map<String, ModelInfo>> = _selectedModels.asStateFlow()
+
+    fun toggleModelSelection(modelId: String) {
+        val current = _selectedModels.value.toMutableMap()
+        val model = _sortedModels.value.find { it.id == modelId }
+
+        if (model != null) {
+            if (current.containsKey(modelId)) {
+                current.remove(modelId)
+            } else {
+                current[modelId] = model
+            }
+            _selectedModels.value = current
+        }
+    }
+
+    fun selectAllModels() {
+        _selectedModels.value = _sortedModels.value.associateBy { it.id }
+    }
+
+    fun clearSelectedModels() {
+        _selectedModels.value = emptyMap()
+    }
+
+    // UI state: sort menu
     private val _sortOrder = MutableStateFlow(ModelSortOrder.NAME_ASC)
     val sortOrder: StateFlow<ModelSortOrder> = _sortOrder.asStateFlow()
 
-    private val _sortedModels = MutableStateFlow<List<ModelInfo>>(emptyList())
-    val sortedModels: StateFlow<List<ModelInfo>> = _sortedModels.asStateFlow()
+    fun setSortOrder(order: ModelSortOrder) {
+        _sortOrder.value = order
+    }
+
+    private val _showSortMenu = MutableStateFlow(false)
+    val showSortMenu: StateFlow<Boolean> = _showSortMenu.asStateFlow()
+
+    fun toggleSortMenu(show: Boolean) {
+        _showSortMenu.value = show
+    }
+
+    // UI state: import menu
+    private val _showImportModelMenu = MutableStateFlow(false)
+    val showImportModelMenu: StateFlow<Boolean> = _showImportModelMenu.asStateFlow()
+
+    fun toggleImportMenu(show: Boolean) {
+        _showImportModelMenu.value = show
+    }
 
     init {
         viewModelScope.launch {
@@ -68,19 +118,16 @@ class ModelsManagementViewModel @Inject constructor(
             ModelSortOrder.LAST_USED -> models.sortedByDescending { it.lastUsed ?: 0 }
         }
 
-    fun setSortOrder(order: ModelSortOrder) {
-        _sortOrder.value = order
-    }
-
-    fun viewModelDetails(modelId: String) {
-        // TODO-han.yin: Stub for now. Would navigate to model details screen or show dialog
-    }
-
+    // Internal state
     private val _managementState = MutableStateFlow<ModelManagementState>(ModelManagementState.Idle)
     val managementState: StateFlow<ModelManagementState> = _managementState.asStateFlow()
 
     fun resetManagementState() {
         _managementState.value = ModelManagementState.Idle
+    }
+
+    fun viewModelDetails(modelId: String) {
+        // TODO-han.yin: Stub for now. Would navigate to model details screen or show dialog
     }
 
     /**
