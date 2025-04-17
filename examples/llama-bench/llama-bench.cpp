@@ -22,6 +22,7 @@
 #include "ggml.h"
 #include "llama.h"
 #include "llama-context.h"
+#include <filesystem>
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -879,14 +880,11 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
  * @param path The input model path information.
  * @return Full name of the model.
  */
-static std::string get_modelfile_name(const std::string & path) {
-    size_t index = path.find_last_of('/');
-    if (index != std::string::npos) {
-        std::string filename = path.substr(index + 1);
-        return filename;
-    } else {
-        return path;
-    }
+static std::string get_modelfile_name(const std::string & path_str) {
+    namespace fs = std::filesystem;
+    fs::path path = path_str;
+    
+    return path.filename();
 }
 
 struct test {
