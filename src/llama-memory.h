@@ -20,6 +20,8 @@ struct llama_memory_params {
 // the KV cache is a type of LLM memory, but there can be other types
 class llama_memory_i {
 public:
+    virtual ~llama_memory_i() = default;
+
     virtual void clear() = 0;
     virtual void defrag() = 0;
 
