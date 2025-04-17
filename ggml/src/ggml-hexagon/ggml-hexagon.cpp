@@ -383,8 +383,8 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.05"},
-        .ggml_dsp_version       = {"0.62"},
+        .ggml_hexagon_version   = {"1.06"},
+        .ggml_dsp_version       = {"0.63"},
 };
 
 //file:///opt/qcom/aistack/qairt/2.31.0.250130/docs/QNN/general/overview.html#tbl-supported-snapdragon-devices
@@ -1417,6 +1417,13 @@ private:
         section = cur_section;
         trim(key);
         trim(value);
+
+        //"1.00" -> 1.00
+        if (value.front() == '"' && value.back() == '"') {
+            value.erase(0, 1); // erase the first character "
+            value.erase(value.size() - 1); // erase the last character "
+        }
+
         return true;
     }
 
@@ -1829,8 +1836,10 @@ static void ggmlhexagon_load_cfg() {
         GGMLHEXAGON_LOG_INFO("%s", tmposs.str().c_str());
     });
     std::string precision_mode;
-    std::string ggml_hexagon_version;
-    hexagoncfg_instance.get_stringvalue("general", "version", ggml_hexagon_version, "1.00");
+    std::string version; //version of ggml-hexagon.cpp
+    std::string ggmldsp_version; //version of ggml-dsp.c
+    hexagoncfg_instance.get_stringvalue("general", "version", version, "1.00");
+    hexagoncfg_instance.get_stringvalue("general", "ggmldsp_version", ggmldsp_version, "0.62");
     hexagoncfg_instance.get_intvalue("general", "enable_perf", g_hexagon_appcfg.enable_perf, 1);
     hexagoncfg_instance.get_intvalue("general", "print_tensors_info", g_hexagon_appcfg.print_tensors_info, 0);
     hexagoncfg_instance.get_intvalue("general", "dump_op_info", g_hexagon_appcfg.dump_op_info, 0);
@@ -1854,7 +1863,9 @@ static void ggmlhexagon_load_cfg() {
 
     GGMLHEXAGON_LOG_INFO("internal ggml_hexagon_version=%s", g_hexagon_appcfg.ggml_hexagon_version);
     GGMLHEXAGON_LOG_INFO("internal ggml_dsp_version=%s", g_hexagon_appcfg.ggml_dsp_version);
-    GGMLHEXAGON_LOG_INFO("external ggml_hexagon_version=%s", ggml_hexagon_version.c_str());
+    GGMLHEXAGON_LOG_INFO("external ggml_hexagon_version=%s", version.c_str());
+    GGMLHEXAGON_LOG_INFO("external ggml_dsp_version=%s", ggmldsp_version.c_str());
+    memcpy(g_hexagon_appcfg.ggml_dsp_version, ggmldsp_version.c_str(), strlen(ggmldsp_version.c_str()));
     GGMLHEXAGON_LOG_INFO("hwaccel_approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
                          ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
     GGMLHEXAGON_LOG_INFO("hexagon_backend=%d(%s)", g_hexagon_appcfg.hexagon_backend,
@@ -5445,6 +5456,7 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     // between ARM-AP and cDSP. the mechanism in qidl/FastRPC is exactly similar to mechanism in TEE.
     // try to find a better/efficient approach to exchange necessary data between ARM-AP side and cDSP side.
     // manually modifying the important data structure ggml_tensor in ggml.h is not make-sense and not acceptable.
+    std::chrono::high_resolution_clock::time_point start_time = std::chrono::high_resolution_clock::now();
     dsptensor_0.data        = src0->data;
     dsptensor_0.data_len    = ggml_nbytes(src0);
     dsptensor_0.type        = src0->type;
@@ -5491,6 +5503,9 @@ static void ggmlhexagon_compute(ggml_backend_hexagon_context * ctx, struct ggml_
     dsptensor_2.nb[3] = dst->nb[3];
 
     memcpy(dsptensor_2.op_params, dst->op_params, GGML_MAX_OP_PARAMS / sizeof(int32_t));
+    std::chrono::high_resolution_clock::time_point end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<size_t, std::nano> duration = end_time - start_time;
+    GGMLHEXAGON_LOG_VERBOSE("pack duration %llu ns", duration.count());
 
     hexagon_error = op_func(ctx->ggmlop_handle, &dsptensor_0, &dsptensor_1, &dsptensor_2);
     if (AEE_SUCCESS != hexagon_error) {
