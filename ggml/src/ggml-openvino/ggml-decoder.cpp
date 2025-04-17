@@ -56,13 +56,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         break;
     }
     case GGML_OP_MUL_MAT: {
-        if (!ggml_is_contiguous(node->src[1]) ||
-            node->src[1]->ne[0] * node->src[1]->nb[0] != node->src[1]->nb[1]) {
-            m_continuous = false;
-        } else {
-            m_continuous = true;
-        }
-        break;
+        m_continuous = node->src[0]->view_src == nullptr;
+      break;
     }
     default:
         break;
