@@ -127,6 +127,8 @@ struct llama_context {
 
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
+    
+    int get_graph_splits() const;
 
 private:
     //

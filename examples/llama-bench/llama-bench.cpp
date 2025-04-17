@@ -21,6 +21,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-context.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -872,6 +873,21 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
 
     return instances;
 }
+/**
+ * @brief Remove the input model path information and keep only the model name.
+ *
+ * @param path The input model path information.
+ * @return Full name of the model.
+ */
+static std::string get_modelfile_name(const std::string & path) {
+    size_t index = path.find_last_of('/');
+    if (index != std::string::npos) {
+        std::string filename = path.substr(index + 1);
+        return filename;
+    } else {
+        return path;
+    }
+}
 
 struct test {
     static const std::string build_commit;
@@ -879,6 +895,7 @@ struct test {
     const std::string        cpu_info;
     const std::string        gpu_info;
     std::string              model_filename;
+    int                      n_graph_splits;
     std::string              model_type;
     uint64_t                 model_size;
     uint64_t                 model_n_params;
@@ -907,7 +924,7 @@ struct test {
         cpu_info(get_cpu_info()),
         gpu_info(get_gpu_info()) {
 
-        model_filename = inst.model;
+        model_filename = get_modelfile_name(inst.model);
         char buf[128];
         llama_model_desc(lmodel, buf, sizeof(buf));
         model_type     = buf;
@@ -936,7 +953,7 @@ struct test {
         std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
         test_time = buf;
 
-        (void) ctx;
+        n_graph_splits = ctx->get_graph_splits();
     }
 
     uint64_t avg_ns() const { return ::avg(samples_ns); }
@@ -970,11 +987,11 @@ struct test {
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
             "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
-            "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "use_mmap",
-            "embeddings",   "n_prompt",     "n_gen",          "test_time",  "avg_ns",       "stddev_ns",
-            "avg_ts",       "stddev_ts",
+            "n_graph_splits", "model_type",  "model_size",   "model_n_params", "n_batch",    "n_ubatch",
+            "n_threads",     "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",
+            "n_gpu_layers",  "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split",
+            "use_mmap",       "embeddings",   "n_prompt",     "n_gen",          "test_time",  "avg_ns",
+            "stddev_ns",      "avg_ts",       "stddev_ts",
         };
         return fields;
     }
@@ -985,7 +1002,7 @@ struct test {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "avg_ns" ||
-            field == "stddev_ns") {
+            field == "stddev_ns" || field == "n_graph_splits") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
@@ -1020,6 +1037,7 @@ struct test {
                                             gpu_info,
                                             get_backend(),
                                             model_filename,
+                                            std::to_string(n_graph_splits),
                                             model_type,
                                             std::to_string(model_size),
                                             std::to_string(model_n_params),
@@ -1194,6 +1212,9 @@ struct markdown_printer : public printer {
             return 10;
         }
         if (field == "n_gpu_layers") {
+            return 3;
+        }
+        if (field == "n_graph_splits") {
             return 3;
         }
         if (field == "n_threads") {
