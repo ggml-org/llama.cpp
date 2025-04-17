@@ -38,12 +38,12 @@ interface ModelLoadingService : InferenceService {
     /**
      * Load a model for benchmark
      */
-    suspend fun loadModelForBenchmark(): Boolean
+    suspend fun loadModelForBenchmark(): ModelLoadingMetrics?
 
     /**
      * Load a model for conversation
      */
-    suspend fun loadModelForConversation(systemPrompt: String?): Boolean
+    suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics?
 }
 
 interface BenchmarkService : InferenceService {
@@ -81,6 +81,17 @@ interface ConversationService : InferenceService {
 }
 
 /**
+ * Metrics for model loading and system prompt processing
+ */
+data class ModelLoadingMetrics(
+    val modelLoadingTimeMs: Long,
+    val systemPromptProcessingTimeMs: Long? = null
+) {
+    val totalTimeMs: Long
+        get() = modelLoadingTimeMs + (systemPromptProcessingTimeMs ?: 0)
+}
+
+/**
  * Represents an update during text generation
  */
 data class GenerationUpdate(
@@ -115,9 +126,7 @@ internal class InferenceServiceImpl @Inject internal constructor(
     private val _currentModel = MutableStateFlow<ModelInfo?>(null)
     override val currentSelectedModel: StateFlow<ModelInfo?> = _currentModel.asStateFlow()
 
-    override fun setCurrentModel(model: ModelInfo) {
-        _currentModel.value = model
-    }
+    override fun setCurrentModel(model: ModelInfo) { _currentModel.value = model }
 
     override suspend fun unloadModel() = inferenceEngine.unloadModel()
 
@@ -129,29 +138,45 @@ internal class InferenceServiceImpl @Inject internal constructor(
 
     /* ModelLoadingService implementation */
 
-    override suspend fun loadModelForBenchmark(): Boolean {
+    override suspend fun loadModelForBenchmark(): ModelLoadingMetrics? {
         return _currentModel.value?.let { model ->
             try {
+                val modelLoadStartTs = System.currentTimeMillis()
                 inferenceEngine.loadModel(model.path)
-                true
+                val modelLoadEndTs = System.currentTimeMillis()
+                ModelLoadingMetrics(modelLoadEndTs - modelLoadStartTs)
             } catch (e: Exception) {
                 Log.e("InferenceManager", "Error loading model", e)
-                false
+                null
             }
-        } == true
+        }
     }
 
-    override suspend fun loadModelForConversation(systemPrompt: String?): Boolean {
+    override suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics? {
         _systemPrompt.value = systemPrompt
         return _currentModel.value?.let { model ->
             try {
-                inferenceEngine.loadModel(model.path, systemPrompt)
-                true
+                val modelLoadStartTs = System.currentTimeMillis()
+                inferenceEngine.loadModel(model.path)
+                val modelLoadEndTs = System.currentTimeMillis()
+
+                if (systemPrompt.isNullOrBlank()) {
+                    ModelLoadingMetrics(modelLoadEndTs - modelLoadStartTs)
+                } else {
+                    val prompt: String = systemPrompt
+                    val systemPromptStartTs = System.currentTimeMillis()
+                    inferenceEngine.setSystemPrompt(prompt)
+                    val systemPromptEndTs = System.currentTimeMillis()
+                    ModelLoadingMetrics(
+                        modelLoadingTimeMs = modelLoadEndTs - modelLoadStartTs,
+                        systemPromptProcessingTimeMs = systemPromptEndTs - systemPromptStartTs
+                    )
+                }
             } catch (e: Exception) {
                 Log.e("InferenceManager", "Error loading model", e)
-                false
+                null
             }
-        } == true
+        }
     }
 
 

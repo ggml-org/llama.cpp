@@ -42,9 +42,9 @@ class StubInferenceEngine : InferenceEngine {
     }
 
     /**
-     * Loads a model from the given path with an optional system prompt.
+     * Loads a model from the given path.
      */
-    override suspend fun loadModel(pathToModel: String, systemPrompt: String?) {
+    override suspend fun loadModel(pathToModel: String) {
         Log.i(TAG, "loadModel! state: ${_state.value}")
 
         try {
@@ -53,16 +53,28 @@ class StubInferenceEngine : InferenceEngine {
             // Simulate model loading
             delay(STUB_MODEL_LOADING_TIME)
 
-            _state.value = State.ModelLoaded
+            _state.value = State.ModelReady
 
-            if (systemPrompt != null) {
-                _state.value = State.ProcessingSystemPrompt
 
-                // Simulate processing system prompt
-                delay(STUB_SYSTEM_PROMPT_PROCESSING_TIME)
-            }
+        } catch (e: CancellationException) {
+            // If coroutine is cancelled, propagate cancellation
+            throw e
+        } catch (e: Exception) {
+            _state.value = State.Error(e.message ?: "Unknown error during model loading")
+        }
+    }
 
-            _state.value = State.AwaitingUserPrompt
+    /**
+     * Process the plain text system prompt
+     */
+    override suspend fun setSystemPrompt(prompt: String) {
+        try {
+            _state.value = State.ProcessingSystemPrompt
+
+            // Simulate processing system prompt
+            delay(STUB_SYSTEM_PROMPT_PROCESSING_TIME)
+
+            _state.value = State.ModelReady
         } catch (e: CancellationException) {
             // If coroutine is cancelled, propagate cancellation
             throw e
@@ -94,10 +106,10 @@ class StubInferenceEngine : InferenceEngine {
                     delay(STUB_TOKEN_GENERATION_TIME)
                 }
 
-                _state.value = State.AwaitingUserPrompt
+                _state.value = State.ModelReady
             } catch (e: CancellationException) {
                 // Handle cancellation gracefully
-                _state.value = State.AwaitingUserPrompt
+                _state.value = State.ModelReady
                 throw e
             } catch (e: Exception) {
                 _state.value = State.Error(e.message ?: "Unknown error during generation")
@@ -144,12 +156,12 @@ class StubInferenceEngine : InferenceEngine {
             result.append("| $modelDesc | ${model_size}GiB | ${model_n_params}B | ")
             result.append("$backend | tg $tg | $tg_avg ± $tg_std |\n")
 
-            _state.value = State.AwaitingUserPrompt
+            _state.value = State.ModelReady
 
             return result.toString()
         } catch (e: CancellationException) {
             // If coroutine is cancelled, propagate cancellation
-            _state.value = State.AwaitingUserPrompt
+            _state.value = State.ModelReady
             throw e
         } catch (e: Exception) {
             _state.value = State.Error(e.message ?: "Unknown error during benchmarking")

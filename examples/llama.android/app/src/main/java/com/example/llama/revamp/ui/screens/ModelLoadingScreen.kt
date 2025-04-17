@@ -101,7 +101,7 @@ fun ModelLoadingScreen(
     // Check if we're in a loading state
     val isLoading = engineState !is State.Uninitialized &&
         engineState !is State.LibraryLoaded &&
-        engineState !is State.AwaitingUserPrompt
+        engineState !is State.ModelReady
 
     // Mode selection callbacks
     val handleBenchmarkSelected = {
@@ -431,7 +431,7 @@ fun ModelLoadingScreen(
                         text = when (engineState) {
                             is State.LoadingModel -> "Loading model..."
                             is State.ProcessingSystemPrompt -> "Processing system prompt..."
-                            is State.ModelLoaded -> "Preparing conversation..."
+                            is State.ModelReady -> "Preparing conversation..."
                             else -> "Processing..."
                         },
                         style = MaterialTheme.typography.titleMedium

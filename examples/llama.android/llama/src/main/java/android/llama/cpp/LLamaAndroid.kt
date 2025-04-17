@@ -18,10 +18,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
-@Target(AnnotationTarget.FUNCTION)
-@Retention(AnnotationRetention.SOURCE)
-annotation class RequiresCleanup(val message: String = "Remember to call this method for proper cleanup!")
-
 /**
  * JNI wrapper for the llama.cpp library providing Android-friendly access to large language models.
  *
@@ -63,6 +59,8 @@ class LLamaAndroid private constructor() : InferenceEngine {
     private val _state = MutableStateFlow<State>(State.Uninitialized)
     override val state: StateFlow<State> = _state
 
+    private var _readyForSystemPrompt = false
+
     /**
      * Single-threaded coroutine dispatcher & scope for LLama asynchronous operations
      */
@@ -85,9 +83,9 @@ class LLamaAndroid private constructor() : InferenceEngine {
     }
 
     /**
-     * Load the LLM, then process the plain text system prompt if provided
+     * Load the LLM
      */
-    override suspend fun loadModel(pathToModel: String, systemPrompt: String?) =
+    override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
             check(_state.value is State.LibraryLoaded) { "Cannot load model in ${_state.value}!" }
             File(pathToModel).let {
@@ -96,6 +94,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
             }
 
             Log.i(TAG, "Loading model... \n$pathToModel")
+            _readyForSystemPrompt = false
             _state.value = State.LoadingModel
             load(pathToModel).let { result ->
                 if (result != 0) throw IllegalStateException("Failed to Load model: $result")
@@ -104,23 +103,31 @@ class LLamaAndroid private constructor() : InferenceEngine {
                 if (result != 0) throw IllegalStateException("Failed to prepare resources: $result")
             }
             Log.i(TAG, "Model loaded!")
-            _state.value = State.ModelLoaded
+            _readyForSystemPrompt = true
+            _state.value = State.ModelReady
+        }
 
-            systemPrompt?.let { prompt ->
-                Log.i(TAG, "Sending system prompt...")
-                _state.value = State.ProcessingSystemPrompt
-                processSystemPrompt(prompt).let { result ->
-                    if (result != 0) {
-                        val errorMessage = "Failed to process system prompt: $result"
-                        _state.value = State.Error(errorMessage)
-                        throw IllegalStateException(errorMessage)
-                    }
+    /**
+     * Process the plain text system prompt
+     */
+    override suspend fun setSystemPrompt(prompt: String) =
+        withContext(llamaDispatcher) {
+            require(prompt.isNotBlank()) { "Cannot process empty system prompt!" }
+            check(_readyForSystemPrompt) { "System prompt must be set ** RIGHT AFTER ** model loaded!" }
+            check(_state.value is State.ModelReady) { "Cannot process system prompt in ${_state.value}!" }
+
+            Log.i(TAG, "Sending system prompt...")
+            _readyForSystemPrompt = false
+            _state.value = State.ProcessingSystemPrompt
+            processSystemPrompt(prompt).let { result ->
+                if (result != 0) {
+                    val errorMessage = "Failed to process system prompt: $result"
+                    _state.value = State.Error(errorMessage)
+                    throw IllegalStateException(errorMessage)
                 }
-                Log.i(TAG, "System prompt processed! Awaiting user prompt...")
-            } ?: run {
-                Log.w(TAG, "No system prompt to process.")
             }
-            _state.value = State.AwaitingUserPrompt
+            Log.i(TAG, "System prompt processed! Awaiting user prompt...")
+            _state.value = State.ModelReady
         }
 
     /**
@@ -131,12 +138,13 @@ class LLamaAndroid private constructor() : InferenceEngine {
         predictLength: Int,
     ): Flow<String> = flow {
         require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
-        check(_state.value is State.AwaitingUserPrompt) {
+        check(_state.value is State.ModelReady) {
             "User prompt discarded due to: ${_state.value}"
         }
 
         try {
             Log.i(TAG, "Sending user prompt...")
+            _readyForSystemPrompt = false
             _state.value = State.ProcessingUserPrompt
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
@@ -153,10 +161,10 @@ class LLamaAndroid private constructor() : InferenceEngine {
                 } ?: break
             }
             Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
-            _state.value = State.AwaitingUserPrompt
+            _state.value = State.ModelReady
         } catch (e: CancellationException) {
             Log.i(TAG, "Generation cancelled by user.")
-            _state.value = State.AwaitingUserPrompt
+            _state.value = State.ModelReady
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)
@@ -170,13 +178,14 @@ class LLamaAndroid private constructor() : InferenceEngine {
      */
     override suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int): String =
         withContext(llamaDispatcher) {
-            check(_state.value is State.AwaitingUserPrompt) {
+            check(_state.value is State.ModelReady) {
                 "Benchmark request discarded due to: $state"
             }
             Log.i(TAG, "Start benchmark (pp: $pp, tg: $tg, pl: $pl, nr: $nr)")
+            _readyForSystemPrompt = false   // Just to be safe
             _state.value = State.Benchmarking
             benchModel(pp, tg, pl, nr).also {
-                _state.value = State.AwaitingUserPrompt
+                _state.value = State.ModelReady
             }
         }
 
@@ -186,8 +195,9 @@ class LLamaAndroid private constructor() : InferenceEngine {
     override suspend fun unloadModel() =
         withContext(llamaDispatcher) {
             when(_state.value) {
-                is State.AwaitingUserPrompt, is State.Error -> {
+                is State.ModelReady, is State.Error -> {
                     Log.i(TAG, "Unloading model and free resources...")
+                    _readyForSystemPrompt = false
                     unload()
                     _state.value = State.LibraryLoaded
                     Log.i(TAG, "Model unloaded!")
@@ -200,8 +210,8 @@ class LLamaAndroid private constructor() : InferenceEngine {
     /**
      * Cancel all ongoing coroutines and free GGML backends
      */
-    @RequiresCleanup("Call from `ViewModel.onCleared()` to prevent resource leaks!")
     override fun destroy() {
+        _readyForSystemPrompt = false
         llamaScope.cancel()
         when(_state.value) {
             is State.Uninitialized -> {}

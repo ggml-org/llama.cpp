@@ -13,9 +13,14 @@ interface InferenceEngine {
     val state: StateFlow<State>
 
     /**
-     * Load a model from the given path with an optional system prompt.
+     * Load a model from the given path.
      */
-    suspend fun loadModel(pathToModel: String, systemPrompt: String? = null)
+    suspend fun loadModel(pathToModel: String)
+
+    /**
+     * Sends a system prompt to the loaded model
+     */
+    suspend fun setSystemPrompt(systemPrompt: String)
 
     /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
@@ -45,11 +50,9 @@ interface InferenceEngine {
         object LibraryLoaded : State()
 
         object LoadingModel : State()
-        object ModelLoaded : State()
+        object ModelReady : State()
 
         object ProcessingSystemPrompt : State()
-        object AwaitingUserPrompt : State()
-
         object ProcessingUserPrompt : State()
         object Generating : State()
 
