@@ -178,34 +178,12 @@ llama_context::llama_context(
 
     // init the memory module
     if (!hparams.vocab_only) {
-        LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
+        llama_memory_params params_mem = {
+            /*.type_k       =*/ params.type_k,
+            /*.type_v       =*/ params.type_v,
+        };
 
-        if (!llama_model_is_recurrent(&model)) {
-            cparams.n_ctx = GGML_PAD(cparams.n_ctx, llama_kv_cache_unified::get_padding(cparams));
-
-            LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
-
-            llama_memory_params params_mem = {
-                /*.type_k       =*/ params.type_k,
-                /*.type_v       =*/ params.type_v,
-                /*.v_trans      =*/ !cparams.flash_attn,
-                /*.offload_kqv  =*/ cparams.offload_kqv,
-                /*.kv_size      =*/ cparams.n_ctx,
-            };
-
-            memory.reset(model.create_memory(params_mem));
-        } else {
-            llama_memory_params params_mem = {
-                /*.type_k       =*/ GGML_TYPE_F32, // required by ggml_ssm_conv for Mamba's conv_states
-                /*.type_v       =*/ GGML_TYPE_F32, // required by ggml_ssm_scan for Mamba's ssm_states
-                /*.v_trans      =*/ false, // unused
-                /*.offload_kqv  =*/ cparams.offload_kqv,
-                /*.kv_size      =*/ std::max((uint32_t) 1, params.n_seq_max), // Mamba needs at least as many KV cells as there are sequences kept at any time
-            };
-
-            memory.reset(model.create_memory(params_mem));
-        }
-
+        memory.reset(model.create_memory(cparams, params_mem));
     }
 
     // init backends

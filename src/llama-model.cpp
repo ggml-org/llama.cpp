@@ -12815,10 +12815,10 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
-llama_memory_i * llama_model::create_memory(const llama_memory_params & params) const {
+llama_memory_i * llama_model::create_memory(llama_cparams & cparams, const llama_memory_params & params) const {
     llama_memory_i * res;
 
-    const bool offload = params.offload_kqv;
+    const bool offload = cparams.offload_kqv;
 
     auto get_buft = [this, offload](int il) {
         const char * dev_name = "CPU";
@@ -12838,6 +12838,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params) 
         return buft;
     };
 
+    LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
+
     switch (arch) {
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_RWKV6:
@@ -12851,12 +12853,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params) 
                             /*.get_rope_factors =*/ nullptr,
                             /*.get_buft         =*/ get_buft,
                         },
-                        params.type_k,
-                        params.type_v,
-                        params.kv_size);
+                        GGML_TYPE_F32,
+                        GGML_TYPE_F32,
+                        std::max((uint32_t) 1, cparams.n_seq_max));
             } break;
         default:
             {
+                cparams.n_ctx = GGML_PAD(cparams.n_ctx, llama_kv_cache_unified::get_padding(cparams));
+
+                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
                 res = new llama_kv_cache_unified(
                         hparams,
                         {
@@ -12876,8 +12882,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params) 
                         },
                         params.type_k,
                         params.type_v,
-                        params.v_trans,
-                        params.kv_size);
+                        !cparams.flash_attn,
+                        cparams.n_ctx);
             }
     }
 
