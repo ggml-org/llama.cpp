@@ -50,9 +50,35 @@ extern "C" {
 #define GGML_MEM_ALIGN      16
 #endif
 
-#define GGML_RESTRICT
+#ifdef __cplusplus
+// restrict not standard in C++
+#    if defined(__GNUC__)
+#        define GGML_RESTRICT       __restrict__
+#    elif defined(__clang__)
+#        define GGML_RESTRICT       __restrict
+#    elif defined(_MSC_VER)
+#        define GGML_RESTRICT       __restrict
+#    else
+#        define GGML_RESTRICT
+#    endif
+#else
+#    if defined (_MSC_VER) && (__STDC_VERSION__ < 201112L)
+#        define GGML_RESTRICT       __restrict
+#    else
+#        define GGML_RESTRICT       restrict
+#    endif
+#endif
 
-#define static_assert(a, b) do { } while (0)
+#ifndef __cplusplus
+#ifndef static_assert
+        #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201100L)
+            #define static_assert(cond, msg) _Static_assert(cond, msg)
+        #else
+            #define static_assert(cond, msg) struct global_scope_noop_trick
+        #endif
+#endif
+#endif // __cplusplus
+
 
 //NPU performance will be slower when enable GGMLHEXAGON_DEBUG
 #ifdef NDEBUG
