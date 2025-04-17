@@ -1,9 +1,32 @@
+/*
+ * Copyright (c) 2025 The ggml authors
+ *
+ * Qualcomm Hexagon SDK and reference tech guides could be found at:
+ * https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
+ *
+ * this single-source-file or self-contained file is implementation of ggml-dsp:
+ *    - a customized tiny ggml running on Qualcomm Hexagon cDSP
+ *    - ported from original ggml
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
 #include "ggml-dsp.h"
-
-// =================================================================================================
-// tiny ggml-dsp, ported from original ggml
-// =================================================================================================
-static int32 g_thread_counts = 1;
 
 void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...) {
 #if !GGMLHEXAGON_DEBUG
@@ -30,7 +53,7 @@ void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor) {
     char tmpbuf[GGMLHEXAGON_LOGBUF_LEN];
     size_t buflen = 0;
     if (tensor->type == GGML_TYPE_F32) {
-        memset(tmpbuf, 0, GGMLHEXAGON_LOG_LEVEL_DEBUG);
+        memset(tmpbuf, 0, GGMLHEXAGON_LOGBUF_LEN);
         for (int h = 0; h < tensor->ne[3]; h++) {
             for (int i = 0; i < tensor->ne[2]; i++) {
                 for (int j = 0; j < tensor->ne[1]; j++) {
@@ -172,117 +195,4 @@ int64_t ggml_time_ms(void) {
 
 int64_t ggml_time_us(void) {
     return hexagon_perf_get_time_us();
-}
-
-int ggmlop_get_thread_counts(void) {
-    return g_thread_counts;
-}
-
-// =================================================================================================
-//  implementation of ggml-hexagon kernel skel function
-// =================================================================================================
-int ggmlop_dsp_open(const char*uri, remote_handle64* handle) {
-    void *tptr = NULL;
-    GGMLHEXAGON_LOG_DEBUG("uri %s", uri);
-    tptr = (void *)malloc(1);
-    *handle = (remote_handle64)tptr;
-    assert(*handle);
-
-    GGMLHEXAGON_LOG_DEBUG("api_version = 0x%x", qurt_api_version());
-    GGMLHEXAGON_LOG_DEBUG("hvx units = 0x%d", qurt_hvx_get_units());
-    qurt_arch_version_t  vers;
-    qurt_sysenv_get_arch_version(&vers);
-    GGMLHEXAGON_LOG_DEBUG("arch_version=0x%x", vers.arch_version);
-    qurt_sysenv_app_heap_t aheap;
-    qurt_sysenv_get_app_heap(&aheap);
-    GGMLHEXAGON_LOG_DEBUG("aheap.heap_base=0x%x, aheap.heap_limit=0x%x", aheap.heap_base, aheap.heap_limit);
-    qurt_sysenv_max_hthreads_t mhwt;
-    qurt_sysenv_get_max_hw_threads(&mhwt);
-    GGMLHEXAGON_LOG_DEBUG("max hardware threads counts=%d", mhwt.max_hthreads);
-    g_thread_counts = mhwt.max_hthreads;
-
-    return 0;
-}
-
-int ggmlop_dsp_close(remote_handle64 handle) {
-    if (handle)
-        free((void*)handle);
-
-    return 0;
-}
-
-AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled, int32 thread_counts) {
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
-    HAP_power_request_t request;
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_apptype;
-    request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
-
-    GGMLHEXAGON_LOG_DEBUG("user specified thread_counts %d", thread_counts);
-    if (thread_counts > 1)
-        g_thread_counts = (thread_counts > g_thread_counts) ? g_thread_counts : thread_counts;
-    else
-        g_thread_counts = 1;
-    GGMLHEXAGON_LOG_DEBUG("real thread_counts %d", g_thread_counts);
-
-    void * ggmop_ctx = (void*)(handle);
-    int retval = HAP_power_set(ggmop_ctx, &request);
-    if (retval)  {
-        GGMLHEXAGON_LOG_DEBUG("failed first power vote");
-        return AEE_EFAILED;
-    }
-
-    //configure clocks & DCVS mode
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_DCVS_v2;
-    request.dcvs_v2.dcvs_enable = TRUE;
-    request.dcvs_v2.dcvs_params.target_corner = (HAP_dcvs_voltage_corner_t)power_level;
-    if (dcvs_enabled) {
-        request.dcvs_v2.dcvs_params.min_corner = HAP_DCVS_VCORNER_DISABLE;
-        request.dcvs_v2.dcvs_params.max_corner = HAP_DCVS_VCORNER_DISABLE;
-    } else {
-        request.dcvs_v2.dcvs_params.min_corner = request.dcvs_v2.dcvs_params.target_corner;
-        request.dcvs_v2.dcvs_params.max_corner = request.dcvs_v2.dcvs_params.target_corner;
-    }
-    request.dcvs_v2.dcvs_option     = HAP_DCVS_V2_PERFORMANCE_MODE;
-    request.dcvs_v2.set_dcvs_params = TRUE;
-    request.dcvs_v2.set_latency     = TRUE;
-    request.dcvs_v2.latency         = latency;
-    retval = HAP_power_set(ggmop_ctx, &request);
-    if (retval) {
-        GGMLHEXAGON_LOG_DEBUG("failed to vote for performance mode");
-        return AEE_EFAILED;
-    }
-
-    memset(&request, 0, sizeof(HAP_power_request_t));
-    request.type = HAP_power_set_HVX;
-    request.hvx.power_up = TRUE;
-    retval = HAP_power_set(ggmop_ctx, &request);
-    if (retval) {
-        GGMLHEXAGON_LOG_DEBUG("failed to vote for HVX power");
-        return AEE_EFAILED;
-    }
-    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
-    return AEE_SUCCESS;
-}
-
-// =================================================================================================
-//  implementation of ggml-hexagon kernel, it's better to put every hexagon-kernel to a single file
-// =================================================================================================
-int ggmlop_dsp_softmax(remote_handle64 h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) {
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
-    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
-    return 0;
-}
-
-int ggmlop_dsp_rmsnorm(remote_handle64 h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) {
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
-    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
-    return 0;
-}
-
-int ggmlop_dsp_pool2d(remote_handle64 h, const dsptensor * src0, const dsptensor * src1, dsptensor * dst) {
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
-    GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
-    return 0;
 }
