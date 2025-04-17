@@ -1,0 +1,42 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build",
+                "build",
+                "--config",
+                "Debug",
+                "-j8"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "cmake-configure"
+            ]
+        },
+        {
+            "label": "cmake-configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B",
+                "build",
+                "-DCMAKE_BUILD_TYPE=Debug"
+            ],
+            "problemMatcher": "$gcc",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        }
+    ]
+} 

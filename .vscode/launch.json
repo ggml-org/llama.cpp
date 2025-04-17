@@ -1,0 +1,73 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug llama-cli TinyLlama-1.1B-Chat-v1.0-GGUF",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/llama-cli",
+            "args": [
+                "-hf", "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF",
+                "-p", "Hello, I am a language model"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "Debug llama-server TinyLlama-1.1B-Chat-v1.0-GGUF",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/llama-server",
+            "args": [
+                "-hf", "TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build",
+            "miDebuggerPath": "/usr/bin/gdb"
+        },
+        {
+            "name": "Debug llama-cli --list-devices",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/llama-cli",
+            "args": ["--list-devices"],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "preLaunchTask": "build",
+            "miDebuggerPath": "/usr/bin/gdb"
+        }
+    ]
+} 
