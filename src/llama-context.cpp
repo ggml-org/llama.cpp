@@ -179,8 +179,8 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k       =*/ params.type_k,
-            /*.type_v       =*/ params.type_v,
+            /*.type_k =*/ params.type_k,
+            /*.type_v =*/ params.type_v,
         };
 
         memory.reset(model.create_memory(cparams, params_mem));
@@ -997,11 +997,9 @@ int llama_context::encode(llama_batch & inp_batch) {
         return -1;
     }
 
-    llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
-
     // temporary allocate memory for the input batch if needed
-    // TODO: this is incorrect for multiple sequences because get_pos_max() is the maximum across all sequences
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->get_pos_max() + 1);
+    // note: during encode, we always pass the full sequence starting from pos = 0
+    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : 0);
 
     const llama_batch & batch = batch_allocr.batch;
     const int32_t n_tokens = batch.n_tokens;
