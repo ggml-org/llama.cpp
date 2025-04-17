@@ -883,7 +883,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
 static std::string get_modelfile_name(const std::string & path_str) {
     namespace fs = std::filesystem;
     fs::path path = path_str;
-    
+
     return path.filename();
 }
 
