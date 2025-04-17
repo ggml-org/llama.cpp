@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.StorageMetrics
 import com.example.llama.revamp.util.getFileNameFromUri
@@ -107,6 +108,10 @@ class ModelsManagementViewModel @Inject constructor(
                 _managementState.value = Importation.Importing(progress, fileName, fileSize)
             }
             _managementState.value = Importation.Success(model)
+        } catch (e: InsufficientStorageException) {
+            _managementState.value = Importation.Error(
+                message = e.message ?: "Insufficient storage space to import $uri",
+            )
         } catch (e: Exception) {
             _managementState.value = Importation.Error(
                 message = e.message ?: "Unknown error importing $uri",

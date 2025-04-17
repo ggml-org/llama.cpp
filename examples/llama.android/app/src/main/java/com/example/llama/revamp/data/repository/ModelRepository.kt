@@ -13,6 +13,7 @@ import com.example.llama.revamp.util.copyWithChannels
 import com.example.llama.revamp.util.extractModelTypeFromFilename
 import com.example.llama.revamp.util.extractParametersFromFilename
 import com.example.llama.revamp.util.extractQuantizationFromFilename
+import com.example.llama.revamp.util.formatSize
 import com.example.llama.revamp.util.getFileNameFromUri
 import com.example.llama.revamp.util.getFileSizeFromUri
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -79,6 +80,8 @@ interface ModelRepository {
     suspend fun deleteModels(modelIds: List<String>)
 }
 
+class InsufficientStorageException(message: String) : IOException(message)
+
 @Singleton
 class ModelRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -131,8 +134,14 @@ class ModelRepositoryImpl @Inject constructor(
             throw IllegalStateException("Another import is already in progress!")
         }
 
-        val fileName = name ?: getFileNameFromUri(context, uri) ?: throw FileNotFoundException("Filename N/A")
         val fileSize = size ?: getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
+        if (!hasEnoughSpaceForImport(fileSize)) {
+            throw InsufficientStorageException(
+                "Not enough storage space. Required: ${formatSize(fileSize)}, Available: ${formatSize(availableSpaceBytes)}"
+            )
+        }
+
+        val fileName = name ?: getFileNameFromUri(context, uri) ?: throw FileNotFoundException("Filename N/A")
         val modelFile = File(modelsDir, fileName)
 
         importJob = coroutineContext[Job]
@@ -219,6 +228,13 @@ class ModelRepositoryImpl @Inject constructor(
             importJob = null
             currentModelFile = null
         }
+    }
+
+    // Add this method to ModelRepositoryImpl.kt
+    private fun hasEnoughSpaceForImport(fileSize: Long): Boolean {
+        val availableSpace = availableSpaceBytes
+        val requiredSpace = (fileSize * MODEL_IMPORT_SPACE_BUFFER_SCALE ).toLong()
+        return availableSpace >= requiredSpace
     }
 
     override suspend fun cancelImport(): Boolean? = withContext(Dispatchers.IO) {
@@ -312,6 +328,7 @@ class ModelRepositoryImpl @Inject constructor(
         private const val STORAGE_METRICS_UPDATE_INTERVAL = 5_000L
         private const val BYTES_IN_GB = 1024f * 1024f * 1024f
 
+        private const val MODEL_IMPORT_SPACE_BUFFER_SCALE = 1.2f
         private const val LARGE_MODEL_THRESHOLD_SIZE = 1024 * 1024 * 1024
         private const val NIO_BUFFER_SIZE = 32 * 1024 * 1024
         private const val NIO_YIELD_SIZE = 128 * 1024 * 1024
