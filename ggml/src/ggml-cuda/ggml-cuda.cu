@@ -96,31 +96,32 @@ int ggml_cuda_get_device() {
 
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {
     ggml_cuda_set_device(device);
-#if defined(GGML_USE_HIP) && defined(GGML_HIP_UMA)
-    auto res = hipMallocManaged(ptr, size);
-    if (res == hipSuccess) {
-        // if error we "need" to know why...
-        CUDA_CHECK(hipMemAdvise(*ptr, size, hipMemAdviseSetCoarseGrain, device));
-    }
-    return res;
-#else
-
-#if !defined(GGML_USE_HIP)
     cudaError_t err;
     if (getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") != nullptr)
     {
         err = cudaMallocManaged(ptr, size);
+#if defined(GGML_USE_HIP)
+        if (err == hipSuccess) {
+            CUDA_CHECK(cudaMemAdvise(*ptr, size, hipMemAdviseSetCoarseGrain, device));
+        }
+
+        // fall back to cudaMalloc if not supported (e.g. on Windows)
+        if (err == hipErrorNotSupported) {
+            static bool warned_unsupported = false;
+            if (!warned_unsupported) {
+                GGML_LOG_WARN("hipMallocManaged unsupported, falling back to hipMalloc.\n");
+                warned_unsupported = true;
+            }
+
+            err = cudaMalloc(ptr, size);
+        }
+#endif // defined(GGML_USE_HIP)
     }
     else
     {
         err = cudaMalloc(ptr, size);
     }
     return err;
-#else
-    return cudaMalloc(ptr, size);
-#endif // !defined(GGML_USE_HIP)
-
-#endif
 }
 
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
@@ -2488,10 +2489,10 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #endif
         }
 
-        if (node->op == GGML_OP_MUL_MAT_ID) {
+        if (node->op == GGML_OP_MUL_MAT_ID || node->op == GGML_OP_CONT || node->op == GGML_OP_DUP) {
             use_cuda_graph = false; // This node type is not supported by CUDA graph capture
 #ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to mul_mat_id\n", __func__);
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
 #endif
         }
 

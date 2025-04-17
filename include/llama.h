@@ -367,17 +367,18 @@ extern "C" {
 
     // model quantization parameters
     typedef struct llama_model_quantize_params {
-        int32_t nthread;                     // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
-        enum llama_ftype ftype;              // quantize to this llama_ftype
-        enum ggml_type output_tensor_type;   // output tensor type
-        enum ggml_type token_embedding_type; // token embeddings tensor type
-        bool allow_requantize;               // allow quantizing non-f32/f16 tensors
-        bool quantize_output_tensor;         // quantize output.weight
-        bool only_copy;                      // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
-        bool pure;                           // quantize all tensors to the default type
-        bool keep_split;                     // quantize to the same number of shards
-        void * imatrix;                      // pointer to importance matrix data
-        void * kv_overrides;                 // pointer to vector containing overrides
+        int32_t nthread;                      // number of threads to use for quantizing, if <=0 will use std::thread::hardware_concurrency()
+        enum llama_ftype ftype;               // quantize to this llama_ftype
+        enum ggml_type output_tensor_type;    // output tensor type
+        enum ggml_type token_embedding_type;  // token embeddings tensor type
+        bool allow_requantize;                // allow quantizing non-f32/f16 tensors
+        bool quantize_output_tensor;          // quantize output.weight
+        bool only_copy;                       // only copy tensors - ftype, allow_requantize and quantize_output_tensor are ignored
+        bool pure;                            // quantize all tensors to the default type
+        bool keep_split;                      // quantize to the same number of shards
+        void * imatrix;                       // pointer to importance matrix data
+        void * kv_overrides;                  // pointer to vector containing overrides
+        void * tensor_types;                  // pointer to vector containing tensor types
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
