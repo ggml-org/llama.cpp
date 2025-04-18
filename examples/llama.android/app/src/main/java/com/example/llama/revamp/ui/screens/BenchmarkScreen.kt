@@ -1,6 +1,7 @@
 package com.example.llama.revamp.ui.screens
 
 import android.llama.cpp.InferenceEngine.State
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,22 +24,30 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.ui.components.ModelCard
+import com.example.llama.revamp.ui.components.UnloadDialogState
+import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 
 @Composable
 fun BenchmarkScreen(
-    onBackPressed: () -> Unit,
-    viewModel: BenchmarkViewModel = hiltViewModel()
+    onNavigateBack: () -> Unit,
+    viewModel: BenchmarkViewModel
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
+    val unloadDialogState by viewModel.unloadDialogState.collectAsState()
 
+    // Run benchmark when entering the screen
     LaunchedEffect(selectedModel) {
         viewModel.runBenchmark()
+    }
+
+    // Handle back button press
+    BackHandler {
+        viewModel.onBackPressed()
     }
 
     Column(
@@ -114,5 +123,36 @@ fun BenchmarkScreen(
                 }
             }
         }
+    }
+
+    // Unload confirmation dialog
+    when (val state = unloadDialogState) {
+        is UnloadDialogState.Confirming -> {
+            UnloadModelConfirmationDialog(
+                onConfirm = {
+                    viewModel.onUnloadConfirmed(onNavigateBack)
+                },
+                onDismiss = {
+                    viewModel.onUnloadDismissed()
+                },
+                isUnloading = false
+            )
+        }
+        is UnloadDialogState.Unloading -> {
+            UnloadModelConfirmationDialog(
+                onConfirm = {
+                    viewModel.onUnloadConfirmed(onNavigateBack)
+                },
+                onDismiss = {
+                    viewModel.onUnloadDismissed()
+                },
+                isUnloading = true
+            )
+        }
+        is UnloadDialogState.Error -> {
+            // TODO-han.yin: TBD
+            android.util.Log.e("JOJO", "Unload error: ${state.message}")
+        }
+        else -> { /* Dialog not shown */ }
     }
 }
