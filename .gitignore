@@ -121,6 +121,7 @@ poetry.toml
 
 # Nix
 /result
+/result-*
 
 # Test binaries
 /tests/test-backend-ops

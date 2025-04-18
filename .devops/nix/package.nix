@@ -107,6 +107,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   pname = "llama-cpp${pnameSuffix}";
   version = llamaVersion;
 
+  outputs = [ "out" "lib" "dev" ];
+
   # Note: none of the files discarded here are visible in the sandbox or
   # affect the output hash. This also means they can be modified without
   # triggering a rebuild.
