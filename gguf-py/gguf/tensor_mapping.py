@@ -346,7 +346,6 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.up_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj", # deepseek deepseek2
             "language_model.model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
-            "model.layers.{bid}.shared_mlp.input_linear",    # granitemoeshared
         ),
 
         # AWQ-activation gate
