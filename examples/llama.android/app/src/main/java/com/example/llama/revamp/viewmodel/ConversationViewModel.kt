@@ -1,6 +1,5 @@
 package com.example.llama.revamp.viewmodel
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.engine.ConversationService
 import com.example.llama.revamp.engine.GenerationUpdate
@@ -22,9 +21,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
     private val conversationService: ConversationService
-) : ViewModel() {
+) : ModelUnloadingViewModel(conversationService) {
 
-    val engineState = conversationService.engineState
     val selectedModel = conversationService.currentSelectedModel
     val systemPrompt = conversationService.systemPrompt
 
@@ -150,8 +148,10 @@ class ConversationViewModel @Inject constructor(
         }
     }
 
+    override suspend fun performCleanup() = clearConversation()
+
     /**
-     * Clear conversation
+     * Stop ongoing generation if any, then clean up all messages in the current conversation
      */
     fun clearConversation() {
         stopGeneration()

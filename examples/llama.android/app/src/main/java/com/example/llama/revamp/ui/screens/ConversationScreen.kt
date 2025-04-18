@@ -1,6 +1,7 @@
 package com.example.llama.revamp.ui.screens
 
 import android.llama.cpp.InferenceEngine.State
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -55,7 +56,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.example.llama.revamp.APP_NAME
 import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
+import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.Message
 import kotlinx.coroutines.launch
@@ -65,13 +68,14 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ConversationScreen(
-    onBackPressed: () -> Unit,
+    onNavigateBack: () -> Unit,
     viewModel: ConversationViewModel
 ) {
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
+    val unloadDialogState by viewModel.unloadModelState.collectAsState()
 
     val isProcessing = engineState is State.ProcessingUserPrompt
     val isGenerating = engineState is State.Generating
@@ -111,6 +115,11 @@ fun ConversationScreen(
         }
     }
 
+    // Handle back navigation requests
+    BackHandler {
+        viewModel.onBackPressed(onNavigateBack)
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -145,10 +154,18 @@ fun ConversationScreen(
             isEnabled = !isProcessing && !isGenerating
         )
     }
+
+    // Unload confirmation dialog
+    ModelUnloadDialogHandler(
+        unloadModelState = unloadDialogState,
+        onUnloadConfirmed = { viewModel.onUnloadConfirmed(onNavigateBack) },
+        onUnloadDismissed = { viewModel.onUnloadDismissed() },
+        onNavigateBack = onNavigateBack,
+    )
 }
 
 @Composable
-fun ConversationMessageList(
+private fun ConversationMessageList(
     messages: List<Message>,
     listState: LazyListState,
 ) {
@@ -172,7 +189,7 @@ fun ConversationMessageList(
 }
 
 @Composable
-fun MessageBubble(message: Message) {
+private fun MessageBubble(message: Message) {
     when (message) {
         is Message.User -> UserMessageBubble(
             formattedTime = message.formattedTime,
@@ -198,7 +215,7 @@ fun MessageBubble(message: Message) {
 }
 
 @Composable
-fun UserMessageBubble(content: String, formattedTime: String) {
+private fun UserMessageBubble(content: String, formattedTime: String) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -235,7 +252,7 @@ fun UserMessageBubble(content: String, formattedTime: String) {
 }
 
 @Composable
-fun AssistantMessageBubble(
+private fun AssistantMessageBubble(
     formattedTime: String,
     content: String,
     isThinking: Boolean,
@@ -323,7 +340,7 @@ fun AssistantMessageBubble(
 }
 
 @Composable
-fun PulsatingDots(small: Boolean = false) {
+private fun PulsatingDots(small: Boolean = false) {
     val transition = rememberInfiniteTransition(label = "dots")
 
     val animations = List(3) { index ->
@@ -363,7 +380,7 @@ fun PulsatingDots(small: Boolean = false) {
 }
 
 @Composable
-fun ConversationInputField(
+private fun ConversationInputField(
     value: String,
     onValueChange: (String) -> Unit,
     onSendClick: () -> Unit,
