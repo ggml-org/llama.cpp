@@ -1,3 +1,6 @@
 [submodule "kompute"]
 	path = ggml/src/kompute
 	url = https://github.com/nomic-ai/kompute.git
+[submodule "PIM-tensorStore"]
+	path = PIM-tensorStore
+	url = https://github.com/mryvae/PIM-tensorStore.git
