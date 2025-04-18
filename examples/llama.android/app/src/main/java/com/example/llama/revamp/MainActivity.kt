@@ -147,9 +147,8 @@ fun AppContent(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Benchmark",
                     navigationIcon = NavigationIcon.Back {
-                        android.util.Log.w("JOJO", "Benchmark navigation icon tapped")
-                        benchmarkViewModel.onBackPressed()
-                                                         },
+                        benchmarkViewModel.onBackPressed { navigationActions.navigateUp() }
+                    },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = Pair(temperatureInfo, useFahrenheit)
                 )

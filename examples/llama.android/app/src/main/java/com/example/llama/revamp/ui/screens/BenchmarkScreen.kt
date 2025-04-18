@@ -47,7 +47,7 @@ fun BenchmarkScreen(
 
     // Handle back button press
     BackHandler {
-        viewModel.onBackPressed()
+        viewModel.onBackPressed(onNavigateBack)
     }
 
     Column(

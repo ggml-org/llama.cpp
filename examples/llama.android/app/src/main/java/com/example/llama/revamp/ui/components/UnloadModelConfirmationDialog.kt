@@ -10,12 +10,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+
+/**
+ * UI state for [UnloadModelConfirmationDialog]
+ */
+sealed class UnloadDialogState {
+    object Hidden : UnloadDialogState()
+    object Confirming : UnloadDialogState()
+    object Unloading : UnloadDialogState()
+    data class Error(val message: String) : UnloadDialogState()
+}
 
 /**
  * Confirmation dialog shown when the user attempts to navigate away from
