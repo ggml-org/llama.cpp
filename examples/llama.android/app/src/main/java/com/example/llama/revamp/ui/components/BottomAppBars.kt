@@ -83,7 +83,7 @@ fun ModelsManagementBottomBar(
     BottomAppBar(
         actions = {
             if (selection.isActive) {
-                // Multi-selection mode actions
+                /* Multi-selection mode actions */
                 IconButton(onClick = { selection.toggleAllSelection(true) }) {
                     Icon(
                         imageVector = Icons.Default.SelectAll,
@@ -111,8 +111,11 @@ fun ModelsManagementBottomBar(
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
                     )
                 }
+
             } else {
-                // Default mode actions
+                /* Default mode actions */
+
+                // Sorting action
                 IconButton(onClick = { sorting.toggleMenu(true) }) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Sort,
@@ -120,78 +123,35 @@ fun ModelsManagementBottomBar(
                     )
                 }
 
-                // Sort dropdown menu
+                // Sorting dropdown menu
                 DropdownMenu(
                     expanded = sorting.isMenuVisible,
                     onDismissRequest = { sorting.toggleMenu(false) }
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Name (A-Z)") },
-                        trailingIcon = {
-                            if (sorting.currentOrder == ModelSortOrder.NAME_ASC)
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Sort by name in ascending order, selected"
-                                )
-                        },
-                        onClick = {
-                            sorting.selectOrder(ModelSortOrder.NAME_ASC)
-                        }
+                    val sortOptions = listOf(
+                        Triple(ModelSortOrder.NAME_ASC, "Name (A-Z)", "Sort by name in ascending order"),
+                        Triple(ModelSortOrder.NAME_DESC, "Name (Z-A)", "Sort by name in descending order"),
+                        Triple(ModelSortOrder.SIZE_ASC, "Size (Smallest first)", "Sort by size in ascending order"),
+                        Triple(ModelSortOrder.SIZE_DESC, "Size (Largest first)", "Sort by size in descending order"),
+                        Triple(ModelSortOrder.LAST_USED, "Last used", "Sort by last used")
                     )
-                    DropdownMenuItem(
-                        text = { Text("Name (Z-A)") },
-                        trailingIcon = {
-                            if (sorting.currentOrder == ModelSortOrder.NAME_DESC)
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Sort by name in descending order, selected"
-                                )
-                        },
-                        onClick = {
-                            sorting.selectOrder(ModelSortOrder.NAME_DESC)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Size (Smallest first)") },
-                        trailingIcon = {
-                            if (sorting.currentOrder == ModelSortOrder.SIZE_ASC)
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Sort by size in ascending order, selected"
-                                )
-                        },
-                        onClick = {
-                            sorting.selectOrder(ModelSortOrder.SIZE_ASC)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Size (Largest first)") },
-                        trailingIcon = {
-                            if (sorting.currentOrder == ModelSortOrder.SIZE_DESC)
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Sort by size in descending order, selected"
-                                )
-                        },
-                        onClick = {
-                            sorting.selectOrder(ModelSortOrder.SIZE_DESC)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Last used") },
-                        trailingIcon = {
-                            if (sorting.currentOrder == ModelSortOrder.LAST_USED)
-                                Icon(
-                                    imageVector = Icons.Default.Check,
-                                    contentDescription = "Sort by last used, selected"
-                                )
-                        },
-                        onClick = {
-                            sorting.selectOrder(ModelSortOrder.LAST_USED)
-                        }
-                    )
+
+                    sortOptions.forEach { (order, label, description) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            trailingIcon = {
+                                if (sorting.currentOrder == order)
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "$description, selected"
+                                    )
+                            },
+                            onClick = { sorting.selectOrder(order) }
+                        )
+                    }
                 }
 
+                // Filtering action
                 IconButton(
                     onClick = filtering.onClick
                 ) {
@@ -201,6 +161,7 @@ fun ModelsManagementBottomBar(
                     )
                 }
 
+                // Selection action
                 IconButton(onClick = { selection.toggleMode(true) }) {
                     Icon(
                         imageVector = Icons.Default.DeleteSweep,
