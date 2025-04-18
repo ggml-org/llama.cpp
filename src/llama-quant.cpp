@@ -21,6 +21,30 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
+static std::string remap_layer(const std::string & orig_name, const std::vector<int>& prune, std::map<int, std::string>& mapped, int& next_id) {
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const int blk = std::stoi(match[1]);
+        std::string new_name = orig_name;
+
+        if (mapped.count(blk)) {
+            // Already mapped, do nothing
+        } else if (std::find(prune.begin(), prune.end(), blk) != prune.end()) {
+            mapped[blk] = "X";
+        } else if (blk < prune.front()) {
+            mapped[blk] = std::to_string(blk);
+            next_id = blk + 1;
+        } else {
+            mapped[blk] = std::to_string(next_id);
+            ++next_id;
+        }
+
+        return new_name.replace(match.position(1), match.length(1), mapped[blk]);
+    }
+
+    return orig_name;
+}
+
 struct quantize_state_impl {
     const llama_model                 & model;
     const llama_model_quantize_params * params;
