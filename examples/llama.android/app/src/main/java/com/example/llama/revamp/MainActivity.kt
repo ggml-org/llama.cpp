@@ -40,6 +40,8 @@ import com.example.llama.revamp.ui.components.AnimatedNavHost
 import com.example.llama.revamp.ui.components.AppNavigationDrawer
 import com.example.llama.revamp.ui.components.AppScaffold
 import com.example.llama.revamp.ui.components.BottomBarConfig
+import com.example.llama.revamp.ui.components.NavigationIcon
+import com.example.llama.revamp.ui.components.ScaffoldConfig
 import com.example.llama.revamp.ui.components.ScaffoldEvent
 import com.example.llama.revamp.ui.components.TopBarConfig
 import com.example.llama.revamp.ui.components.UnloadModelConfirmationDialog
@@ -147,66 +149,52 @@ fun AppContent(
     val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
     // Create scaffold's top & bottom bar configs based on current route
-    val topBarConfig = when (currentRoute) {
-        // (Home) Model selection screen
-        AppDestinations.MODEL_SELECTION_ROUTE -> {
-            TopBarConfig.Default(
-                title = "Models",
-                navigationIcon = TopBarConfig.NavigationIcon.Menu(openDrawer)
+    val scaffoldConfig = when (currentRoute) {
+        // Model selection screen
+        AppDestinations.MODEL_SELECTION_ROUTE ->
+            ScaffoldConfig(
+                topBarConfig = TopBarConfig.Default(
+                    title = "Models",
+                    navigationIcon = NavigationIcon.Menu(openDrawer)
+                )
             )
-        }
-
-        // Settings screen
-        AppDestinations.SETTINGS_GENERAL_ROUTE -> {
-            TopBarConfig.Default(
-                title = "Settings",
-                navigationIcon = TopBarConfig.NavigationIcon.Back { navigationActions.navigateUp() }
-            )
-        }
-
-        // Storage management screen
-        AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
-            TopBarConfig.Storage(
-                title = "Models Management",
-                navigationIcon = TopBarConfig.NavigationIcon.Back { navigationActions.navigateUp() },
-                storageMetrics = storageMetrics
-            )
-        }
 
         // Model loading screen
-        AppDestinations.MODEL_LOADING_ROUTE -> {
-            TopBarConfig.Performance(
-                title = "Load Model",
-                navigationIcon = TopBarConfig.NavigationIcon.Back(handleBackWithModelCheck),
-                memoryMetrics = memoryUsage,
-                temperatureInfo = null
+        AppDestinations.MODEL_LOADING_ROUTE ->
+            ScaffoldConfig(
+                topBarConfig = TopBarConfig.Performance(
+                    title = "Load Model",
+                    navigationIcon = NavigationIcon.Back(handleBackWithModelCheck),
+                    memoryMetrics = memoryUsage,
+                    temperatureInfo = null
+                )
             )
-        }
 
         // Benchmark and Conversation screens
-        AppDestinations.BENCHMARK_ROUTE, AppDestinations.CONVERSATION_ROUTE -> {
-            TopBarConfig.Performance(
-                title = when(currentRoute) {
-                    AppDestinations.CONVERSATION_ROUTE -> "Chat"
-                    AppDestinations.BENCHMARK_ROUTE -> "Benchmark"
-                    else -> "LlamaAndroid"
-                },
-                navigationIcon = TopBarConfig.NavigationIcon.Back(handleBackWithModelCheck),
-                memoryMetrics = memoryUsage,
-                temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+        AppDestinations.BENCHMARK_ROUTE, AppDestinations.CONVERSATION_ROUTE ->
+            ScaffoldConfig(
+                topBarConfig = TopBarConfig.Performance(
+                    title = when(currentRoute) {
+                        AppDestinations.CONVERSATION_ROUTE -> "Chat"
+                        AppDestinations.BENCHMARK_ROUTE -> "Benchmark"
+                        else -> "LlamaAndroid"
+                    },
+                    navigationIcon = NavigationIcon.Back(handleBackWithModelCheck),
+                    memoryMetrics = memoryUsage,
+                    temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+                )
             )
-        }
 
-        // Fallback for unknown routes
-        else -> {
-            TopBarConfig.Default(
-                title = "LlamaAndroid",
-                navigationIcon = TopBarConfig.NavigationIcon.None
+        // Settings screen
+        AppDestinations.SETTINGS_GENERAL_ROUTE ->
+            ScaffoldConfig(
+                topBarConfig = TopBarConfig.Default(
+                    title = "Settings",
+                    navigationIcon = NavigationIcon.Back { navigationActions.navigateUp() }
+                )
             )
-        }
-    }
 
-    val bottomBarConfig = when (currentRoute) {
+        // Storage management screen
         AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
             // Collect the needed states
             val sortOrder by modelsManagementViewModel.sortOrder.collectAsState()
@@ -220,11 +208,11 @@ fun AppContent(
                 contract = ActivityResultContracts.OpenDocument()
             ) { uri -> uri?.let { modelsManagementViewModel.localModelFileSelected(it) } }
 
-            BottomBarConfig.ModelsManagement(
+            val bottomBarConfig = BottomBarConfig.ModelsManagement(
                 sorting = BottomBarConfig.ModelsManagement.SortingConfig(
                     currentOrder = sortOrder,
                     isMenuVisible = showSortMenu,
-                    toggleMenu = { show -> modelsManagementViewModel.toggleSortMenu(show) },
+                    toggleMenu = { modelsManagementViewModel.toggleSortMenu(it) },
                     selectOrder = {
                         modelsManagementViewModel.setSortOrder(it)
                         modelsManagementViewModel.toggleSortMenu(false)
@@ -235,9 +223,9 @@ fun AppContent(
                 ),
                 selection = BottomBarConfig.ModelsManagement.SelectionConfig(
                     isActive = isMultiSelectionMode,
-                    toggleMode = { enabled -> modelsManagementViewModel.toggleSelectionMode(enabled) },
+                    toggleMode = { modelsManagementViewModel.toggleSelectionMode(it) },
                     selectedModels = selectedModels,
-                    toggleAllSelection = { selectAll -> modelsManagementViewModel.toggleAllSelection(selectAll) },
+                    toggleAllSelection = { modelsManagementViewModel.toggleAllSelection(it) },
                     deleteSelected = {
                         if (selectedModels.isNotEmpty()) {
                             modelsManagementViewModel.batchDeletionClicked(selectedModels)
@@ -255,10 +243,23 @@ fun AppContent(
                         modelsManagementViewModel.importFromHuggingFace()
                         modelsManagementViewModel.toggleImportMenu(false)
                     }
+                )
+            )
+
+            ScaffoldConfig(
+                topBarConfig = TopBarConfig.Storage(
+                    title = "Models Management",
+                    navigationIcon = NavigationIcon.Back { navigationActions.navigateUp() },
+                    storageMetrics = storageMetrics
                 ),
+                bottomBarConfig = bottomBarConfig
             )
         }
-        else -> BottomBarConfig.None
+
+        // Fallback for empty screen or unknown routes
+        else -> ScaffoldConfig(
+            topBarConfig = TopBarConfig.Default(title = "", navigationIcon = NavigationIcon.None)
+        )
     }
 
     // Handle child screens' scaffold events
@@ -309,8 +310,8 @@ fun AppContent(
     ) {
         // The AppScaffold now uses the config we created
         AppScaffold(
-            topBarconfig = topBarConfig,
-            bottomBarConfig = bottomBarConfig,
+            topBarconfig = scaffoldConfig.topBarConfig,
+            bottomBarConfig = scaffoldConfig.bottomBarConfig,
             snackbarHostState = snackbarHostState,
         ) { paddingValues ->
             // AnimatedNavHost inside the scaffold content

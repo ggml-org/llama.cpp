@@ -35,7 +35,13 @@ sealed class TopBarConfig {
     abstract val title: String
     abstract val navigationIcon: NavigationIcon
 
-    // Data class for performance monitoring scaffolds
+    // Default/simple top bar with only a navigation icon
+    data class Default(
+        override val title: String,
+        override val navigationIcon: NavigationIcon
+    ) : TopBarConfig()
+
+    // Performance monitoring top bar with RAM and optional temperature
     data class Performance(
         override val title: String,
         override val navigationIcon: NavigationIcon,
@@ -43,25 +49,21 @@ sealed class TopBarConfig {
         val temperatureInfo: Pair<TemperatureMetrics, Boolean>?,
     ) : TopBarConfig()
 
-    // Data class for storage management scaffolds
+    // Storage management top bar with used & total storage
     data class Storage(
         override val title: String,
         override val navigationIcon: NavigationIcon,
         val storageMetrics: StorageMetrics?
     ) : TopBarConfig()
+}
 
-    // Data class for default/simple scaffolds
-    data class Default(
-        override val title: String,
-        override val navigationIcon: NavigationIcon
-    ) : TopBarConfig()
-
-    // Helper class for navigation icon configuration
-    sealed class NavigationIcon {
-        data class Menu(val onMenuOpen: () -> Unit) : NavigationIcon()
-        data class Back(val onNavigateBack: () -> Unit) : NavigationIcon()
-        object None : NavigationIcon()
-    }
+/**
+ * Helper class for navigation icon configuration
+ */
+sealed class NavigationIcon {
+    data class Back(val onNavigateBack: () -> Unit) : NavigationIcon()
+    data class Menu(val onMenuOpen: () -> Unit) : NavigationIcon()
+    object None : NavigationIcon()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

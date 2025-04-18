@@ -8,6 +8,13 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 
+/**
+ * Configuration of both [TopBarConfig] and [BottomBarConfig]
+ */
+data class ScaffoldConfig(
+    val topBarConfig: TopBarConfig,
+    val bottomBarConfig: BottomBarConfig = BottomBarConfig.None
+)
 
 /**
  * Events called back from child screens
@@ -38,8 +45,8 @@ fun AppScaffold(
                     title = topBarconfig.title,
                     memoryMetrics = topBarconfig.memoryMetrics,
                     temperatureDisplay = topBarconfig.temperatureInfo,
-                    onNavigateBack = (topBarconfig.navigationIcon as? TopBarConfig.NavigationIcon.Back)?.onNavigateBack,
-                    onMenuOpen = (topBarconfig.navigationIcon as? TopBarConfig.NavigationIcon.Menu)?.onMenuOpen
+                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack,
+                    onMenuOpen = (topBarconfig.navigationIcon as? NavigationIcon.Menu)?.onMenuOpen
                 )
             }
 
@@ -47,15 +54,15 @@ fun AppScaffold(
                 StorageTopBar(
                     title = topBarconfig.title,
                     storageMetrics = topBarconfig.storageMetrics,
-                    onNavigateBack = (topBarconfig.navigationIcon as? TopBarConfig.NavigationIcon.Back)?.onNavigateBack
+                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack
                 )
             }
 
             is TopBarConfig.Default -> {
                 DefaultTopBar(
                     title = topBarconfig.title,
-                    onNavigateBack = (topBarconfig.navigationIcon as? TopBarConfig.NavigationIcon.Back)?.onNavigateBack,
-                    onMenuOpen = (topBarconfig.navigationIcon as? TopBarConfig.NavigationIcon.Menu)?.onMenuOpen
+                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack,
+                    onMenuOpen = (topBarconfig.navigationIcon as? NavigationIcon.Menu)?.onMenuOpen
                 )
             }
         }
