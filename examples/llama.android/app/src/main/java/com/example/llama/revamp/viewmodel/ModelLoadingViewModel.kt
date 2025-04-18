@@ -3,6 +3,7 @@ package com.example.llama.revamp.viewmodel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
+import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.engine.ModelLoadingService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -79,17 +80,23 @@ class ModelLoadingViewModel @Inject constructor(
     }
 
     /**
-     * Prepares the engine for benchmark mode.
+     * Loads the model, then navigate to [BenchmarkScreen] with [ModelLoadingMetrics]
      */
-    suspend fun prepareForBenchmark() =
-        modelLoadingService.loadModelForBenchmark()
+    fun onBenchmarkSelected(onNavigateToBenchmark: (ModelLoadingMetrics) -> Unit) =
+        viewModelScope.launch {
+            onNavigateToBenchmark(modelLoadingService.loadModelForBenchmark())
+        }
 
     /**
-     * Prepare for conversation
+     * Loads the model, process system prompt if any,
+     * then navigate to [ConversationScreen] with [ModelLoadingMetrics]
      */
-    suspend fun prepareForConversation(systemPrompt: String? = null) =
-        modelLoadingService.loadModelForConversation(systemPrompt)
-
+    fun onConversationSelected(
+        systemPrompt: String? = null,
+        onNavigateToConversation: (ModelLoadingMetrics) -> Unit
+    ) = viewModelScope.launch {
+        onNavigateToConversation(modelLoadingService.loadModelForConversation(systemPrompt))
+    }
 
     companion object {
         private val TAG = ModelLoadingViewModel::class.java.simpleName

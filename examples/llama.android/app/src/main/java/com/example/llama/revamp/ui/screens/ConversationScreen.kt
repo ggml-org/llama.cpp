@@ -57,6 +57,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.APP_NAME
+import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.viewmodel.ConversationViewModel
@@ -68,6 +69,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ConversationScreen(
+    loadingMetrics: ModelLoadingMetrics,
     onNavigateBack: () -> Unit,
     viewModel: ConversationViewModel
 ) {

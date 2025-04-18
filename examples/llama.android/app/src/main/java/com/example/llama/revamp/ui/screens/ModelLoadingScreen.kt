@@ -42,7 +42,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,11 +49,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.SystemPrompt
+import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
 
 
 enum class Mode {
@@ -70,12 +68,10 @@ enum class SystemPromptTab(val label: String) {
 @Composable
 fun ModelLoadingScreen(
     onNavigateBack: () -> Unit,
-    onBenchmarkSelected: (prepareJob: Job) -> Unit,
-    onConversationSelected: (systemPrompt: String?, prepareJob: Job) -> Unit,
+    onNavigateToBenchmark: (ModelLoadingMetrics) -> Unit,
+    onNavigateToConversation: (ModelLoadingMetrics) -> Unit,
     viewModel: ModelLoadingViewModel,
 ) {
-    val coroutineScope = rememberCoroutineScope()
-
     val engineState by viewModel.engineState.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
     val presetPrompts by viewModel.presetPrompts.collectAsState()
@@ -107,22 +103,6 @@ fun ModelLoadingScreen(
 
     // Check if we're in a loading state
     val isLoading = engineState !is State.Initialized && engineState !is State.ModelReady
-
-    // Mode selection callbacks
-    val handleBenchmarkSelected = {
-        val prepareJob = coroutineScope.launch {
-            viewModel.prepareForBenchmark()
-        }
-        onBenchmarkSelected(prepareJob)
-    }
-
-    // TODO-han.yin: refactor this into ViewModel too
-    val handleConversationSelected = { systemPrompt: String? ->
-        val prepareJob = coroutineScope.launch {
-            viewModel.prepareForConversation(systemPrompt)
-        }
-        onConversationSelected(systemPrompt, prepareJob)
-    }
 
     // Handle back navigation requests
     BackHandler {
@@ -301,7 +281,7 @@ fun ModelLoadingScreen(
         Button(
             onClick = {
                 when (selectedMode) {
-                    Mode.BENCHMARK -> handleBenchmarkSelected()
+                    Mode.BENCHMARK -> viewModel.onBenchmarkSelected(onNavigateToBenchmark)
 
                     Mode.CONVERSATION -> {
                         val systemPrompt = if (useSystemPrompt) {
@@ -324,7 +304,7 @@ fun ModelLoadingScreen(
                             }
                         } else null
 
-                        handleConversationSelected(systemPrompt)
+                        viewModel.onConversationSelected(systemPrompt, onNavigateToConversation)
                     }
 
                     null -> { /* No mode selected */

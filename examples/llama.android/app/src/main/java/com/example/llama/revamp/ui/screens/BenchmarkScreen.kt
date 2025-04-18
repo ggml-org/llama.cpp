@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.ui.components.ModelCard
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
@@ -31,6 +32,7 @@ import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 
 @Composable
 fun BenchmarkScreen(
+    loadingMetrics: ModelLoadingMetrics,
     onNavigateBack: () -> Unit,
     viewModel: BenchmarkViewModel
 ) {

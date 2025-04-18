@@ -21,9 +21,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavType
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.components.AnimatedNavHost
@@ -48,7 +51,6 @@ import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
@@ -110,9 +112,9 @@ fun AppContent(
     val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
     // Create scaffold's top & bottom bar configs based on current route
-    val scaffoldConfig = when (currentRoute) {
+    val scaffoldConfig = when {
         // Model selection screen
-        AppDestinations.MODEL_SELECTION_ROUTE ->
+        currentRoute == AppDestinations.MODEL_SELECTION_ROUTE ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Default(
                     title = "Models",
@@ -121,7 +123,7 @@ fun AppContent(
             )
 
         // Model loading screen
-        AppDestinations.MODEL_LOADING_ROUTE ->
+        currentRoute == AppDestinations.MODEL_LOADING_ROUTE ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Load Model",
@@ -134,7 +136,7 @@ fun AppContent(
             )
 
         // Benchmark screen
-        AppDestinations.BENCHMARK_ROUTE ->
+        currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Benchmark",
@@ -147,7 +149,7 @@ fun AppContent(
             )
 
         // Conversation screen
-        AppDestinations.CONVERSATION_ROUTE ->
+        currentRoute.startsWith(AppDestinations.CONVERSATION_ROUTE) ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Chat",
@@ -160,7 +162,7 @@ fun AppContent(
             )
 
         // Settings screen
-        AppDestinations.SETTINGS_GENERAL_ROUTE ->
+        currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Default(
                     title = "Settings",
@@ -169,7 +171,7 @@ fun AppContent(
             )
 
         // Storage management screen
-        AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
+        currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE -> {
             // Collect the needed states
             val sortOrder by modelsManagementViewModel.sortOrder.collectAsState()
             val isMultiSelectionMode by modelsManagementViewModel.isMultiSelectionMode.collectAsState()
@@ -301,35 +303,59 @@ fun AppContent(
                 composable(AppDestinations.MODEL_LOADING_ROUTE) {
                     ModelLoadingScreen(
                         onNavigateBack = { navigationActions.navigateUp() },
-                        onBenchmarkSelected = { prepareJob ->
-                            // Wait for preparation to complete, then navigate if still active
-                            coroutineScope.launch {
-                                prepareJob.join()
-                                if (isActive) { navigationActions.navigateToBenchmark() }
-                            }
-                        },
-                        onConversationSelected = { systemPrompt, prepareJob ->
-                            // Wait for preparation to complete, then navigate if still active
-                            coroutineScope.launch {
-                                prepareJob.join()
-                                if (isActive) { navigationActions.navigateToConversation() }
-                            }
-                        },
+                        onNavigateToBenchmark = { navigationActions.navigateToBenchmark(it) },
+                        onNavigateToConversation = { navigationActions.navigateToConversation(it) },
                         viewModel = modelLoadingViewModel
                     )
                 }
 
                 // Benchmark Screen
-                composable(AppDestinations.BENCHMARK_ROUTE) {
+                composable(
+                    route = AppDestinations.BENCHMARK_ROUTE_WITH_PARAMS,
+                    arguments = listOf(
+                        navArgument("modelLoadTimeMs") {
+                            type = NavType.LongType
+                            defaultValue = 0L
+                        }
+                    )
+                ) { backStackEntry ->
+                    val modelLoadTimeMs = backStackEntry.arguments?.getLong("modelLoadTimeMs") ?: 0L
+                    val metrics = if (modelLoadTimeMs > 0) {
+                        ModelLoadingMetrics(modelLoadTimeMs)
+                    } else throw IllegalArgumentException("Expecting a valid ModelLoadingMetrics!")
+
                     BenchmarkScreen(
+                        loadingMetrics = metrics,
                         onNavigateBack = { navigationActions.navigateUp() },
                         viewModel = benchmarkViewModel
                     )
                 }
 
                 // Conversation Screen
-                composable(AppDestinations.CONVERSATION_ROUTE) {
+                composable(
+                    route = AppDestinations.CONVERSATION_ROUTE_WITH_PARAMS,
+                    arguments = listOf(
+                        navArgument("modelLoadTimeMs") {
+                            type = NavType.LongType
+                            defaultValue = 0L
+                        },
+                        navArgument("promptTimeMs") {
+                            type = NavType.LongType
+                            defaultValue = 0L
+                        }
+                    )
+                ) { backStackEntry ->
+                    val modelLoadTimeMs = backStackEntry.arguments?.getLong("modelLoadTimeMs") ?: 0L
+                    val promptTimeMs = backStackEntry.arguments?.getLong("promptTimeMs") ?: 0L
+                    val metrics = if (modelLoadTimeMs > 0) {
+                        ModelLoadingMetrics(
+                            modelLoadingTimeMs = modelLoadTimeMs,
+                            systemPromptProcessingTimeMs = if (promptTimeMs > 0) promptTimeMs else null
+                        )
+                    } else throw IllegalArgumentException("Expecting a valid ModelLoadingMetrics!")
+
                     ConversationScreen(
+                        loadingMetrics = metrics,
                         onNavigateBack = { navigationActions.navigateUp() },
                         viewModel = conversationViewModel
                     )
