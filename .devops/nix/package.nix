@@ -188,7 +188,6 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   cmakeFlags =
     [
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
-      (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "LLAMA_CURL" enableCurl)
       (cmakeBool "GGML_NATIVE" false)
       (cmakeBool "GGML_BLAS" useBlas)
