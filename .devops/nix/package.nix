@@ -150,7 +150,6 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     [
       cmake
       ninja
-      pkg-config
       git
     ]
     ++ optionals useCuda [
@@ -171,6 +170,11 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useVulkan vulkanBuildInputs
     ++ optionals enableCurl [ curl ];
 
+  propagatedNativeBuildInputs = [ pkg-config ];
+
+  propagatedBuildInputs =
+    optionals useBlas [ blas ];
+
   cmakeFlags =
     [
       (cmakeBool "LLAMA_BUILD_SERVER" true)
@@ -184,6 +188,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_METAL" useMetalKit)
       (cmakeBool "GGML_VULKAN" useVulkan)
       (cmakeBool "GGML_STATIC" enableStatic)
+      (cmakeBool "BLA_PREFER_PKGCONFIG" true)
     ]
     ++ optionals useCuda [
       (
