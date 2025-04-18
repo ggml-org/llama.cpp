@@ -36,6 +36,9 @@
   enableCurl ? true,
   useVulkan ? false,
   useOpenMP ? false,
+  buildCommon ? true,
+  buildExamples ? buildCommon,
+  buildServer ? buildExamples,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -51,6 +54,7 @@ let
     cmakeFeature
     optionals
     strings
+    assertMsg
     ;
 
   stdenv = throw "Use effectiveStdenv instead";
@@ -107,6 +111,9 @@ let
     vulkan-loader
   ];
 in
+
+assert assertMsg (buildExamples -> buildCommon) "buildCommon must be true when buildExamples is true";
+assert assertMsg (buildServer -> buildExamples) "buildExamples must be true when buildServer is true";
 
 effectiveStdenv.mkDerivation (finalAttrs: {
   pname = "llama-cpp${pnameSuffix}";
@@ -180,7 +187,6 @@ effectiveStdenv.mkDerivation (finalAttrs: {
 
   cmakeFlags =
     [
-      (cmakeBool "LLAMA_BUILD_SERVER" true)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
       (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "LLAMA_CURL" enableCurl)
@@ -192,6 +198,10 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_VULKAN" useVulkan)
       (cmakeBool "GGML_OPENMP" useOpenMP)
       (cmakeBool "GGML_STATIC" enableStatic)
+      (cmakeBool "LLAMA_BUILD_COMMON" (buildCommon || finalAttrs.doCheck or false))
+      (cmakeBool "LLAMA_BUILD_TESTS" finalAttrs.doCheck or false)
+      (cmakeBool "LLAMA_BUILD_EXAMPLES" buildExamples)
+      (cmakeBool "LLAMA_BUILD_SERVER" buildServer)
       (cmakeBool "BLA_PREFER_PKGCONFIG" true)
     ]
     ++ optionals useCuda [
