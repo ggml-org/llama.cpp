@@ -1,12 +1,7 @@
 package com.example.llama.revamp
 
-import android.llama.cpp.InferenceEngine.State
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
-import androidx.activity.OnBackPressedDispatcher
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,18 +14,13 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
@@ -135,7 +125,9 @@ fun AppContent(
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Load Model",
-                    navigationIcon = NavigationIcon.Back { navigationActions.navigateUp() },
+                    navigationIcon = NavigationIcon.Back {
+                        benchmarkViewModel.onBackPressed { navigationActions.navigateUp() }
+                    },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = null
                 )
@@ -160,9 +152,8 @@ fun AppContent(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Chat",
                     navigationIcon = NavigationIcon.Back {
-                        // TODO-han.yin: uncomment after [ConversationViewModel] done
-                     //    conversationViewModel.onBackPressed()
-                     },
+                         conversationViewModel.onBackPressed { navigationActions.navigateUp() }
+                    },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = Pair(temperatureInfo, useFahrenheit)
                 )
@@ -309,7 +300,7 @@ fun AppContent(
                 // Mode Selection Screen
                 composable(AppDestinations.MODEL_LOADING_ROUTE) {
                     ModelLoadingScreen(
-                        engineState = engineState,
+                        onNavigateBack = { navigationActions.navigateUp() },
                         onBenchmarkSelected = { prepareJob ->
                             // Wait for preparation to complete, then navigate if still active
                             coroutineScope.launch {
