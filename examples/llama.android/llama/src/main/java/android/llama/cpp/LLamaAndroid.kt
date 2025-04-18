@@ -87,7 +87,9 @@ class LLamaAndroid private constructor() : InferenceEngine {
      */
     override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
-            check(_state.value is State.LibraryLoaded) { "Cannot load model in ${_state.value}!" }
+            check(_state.value is State.LibraryLoaded) {
+                "Cannot load model in ${_state.value.javaClass.simpleName}!"
+            }
             File(pathToModel).let {
                 require(it.exists()) { "Model file not found: $pathToModel" }
                 require(it.isFile) { "Model file is not a file: $pathToModel" }
@@ -114,7 +116,9 @@ class LLamaAndroid private constructor() : InferenceEngine {
         withContext(llamaDispatcher) {
             require(prompt.isNotBlank()) { "Cannot process empty system prompt!" }
             check(_readyForSystemPrompt) { "System prompt must be set ** RIGHT AFTER ** model loaded!" }
-            check(_state.value is State.ModelReady) { "Cannot process system prompt in ${_state.value}!" }
+            check(_state.value is State.ModelReady) {
+                "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
+            }
 
             Log.i(TAG, "Sending system prompt...")
             _readyForSystemPrompt = false
@@ -139,13 +143,14 @@ class LLamaAndroid private constructor() : InferenceEngine {
     ): Flow<String> = flow {
         require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
         check(_state.value is State.ModelReady) {
-            "User prompt discarded due to: ${_state.value}"
+            "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
         }
 
         try {
             Log.i(TAG, "Sending user prompt...")
             _readyForSystemPrompt = false
             _state.value = State.ProcessingUserPrompt
+
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
                     Log.e(TAG, "Failed to process user prompt: $result")
@@ -194,16 +199,19 @@ class LLamaAndroid private constructor() : InferenceEngine {
      */
     override suspend fun unloadModel() =
         withContext(llamaDispatcher) {
-            when(_state.value) {
+            when(val state = _state.value) {
                 is State.ModelReady, is State.Error -> {
                     Log.i(TAG, "Unloading model and free resources...")
                     _readyForSystemPrompt = false
+                    _state.value = State.UnloadingModel
+
                     unload()
+
                     _state.value = State.LibraryLoaded
                     Log.i(TAG, "Model unloaded!")
                     Unit
                 }
-                else -> throw IllegalStateException("Cannot unload model in ${_state.value}")
+                else -> throw IllegalStateException("Cannot unload model in ${state.javaClass.simpleName}")
             }
         }
 

@@ -50,6 +50,7 @@ interface InferenceEngine {
         object LibraryLoaded : State()
 
         object LoadingModel : State()
+        object UnloadingModel : State()
         object ModelReady : State()
 
         object ProcessingSystemPrompt : State()
