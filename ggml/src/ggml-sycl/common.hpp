@@ -313,7 +313,6 @@ struct ggml_backend_sycl_context {
     int device;
     std::string name;
     optimize_feature opt_feature;
-    bool optimized_graph=false;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
