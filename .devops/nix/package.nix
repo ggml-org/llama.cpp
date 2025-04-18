@@ -96,10 +96,13 @@ let
     rocblas
   ];
 
+  vulkanNativeBuildInputs = [
+    shaderc
+  ];
+
   vulkanBuildInputs = [
     vulkan-headers
     vulkan-loader
-    shaderc
   ];
 in
 
@@ -155,6 +158,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
 
       autoAddDriverRunpath
     ]
+    ++ optionals useVulkan vulkanNativeBuildInputs
     ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [ glibc.static ]
     ++ optionals (effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
 
