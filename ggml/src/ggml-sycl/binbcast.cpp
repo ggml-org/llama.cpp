@@ -1,7 +1,9 @@
 #include "binbcast.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <sycl/sycl.hpp>
+
 #include "ggml.h"
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
