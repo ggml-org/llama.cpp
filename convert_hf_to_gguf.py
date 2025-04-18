@@ -5015,7 +5015,7 @@ class ChatGLMModel(Model):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
-    
+
     def set_vocab_legacy(self):
         dir_model = self.dir_model
         hparams = self.hparams
@@ -5055,7 +5055,7 @@ class ChatGLMModel(Model):
             else:
                 tokens.append(reverse_vocab[i])
                 toktypes.append(gguf.TokenType.NORMAL)
-                
+
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre('chatglm-bpe')
         self.gguf_writer.add_token_list(tokens)
