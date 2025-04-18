@@ -94,7 +94,7 @@ struct bin_bcast_sycl {
                     const int64_t ne12, const int64_t ne13, const int64_t ne0, const int64_t ne1, const int64_t ne2,
                     const int64_t ne3, const size_t nb00, const size_t nb01, const size_t nb02, const size_t nb03,
                     const size_t nb10, const size_t nb11, const size_t nb12, const size_t nb13, const size_t nb0,
-                    const size_t nb1, const size_t nb2, const size_t nb3, const bool src0_is_contiguos,
+                    const size_t nb1, const size_t nb2, const size_t nb3, const bool src0_is_contiguous,
                     const bool src1_is_contiguous, const bool dst_is_contiguous, queue_ptr stream) {
         int nr0 = ne10 / ne0;
         int nr1 = ne11/ne1;
@@ -123,7 +123,7 @@ struct bin_bcast_sycl {
             cnb[3] *= cne[3];
         };
 
-        if (src0_is_contiguos && src1_is_contiguous && dst_is_contiguous) {
+        if (src0_is_contiguous && src1_is_contiguous && dst_is_contiguous) {
             for (int i = 0; i < 4; i++) {
                 if (nr[i] != 1) {
                     break;
