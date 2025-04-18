@@ -28,7 +28,7 @@ sealed class ScaffoldEvent {
         val onAction: (() -> Unit)? = null
     ) : ScaffoldEvent()
 
-     data class ChangeTitle(val newTitle: String) : ScaffoldEvent()
+    data class ChangeTitle(val newTitle: String) : ScaffoldEvent()
 }
 
 @Composable
@@ -39,40 +39,33 @@ fun AppScaffold(
     content: @Composable (PaddingValues) -> Unit
 ) {
     val topBar: @Composable () -> Unit = {
-        when (topBarconfig) {
-            is TopBarConfig.Performance -> {
-                PerformanceTopBar(
-                    title = topBarconfig.title,
-                    memoryMetrics = topBarconfig.memoryMetrics,
-                    temperatureDisplay = topBarconfig.temperatureInfo,
-                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack,
-                    onMenuOpen = (topBarconfig.navigationIcon as? NavigationIcon.Menu)?.onMenuOpen
-                )
-            }
+        when (val topConfig = topBarconfig) {
+            is TopBarConfig.Default -> DefaultTopBar(
+                title = topBarconfig.title,
+                onNavigateBack = topConfig.navigationIcon.backAction,
+                onMenuOpen = topConfig.navigationIcon.menuAction,
+            )
 
-            is TopBarConfig.Storage -> {
-                StorageTopBar(
-                    title = topBarconfig.title,
-                    storageMetrics = topBarconfig.storageMetrics,
-                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack
-                )
-            }
+            is TopBarConfig.Performance -> PerformanceTopBar(
+                title = topBarconfig.title,
+                memoryMetrics = topBarconfig.memoryMetrics,
+                temperatureDisplay = topBarconfig.temperatureInfo,
+                onNavigateBack = topConfig.navigationIcon.backAction,
+                onMenuOpen = topConfig.navigationIcon.menuAction,
+            )
 
-            is TopBarConfig.Default -> {
-                DefaultTopBar(
-                    title = topBarconfig.title,
-                    onNavigateBack = (topBarconfig.navigationIcon as? NavigationIcon.Back)?.onNavigateBack,
-                    onMenuOpen = (topBarconfig.navigationIcon as? NavigationIcon.Menu)?.onMenuOpen
-                )
-            }
+            is TopBarConfig.Storage -> StorageTopBar(
+                title = topBarconfig.title,
+                storageMetrics = topBarconfig.storageMetrics,
+                onNavigateBack = topConfig.navigationIcon.backAction,
+            )
         }
     }
 
     val bottomBar: @Composable () -> Unit = {
         when (val config = bottomBarConfig) {
-            is BottomBarConfig.None -> {
-                /* No bottom bar */
-            }
+            is BottomBarConfig.None -> { /* No bottom bar */ }
+
             is BottomBarConfig.ModelsManagement -> {
                 ModelsManagementBottomBar(
                     sorting = config.sorting,
@@ -91,3 +84,10 @@ fun AppScaffold(
         content = content
     )
 }
+
+// Helper functions to obtain navigation actions if exist
+private val NavigationIcon.backAction: (() -> Unit)?
+    get() = (this as? NavigationIcon.Back)?.onNavigateBack
+
+private val NavigationIcon.menuAction: (() -> Unit)?
+    get() = (this as? NavigationIcon.Menu)?.onMenuOpen
