@@ -184,18 +184,19 @@ static int eval_message(gemma3_context & ctx, common_chat_msg & msg, std::vector
     text.text          = formatted_chat.prompt;
     text.add_special   = add_bos;
     text.parse_special = true;
-    mtmd_input_chunks_ptr chunks(mtmd_tokenize(ctx.ctx_vision.get(), text, bitmaps));
-    if (chunks == nullptr) {
-        LOG_ERR("Unable to tokenize prompt\n");
+    mtmd_input_chunks chunks;
+    int32_t res = mtmd_tokenize(ctx.ctx_vision.get(), chunks, text, bitmaps);
+    if (res != 0) {
+        LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
         return 1;
     }
 
-    if (mtmd_helper_eval(ctx.ctx_vision.get(), ctx.lctx, chunks.get(), ctx.n_past, 0, ctx.n_batch)) {
+    if (mtmd_helper_eval(ctx.ctx_vision.get(), ctx.lctx, chunks, ctx.n_past, 0, ctx.n_batch)) {
         LOG_ERR("Unable to eval prompt\n");
         return 1;
     }
 
-    ctx.n_past += mtmd_helper_get_n_tokens(chunks.get());
+    ctx.n_past += mtmd_helper_get_n_tokens(chunks);
 
     return 0;
 }
