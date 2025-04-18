@@ -404,7 +404,7 @@ private fun ConversationInputField(
                 modifier = Modifier
                     .weight(1f)
                     .padding(end = 8.dp),
-                placeholder = { Text("Message Kleidi LLaMA...") },
+                placeholder = { Text("Message $APP_NAME...") },
                 maxLines = 5,
                 enabled = isEnabled,
                 colors = TextFieldDefaults.colors(

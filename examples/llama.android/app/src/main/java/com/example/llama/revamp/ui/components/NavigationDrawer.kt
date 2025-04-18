@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.llama.revamp.APP_NAME
 import com.example.llama.revamp.navigation.NavigationActions
 import kotlinx.coroutines.launch
 
@@ -103,7 +104,7 @@ private fun DrawerContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "Kleidi LLaMA",
+                text = APP_NAME,
                 style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center
             )

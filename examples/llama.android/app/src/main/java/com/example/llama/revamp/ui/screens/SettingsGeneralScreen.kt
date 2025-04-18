@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.llama.revamp.APP_NAME
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 
 /**
@@ -29,7 +30,6 @@ import com.example.llama.revamp.viewmodel.PerformanceViewModel
 @Composable
 fun SettingsGeneralScreen(
     performanceViewModel: PerformanceViewModel = hiltViewModel(),
-    onBackPressed: () -> Unit,
 ) {
     // Collect state from ViewModel
     val isMonitoringEnabled by performanceViewModel.isMonitoringEnabled.collectAsState()
@@ -76,7 +76,7 @@ fun SettingsGeneralScreen(
                     modifier = Modifier.padding(16.dp)
                 ) {
                     Text(
-                        text = "Kleidi LLaMA",
+                        text = APP_NAME,
                         style = MaterialTheme.typography.titleLarge
                     )
 

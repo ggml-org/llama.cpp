@@ -47,7 +47,6 @@ import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
  */
 @Composable
 fun ModelsManagementScreen(
-    onBackPressed: () -> Unit,
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     viewModel: ModelsManagementViewModel,
 ) {
