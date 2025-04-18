@@ -874,18 +874,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
 
     return instances;
 }
-/**
- * @brief Remove the input model path information and keep only the model name.
- *
- * @param path The input model path information.
- * @return Full name of the model.
- */
-static std::string get_modelfile_name(const std::string & path_str) {
-    namespace fs = std::filesystem;
-    fs::path path = path_str;
-
-    return path.filename();
-}
 
 struct test {
     static const std::string build_commit;
@@ -922,7 +910,7 @@ struct test {
         cpu_info(get_cpu_info()),
         gpu_info(get_gpu_info()) {
 
-        model_filename = get_modelfile_name(inst.model);
+        model_filename = inst.model;
         char buf[128];
         llama_model_desc(lmodel, buf, sizeof(buf));
         model_type     = buf;
