@@ -12,9 +12,9 @@ jobs:
       - name: Setup port
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d -type f -exec \
+               sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' {} +
           sudo apt-get update
 
       - name: Setup toolchain
@@ -56,9 +56,9 @@ jobs:
       - name: Setup port
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d -type f -exec \
+               sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' {} +
           sudo apt-get update
 
       - name: Setup toolchain
@@ -103,9 +103,9 @@ jobs:
       - name: Setup port
         run: |
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
+          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' /etc/apt/sources.list
+          sudo find /etc/apt/sources.list.d -type f -exec \
+               sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' {} +
           sudo apt-get update
 
       - name: Setup toolchain
