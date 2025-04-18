@@ -23,6 +23,9 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include <limits>
+#include <cassert>
+#include <cmath>
 
 
 static bool qwen2vl_eval_image_embed(llama_context * ctx_llama, const struct llava_image_embed * image_embed,
@@ -367,14 +370,14 @@ static void debug_test_mrope_2d() {
     // 1. Initialize backend
     ggml_backend_t backend = NULL;
     std::string backend_name = "";
-#ifdef GGML_USE_CUDA
-    fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
-    backend_name = "cuda";
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-    }
-#endif
+// #ifdef GGML_USE_CUDA
+//     fprintf(stderr, "%s: using CUDA backend\n", __func__);
+//     backend = ggml_backend_cuda_init(0); // init device 0
+//     backend_name = "cuda";
+//     if (!backend) {
+//         fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+//     }
+// #endif
     // if there aren't GPU Backends fallback to CPU backend
     if (!backend) {
         backend = ggml_backend_cpu_init();
@@ -483,28 +486,82 @@ static void debug_test_mrope_2d() {
     ggml_backend_free(backend);
 }
 
-static void debug_dump_img_embed(struct llava_context * ctx_llava) {
-    int n_embd  = llama_model_n_embd(llama_get_model(ctx_llava->ctx_llama));
-    int ne = n_embd * 4;
-    float vals[56 * 56 * 3];
+enum model_output_type {
+    conv3d,
+    patch_embed,
+    patch_win_attn_scatter,
+    first_attn_layer,
+    last_attn_layer,
+    attn_softmax,
+    final_layer,
+};
+
+static void debug_dump_img_embed(struct llava_context * ctx_llava, model_output_type output_type) {
+    constexpr int ih = 140;
+    constexpr int iw = 196;
+    // constexpr int ih = 56;
+    // constexpr int iw = 56;
+    // int n_embd  = llama_model_n_embd(llama_get_model(ctx_llava->ctx_llama));
+    int n_embd  = 1280;
+    int merge = 1;
+    if (output_type == model_output_type::final_layer) {
+        n_embd  = 2048;
+        merge = 2;
+    }
+    else if (output_type == model_output_type::attn_softmax) {
+        merge = 1;
+        n_embd = (ih/14/merge) * (iw/14/merge) * 16;
+    }
+
+    int ne = (ih/14/merge) * (iw/14/merge) * n_embd;
+    float vals[iw * ih * 3];
     // float embd[ne];
     std::vector<float> embd;
     embd.resize(ne);
 
-    for (int i = 0; i < 56*56; i++)
+    for (int i = 0; i < iw*ih; i++)
     {
         for (int c = 0; c < 3; c++)
-            vals[i * 3 + c] = (float)(i % (56 * 56)) / (56*56);
+            vals[i * 3 + c] = (float)i / (iw*ih);
     }
 
-    clip_encode_float_image(ctx_llava->ctx_clip, 16, vals, 56, 56, embd.data());
+    clip_encode_float_image(ctx_llava->ctx_clip, 8, vals, ih, iw, embd.data());
 
-    std::ofstream outFile("img_embed.bin", std::ios::binary);
+    std::string file_postfix = "";
+    switch (output_type)
+    {
+    case model_output_type::conv3d:
+        file_postfix = "conv3d";
+        break;
+    case model_output_type::patch_embed:
+        file_postfix = "patch_embed";
+        break;
+    case model_output_type::patch_win_attn_scatter:
+        file_postfix = "scatter";
+        break;
+    case model_output_type::first_attn_layer:
+        file_postfix = "first_attn";
+        break;
+    case model_output_type::last_attn_layer:
+        file_postfix = "last_attn";
+        break;
+    case model_output_type::attn_softmax:
+        file_postfix = "attn_softmax";
+        break;
+    case model_output_type::final_layer:
+        file_postfix = "final";
+        break;
+    default:
+        break;
+    }
+    auto output_path = "img_embed_" + file_postfix + ".bin";
+
+    std::ofstream outFile(output_path, std::ios::binary);
     if (outFile.is_open()) {
         outFile.write(reinterpret_cast<const char*>(embd.data()), ne * sizeof(float));
 
         outFile.close();
-        std::cout << "Data successfully written to mrope.bin" << std::endl;
+        std::cout << "Data successfully written to ::[ " << output_path << std::endl;
     } else {
         std::cerr << "Error opening file!" << std::endl;
     }
@@ -551,8 +608,9 @@ int main(int argc, char ** argv) {
     } else if (params.image[0].empty()) {
         auto ctx_llava = llava_init_context(&params, model);
 
-        debug_test_mrope_2d();
-        debug_dump_img_embed(ctx_llava);
+        // debug_test_mrope_2d();
+        debug_dump_img_embed(ctx_llava, model_output_type::final_layer);
+        // debug_dump_img_embed(ctx_llava, model_output_type::last_attn_layer);
 
         llama_perf_context_print(ctx_llava->ctx_llama);
         ctx_llava->model = NULL;
