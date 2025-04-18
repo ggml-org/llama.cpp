@@ -37,6 +37,7 @@ BUILD_TARGETS = \
 	llama-speculative \
 	llama-tokenize \
 	llama-ts \
+	llama-ts-rebuild	\
 	llama-vdot \
 	llama-cvector-generator \
 	llama-gen-docs \
@@ -952,7 +953,15 @@ OBJ_COMMON = \
 	common/build-info.o \
 	common/json-schema-to-grammar.o
 
-OBJ_ALL = $(OBJ_GGML) $(OBJ_LLAMA) $(OBJ_COMMON)
+OBJ_PIM_LLM = \
+	PIM-tensorStore/host/mm/pim_mm.o	\
+	PIM-tensorStore/host/mm/pim_direct_comm.o 	\
+	PIM-tensorStore/host/msg/msg_block.o \
+	PIM-tensorStore/host/msg/msg_buffer.o \
+	PIM-tensorStore/host/msg/msg_comm.o \
+	PIM-tensorStore/host/util/util.o 
+
+OBJ_ALL = $(OBJ_GGML) $(OBJ_LLAMA) $(OBJ_COMMON) ${OBJ_PIM_LLM}
 
 LIB_GGML   = $(LIB_PRE)ggml$(DSO_EXT)
 LIB_GGML_S = $(LIB_PRE)ggml.a
@@ -1238,12 +1247,55 @@ $(LIB_COMMON_S): \
 	$(OBJ_COMMON)
 	ar rcs $(LIB_COMMON_S) $^
 
+# pim_llm
+
+PIM-tensorStore/host/mm/pim_mm.o: \
+	PIM-tensorStore/host/mm/pim_mm.c \
+	PIM-tensorStore/host/mm/pim_mm.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+PIM-tensorStore/host/mm/pim_direct_comm.o: \
+	PIM-tensorStore/host/mm/pim_direct_comm.c \
+	PIM-tensorStore/host/mm/pim_direct_comm.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+PIM-tensorStore/host/msg/msg_block.o: \
+	PIM-tensorStore/host/msg/msg_block.c \
+	PIM-tensorStore/host/msg/msg_block.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+PIM-tensorStore/host/msg/msg_buffer.o: \
+	PIM-tensorStore/host/msg/msg_buffer.c \
+	PIM-tensorStore/host/msg/msg_buffer.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+PIM-tensorStore/host/msg/msg_comm.o: \
+	PIM-tensorStore/host/msg/msg_comm.c \
+	PIM-tensorStore/host/msg/msg_comm.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+PIM-tensorStore/host/util/util.o : \
+	PIM-tensorStore/host/util/util.c \
+	PIM-tensorStore/host/util/util.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(LIB_PIM_LLM): \
+	$(OBJ_PIM_LLM) \
+	$(CC) $(CFLAGS) -shared -fPIC -o $@ $^ $(LDFLAGS)
+
+$(LIB_PIM_LLM_S): \
+	$(OBJ_PIM_LLM)
+	ar rcs $(LIB_PIM_LLM_S) $^
+
 clean:
 	rm -vrf *.dot $(BUILD_TARGETS) $(TEST_TARGETS)
 	rm -rvf src/*.o
 	rm -rvf tests/*.o
 	rm -rvf examples/*.o
 	rm -rvf common/*.o
+	rm -rvf PIM-tensorStore/host/mm/*.o
+	rm -rvf PIM-tensorStore/host/msg/*.o
+	rm -rvf PIM-tensorStore/host/util/*.o
 	rm -rvf *.a
 	rm -rvf *.dll
 	rm -rvf *.so
@@ -1283,6 +1335,11 @@ llama-cli: examples/main/main.cpp \
 	@echo
 
 llama-ts: examples/tensor/ts.cpp \
+	$(OBJ_ALL)
+	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+
+llama-ts-rebuild: examples/tensor/ts-rebuild.cpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)

@@ -119,11 +119,16 @@ int gemv_dpu_kernel(struct pim_context *context, struct ggml_tensor * w, struct 
 
   // Check results
   float *mul_mat_res = (float *)res->data;
+  ex_tp1 = std::chrono::high_resolution_clock::now();
   DPU_FOREACH(context->dpu_set, dpu, i) {
     DPU_ASSERT(dpu_prepare_xfer(dpu, mul_mat_res + i * context->pim_metadata.rows_per_dpu*in_q->ne[1]));
   }
   DPU_ASSERT(dpu_push_xfer(context->dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset, context->pim_metadata.rows_per_dpu*in_q->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
+  ex_tp2 = std::chrono::high_resolution_clock::now();
 
+  dur = ex_tp2 - ex_tp1;
+
+  std::cout << "传回结果用时：" << std::chrono::duration_cast<std::chrono::microseconds>(dur).count() << " us" << std::endl;
   return 0;
 }
 #endif
@@ -216,12 +221,12 @@ int main(int argc, char** argv) {
 
 
   // dpu code 
-  // gemv_dpu_kernel(pqcontext, ts_a, ts_bq, ts_c_pim);
-  // std::cout << "error between c and c_pim:" << std::endl;
-  // compare_tensor(ts_c, ts_c_pim);
+  gemv_dpu_kernel(pqcontext, ts_a, ts_bq, ts_c_pim);
+  std::cout << "error between c and c_pim:" << std::endl;
+  compare_tensor(ts_c, ts_c_pim);
 
   // cpu code
-  gemv_cpu_kernel(pqcontext, ts_a, ts_bq, ts_c_pim);
+  // gemv_cpu_kernel(pqcontext, ts_a, ts_bq, ts_c_pim);
 
   // float first_res = mul_add_q4_0_q8_0(ts_a, ts_bq);
   // std::cout<<"first element: "<<std::fixed << std::setprecision(6)<<first_res<<std::endl;
