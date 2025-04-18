@@ -254,6 +254,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     maintainers = with lib.maintainers; [
       philiptaron
       SomeoneSerge
+      hacker1024
     ];
 
     # Extend `badPlatforms` instead
