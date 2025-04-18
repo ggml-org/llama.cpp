@@ -62,8 +62,8 @@ enum class Mode {
     CONVERSATION
 }
 
-enum class SystemPromptTab {
-    PRESETS, CUSTOM, RECENTS
+enum class SystemPromptTab(val label: String) {
+    PRESETS("Presets"), CUSTOM("Custom"), RECENTS("Recents")
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -106,9 +106,7 @@ fun ModelLoadingScreen(
     }
 
     // Check if we're in a loading state
-    val isLoading = engineState !is State.Uninitialized &&
-        engineState !is State.Initialized &&
-        engineState !is State.ModelReady
+    val isLoading = engineState !is State.Initialized && engineState !is State.ModelReady
 
     // Mode selection callbacks
     val handleBenchmarkSelected = {
@@ -348,9 +346,9 @@ fun ModelLoadingScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = when (engineState) {
+                        is State.Initializing, State.Initialized -> "Initializing..."
                         is State.LoadingModel -> "Loading model..."
                         is State.ProcessingSystemPrompt -> "Processing system prompt..."
-                        is State.ModelReady -> "Preparing conversation..."
                         else -> "Processing..."
                     },
                     style = MaterialTheme.typography.titleMedium
@@ -394,15 +392,7 @@ private fun SystemPromptTabSelector(
                         )
                     }
                 },
-                label = {
-                    Text(
-                        when (tab) {
-                            SystemPromptTab.PRESETS -> "Presets"
-                            SystemPromptTab.CUSTOM -> "Custom"
-                            SystemPromptTab.RECENTS -> "Recents"
-                        }
-                    )
-                }
+                label = { Text(tab.label) }
             )
         }
     }
