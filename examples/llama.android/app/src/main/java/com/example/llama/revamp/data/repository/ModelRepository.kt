@@ -99,7 +99,7 @@ class ModelRepositoryImpl @Inject constructor(
             emit(
                 StorageMetrics(
                     usedGB = modelsSizeBytes / BYTES_IN_GB,
-                    totalGB = availableSpaceBytes / BYTES_IN_GB
+                    availableGB = availableSpaceBytes / BYTES_IN_GB
                 )
             )
             delay(STORAGE_METRICS_UPDATE_INTERVAL)
@@ -343,5 +343,5 @@ class ModelRepositoryImpl @Inject constructor(
 
 data class StorageMetrics(
     val usedGB: Float,
-    val totalGB: Float
+    val availableGB: Float
 )

@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Label
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -174,7 +175,9 @@ fun StorageTopBar(
             }
         },
         actions = {
-            StorageIndicator(storageMetrics = storageMetrics)
+            storageMetrics?.let {
+                StorageIndicator(storageMetrics = it)
+            }
         },
         colors = TopAppBarDefaults.topAppBarColors(
             containerColor = MaterialTheme.colorScheme.surface,
@@ -238,23 +241,17 @@ fun TemperatureIndicator(temperatureMetrics: TemperatureMetrics, useFahrenheit: 
 }
 
 @Composable
-fun StorageIndicator(storageMetrics: StorageMetrics?) {
-    val usedGb = storageMetrics?.usedGB
-    val totalGb = storageMetrics?.totalGB
-    val usedRatio = if (usedGb != null && totalGb != null && totalGb > 0.0f) {
-        usedGb / totalGb
-    } else {
-        null
-    }
+fun StorageIndicator(storageMetrics: StorageMetrics) {
+    val usedGb = storageMetrics.usedGB
+    val availableGb = storageMetrics.availableGB
 
     Row(modifier = Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(
             imageVector = Icons.Default.SdStorage,
             contentDescription = "Storage",
             tint = when {
-                usedRatio == null -> MaterialTheme.colorScheme.onSurface
-                usedRatio > 0.9f -> MaterialTheme.colorScheme.error
-                usedRatio > 0.7f -> MaterialTheme.colorScheme.tertiary
+                availableGb < 5.0f -> MaterialTheme.colorScheme.error
+                availableGb < 10.0f -> MaterialTheme.colorScheme.tertiary
                 else -> MaterialTheme.colorScheme.onSurface
             }
         )
@@ -262,9 +259,7 @@ fun StorageIndicator(storageMetrics: StorageMetrics?) {
         Spacer(modifier = Modifier.width(2.dp))
 
         Text(
-            text = storageMetrics?.let {
-                String.format(Locale.getDefault(), "%.1f / %.1f GB", it.usedGB, it.totalGB)
-            } ?: String.format(Locale.getDefault(), " - / - GB"),
+            text = String.format(Locale.getDefault(), "%.1f / %.1f GB", usedGb, availableGb),
             style = MaterialTheme.typography.bodySmall
         )
     }
