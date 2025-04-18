@@ -13,6 +13,7 @@
   cudaPackages,
   autoAddDriverRunpath,
   darwin,
+  llvmPackages,
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
@@ -34,6 +35,7 @@
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   enableCurl ? true,
   useVulkan ? false,
+  useOpenMP ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -173,7 +175,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   propagatedNativeBuildInputs = [ pkg-config ];
 
   propagatedBuildInputs =
-    optionals useBlas [ blas ];
+    optionals useBlas [ blas ]
+    ++ optionals useOpenMP [ llvmPackages.openmp ];
 
   cmakeFlags =
     [
@@ -187,6 +190,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_HIP" useRocm)
       (cmakeBool "GGML_METAL" useMetalKit)
       (cmakeBool "GGML_VULKAN" useVulkan)
+      (cmakeBool "GGML_OPENMP" useOpenMP)
       (cmakeBool "GGML_STATIC" enableStatic)
       (cmakeBool "BLA_PREFER_PKGCONFIG" true)
     ]
