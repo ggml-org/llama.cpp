@@ -202,6 +202,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "LLAMA_BUILD_EXAMPLES" buildExamples)
       (cmakeBool "LLAMA_BUILD_SERVER" buildServer)
       (cmakeBool "BLA_PREFER_PKGCONFIG" true)
+      (cmakeFeature "CMAKE_CTEST_ARGUMENTS" "--exclude-regex;test-eval-callback") # Uses Internet
     ]
     ++ optionals useCuda [
       (
@@ -232,6 +233,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     mkdir -p $out/include
     cp $src/include/llama.h $out/include/
   '';
+
+  doCheck = true;
 
   meta = {
     # Configurations we don't want even the CI to evaluate. Results in the
