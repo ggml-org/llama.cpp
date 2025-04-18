@@ -221,37 +221,41 @@ fun AppContent(
             ) { uri -> uri?.let { modelsManagementViewModel.localModelFileSelected(it) } }
 
             BottomBarConfig.ModelsManagement(
-                isMultiSelectionMode = isMultiSelectionMode,
-                selectedModels = selectedModels,
-                onSelectAll = { modelsManagementViewModel.selectAllModels() },
-                onDeselectAll = { modelsManagementViewModel.clearSelectedModels() },
-                onDeleteSelected = {
-                    if (selectedModels.isNotEmpty()) {
-                        modelsManagementViewModel.batchDeletionClicked(selectedModels.toMap())
+                sorting = BottomBarConfig.ModelsManagement.SortingConfig(
+                    currentOrder = sortOrder,
+                    isMenuVisible = showSortMenu,
+                    toggleMenu = { show -> modelsManagementViewModel.toggleSortMenu(show) },
+                    selectOrder = {
+                        modelsManagementViewModel.setSortOrder(it)
+                        modelsManagementViewModel.toggleSortMenu(false)
                     }
-                },
-                onSortClicked = { modelsManagementViewModel.toggleSortMenu(true) },
-                onFilterClicked = { /* TODO: implement filtering */ },
-                onDeleteModeClicked = { modelsManagementViewModel.setMultiSelectionMode(true) },
-                onAddModelClicked = { modelsManagementViewModel.toggleImportMenu(true) },
-                onExitSelectionMode = { modelsManagementViewModel.setMultiSelectionMode(false) },
-                showSortMenu = showSortMenu,
-                onSortMenuDismissed = { modelsManagementViewModel.toggleSortMenu(false) },
-                currentSortOrder = sortOrder,
-                onSortOptionSelected = {
-                    modelsManagementViewModel.setSortOrder(it)
-                    modelsManagementViewModel.toggleSortMenu(false)
-                },
-                showImportModelMenu = showImportModelMenu,
-                onImportMenuDismissed = { modelsManagementViewModel.toggleImportMenu(false) },
-                onImportLocalModelClicked = {
-                    fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
-                    modelsManagementViewModel.toggleImportMenu(false)
-                },
-                onImportHuggingFaceClicked = {
-                    modelsManagementViewModel.importFromHuggingFace()
-                    modelsManagementViewModel.toggleImportMenu(false)
-                }
+                ),
+                filtering = BottomBarConfig.ModelsManagement.FilteringConfig(
+                    onClick = { /* TODO: implement filtering */ },
+                ),
+                selection = BottomBarConfig.ModelsManagement.SelectionConfig(
+                    isActive = isMultiSelectionMode,
+                    toggleMode = { enabled -> modelsManagementViewModel.toggleSelectionMode(enabled) },
+                    selectedModels = selectedModels,
+                    toggleAllSelection = { selectAll -> modelsManagementViewModel.toggleAllSelection(selectAll) },
+                    deleteSelected = {
+                        if (selectedModels.isNotEmpty()) {
+                            modelsManagementViewModel.batchDeletionClicked(selectedModels)
+                        }
+                    },
+                ),
+                importing = BottomBarConfig.ModelsManagement.ImportConfig(
+                    isMenuVisible = showImportModelMenu,
+                    toggleMenu = { show -> modelsManagementViewModel.toggleImportMenu(show) },
+                    importFromLocal = {
+                        fileLauncher.launch(arrayOf("application/octet-stream", "*/*"))
+                        modelsManagementViewModel.toggleImportMenu(false)
+                    },
+                    importFromHuggingFace = {
+                        modelsManagementViewModel.importFromHuggingFace()
+                        modelsManagementViewModel.toggleImportMenu(false)
+                    }
+                ),
             )
         }
         else -> BottomBarConfig.None

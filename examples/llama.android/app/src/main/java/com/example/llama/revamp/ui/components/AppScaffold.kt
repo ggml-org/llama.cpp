@@ -62,30 +62,16 @@ fun AppScaffold(
     }
 
     val bottomBar: @Composable () -> Unit = {
-        when (bottomBarConfig) {
+        when (val config = bottomBarConfig) {
             is BottomBarConfig.None -> {
                 /* No bottom bar */
             }
             is BottomBarConfig.ModelsManagement -> {
                 ModelsManagementBottomBar(
-                    isMultiSelectionMode = bottomBarConfig.isMultiSelectionMode,
-                    selectedModels = bottomBarConfig.selectedModels,
-                    onSelectAll = bottomBarConfig.onSelectAll,
-                    onDeselectAll = bottomBarConfig.onDeselectAll,
-                    onDeleteSelected = bottomBarConfig.onDeleteSelected,
-                    onSortClicked = bottomBarConfig.onSortClicked,
-                    onFilterClicked = bottomBarConfig.onFilterClicked,
-                    onDeleteModeClicked = bottomBarConfig.onDeleteModeClicked,
-                    onAddModelClicked = bottomBarConfig.onAddModelClicked,
-                    onExitSelectionMode = bottomBarConfig.onExitSelectionMode,
-                    showSortMenu = bottomBarConfig.showSortMenu,
-                    onSortMenuDismissed = bottomBarConfig.onSortMenuDismissed,
-                    currentSortOrder = bottomBarConfig.currentSortOrder,
-                    onSortOptionSelected = bottomBarConfig.onSortOptionSelected,
-                    showImportModelMenu = bottomBarConfig.showImportModelMenu,
-                    onImportMenuDismissed = bottomBarConfig.onImportMenuDismissed,
-                    onImportLocalModelClicked = bottomBarConfig.onImportLocalModelClicked,
-                    onImportHuggingFaceClicked = bottomBarConfig.onImportHuggingFaceClicked
+                    sorting = config.sorting,
+                    filtering = config.filtering,
+                    selection = config.selection,
+                    importing = config.importing,
                 )
             }
         }

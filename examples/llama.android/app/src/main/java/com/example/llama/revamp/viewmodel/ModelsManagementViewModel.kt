@@ -46,10 +46,10 @@ class ModelsManagementViewModel @Inject constructor(
     private val _isMultiSelectionMode = MutableStateFlow(false)
     val isMultiSelectionMode: StateFlow<Boolean> = _isMultiSelectionMode.asStateFlow()
 
-    fun setMultiSelectionMode(enabled: Boolean) {
+    fun toggleSelectionMode(enabled: Boolean) {
         _isMultiSelectionMode.value = enabled
         if (!enabled) {
-            clearSelectedModels()
+            toggleAllSelection(selectAll = false)
         }
     }
 
@@ -57,7 +57,7 @@ class ModelsManagementViewModel @Inject constructor(
     private val _selectedModels = MutableStateFlow<Map<String, ModelInfo>>(emptyMap())
     val selectedModels: StateFlow<Map<String, ModelInfo>> = _selectedModels.asStateFlow()
 
-    fun toggleModelSelection(modelId: String) {
+    fun toggleModelSelectionById(modelId: String) {
         val current = _selectedModels.value.toMutableMap()
         val model = _sortedModels.value.find { it.id == modelId }
 
@@ -71,12 +71,12 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
-    fun selectAllModels() {
-        _selectedModels.value = _sortedModels.value.associateBy { it.id }
-    }
-
-    fun clearSelectedModels() {
-        _selectedModels.value = emptyMap()
+    fun toggleAllSelection(selectAll: Boolean) {
+        if (selectAll) {
+            _selectedModels.value = _sortedModels.value.associateBy { it.id }
+        } else {
+            _selectedModels.value = emptyMap()
+        }
     }
 
     // UI state: sort menu

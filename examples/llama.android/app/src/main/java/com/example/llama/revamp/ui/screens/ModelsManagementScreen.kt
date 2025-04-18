@@ -66,7 +66,7 @@ fun ModelsManagementScreen(
     ) {
         if (isMultiSelectionMode) {
             // Exit selection mode if in selection mode
-            viewModel.setMultiSelectionMode(false)
+            viewModel.toggleSelectionMode(false)
         } else {
             /* Ignore back press while processing model management requests */
         }
@@ -84,7 +84,7 @@ fun ModelsManagementScreen(
                     model = model,
                     onClick = {
                         if (isMultiSelectionMode) {
-                            viewModel.toggleModelSelection(model.id)
+                            viewModel.toggleModelSelectionById(model.id)
                         } else {
                             viewModel.viewModelDetails(model.id)
                         }
@@ -179,7 +179,7 @@ fun ModelsManagementScreen(
 
             is Deletion.Success -> {
                 LaunchedEffect(state) {
-                    viewModel.setMultiSelectionMode(false)
+                    viewModel.toggleSelectionMode(false)
 
                     val count = state.models.size
                     onScaffoldEvent(

@@ -27,6 +27,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.llama.R
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.ui.components.BottomBarConfig.ModelsManagement
 import com.example.llama.revamp.viewmodel.ModelSortOrder
 
 /**
@@ -37,62 +38,60 @@ sealed class BottomBarConfig {
     object None : BottomBarConfig()
 
     data class ModelsManagement(
-        val isMultiSelectionMode: Boolean,
-        val selectedModels: Map<String, ModelInfo>,
-        val onSelectAll: () -> Unit,
-        val onDeselectAll: () -> Unit,
-        val onDeleteSelected: () -> Unit,
-        val onSortClicked: () -> Unit,
-        val onFilterClicked: () -> Unit,
-        val onDeleteModeClicked: () -> Unit,
-        val onAddModelClicked: () -> Unit,
-        val onExitSelectionMode: () -> Unit,
-        val showSortMenu: Boolean,
-        val onSortMenuDismissed: () -> Unit,
-        val currentSortOrder: ModelSortOrder,
-        val onSortOptionSelected: (ModelSortOrder) -> Unit,
-        val showImportModelMenu: Boolean,
-        val onImportMenuDismissed: () -> Unit,
-        val onImportLocalModelClicked: () -> Unit,
-        val onImportHuggingFaceClicked: () -> Unit
-    ) : BottomBarConfig()
+        val sorting: SortingConfig,
+        val filtering: FilteringConfig,
+        val selection: SelectionConfig,
+        val importing: ImportConfig
+    ) : BottomBarConfig() {
+        data class SortingConfig(
+            val currentOrder: ModelSortOrder,
+            val isMenuVisible: Boolean,
+            val toggleMenu: (Boolean) -> Unit,
+            val selectOrder: (ModelSortOrder) -> Unit
+        )
+
+        data class FilteringConfig(
+            val onClick: () -> Unit
+        )
+
+        data class SelectionConfig(
+            val isActive: Boolean,
+            val toggleMode: (Boolean) -> Unit,
+            val selectedModels: Map<String, ModelInfo>,
+            val toggleAllSelection: (Boolean) -> Unit,
+            val deleteSelected: () -> Unit
+        )
+
+        data class ImportConfig(
+            val isMenuVisible: Boolean,
+            val toggleMenu: (Boolean) -> Unit,
+            val importFromLocal: () -> Unit,
+            val importFromHuggingFace: () -> Unit
+        )
+    }
 
     // TODO-han.yin: add more bottom bar types here
 }
 
 @Composable
 fun ModelsManagementBottomBar(
-    isMultiSelectionMode: Boolean,
-    selectedModels: Map<String, ModelInfo>,
-    onSelectAll: () -> Unit,
-    onDeselectAll: () -> Unit,
-    onDeleteSelected: () -> Unit,
-    onSortClicked: () -> Unit,
-    onFilterClicked: () -> Unit,
-    onDeleteModeClicked: () -> Unit,
-    onAddModelClicked: () -> Unit,
-    onExitSelectionMode: () -> Unit,
-    showSortMenu: Boolean,
-    onSortMenuDismissed: () -> Unit,
-    currentSortOrder: ModelSortOrder,
-    onSortOptionSelected: (ModelSortOrder) -> Unit,
-    showImportModelMenu: Boolean,
-    onImportMenuDismissed: () -> Unit,
-    onImportLocalModelClicked: () -> Unit,
-    onImportHuggingFaceClicked: () -> Unit
+    sorting: ModelsManagement.SortingConfig,
+    filtering: ModelsManagement.FilteringConfig,
+    selection: ModelsManagement.SelectionConfig,
+    importing: ModelsManagement.ImportConfig
 ) {
     BottomAppBar(
         actions = {
-            if (isMultiSelectionMode) {
+            if (selection.isActive) {
                 // Multi-selection mode actions
-                IconButton(onClick = onSelectAll) {
+                IconButton(onClick = { selection.toggleAllSelection(true) }) {
                     Icon(
                         imageVector = Icons.Default.SelectAll,
                         contentDescription = "Select all"
                     )
                 }
 
-                IconButton(onClick = onDeselectAll) {
+                IconButton(onClick = { selection.toggleAllSelection(false) }) {
                     Icon(
                         imageVector = Icons.Default.ClearAll,
                         contentDescription = "Deselect all"
@@ -100,13 +99,13 @@ fun ModelsManagementBottomBar(
                 }
 
                 IconButton(
-                    onClick = onDeleteSelected,
-                    enabled = selectedModels.isNotEmpty()
+                    onClick = selection.deleteSelected,
+                    enabled = selection.selectedModels.isNotEmpty()
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete selected",
-                        tint = if (selectedModels.isNotEmpty())
+                        tint = if (selection.selectedModels.isNotEmpty())
                             MaterialTheme.colorScheme.error
                         else
                             MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
@@ -114,7 +113,7 @@ fun ModelsManagementBottomBar(
                 }
             } else {
                 // Default mode actions
-                IconButton(onClick = onSortClicked) {
+                IconButton(onClick = { sorting.toggleMenu(true) }) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.Sort,
                         contentDescription = "Sort models"
@@ -123,78 +122,78 @@ fun ModelsManagementBottomBar(
 
                 // Sort dropdown menu
                 DropdownMenu(
-                    expanded = showSortMenu,
-                    onDismissRequest = onSortMenuDismissed
+                    expanded = sorting.isMenuVisible,
+                    onDismissRequest = { sorting.toggleMenu(false) }
                 ) {
                     DropdownMenuItem(
                         text = { Text("Name (A-Z)") },
                         trailingIcon = {
-                            if (currentSortOrder == ModelSortOrder.NAME_ASC)
+                            if (sorting.currentOrder == ModelSortOrder.NAME_ASC)
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sort by name in ascending order, selected"
                                 )
                         },
                         onClick = {
-                            onSortOptionSelected(ModelSortOrder.NAME_ASC)
+                            sorting.selectOrder(ModelSortOrder.NAME_ASC)
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("Name (Z-A)") },
                         trailingIcon = {
-                            if (currentSortOrder == ModelSortOrder.NAME_DESC)
+                            if (sorting.currentOrder == ModelSortOrder.NAME_DESC)
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sort by name in descending order, selected"
                                 )
                         },
                         onClick = {
-                            onSortOptionSelected(ModelSortOrder.NAME_DESC)
+                            sorting.selectOrder(ModelSortOrder.NAME_DESC)
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("Size (Smallest first)") },
                         trailingIcon = {
-                            if (currentSortOrder == ModelSortOrder.SIZE_ASC)
+                            if (sorting.currentOrder == ModelSortOrder.SIZE_ASC)
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sort by size in ascending order, selected"
                                 )
                         },
                         onClick = {
-                            onSortOptionSelected(ModelSortOrder.SIZE_ASC)
+                            sorting.selectOrder(ModelSortOrder.SIZE_ASC)
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("Size (Largest first)") },
                         trailingIcon = {
-                            if (currentSortOrder == ModelSortOrder.SIZE_DESC)
+                            if (sorting.currentOrder == ModelSortOrder.SIZE_DESC)
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sort by size in descending order, selected"
                                 )
                         },
                         onClick = {
-                            onSortOptionSelected(ModelSortOrder.SIZE_DESC)
+                            sorting.selectOrder(ModelSortOrder.SIZE_DESC)
                         }
                     )
                     DropdownMenuItem(
                         text = { Text("Last used") },
                         trailingIcon = {
-                            if (currentSortOrder == ModelSortOrder.LAST_USED)
+                            if (sorting.currentOrder == ModelSortOrder.LAST_USED)
                                 Icon(
                                     imageVector = Icons.Default.Check,
                                     contentDescription = "Sort by last used, selected"
                                 )
                         },
                         onClick = {
-                            onSortOptionSelected(ModelSortOrder.LAST_USED)
+                            sorting.selectOrder(ModelSortOrder.LAST_USED)
                         }
                     )
                 }
 
                 IconButton(
-                    onClick = onFilterClicked
+                    onClick = filtering.onClick
                 ) {
                     Icon(
                         imageVector = Icons.Default.FilterAlt,
@@ -202,7 +201,7 @@ fun ModelsManagementBottomBar(
                     )
                 }
 
-                IconButton(onClick = onDeleteModeClicked) {
+                IconButton(onClick = { selection.toggleMode(true) }) {
                     Icon(
                         imageVector = Icons.Default.DeleteSweep,
                         contentDescription = "Delete models"
@@ -212,19 +211,19 @@ fun ModelsManagementBottomBar(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = if (isMultiSelectionMode) onExitSelectionMode else onAddModelClicked,
+                onClick = { if (selection.isActive) selection.toggleMode(false) else importing.toggleMenu(true) },
                 containerColor = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Icon(
-                    imageVector = if (isMultiSelectionMode) Icons.Default.Close else Icons.Default.Add,
-                    contentDescription = if (isMultiSelectionMode) "Exit selection mode" else "Add model"
+                    imageVector = if (selection.isActive) Icons.Default.Close else Icons.Default.Add,
+                    contentDescription = if (selection.isActive) "Exit selection mode" else "Add model"
                 )
             }
 
             // Add model dropdown menu
             DropdownMenu(
-                expanded = showImportModelMenu,
-                onDismissRequest = onImportMenuDismissed
+                expanded = importing.isMenuVisible,
+                onDismissRequest = { importing.toggleMenu(false) }
             ) {
                 DropdownMenuItem(
                     text = { Text("Import local model") },
@@ -234,7 +233,7 @@ fun ModelsManagementBottomBar(
                             contentDescription = "Import a local model on the device"
                         )
                     },
-                    onClick = onImportLocalModelClicked
+                    onClick = importing.importFromLocal
                 )
                 DropdownMenuItem(
                     text = { Text("Download from HuggingFace") },
@@ -246,7 +245,7 @@ fun ModelsManagementBottomBar(
                             tint = Color.Unspecified,
                         )
                     },
-                    onClick = onImportHuggingFaceClicked
+                    onClick = importing.importFromHuggingFace
                 )
             }
         }
