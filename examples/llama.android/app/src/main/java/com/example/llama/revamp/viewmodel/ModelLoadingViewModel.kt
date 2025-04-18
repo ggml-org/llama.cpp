@@ -1,6 +1,5 @@
 package com.example.llama.revamp.viewmodel
 
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.data.repository.SystemPromptRepository
@@ -16,7 +15,7 @@ import javax.inject.Inject
 class ModelLoadingViewModel @Inject constructor(
     private val modelLoadingService: ModelLoadingService,
     private val repository: SystemPromptRepository
-) : ViewModel() {
+) : ModelUnloadingViewModel(modelLoadingService) {
 
     /**
      * Currently selected model to be loaded
