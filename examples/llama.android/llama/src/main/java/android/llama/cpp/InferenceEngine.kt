@@ -1,5 +1,6 @@
 package android.llama.cpp
 
+import android.llama.cpp.InferenceEngine.State
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -47,17 +48,18 @@ interface InferenceEngine {
      */
     sealed class State {
         object Uninitialized : State()
-        object LibraryLoaded : State()
+        object Initializing : State()
+        object Initialized : State()
 
         object LoadingModel : State()
         object UnloadingModel : State()
         object ModelReady : State()
 
+        object Benchmarking : State()
         object ProcessingSystemPrompt : State()
         object ProcessingUserPrompt : State()
-        object Generating : State()
 
-        object Benchmarking : State()
+        object Generating : State()
 
         data class Error(val errorMessage: String = "") : State()
     }
@@ -66,3 +68,16 @@ interface InferenceEngine {
         const val DEFAULT_PREDICT_LENGTH = 1024
     }
 }
+
+val State.isUninterruptible
+    get() = this !is State.Initialized &&
+        this !is State.ModelReady &&
+        this !is State.Generating &&
+        this !is State.Error
+
+val State.isModelLoaded: Boolean
+    get() = this !is State.Uninitialized &&
+        this !is State.Initializing &&
+        this !is State.Initialized &&
+        this !is State.LoadingModel &&
+        this !is State.UnloadingModel

@@ -71,13 +71,18 @@ class LLamaAndroid private constructor() : InferenceEngine {
     init {
         llamaScope.launch {
             try {
+                check(_state.value is State.Uninitialized) {
+                    "Cannot load native library in ${_state.value.javaClass.simpleName}!"
+                }
+
+                _state.value = State.Initializing
                 System.loadLibrary(LIB_LLAMA_ANDROID)
                 init()
-                _state.value = State.LibraryLoaded
+                _state.value = State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
             } catch (e: Exception) {
-                _state.value = State.Error("Failed to load native library: ${e.message}")
                 Log.e(TAG, "Failed to load native library", e)
+                throw e
             }
         }
     }
@@ -87,7 +92,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
      */
     override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
-            check(_state.value is State.LibraryLoaded) {
+            check(_state.value is State.Initialized) {
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
             }
             File(pathToModel).let {
@@ -207,7 +212,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
 
                     unload()
 
-                    _state.value = State.LibraryLoaded
+                    _state.value = State.Initialized
                     Log.i(TAG, "Model unloaded!")
                     Unit
                 }
@@ -223,7 +228,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
         llamaScope.cancel()
         when(_state.value) {
             is State.Uninitialized -> {}
-            is State.LibraryLoaded -> shutdown()
+            is State.Initialized -> shutdown()
             else -> { unload(); shutdown() }
         }
     }

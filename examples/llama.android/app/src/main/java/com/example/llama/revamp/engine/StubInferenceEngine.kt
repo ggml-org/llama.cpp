@@ -49,12 +49,14 @@ class StubInferenceEngine : InferenceEngine {
 
     init {
         llamaScope.launch {
-            Log.i(TAG, "Initiated!")
+            Log.i(TAG, "Loading and initializing native library!")
+            _state.value = State.Initializing
 
             // Simulate library loading
             delay(STUB_LIBRARY_LOADING_TIME)
 
-            _state.value = State.LibraryLoaded
+            Log.i(TAG, "Native library initialized!")
+            _state.value = State.Initialized
         }
     }
 
@@ -64,7 +66,7 @@ class StubInferenceEngine : InferenceEngine {
     override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
             Log.i(TAG, "loadModel! state: ${_state.value.javaClass.simpleName}")
-            check(_state.value is State.LibraryLoaded) {
+            check(_state.value is State.Initialized) {
                 "Cannot load model at ${_state.value.javaClass.simpleName}"
             }
 
@@ -218,7 +220,7 @@ class StubInferenceEngine : InferenceEngine {
                     // Simulate model unloading time
                     delay(STUB_MODEL_UNLOADING_TIME)
 
-                    _state.value = State.LibraryLoaded
+                    _state.value = State.Initialized
                 }
                 else -> throw IllegalStateException(
                     "Cannot load model at ${_state.value.javaClass.simpleName}"
