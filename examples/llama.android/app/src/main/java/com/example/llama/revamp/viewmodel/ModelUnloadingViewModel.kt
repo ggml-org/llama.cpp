@@ -7,11 +7,21 @@ import android.llama.cpp.isUninterruptible
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.engine.InferenceService
-import com.example.llama.revamp.ui.components.UnloadDialogState
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+
+/**
+ * UI states to be consumed by [ModelUnloadDialogHandler], etc.
+ */
+sealed class UnloadModelState {
+    object Hidden : UnloadModelState()
+    object Confirming : UnloadModelState()
+    object Unloading : UnloadModelState()
+    data class Error(val message: String) : UnloadModelState()
+}
 
 /**
  * Base ViewModel class for screens that requires additional model unloading functionality
@@ -39,11 +49,13 @@ abstract class ModelUnloadingViewModel(
     /**
      * [UnloadModelConfirmationDialog]'s UI states
      */
-    private val _unloadDialogState = MutableStateFlow<UnloadDialogState>(UnloadDialogState.Hidden)
-    val unloadDialogState: StateFlow<UnloadDialogState> = _unloadDialogState.asStateFlow()
+    private val _unloadModelState = MutableStateFlow<UnloadModelState>(UnloadModelState.Hidden)
+    val unloadModelState: StateFlow<UnloadModelState> = _unloadModelState.asStateFlow()
 
     /**
      * Handle back press from both back button and top bar
+     *
+     * Subclass can override this default implementation
      */
     open fun onBackPressed(onNavigateBack: () -> Unit) =
         if (isUninterruptible) {
@@ -53,7 +65,7 @@ abstract class ModelUnloadingViewModel(
             onNavigateBack.invoke()
         } else {
             // If model is loaded, show confirmation dialog
-            _unloadDialogState.value = UnloadDialogState.Confirming
+            _unloadModelState.value = UnloadModelState.Confirming
         }
 
     /**
@@ -62,7 +74,7 @@ abstract class ModelUnloadingViewModel(
     fun onUnloadConfirmed(onNavigateBack: () -> Unit) =
         viewModelScope.launch {
             // Set unloading state to show progress
-            _unloadDialogState.value = UnloadDialogState.Unloading
+            _unloadModelState.value = UnloadModelState.Unloading
 
             try {
                 // Perform screen-specific cleanup
@@ -72,11 +84,11 @@ abstract class ModelUnloadingViewModel(
                 inferenceService.unloadModel()
 
                 // Reset state and navigate back
-                _unloadDialogState.value = UnloadDialogState.Hidden
+                _unloadModelState.value = UnloadModelState.Hidden
                 onNavigateBack()
             } catch (e: Exception) {
                 // Handle error
-                _unloadDialogState.value = UnloadDialogState.Error(
+                _unloadModelState.value = UnloadModelState.Error(
                     e.message ?: "Unknown error while unloading the model"
                 )
             }
@@ -86,11 +98,11 @@ abstract class ModelUnloadingViewModel(
      * Handle dismissal of unload dialog
      */
     fun onUnloadDismissed() =
-        when (_unloadDialogState.value) {
-            is UnloadDialogState.Unloading -> {
+        when (_unloadModelState.value) {
+            is UnloadModelState.Unloading -> {
                 // Ignore dismissing requests during unloading
             }
-            else -> _unloadDialogState.value = UnloadDialogState.Hidden
+            else -> _unloadModelState.value = UnloadModelState.Hidden
         }
 
     /**
@@ -98,7 +110,5 @@ abstract class ModelUnloadingViewModel(
      *
      * To be implemented by subclasses if needed
      */
-    protected open suspend fun performCleanup() {
-        // Default empty implementation
-    }
+    protected open suspend fun performCleanup() {}
 }
