@@ -3,7 +3,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-#include "common/base64.hpp"
+#include "base64.hpp"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576

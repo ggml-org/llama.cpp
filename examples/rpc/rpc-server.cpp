@@ -126,7 +126,7 @@ static std::string fs_get_cache_directory() {
     if (getenv("LLAMA_CACHE")) {
         cache_directory = std::getenv("LLAMA_CACHE");
     } else {
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
         } else {
@@ -136,7 +136,9 @@ static std::string fs_get_cache_directory() {
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
-#endif // __linux__
+#else
+#  error Unknown architecture
+#endif
         cache_directory = ensure_trailing_slash(cache_directory);
         cache_directory += "llama.cpp";
     }
@@ -295,7 +297,10 @@ int main(int argc, char * argv[]) {
         }
         cache_dir = cache_dir_str.c_str();
     }
-    printf("Starting RPC server\n");
+    printf("Starting RPC server v%d.%d.%d\n",
+           RPC_PROTO_MAJOR_VERSION,
+           RPC_PROTO_MINOR_VERSION,
+           RPC_PROTO_PATCH_VERSION);
     printf("  endpoint       : %s\n", endpoint.c_str());
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));

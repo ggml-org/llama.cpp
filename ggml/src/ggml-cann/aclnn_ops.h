@@ -1,15 +1,4 @@
-#ifndef CANN_ACLNN_OPS
-#define CANN_ACLNN_OPS
-
 /**
- * @file    acl_tensor
- * @brief   This file contains related functions of ggml_tensor and acl_tensor.
- *          Contains conversion from ggml_tensor to acl_tensor, broadcast and other
- *          functions.
- * @author  hipudding <huafengchun@gmail.com>
- * @author  wangshuai09 <391746016@qq.com>
- * @date    July 15, 2024
- *
  * Copyright (c) 2023-2024 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -31,6 +20,10 @@
  * IN THE SOFTWARE.
  */
 
+#ifndef CANN_ACLNN_OPS
+#define CANN_ACLNN_OPS
+
+#include <functional>
 #include <aclnnop/aclnn_abs.h>
 #include <aclnnop/aclnn_neg.h>
 #include <aclnnop/aclnn_exp.h>
@@ -50,6 +43,8 @@
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_sin.h>
 #include <aclnnop/aclnn_cos.h>
+#include <aclnnop/aclnn_log.h>
+#include <aclnnop/aclnn_sign.h>
 #include "acl_tensor.h"
 #include "common.h"
 
@@ -483,8 +478,8 @@ void ggml_cann_rope(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  *          operation is executed using the CANN backend for optimized performance.
  *
  * @param ctx The CANN context used for operations.
- * @param dst The destination tensor where the indices of the maximum values will be stored.
- *            dst->op is `GGML_OP_ARGMAX`.
+ * @param dst The destination tensor where the indices of the maximum values will
+ *            be stored. dst->op is `GGML_OP_ARGMAX`.
  */
 void ggml_cann_argmax(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
@@ -600,6 +595,286 @@ void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
     aclTensor* acl_dst);
 
 /**
+ * @brief Prepares broadcast-compatible ACL tensors for two input tensors and one
+ * output tensor.
+ *
+ * This function checks whether broadcasting is needed between `src0` and `src1`.
+ * If broadcasting is required, it calculates the proper shapes and creates
+ * ACL tensors with broadcast parameters. Otherwise, it directly creates ACL tensors
+ * based on the original tensor shapes.
+ *
+ * @param src0     The first input tensor (reference shape).
+ * @param src1     The second input tensor (possibly broadcasted).
+ * @param dst      The destination/output tensor.
+ * @param acl_src0 Output pointer to the created ACL tensor corresponding to src0.
+ * @param acl_src1 Output pointer to the created ACL tensor corresponding to src1.
+ * @param acl_dst  Output pointer to the created ACL tensor corresponding to dst.
+ */
+void bcast_shape(ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst,
+    aclTensor ** acl_src0, aclTensor ** acl_src1, aclTensor ** acl_dst);
+
+/**
+ * @brief   Computes the 1D transposed convolution (deconvolution) of a ggml
+ * tensor using the CANN backend.
+ *
+ * @details This function performs a 1D transposed convolution (also known as
+ * deconvolution) operation on the input tensor. The computed result is stored
+ * in the destination tensor `dst`. The operation is optimized using the CANN
+ * backend for improved performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the transposed convolution result
+ * will be stored. dst->op is `GGML_OP_CONV_TRANSPOSE_1D`.
+ */
+void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Applies the ELU (Exponential Linear Unit) activation to a ggml tensor
+ * using the CANN backend.
+ *
+ * @details This function performs an element-wise ELU activation on the input
+ *          tensor.
+ *          The result is written to the destination tensor `dst` in-place.
+ *          The ELU function is defined as:
+ *
+ *          \text{ELU}(x) =
+ *          \begin{cases}
+ *          x, & \text{if } x > 0 \\
+ *          \alpha \left( \exp(x) - 1 \right), & \text{if } x \leq 0
+ *          \end{cases}
+ *
+ *          where α (alpha) is a hyperparameter, typically set to 1.0.
+ *          This operation is optimized using the CANN backend for high-performance
+ *          inference or training.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the ELU-activated result will be stored.
+ *            dst->op is expected to be `GGML_OP_ELU`.
+ */
+void ggml_cann_elu(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Computes the mean of a ggml tensor element-wise using the CANN backend.
+ *
+ * @details This function calculates the element-wise mean of the input tensor.
+ *          The result is written to the destination tensor `dst`.
+ *          The mean is computed by averaging the values across the entire tensor.
+ *
+ *          This operation is optimized using the CANN backend for high-performance inference or training.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the mean result will be stored.
+ *            dst->op is expected to be `GGML_OP_MEAN`.
+ */
+void ggml_cann_mean(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Applies 1D reflect padding to a ggml tensor using the CANN backend.
+ *
+ * @details This function performs 1D reflect padding on the input tensor.
+ *          The amount of padding on each side is specified by parameters stored in `dst->op_params`.
+ *          The operation reflects the values at the borders of the tensor to generate the padded output.
+ *
+ *          This operation is optimized using the CANN backend for high-performance inference or training.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the padded result will be stored.
+ *            dst->op is expected to be `GGML_OP_PAD_REFLECT_1D`.
+ */
+void ggml_cann_pad_reflect_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Counts the number of equal elements in two ggml tensors using the CANN backend.
+ *
+ * @details This function performs an element-wise comparison between two input tensors,
+ *          and counts the number of positions where the elements are equal. The result is
+ *          stored in the destination tensor `dst` as a scalar.
+ *
+ *          The operation is optimized using the CANN backend, making it suitable for
+ *          high-performance inference or training scenarios.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result will be stored.
+ *            dst->op is expected to be `GGML_OP_COUNT_EQUAL`.
+ */
+void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Applies the Step activation function to a ggml tensor using the CANN backend.
+ *
+ * @details This function applies a step function element-wise to the input tensor, where
+ *          each element is transformed to 1.0 if it is greater than 0, and 0.0 otherwise.
+ *          The result is stored in the destination tensor `dst`.
+ *
+ *          This operation is accelerated using the CANN backend to improve runtime performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result will be stored.
+ *            dst->op is expected to be `GGML_OP_STEP`.
+ */
+void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/*
+ * @brief A generic wrapper for ACL resources with custom deleter support.
+ */
+using any_acl_resource = std::unique_ptr<void, std::function<void(void*)>>;
+
+/**
+ * @brief Trait structure used to define how to destroy a given ACL resource type.
+ *
+ * @tparam T ACL resource type.
+ */
+template<typename T>
+struct acl_resource_traits;
+
+/**
+ * @brief Specialization for aclTensor, defines how to destroy an aclTensor resource.
+ */
+template<>
+struct acl_resource_traits<aclTensor> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyTensor(static_cast<aclTensor*>(p)));
+    }
+};
+
+/**
+ * @brief Specialization for aclIntArray, defines how to destroy an aclIntArray resource.
+ */
+template<>
+struct acl_resource_traits<aclIntArray> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyIntArray(static_cast<aclIntArray*>(p)));
+    }
+};
+
+/**
+ * @brief Specialization for aclScalar, defines how to destroy an aclScalar resource.
+ */
+template<>
+struct acl_resource_traits<aclScalar> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyScalar(static_cast<aclScalar*>(p)));
+    }
+};
+
+/**
+ * @brief Specialization for aclTensorList, defines how to destroy an aclTensorList resource.
+ */
+template<>
+struct acl_resource_traits<aclTensorList> {
+    static void destroy(void* p) {
+        ACL_CHECK(aclDestroyTensorList(static_cast<aclTensorList*>(p)));
+    }
+};
+
+/**
+ * @brief Creates a generic ACL resource wrapper with proper destruction logic.
+ *
+ * @tparam T ACL resource type.
+ * @param ptr Raw pointer to ACL resource.
+ * @return any_acl_resource Smart pointer that handles destruction.
+ */
+template<typename T>
+any_acl_resource make_acl_resource(T* ptr) {
+    return any_acl_resource(
+        static_cast<void*>(ptr),
+        [](void* p) {
+            acl_resource_traits<T>::destroy(p);
+        }
+    );
+}
+
+/**
+ * @brief Registers multiple ACL resources into a vector for lifetime management.
+ *
+ * @tparam Args Variadic list of ACL resource types.
+ * @param vec Target vector to hold ACL resources.
+ * @param args Raw pointers to ACL resources.
+ */
+template<typename... Args>
+void register_acl_resources(std::vector<any_acl_resource>& vec, Args*... args) {
+    (vec.emplace_back(make_acl_resource(args)), ...);
+}
+
+/**
+ * @brief Task class that wraps the execution of an aclnn function call.
+ */
+class aclnn_task : public cann_task {
+    public:
+        aclnn_task(aclnn_func_t aclnn_func, void * workspace_addr,
+                   uint64_t workspace_size, aclOpExecutor * executor,
+                   aclrtStream stream) :
+            aclnn_func_(aclnn_func),
+            workspace_addr_(workspace_addr),
+            workspace_size_(workspace_size),
+            executor_(executor),
+            stream_(stream) {}
+        virtual void run_task() override {
+            ACL_CHECK(aclnn_func_(workspace_addr_, workspace_size_, executor_, stream_));
+        }
+    private:
+        aclnn_func_t aclnn_func_;
+        void *          workspace_addr_;
+        uint64_t        workspace_size_;
+        aclOpExecutor * executor_;
+        aclrtStream     stream_;
+};
+
+/**
+ * @brief Task class that releases ACL resources after usage.
+ */
+class release_resource_task : public cann_task {
+public:
+    release_resource_task(std::vector<any_acl_resource>&& resources){
+        resource_ = std::move(resources);
+    }
+
+    virtual void run_task() override {
+        resource_.clear();
+    }
+private:
+    std::vector<any_acl_resource> resource_;
+};
+
+/**
+ * @brief Task class for performing asynchronous memory copy operations.
+ */
+class async_memcpy_task : public cann_task {
+public:
+    async_memcpy_task(void* dst, const void* src, size_t size,
+                      aclrtMemcpyKind kind, aclrtStream stream)
+        : dst_(dst), src_(src), size_(size), kind_(kind), stream_(stream) {}
+
+    virtual void run_task() override {
+        ACL_CHECK(aclrtMemcpyAsync(dst_, size_, src_, size_, kind_, stream_));
+    }
+private:
+    void* dst_;
+    const void* src_;
+    size_t size_;
+    aclrtMemcpyKind kind_;
+    aclrtStream stream_;
+};
+
+/**
+ * @brief Task class for performing asynchronous memory set operations.
+ */
+class async_memset_task : public cann_task {
+    public:
+    async_memset_task(void* buffer, size_t size, int32_t value, aclrtStream stream)
+            : buffer_(buffer), size_(size), value_(value), stream_(stream) {}
+
+        virtual void run_task() override {
+            ACL_CHECK(aclrtMemsetAsync(buffer_, size_, value_, size_, stream_));
+        }
+    private:
+        void* buffer_;
+        size_t size_;
+        int32_t value_;
+        aclrtStream stream_;
+};
+
+/**
  * @brief Launches an asynchronous task using the memory allocator.
  *
  * This macro submit an asynchronous task on the specified stream.
@@ -616,45 +891,101 @@ void aclnn_sin(ggml_backend_cann_context& ctx, aclTensor* acl_src,
  * other task before this asynchronous task ends, because all tasks in the
  * same stream are executed in queue order.
  */
-#define GGML_CANN_CALL_ACLNN_OP(OP_NAME, ...)                                                \
-    do {                                                                                     \
-        uint64_t        workspaceSize = 0;                                                   \
-        aclOpExecutor * executor;                                                            \
-        void *          workspaceAddr = nullptr;                                             \
-                                                                                             \
-        ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor)); \
-                                                                                             \
-        if (workspaceSize > 0) {                                                             \
-            ggml_cann_pool_alloc workspace_allocator(ctx.pool(), workspaceSize);             \
-            workspaceAddr = workspace_allocator.get();                                       \
-        }                                                                                    \
-        ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, ctx.stream()));     \
+
+#define GGML_CANN_CALL_ACLNN_OP(CTX, OP_NAME, ...)                                          \
+    do {                                                                                    \
+        uint64_t        workspaceSize = 0;                                                  \
+        aclOpExecutor * executor;                                                           \
+        void *          workspaceAddr = nullptr;                                            \
+        ACL_CHECK(aclnn##OP_NAME##GetWorkspaceSize(__VA_ARGS__, &workspaceSize, &executor));\
+        /* workspace should alloced in main thread to keep malloc order when using vmm. */  \
+        if (workspaceSize > 0) {                                                            \
+            ggml_cann_pool_alloc workspace_allocator(CTX.pool(), workspaceSize);            \
+            workspaceAddr = workspace_allocator.get();                                      \
+        }                                                                                   \
+        if (CTX.async_mode) {                                                               \
+            auto task =                                                                     \
+                std::make_unique<aclnn_task>(aclnn##OP_NAME, workspaceAddr, workspaceSize,  \
+                    executor, CTX.stream()); \
+            CTX.task_queue.submit_task(std::move(task));                                    \
+        } else {                                                                            \
+            ACL_CHECK(aclnn##OP_NAME(workspaceAddr, workspaceSize, executor, CTX.stream()));\
+        }                                                                                   \
     } while (0)
 
-
 /**
- * @brief Prepares broadcast-compatible ACL tensors for two input tensors and one output tensor.
+ * @brief Registers and releases multiple ACL resources, optionally deferring the release
+ *        using a task.
  *
- * This function checks whether broadcasting is needed between `src0` and `src1`.
- * If broadcasting is required, it calculates the proper shapes and creates
- * ACL tensors with broadcast parameters. Otherwise, it directly creates ACL tensors
- * based on the original tensor shapes.
- *
- * @param src0     The first input tensor (reference shape).
- * @param src1     The second input tensor (possibly broadcasted).
- * @param dst      The destination/output tensor.
- * @param acl_src0 Output pointer to the created ACL tensor corresponding to src0.
- * @param acl_src1 Output pointer to the created ACL tensor corresponding to src1.
- * @param acl_dst  Output pointer to the created ACL tensor corresponding to dst.
+ * @tparam Args Types of the ACL resources.
+ * @param ctx Backend context which manages task submission and async mode.
+ * @param args Pointers to ACL resources to be released.
  */
-void bcast_shape(ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst, aclTensor ** acl_src0,
-                        aclTensor ** acl_src1, aclTensor ** acl_dst);
+template <typename... Args>
+void ggml_cann_release_resources(ggml_backend_cann_context & ctx, Args &&... args) {
+    std::vector<any_acl_resource> resources;
+    register_acl_resources(resources, std::forward<Args>(args)...);
+    if(ctx.async_mode) {
+        auto task = std::make_unique<release_resource_task>(std::move(resources));
+        ctx.task_queue.submit_task(std::move(task));
+    }
+}
 
 /**
- * @brief Applies a element-wise operation to two input tensors using the CANN backend.
+ * @brief Performs an asynchronous memory copy operation, optionally deferred via task submission.
  *
- * This templated function takes a binary operator and applies it to two source tensors
- * associated with the destination tensor. The function handles broadcasting as needed.
+ * @param ctx Backend context containing stream and async configuration.
+ * @param dst Destination memory address.
+ * @param src Source memory address.
+ * @param len Size of memory to copy (in bytes).
+ * @param kind Type of memory copy (host-to-device, device-to-host, etc).
+ */
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context & ctx, void * dst,
+                                   const void * src, size_t len, aclrtMemcpyKind kind) {
+    if (ctx.async_mode) {
+        auto task = std::make_unique<async_memcpy_task>(dst, const_cast<void *>(src), len, kind, ctx.stream());
+        ctx.task_queue.submit_task(std::move(task));
+    } else {
+        ACL_CHECK(aclrtMemcpyAsync(dst, len, src, len, kind, ctx.stream()));
+    }
+}
+
+inline void ggml_cann_async_memcpy(ggml_backend_cann_context * ctx, void * dst,
+                                   const void * src, size_t len, aclrtMemcpyKind kind) {
+    if (ctx->async_mode) {
+        auto task = std::make_unique<async_memcpy_task>(dst, const_cast<void *>(src), len, kind, ctx->stream());
+        ctx->task_queue.submit_task(std::move(task));
+    } else {
+        ACL_CHECK(aclrtMemcpyAsync(dst, len, src, len, kind, ctx->stream()));
+    }
+}
+
+/**
+ * @brief Performs an asynchronous memory set operation, optionally deferred via task submission.
+ *
+ * @param ctx Backend context containing stream and async configuration.
+ * @param buffer Memory buffer to be set.
+ * @param size Size of the memory buffer (in bytes).
+ * @param value Value to set in the buffer.
+ */
+inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffer,
+                                   size_t size, int value) {
+    if (ctx.async_mode) {
+        auto task = std::make_unique<async_memset_task>(buffer, size, value, ctx.stream());
+        ctx.task_queue.submit_task(std::move(task));
+    } else {
+        ACL_CHECK(aclrtMemsetAsync(buffer, size, value, size, ctx.stream()));
+    }
+}
+
+/**
+ * @brief Applies a element-wise operation to two input tensors using the CANN
+ * backend.
+ *
+ * This templated function takes a binary operator and applies it to two source
+ * tensors
+ * associated with the destination tensor. The function handles broadcasting as
+ * needed.
  *
  * @tparam binary_op A callable object (e.g., lambda or function pointer) representing
  *         the binary operation to be performed. It must take three arguments:
@@ -676,10 +1007,9 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     bcast_shape(src0, src1, dst, &acl_src0, &acl_src1, &acl_dst);
     binary_op(ctx, acl_src0, acl_src1, acl_dst);
 
-    ACL_CHECK(aclDestroyTensor(acl_src0));
-    ACL_CHECK(aclDestroyTensor(acl_src1));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
+    ggml_cann_release_resources(ctx, acl_src0, acl_src1, acl_dst);
 }
+
 
 /**
  * @brief Applies a unary operation to an input tensor using the CANN backend.
@@ -690,7 +1020,6 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @tparam unary_op A callable with the signature:
  *         void(ggml_backend_cann_context&, aclTensor*, aclTensor*)
  *         where the first aclTensor is the source and the second is the destination.
- *
  * @param ctx The CANN backend context for managing resources and execution.
  * @param dst The destination tensor. Its src[0] is treated as the input tensor.
  */
@@ -702,9 +1031,27 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
     unary_op(ctx, acl_src, acl_dst);
-    ACL_CHECK(aclDestroyTensor(acl_src));
-    ACL_CHECK(aclDestroyTensor(acl_dst));
+    ggml_cann_release_resources(ctx, acl_src, acl_dst);
 }
+
+/**
+ * @brief   Applies a unary operation to a ggml tensor using the CANN backend.
+ *
+ * @details This function performs a unary operation on the input tensor using
+ * a user-provided lambda or callable object `unary_op`, which accepts the CANN
+ * context and two ACL tensors (source and destination). Internally, this function
+ * creates ACL representations of the ggml tensors and invokes the unary operation.
+ * The result is stored in the destination tensor `dst`. This utility abstracts the
+ * common boilerplate of tensor conversion and cleanup when implementing unary ops.
+ *
+ * @param unary_op A callable that performs the unary operation using CANN APIs.
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result will be stored.
+ *            The source tensor is retrieved from `dst->src[0]`.
+ */
+void ggml_cann_unary_op(
+    std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
+    ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief Helper macro to invoke a unary ACL operation using ggml_cann_unary_op.
@@ -715,7 +1062,7 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
  *
  * Internally, the lambda will call:
  * @code
- * GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);
+ * GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);
  * @endcode
  *
  * @param OP_NAME The name of the ACL unary operator to invoke via GGML_CANN_CALL_ACLNN_OP.
@@ -723,13 +1070,14 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
  * @see ggml_cann_unary_op
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                         \
-    do {                                                         \
-        auto lambda = [](auto ctx, auto acl_src, auto acl_dst) { \
-            GGML_CANN_CALL_ACLNN_OP(OP_NAME, acl_src, acl_dst);  \
-        };                                                       \
-        ggml_cann_unary_op<lambda>(ctx, dst);                    \
-    }                                                            \
+#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                              \
+    do {                                                              \
+        auto lambda = [](ggml_backend_cann_context& ctx,              \
+            aclTensor* acl_src,                                       \
+            aclTensor* acl_dst) {                                     \
+            GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);  \
+        };                                                            \
+        ggml_cann_unary_op(lambda, ctx, dst);                         \
+    }                                                                 \
     while (0)
-
 #endif  // CANN_ACLNN_OPS

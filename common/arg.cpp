@@ -228,12 +228,13 @@ static bool common_download_file_single(const std::string & url, const std::stri
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
 
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
     // Check if hf-token or bearer-token was specified
     if (!bearer_token.empty()) {
         std::string auth_header = "Authorization: Bearer " + bearer_token;
         http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
-        curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
     }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
 
 #if defined(_WIN32)
     // CURLSSLOPT_NATIVE_CA tells libcurl to use standard certificate store of
@@ -544,7 +545,10 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
     curl_slist_ptr http_headers;
     std::string res_str;
-    std::string url = "https://huggingface.co/v2/" + hf_repo + "/manifests/" + tag;
+
+    std::string model_endpoint = get_model_endpoint();
+
+    std::string url = model_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
     typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
@@ -659,13 +663,8 @@ static void common_params_handle_model(
                 }
             }
 
-            std::string hf_endpoint = "https://huggingface.co/";
-            const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-            if (hf_endpoint_env) {
-                hf_endpoint = hf_endpoint_env;
-                if (hf_endpoint.back() != '/') hf_endpoint += '/';
-            }
-            model.url = hf_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
+            std::string model_endpoint = get_model_endpoint();
+            model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs

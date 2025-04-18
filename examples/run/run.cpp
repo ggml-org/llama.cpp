@@ -697,8 +697,10 @@ class LlamaData {
         std::vector<std::string> headers = { "User-Agent: llama-cpp", "Accept: application/json" };
         std::string              url;
 
+        std::string model_endpoint = get_model_endpoint();
+
         if (pos == std::string::npos) {
-            auto [model_name, manifest_url] = extract_model_and_tag(model, "https://huggingface.co/v2/");
+            auto [model_name, manifest_url] = extract_model_and_tag(model, model_endpoint + "v2/");
             hfr                             = model_name;
 
             nlohmann::json manifest;
@@ -713,7 +715,7 @@ class LlamaData {
             hff = model.substr(pos + 1);
         }
 
-        url = "https://huggingface.co/" + hfr + "/resolve/main/" + hff;
+        url = model_endpoint + hfr + "/resolve/main/" + hff;
 
         return download(url, bn, true, headers);
     }
