@@ -146,6 +146,7 @@ struct slot_params {
             {"top_k",                     sampling.top_k},
             {"top_p",                     sampling.top_p},
             {"min_p",                     sampling.min_p},
+            {"top_n_sigma",               sampling.top_n_sigma},
             {"xtc_probability",           sampling.xtc_probability},
             {"xtc_threshold",             sampling.xtc_threshold},
             {"typical_p",                 sampling.typ_p},
@@ -248,6 +249,7 @@ struct server_task {
         params.sampling.top_k              = json_value(data, "top_k",              defaults.sampling.top_k);
         params.sampling.top_p              = json_value(data, "top_p",              defaults.sampling.top_p);
         params.sampling.min_p              = json_value(data, "min_p",              defaults.sampling.min_p);
+        params.sampling.top_n_sigma        = json_value(data, "top_n_sigma",        defaults.sampling.top_n_sigma);
         params.sampling.xtc_probability    = json_value(data, "xtc_probability",    defaults.sampling.xtc_probability);
         params.sampling.xtc_threshold      = json_value(data, "xtc_threshold",      defaults.sampling.xtc_threshold);
         params.sampling.typ_p              = json_value(data, "typical_p",          defaults.sampling.typ_p);
