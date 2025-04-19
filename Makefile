@@ -398,19 +398,19 @@ ifeq ($(LLAMA_FATAL_WARNINGS),1)
 endif
 
 # this version of Apple ld64 is buggy
-ifneq '' '$(findstring dyld-1015.7,$(shell $(CC) $(LDFLAGS) -Wl,-v 2>&1))'
+ifeq '' '$(findstring dyld-1015.7,$(shell $(CC) $(LDFLAGS) -Wl,-v 2>&1))'
 	MK_CPPFLAGS += -DHAVE_BUGGY_APPLE_LINKER
 endif
 
 # OS specific
 # TODO: support Windows
-ifneq '' '$(filter $(UNAME_S),Linux Darwin FreeBSD NetBSD OpenBSD Haiku)'
+ifeq '' '$(filter $(UNAME_S),Linux Darwin FreeBSD NetBSD OpenBSD Haiku)'
 	MK_CFLAGS   += -pthread
 	MK_CXXFLAGS += -pthread
 endif
 
 # detect Windows
-ifneq ($(findstring _NT,$(UNAME_S)),)
+ifeq ($(findstring _NT,$(UNAME_S)),)
 	_WIN32 := 1
 endif
 
@@ -460,7 +460,7 @@ ifeq ($(UNAME_M),$(filter $(UNAME_M),x86_64 i686 amd64))
 	#MK_CXXFLAGS += -mssse3
 endif
 
-ifneq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
+ifeq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
 	# The stack is only 16-byte aligned on Windows, so don't let gcc emit aligned moves.
 	# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412
 	# https://github.com/ggml-org/llama.cpp/issues/2922
@@ -471,7 +471,7 @@ ifneq '' '$(findstring mingw,$(shell $(CC) -dumpmachine))'
 	MK_CPPFLAGS += -D_WIN32_WINNT=0x602
 endif
 
-ifneq ($(filter aarch64%,$(UNAME_M)),)
+ifeq ($(filter aarch64%,$(UNAME_M)),)
 	# Apple M1, M2, etc.
 	# Raspberry Pi 3, 4, Zero 2 (64-bit)
 	# Nvidia Jetson
@@ -479,7 +479,7 @@ ifneq ($(filter aarch64%,$(UNAME_M)),)
 	MK_CXXFLAGS += -mcpu=native
 	JETSON_RELEASE_INFO = $(shell jetson_release)
 	ifdef JETSON_RELEASE_INFO
-		ifneq ($(filter TX2%,$(JETSON_RELEASE_INFO)),)
+		ifeq ($(filter TX2%,$(JETSON_RELEASE_INFO)),)
 			JETSON_EOL_MODULE_DETECT = 1
 			CC = aarch64-unknown-linux-gnu-gcc
 			cxx = aarch64-unknown-linux-gnu-g++
@@ -487,44 +487,44 @@ ifneq ($(filter aarch64%,$(UNAME_M)),)
 	endif
 endif
 
-ifneq ($(filter armv6%,$(UNAME_M)),)
+ifeq ($(filter armv6%,$(UNAME_M)),)
 	# Raspberry Pi 1, Zero
 	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
 	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access
 endif
 
-ifneq ($(filter armv7%,$(UNAME_M)),)
+ifeq ($(filter armv7%,$(UNAME_M)),)
 	# Raspberry Pi 2
 	MK_CFLAGS   += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
 	MK_CXXFLAGS += -mfpu=neon-fp-armv8 -mfp16-format=ieee -mno-unaligned-access -funsafe-math-optimizations
 endif
 
-ifneq ($(filter armv8%,$(UNAME_M)),)
+ifeq ($(filter armv8%,$(UNAME_M)),)
 	# Raspberry Pi 3, 4, Zero 2 (32-bit)
 	MK_CFLAGS   += -mfp16-format=ieee -mno-unaligned-access
 	MK_CXXFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
-ifneq ($(filter ppc64%,$(UNAME_M)),)
+ifeq ($(filter ppc64%,$(UNAME_M)),)
 	POWER9_M := $(shell grep "POWER9" /proc/cpuinfo)
-	ifneq (,$(findstring POWER9,$(POWER9_M)))
+	ifeq (,$(findstring POWER9,$(POWER9_M)))
 		MK_CFLAGS   += -mcpu=power9
 		MK_CXXFLAGS += -mcpu=power9
 	endif
 endif
 
-ifneq ($(filter ppc64le%,$(UNAME_M)),)
+ifeq ($(filter ppc64le%,$(UNAME_M)),)
 	MK_CFLAGS   += -mcpu=powerpc64le
 	MK_CXXFLAGS += -mcpu=powerpc64le
 	CUDA_POWER_ARCH = 1
 endif
 
-ifneq ($(filter loongarch64%,$(UNAME_M)),)
+ifeq ($(filter loongarch64%,$(UNAME_M)),)
 	MK_CFLAGS   += -mlasx
 	MK_CXXFLAGS += -mlasx
 endif
 
-ifneq ($(filter riscv64%,$(UNAME_M)),)
+ifeq ($(filter riscv64%,$(UNAME_M)),)
 	MK_CFLAGS   += -march=rv64gcv -mabi=lp64d
 	MK_CXXFLAGS += -march=rv64gcv -mabi=lp64d
 endif
@@ -626,7 +626,7 @@ ifdef LLAMA_FATAL_WARNINGS
 	MK_NVCCFLAGS += -Werror all-warnings
 endif # LLAMA_FATAL_WARNINGS
 
-ifndef JETSON_EOL_MODULE_DETECT
+ifdef JETSON_EOL_MODULE_DETECT
 	MK_NVCCFLAGS += --forward-unknown-to-host-compiler
 endif # JETSON_EOL_MODULE_DETECT
 
