@@ -21,7 +21,7 @@ I build with a freshly installed Ubuntu 24.04 VM. Here are some packages that ar
 ```
 sudo apt install -y git python3-pip build-essential zlib1g-dev \
     libffi-dev libssl-dev libbz2-dev libreadline-dev libsqlite3-dev \
-    liblzma-dev tk-dev python3-tk cmake zip
+    liblzma-dev tk-dev python3-tk cmake zip npm
 printf "\n**********\n*\n* FINISHED: Build Dependencies.\n*\n**********\n\n"
 ```
 

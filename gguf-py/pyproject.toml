@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gguf"
-version = "0.16.0"
+version = "0.16.2"
 description = "Read and write ML models in GGUF for GGML"
 authors = ["GGML <ggml@ggml.ai>"]
 packages = [
@@ -23,9 +23,13 @@ numpy = ">=1.17"
 tqdm = ">=4.27"
 pyyaml = ">=5.1"
 sentencepiece = ">=0.1.98,<=0.2.0"
+PySide6 = { version = "^6.9", python = ">=3.9,<3.14", optional = true }
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"
+
+[tool.poetry.extras]
+gui = ["PySide6"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -36,3 +40,4 @@ gguf-convert-endian = "gguf.scripts:gguf_convert_endian_entrypoint"
 gguf-dump = "gguf.scripts:gguf_dump_entrypoint"
 gguf-set-metadata = "gguf.scripts:gguf_set_metadata_entrypoint"
 gguf-new-metadata = "gguf.scripts:gguf_new_metadata_entrypoint"
+gguf-editor-gui = "gguf.scripts:gguf_editor_gui_entrypoint"
