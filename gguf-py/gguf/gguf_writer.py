@@ -530,6 +530,9 @@ class GGUFWriter:
     def add_license_link(self, license: str) -> None:
         self.add_string(Keys.General.LICENSE_LINK, license)
 
+    def add_license_content(self, license: str) -> None:
+        self.add_string(Keys.General.LICENSE_CONTENT, license)
+
     def add_url(self, url: str) -> None:
         self.add_string(Keys.General.URL, url)
 
