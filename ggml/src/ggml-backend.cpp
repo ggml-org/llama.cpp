@@ -536,6 +536,10 @@ struct ggml_backend_multi_buffer_context {
     size_t n_buffers;
 };
 
+void ggml_backend_set_size(ggml_backend_buffer_t buffer, size_t cur_size){
+    buffer->size = cur_size;
+}
+
 static void ggml_backend_multi_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_multi_buffer_context * ctx = (ggml_backend_multi_buffer_context *) buffer->context;
     for (size_t i = 0; i < ctx->n_buffers; i++) {

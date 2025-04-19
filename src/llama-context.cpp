@@ -1548,6 +1548,7 @@ int32_t llama_context::output_reserve(int32_t n_outputs) {
     std::fill(output_ids.begin(), output_ids.end(), -1);
 
     ggml_backend_buffer_clear(buf_output.get(), 0);
+    ggml_backend_set_size(buf_output.get(), new_size);
 
     this->n_outputs     = 0;
     this->n_outputs_max = n_outputs_max;
