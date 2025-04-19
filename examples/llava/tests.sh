@@ -17,25 +17,29 @@ cd $PROJ_ROOT
 
 arr_bin=()
 arr_hf=()
+arr_tmpl=() # chat template
 
 add_test() {
     local bin=$1
     local hf=$2
+    local tmpl=${3:-""} # default to empty string if not provided
     arr_bin+=("$bin")
     arr_hf+=("$hf")
+    arr_tmpl+=("$tmpl")
 }
 
-add_test "llama-gemma3-cli"   "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
-add_test "llama-llava-cli"    "cmp-nct/Yi-VL-6B-GGUF:Q5_K"
-add_test "llama-llava-cli"    "guinmoon/MobileVLM-3B-GGUF:Q4_K_M"
-add_test "llama-llava-cli"    "THUDM/glm-edge-v-5b-gguf:Q4_K_M"
-add_test "llama-llava-cli"    "second-state/Llava-v1.5-7B-GGUF:Q2_K"
-add_test "llama-llava-cli"    "cjpais/llava-1.6-mistral-7b-gguf:Q3_K"
-add_test "llama-llava-cli"    "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M"
-add_test "llama-minicpmv-cli" "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K" # model from openbmb is corrupted
-add_test "llama-minicpmv-cli" "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
-add_test "llama-minicpmv-cli" "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
+add_test "llama-mtmd-cli"  "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+add_test "llama-mtmd-cli"  "guinmoon/MobileVLM-3B-GGUF:Q4_K_M"               "deepseek"
+add_test "llama-mtmd-cli"  "THUDM/glm-edge-v-5b-gguf:Q4_K_M"
+add_test "llama-mtmd-cli"  "second-state/Llava-v1.5-7B-GGUF:Q2_K"            "vicuna"
+add_test "llama-mtmd-cli"  "cjpais/llava-1.6-mistral-7b-gguf:Q3_K"           "vicuna"
+add_test "llama-mtmd-cli"  "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M"
+add_test "llama-mtmd-cli"  "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K"  # model from openbmb is corrupted
+add_test "llama-mtmd-cli"  "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
+add_test "llama-mtmd-cli"  "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
 add_test "llama-qwen2vl-cli"  "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
+
+# add_test "llama-mtmd-cli"  "cmp-nct/Yi-VL-6B-GGUF:Q5_K"  # this model has broken chat template, not usable
 
 ###############
 
@@ -46,12 +50,20 @@ arr_res=()
 for i in "${!arr_bin[@]}"; do
     bin="${arr_bin[$i]}"
     hf="${arr_hf[$i]}"
+    tmpl="${arr_tmpl[$i]}"
 
     echo "Running test with binary: $bin and HF model: $hf"
     echo ""
     echo ""
 
-    output=$("$PROJ_ROOT/build/bin/$bin" -hf "$hf" --image $SCRIPT_DIR/test-1.jpeg -p "what is the publisher name of the newspaper?" --temp 0 2>&1 | tee /dev/tty)
+    output=$(\
+        "$PROJ_ROOT/build/bin/$bin" \
+        -hf "$hf" \
+        --image $SCRIPT_DIR/test-1.jpeg \
+        -p "what is the publisher name of the newspaper?" \
+        --temp 0 -n 128 \
+        ${tmpl:+--chat-template "$tmpl"} \
+        2>&1 | tee /dev/tty)
 
     echo "$output" > $SCRIPT_DIR/output/$bin-$(echo "$hf" | tr '/' '-').log
 

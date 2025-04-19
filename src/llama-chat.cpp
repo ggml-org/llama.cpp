@@ -121,6 +121,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_PHI_3;
     } else if (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>")) {
         return tmpl_contains("</s>") ? LLM_CHAT_TEMPLATE_FALCON_3 : LLM_CHAT_TEMPLATE_GLMEDGE;
+    } else if (tmpl_contains("<|{{ item['role'] }}|>") && tmpl_contains("<|begin_of_image|>")) {
+        return LLM_CHAT_TEMPLATE_GLMEDGE;
     } else if (tmpl_contains("<|user|>") && tmpl_contains("<|endoftext|>")) {
         return LLM_CHAT_TEMPLATE_ZEPHYR;
     } else if (tmpl_contains("bos_token + message['role']")) {
