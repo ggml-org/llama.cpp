@@ -32,16 +32,17 @@ public:
         else static_assert(0);
     }
 
-    static inline void row_gemm(ggml_backend_sycl_context & ctx, bool a_trans, bool b_trans, int m, int n, int k,
-                                const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q) {
+    static void row_gemm(ggml_backend_sycl_context & ctx, bool a_trans, bool b_trans, int m, int n, int k,
+            const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q,
+            dnnl_dim_t batches = 1) {
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
-        dnnl::memory::dims a_dims = { m, k };
-        dnnl::memory::dims b_dims = { k, n };
-        dnnl::memory::dims c_dims = { m, n };
-        const auto a_in_md = dnnl::memory::desc(a_dims, at, a_trans ? tag::ba : tag::ab);
-        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_trans ? tag::ba : tag::ab);
-        const auto c_md    = dnnl::memory::desc(c_dims, ct, tag::ab);
+        dnnl::memory::dims a_dims = { batches, m, k };
+        dnnl::memory::dims b_dims = { batches, k, n };
+        dnnl::memory::dims c_dims = { batches, m, n };
+        const auto a_in_md = dnnl::memory::desc(a_dims, at, a_trans ? tag::acb : tag::abc);
+        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_trans ? tag::acb : tag::abc);
+        const auto c_md    = dnnl::memory::desc(c_dims, ct, tag::abc);
 
         dnnl::primitive_attr primitive_attr;
         primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
