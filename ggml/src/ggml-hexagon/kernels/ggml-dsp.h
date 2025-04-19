@@ -31,6 +31,8 @@ extern "C" {
 
 #define ALIGN_128_BYTE      128
 
+#define VLEN                128
+
 #define GGML_UNUSED(x)      (void)(x)
 
 #define UNUSED              GGML_UNUSED
@@ -49,6 +51,8 @@ extern "C" {
 #else
 #define GGML_MEM_ALIGN      16
 #endif
+
+#define GGML_API            extern
 
 #ifdef __cplusplus
 // restrict not standard in C++
@@ -142,21 +146,22 @@ enum ggml_type {
 
 typedef double      ggml_float;
 
-int64_t ggml_time_ms(void);
-int64_t ggml_time_us(void);
+GGML_API int64_t ggml_time_ms(void);
+GGML_API int64_t ggml_time_us(void);
 
-size_t ggml_nbytes(const struct ggml_tensor * tensor);
-int64_t ggml_nrows(const struct ggml_tensor * tensor);
-bool ggml_is_contiguous(const struct ggml_tensor * tensor);
-void ggml_abort(const char * file, int line, const char * fmt, ...);
-bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
-bool ggml_are_same_shape(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+GGML_API size_t ggml_nbytes(const struct ggml_tensor * tensor);
+GGML_API int64_t ggml_nrows(const struct ggml_tensor * tensor);
+GGML_API int ggml_n_dims(const struct ggml_tensor * tensor);
+GGML_API bool ggml_is_contiguous(const struct ggml_tensor * tensor);
+GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
+GGML_API bool ggml_can_repeat(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
+GGML_API bool ggml_are_same_shape(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
 
-void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor);
-void ggmlhexagon_dump_tensor(const ggml_tensor * tensor, int dump_tensor_data);
-void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...);
+GGML_API void ggmlhexagon_dump_tensor_elements(const ggml_tensor * tensor);
+GGML_API void ggmlhexagon_dump_tensor(const ggml_tensor * tensor, int dump_tensor_data);
+GGML_API void ggmlhexagon_log_internal(int level, const char *file, const char *func, int line, const char *format, ...);
 
-int ggmlop_get_thread_counts(void);
+GGML_API int ggmlop_get_thread_counts(void);
 
 #ifdef  __cplusplus
 }

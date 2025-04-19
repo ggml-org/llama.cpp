@@ -178,6 +178,15 @@ bool ggml_is_contiguous(const struct ggml_tensor * tensor) {
     return ggml_is_contiguous_0(tensor);
 }
 
+int ggml_n_dims(const struct ggml_tensor * tensor) {
+    for (int i = GGML_MAX_DIMS - 1; i >= 1; --i) {
+        if (tensor->ne[i] > 1) {
+            return i + 1;
+        }
+    }
+    return 1;
+}
+
 void ggml_abort(const char * file, int line, const char * fmt, ...) {
     GGMLHEXAGON_LOG_DEBUG("enter ggml_abort");
     abort();

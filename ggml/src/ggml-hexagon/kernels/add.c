@@ -1,14 +1,21 @@
 #include "ggml-dsp.h"
 
-inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float * x, const float * y) {
+static inline void l2fetch(const void * p, uint32_t stride,
+                           uint32_t width, uint32_t height,
+                           uint32_t dir) {
+    uint64_t control = HEXAGON_V64_CREATE_H(dir, stride, width, height);
+    __asm__ __volatile__ (" l2fetch(%0,%1) " : :"r"(p),"r"(control));
+}
+
+static inline void ggmlhexagon_dsp_add_f32(const int n, float * GGML_RESTRICT z, const float * GGML_RESTRICT x, const float * GGML_RESTRICT y) {
     HVX_Vector * va;
     HVX_Vector * vb;
     HVX_Vector * vc;
     HVX_Vector qf32;
-    const int FLOATS_PER_VECTOR = 128 / sizeof(float);
-    const int block  = n / FLOATS_PER_VECTOR;
-    const int left   = n % FLOATS_PER_VECTOR;
-    const int blocks = block * FLOATS_PER_VECTOR;
+    const size_t FLOATS_PER_VECTOR = 128 / sizeof(float);
+    const size_t block  = n / FLOATS_PER_VECTOR;
+    const size_t left   = n % FLOATS_PER_VECTOR;
+    const size_t blocks = block * FLOATS_PER_VECTOR;
 
     if ((((uintptr_t)z | (uintptr_t)x | (uintptr_t)y) % ALIGN_128_BYTE) != 0) {
         GGMLHEXAGON_LOG_DEBUG("memaddress mismatch alignment 128 bytes z:%p x:%p y:%p", z, x, y);
@@ -21,11 +28,13 @@ inline static void ggmlhexagon_dsp_add_f32 (const int n, float * z, const float 
     va = (HVX_Vector *)x;
     vb = (HVX_Vector *)y;
     vc = (HVX_Vector *)z;
+    //unroll is better but need more carefully check for various cases and I think DSP also don't like branch predication
     for (size_t i = 0; i < block; ++i) {
+        l2fetch(va + VLEN, VLEN, VLEN, 1, 0);
+        l2fetch(vb + VLEN, VLEN, VLEN, 1, 0);
         //*vc++ = Q6_Vsf_vadd_VsfVsf(*va++, *vb++);
         qf32 = Q6_Vqf32_vadd_VsfVsf(*va++, *vb++);
-        *vc = Q6_Vsf_equals_Vqf32(qf32);
-        vc++;
+        *vc++ = Q6_Vsf_equals_Vqf32(qf32);
     }
 
     if (left > 0) {
@@ -48,6 +57,17 @@ static void ggml_compute_forward_add_f32(
     ggmlhexagon_dump_tensor(dst, 1);
 
     GGML_ASSERT(ggml_can_repeat(src1, src0) && ggml_are_same_shape(src0, dst));
+
+    const int rank = ggml_n_dims(src0);
+    if (1 == rank) {
+        //element-wise addition with vector
+        const size_t len = src0->ne[0];
+        float * dst_ptr  = (float *) (dst->data);
+        float * src0_ptr = (float *) (src0->data);
+        float * src1_ptr = (float *) (src1->data);
+        ggmlhexagon_dsp_add_f32(len, dst_ptr, src0_ptr, src1_ptr);
+        return;
+    }
 
     const int ith = 0;
     const int nth = 1;
@@ -115,24 +135,9 @@ static void ggml_compute_forward_add_f32(
 }
 
 //FIXME: why failed with test-backend-ops when disable ion rpc mempool
-int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst)
-{
+int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-        {
-            if (src1->type == GGML_TYPE_F32) {
-                ggml_compute_forward_add_f32(src0, src1, dst);
-            } else {
-                GGML_ABORT("fatal error");
-            }
-            break;
-        }
-        default:
-        {
-            GGML_ABORT("fatal error");
-        }
-    }
+    ggml_compute_forward_add_f32(src0, src1, dst);
     GGMLHEXAGON_LOG_DEBUG("leave %s\n", __func__);
     return 0;
 }
