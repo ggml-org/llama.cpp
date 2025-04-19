@@ -1,5 +1,4 @@
 #include "llama-quant.h"
-
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
@@ -14,6 +13,9 @@
 #include <thread>
 #include <unordered_map>
 
+//static std::vector prune_map = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29};
+static std::vector<int> prune_map = {7};
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -22,6 +24,10 @@ static void zeros(std::ofstream & file, size_t n) {
 }
 
 static std::string remap_layer(const std::string & orig_name, const std::vector<int>& prune, std::map<int, std::string>& mapped, int& next_id) {
+    if (prune.empty()) {
+        return orig_name;
+    }
+
     static const std::regex pattern(R"(blk\.(\d+)\.)");
     if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
         const int blk = std::stoi(match[1]);
@@ -39,7 +45,8 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
             ++next_id;
         }
 
-        return new_name.replace(match.position(1), match.length(1), mapped[blk]);
+        std::string name = mapped[blk] == "X" ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
+        return name;
     }
 
     return orig_name;
@@ -597,6 +604,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
+    // ToDo: Add test for --tensor-prune condition
+    const auto block_count = gguf_get_val_u32(ctx_out.get(), LLM_KV_BLOCK_COUNT) - prune_map.size();
+    gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count);
+
     // Remove split metadata
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str());
@@ -620,10 +631,28 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    std::map<int, std::string> mapped;
+    int next_blk_id = 0;
+    int pruned_attention_w = 0;
+
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
+        // ToDo: Add test for --tensor-prune condition
+        const std::string remapped_name(remap_layer(it.first, prune_map, mapped, next_blk_id));
+        if (remapped_name == "X") {
+            if (it.first.find("attn_v.weight") != std::string::npos ||
+                it.first.find("attn_qkv.weight") != std::string::npos ||
+                it.first.find("attn_kv_b.weight")!= std::string::npos) {
+                pruned_attention_w++;
+                }
+            LLAMA_LOG_DEBUG("%s: prunning tensor %s\n", __func__, it.first.c_str());
+            continue;
+        } else if (remapped_name != it.first) {
+            ggml_set_name(it.second.tensor, remapped_name.c_str());
+            //LLAMA_LOG_DEBUG("%s: tensor %s remmaped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
+        }
         tensors.push_back(&it.second);
     }
 
@@ -663,7 +692,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (llama_model_has_encoder(&model)) {
             n_attn_layer *= 3;
         }
-        GGML_ASSERT((qs.n_attention_wv == n_attn_layer) && "n_attention_wv is unexpected");
+        GGML_ASSERT((qs.n_attention_wv == n_attn_layer - pruned_attention_w) && "n_attention_wv is unexpected");
     }
 
     size_t total_size_org = 0;
