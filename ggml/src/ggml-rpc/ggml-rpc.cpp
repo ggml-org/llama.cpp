@@ -982,8 +982,21 @@ bool rpc_server::buffer_clear(const rpc_msg_buffer_clear_req & request) {
 }
 
 ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
+    // Validate tensor type before using it
+    if (tensor->type < 0 || tensor->type >= GGML_TYPE_COUNT) {
+        GGML_LOG_ERROR("[%s] invalid tensor type received: %u\n", __func__, tensor->type);
+        return nullptr;
+    }
+
     ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,
         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+
+    // ggml_new_tensor_4d might fail if dimensions are invalid, although less likely to crash than invalid type
+    if (result == nullptr) {
+        GGML_LOG_ERROR("[%s] ggml_new_tensor_4d failed for type %u\\n", __func__, tensor->type);
+        return nullptr;
+    }
+
     for (uint32_t i = 0; i < GGML_MAX_DIMS; i++) {
         result->nb[i] = tensor->nb[i];
     }
@@ -1043,7 +1056,10 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
-            GGML_ABORT("[%s] tensor->data out of bounds\n", __func__);
+            // Replace GGML_ABORT with logging and error return
+            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%zx, 0x%zx)\n",
+                           __func__, in_tensor->data, offset, size, p0, p1);
+            return false;
         }
     }
 
@@ -1118,7 +1134,11 @@ bool rpc_server::set_tensor_hash(const std::vector<uint8_t> & input, rpc_msg_set
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
-            GGML_ABORT("[%s] tensor->data out of bounds\n", __func__);
+            // Replace GGML_ABORT with logging and error return
+            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu, hash=0x%" PRIx64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
+                           __func__, in_tensor->data, offset, size, *hash, p0, p1);
+            response.result = 0;
+            return false;
         }
     }
     ggml_backend_tensor_set(tensor, cached_file.data(), offset, size);
@@ -1183,7 +1203,10 @@ bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<
         if (request.tensor.data + request.offset < p0 ||
             request.tensor.data + request.offset >= p1 ||
             request.size > (p1 - request.tensor.data - request.offset)) {
-                GGML_ABORT("[%s] tensor->data out of bounds\n", __func__);
+                // Replace GGML_ABORT with logging and error return
+                GGML_LOG_ERROR("[%s] requested tensor region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%" PRIu64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
+                               __func__, request.tensor.data, request.offset, request.size, p0, p1);
+                return false;
         }
     }
 
@@ -1206,6 +1229,7 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
     ggml_tensor * dst = deserialize_tensor(ctx, &request.dst);
     if (src == nullptr || dst == nullptr) {
         GGML_LOG_ERROR("[%s] error deserializing tensors\n", __func__);
+        response.result = 0;
         return false;
     }
 
@@ -1223,6 +1247,7 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
                          dst_data + src_size,
                          dst_base,
                          dst_base + dst_buf_sz);
+        response.result = 0;
         return false;
     }
 
@@ -1243,7 +1268,14 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     if (tensor_map.find(id) != tensor_map.end()) {
         return tensor_map[id];
     }
-    const rpc_tensor * tensor = tensor_ptrs.at(id);
+    // Safely find the tensor pointer
+    auto it_ptr = tensor_ptrs.find(id);
+    if (it_ptr == tensor_ptrs.end()) {
+        GGML_LOG_ERROR("[%s] tensor id %" PRIu64 " not found in provided tensors\n", __func__, id);
+        return nullptr;
+    }
+    const rpc_tensor * tensor = it_ptr->second;
+
     struct ggml_tensor * result = deserialize_tensor(ctx, tensor);
     if (result == nullptr) {
         return nullptr;
@@ -1251,35 +1283,103 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     tensor_map[id] = result;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         result->src[i] = create_node(tensor->src[i], ctx, tensor_ptrs, tensor_map);
+        // Check if recursive call failed
+        if (tensor->src[i] != 0 && result->src[i] == nullptr) {
+            GGML_LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                           __func__, i, tensor->src[i], id);
+            // Must return nullptr to signal failure up the call stack
+            return nullptr;
+        }
     }
     result->view_src = create_node(tensor->view_src, ctx, tensor_ptrs, tensor_map);
+    // Check if recursive call failed
+    if (tensor->view_src != 0 && result->view_src == nullptr) {
+        GGML_LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                       __func__, tensor->view_src, id);
+        // Must return nullptr to signal failure up the call stack
+        return nullptr;
+    }
     result->view_offs = tensor->view_offs;
     return result;
 }
 
 bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph_compute_rsp & response) {
     // serialization format:
-    // | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
-    if (input.size() < sizeof(uint32_t)) {
+    // | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t)) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
+
+    // Perform robust size checks with overflow protection
+    const size_t min_header_size = sizeof(uint32_t);
+    if (input.size() < min_header_size) {
+        GGML_LOG_ERROR("[%s] input message too small for n_nodes header: %zu bytes\n", __func__, input.size());
+        response.result = GGML_STATUS_FAILED;
         return false;
     }
     uint32_t n_nodes;
     memcpy(&n_nodes, input.data(), sizeof(n_nodes));
-    if (input.size() < sizeof(uint32_t) + n_nodes*sizeof(uint64_t) + sizeof(uint32_t)) {
+
+    // Calculate required size for nodes array
+    size_t nodes_array_bytes = n_nodes * sizeof(uint64_t);
+
+    // Calculate required size up to n_tensors field safely
+    size_t required_size_before_tensors = min_header_size;
+
+    // Check for overflow before adding nodes_array_bytes
+    if (SIZE_MAX - required_size_before_tensors < nodes_array_bytes) {
+        GGML_LOG_ERROR("[%s] integer overflow calculating size before tensors step 1: n_nodes=%u\n", __func__, n_nodes);
+        response.result = GGML_STATUS_FAILED; // Use correct status
         return false;
     }
-    const uint64_t * nodes = (const uint64_t *)(input.data() + sizeof(n_nodes));
+    required_size_before_tensors += nodes_array_bytes;
+
+    const size_t n_tensors_field_size = sizeof(uint32_t);
+    // Check for overflow before adding n_tensors_field_size
+    if (SIZE_MAX - required_size_before_tensors < n_tensors_field_size) {
+        GGML_LOG_ERROR("[%s] integer overflow calculating size before tensors step 2: n_nodes=%u\n", __func__, n_nodes);
+        response.result = GGML_STATUS_FAILED; // Use correct status
+        return false;
+    }
+    required_size_before_tensors += n_tensors_field_size;
+
+    if (input.size() < required_size_before_tensors) {
+        GGML_LOG_ERROR("[%s] input message too small for nodes array or n_tensors header: %zu bytes, needed %zu\n", __func__, input.size(), required_size_before_tensors);
+        response.result = GGML_STATUS_FAILED; // Use correct status
+        return false;
+    }
+
+    // Read n_tensors
+    const uint64_t * nodes_ptr = (const uint64_t *)(input.data() + sizeof(n_nodes));
     uint32_t n_tensors;
-    memcpy(&n_tensors, input.data() + sizeof(n_nodes) + n_nodes*sizeof(uint64_t), sizeof(n_tensors));
-    if (input.size() < sizeof(uint32_t) + n_nodes*sizeof(uint64_t) + sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor)) {
+    memcpy(&n_tensors, input.data() + min_header_size + nodes_array_bytes, sizeof(n_tensors));
+
+    // Calculate required size for tensors array
+    size_t tensors_array_bytes = n_tensors * sizeof(rpc_tensor);
+
+    // Calculate total required size safely
+    size_t required_total_size = required_size_before_tensors;
+
+    // Check for overflow before adding tensors_array_bytes
+    if (SIZE_MAX - required_total_size < tensors_array_bytes) {
+        GGML_LOG_ERROR("[%s] integer overflow calculating total required size: n_nodes=%u, n_tensors=%u\n", __func__, n_nodes, n_tensors);
+        response.result = GGML_STATUS_FAILED;
         return false;
     }
-    const rpc_tensor * tensors = (const rpc_tensor *)(input.data() + sizeof(n_nodes) + n_nodes*sizeof(uint64_t) + sizeof(n_tensors));
+    required_total_size += tensors_array_bytes;
+
+    if (input.size() < required_total_size) {
+        GGML_LOG_ERROR("[%s] input message too small for tensors array: %zu bytes, needed %zu\n", __func__, input.size(), required_total_size);
+        response.result = GGML_STATUS_FAILED;
+        return false;
+    }
+
+    // Pointers are now safe to use based on size checks
+    const rpc_tensor * tensors = (const rpc_tensor *)(input.data() + required_size_before_tensors);
     GGML_PRINT_DEBUG("[%s] n_nodes: %u, n_tensors: %u\n", __func__, n_nodes, n_tensors);
 
-    size_t buf_size = ggml_tensor_overhead()*(n_nodes + n_tensors) + ggml_graph_overhead_custom(n_nodes, false);
+    // Estimate buffer size for context
+    size_t ctx_buf_size = ggml_tensor_overhead()*((size_t)n_nodes + n_tensors) + ggml_graph_overhead_custom(n_nodes, false);
+
     struct ggml_init_params params = {
-        /*.mem_size   =*/ buf_size,
+        /*.mem_size   =*/ ctx_buf_size,
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
@@ -1295,12 +1395,20 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
     std::unordered_map<uint64_t, ggml_tensor*> tensor_map;
     for (uint32_t i = 0; i < n_nodes; i++) {
         int64_t id;
-        memcpy(&id, &nodes[i], sizeof(id));
+        memcpy(&id, &nodes_ptr[i], sizeof(id));
         graph->nodes[i] = create_node(id, ctx, tensor_ptrs, tensor_map);
+        // Check if create_node failed (e.g., due to invalid type or missing ID)
+        if (graph->nodes[i] == nullptr) {
+            GGML_LOG_ERROR("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
+            response.result = GGML_STATUS_FAILED;
+            // No need to free ctx, ggml_context_ptr handles it.
+            return false;
+        }
     }
     ggml_status status = ggml_backend_graph_compute(backend, graph);
     response.result = status;
-    return true;
+    // Return true only if computation succeeded
+    return status == GGML_STATUS_SUCCESS;
 }
 
 rpc_server::~rpc_server() {
