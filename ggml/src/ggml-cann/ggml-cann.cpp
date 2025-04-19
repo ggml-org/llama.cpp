@@ -156,195 +156,196 @@ const ggml_cann_device_info& ggml_cann_info() {
  * This class manages a pool of CANN buffers for a specific device.
  */
 struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
-        /**
-         * @brief The maximum reuse margin for a buffer.
-         */
-        static const size_t max_reuse_margin = 1ull << 22;  // 4MB
+    /**
+     * @brief The maximum reuse margin for a buffer.
+     */
+    static const size_t max_reuse_margin = 1ull << 22;  // 4MB
 
-        /**
-         * @brief The minimum free margin for a buffer.
-         */
-        static const size_t min_free_margin = 1ull << 20;   // 1MB
+    /**
+     * @brief The minimum free margin for a buffer.
+     */
+    static const size_t min_free_margin = 1ull << 20;   // 1MB
 
-        /**
-         * @brief The alignment for buffer allocation.
-         */
-        static const size_t alignment = 128;
+    /**
+     * @brief The alignment for buffer allocation.
+     */
+    static const size_t alignment = 128;
 
-        /**
-         * @brief The device ID associated with this buffer pool.
-         */
-        int device;
+    /**
+     * @brief The device ID associated with this buffer pool.
+     */
+    int device;
 
-        /**
-         * @brief Whether to disable clean during buffer allocation.
-         */
-        bool disable_clean = false;
+    /**
+     * @brief Whether to disable clean during buffer allocation.
+     */
+    bool disable_clean = false;
 
-        /**
-         * @brief Structure representing a CANN buffer.
-         */
-        struct ggml_cann_buffer {
-            void* ptr = nullptr;  ///< Pointer to the buffer.
-            size_t size = 0;      ///< Size of the buffer.
-            std::chrono::steady_clock::time_point last_used;  ///< Last used time.
+    /**
+     * @brief Structure representing a CANN buffer.
+     */
+    struct ggml_cann_buffer {
+        void* ptr = nullptr;  ///< Pointer to the buffer.
+        size_t size = 0;      ///< Size of the buffer.
+        std::chrono::steady_clock::time_point last_used;  ///< Last used time.
 
-            bool operator>(const ggml_cann_buffer& other) const {
-                return size > other.size;
-            }
-        };
+        bool operator>(const ggml_cann_buffer& other) const {
+            return size > other.size;
+        }
+    };
 
-        /**
-         * @brief Array of CANN buffers in the pool.
-         */
-        std::unordered_map<void*, size_t> buffer_pool;
-        std::priority_queue<ggml_cann_buffer,
-                            std::vector<ggml_cann_buffer>,
-                            std::greater<>> free_buffers ;
+    /**
+     * @brief Array of CANN buffers in the pool.
+     */
+    std::unordered_map<void*, size_t> buffer_pool;
+    std::priority_queue<ggml_cann_buffer,
+                        std::vector<ggml_cann_buffer>,
+                        std::greater<>> free_buffers ;
 
-        /**
-         * @brief Total size of all buffers in the pool.
-         */
-        size_t pool_size = 0;
+    /**
+     * @brief Total size of all buffers in the pool.
+     */
+    size_t pool_size = 0;
 
-        /**
-         * @brief Constructor to initialize the buffer pool for a specific device.
-         *
-         * @param device The device ID to associate with this buffer pool.
-         */
-        explicit ggml_cann_pool_buf_prio(int device) : device(device) {
-            disable_clean = getenv("GGML_CANN_DISABLE_BUF_POOL_CLEAN") != nullptr;
+    /**
+     * @brief Constructor to initialize the buffer pool for a specific device.
+     *
+     * @param device The device ID to associate with this buffer pool.
+     */
+    explicit ggml_cann_pool_buf_prio(int device) : device(device) {
+        disable_clean = getenv("GGML_CANN_DISABLE_BUF_POOL_CLEAN") != nullptr;
+    }
+
+    /**
+     * @brief Destructor to free all buffers in the pool.
+     */
+    ~ggml_cann_pool_buf_prio() {
+        ggml_cann_set_device(device);
+        for (auto& [b_ptr, b_size] : buffer_pool) {
+            aclrtFree(b_ptr);
+            pool_size -= b_size;
+        }
+        buffer_pool.clear();
+        GGML_ASSERT(pool_size == 0);
+    }
+
+    /**
+     * @brief Allocate a buffer of the given size.
+     *
+     * @param size The size of the buffer to allocate.
+     * @param actual_size A pointer to a variable to receive the actual size of
+     * the allocated buffer.
+     * @return A pointer to the allocated buffer.
+     */
+    void* alloc(size_t size, size_t* actual_size) override {
+        size = GGML_PAD(size, alignment);
+        if (size == 0) {
+            size = alignment;
         }
 
-        /**
-         * @brief Destructor to free all buffers in the pool.
-         */
-        ~ggml_cann_pool_buf_prio() {
-            ggml_cann_set_device(device);
-            for (auto& [b_ptr, b_size] : buffer_pool) {
-                aclrtFree(b_ptr);
-               pool_size -= b_size;
-            }
-            buffer_pool.clear();
-            GGML_ASSERT(pool_size == 0);
-        }
+        void* ptr = nullptr;
+        auto now = std::chrono::steady_clock::now();
 
-        /**
-         * @brief Allocate a buffer of the given size.
-         *
-         * @param size The size of the buffer to allocate.
-         * @param actual_size A pointer to a variable to receive the actual size of
-         * the allocated buffer.
-         * @return A pointer to the allocated buffer.
-         */
-        void* alloc(size_t size, size_t* actual_size) override {
-            size = GGML_PAD(size, alignment);
-            if (size == 0) {
-                size = alignment;
-            }
+        std::vector<ggml_cann_buffer> free_buffers_rest;
+        free_buffers_rest.reserve(free_buffers.size());
+        while (!free_buffers.empty()) {
+            auto b = free_buffers.top();
+            free_buffers.pop();
 
-            void* ptr = nullptr;
-            auto now = std::chrono::steady_clock::now();
-
-            std::vector<ggml_cann_buffer> free_buffers_rest;
-            free_buffers_rest.reserve(free_buffers.size());
-            while (!free_buffers.empty()) {
-                auto b = free_buffers.top();
-                free_buffers.pop();
-
-                if (b.size >= size) {
-                    // reuse the buffer if the size is enough
-                    const size_t margin = b.size - size;
-                    if (margin <= max_reuse_margin) {
-                        *actual_size = b.size;
-                        ptr = b.ptr;
-    #ifdef DEBUG_CANN_MALLOC
-                        GGML_LOG_INFO(
-                            "cann pool[%d]: reused   %p, "
-                            "pool_size = %5u MB, "
-                            "size = %5u MB, "
-                            "margin = %5u MB\n",
-                            device, b.ptr,
-                            (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576),
-                            (uint32_t)(GGML_PAD(size, 1048576) / 1048576),
-                            (uint32_t)(GGML_PAD(margin, 1048576) / 1048576));
-    #endif
-                        break;
-                    }
-                }
-
-                bool should_clean = !disable_clean &&
-                                   b.size > min_free_margin &&
-                                   std::chrono::duration_cast<std::chrono::milliseconds>(now - b.last_used).count() > 100;
-                if (should_clean) {
-                    // free the buffer if the size is needed to be freed
-                    ACL_CHECK(aclrtFree(b.ptr));
-                    pool_size -= b.size;
-                    buffer_pool.erase(b.ptr);
-    #ifdef DEBUG_CANN_MALLOC
+            if (b.size >= size) {
+                // reuse the buffer if the size is enough
+                const size_t margin = b.size - size;
+                if (margin <= max_reuse_margin) {
+                    *actual_size = b.size;
+                    ptr = b.ptr;
+#ifdef DEBUG_CANN_MALLOC
                     GGML_LOG_INFO(
-                        "cann pool[%d]: clean    %p, "
+                        "cann pool[%d]: reused   %p, "
                         "pool_size = %5u MB, "
-                        "size = %5u MB\n",
+                        "size = %5u MB, "
+                        "margin = %5u MB\n",
                         device, b.ptr,
                         (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576),
-                        (uint32_t)(GGML_PAD(b.size, 1048576) / 1048576));
-    #endif
-                    continue;
+                        (uint32_t)(GGML_PAD(size, 1048576) / 1048576),
+                        (uint32_t)(GGML_PAD(margin, 1048576) / 1048576));
+#endif
+                    break;
                 }
-                free_buffers_rest.push_back(b);
-            }
-            for (ggml_cann_buffer &b : free_buffers_rest) {
-                free_buffers.push(std::move(b));
             }
 
-    #ifdef DEBUG_CANN_MALLOC
-            GGML_LOG_INFO("cann pool[%d] free pool_size = %5u MB\n\n", device, (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576));
-    #endif
-            if (ptr != nullptr) {
-                return ptr;
+            bool should_clean = !disable_clean &&
+                                b.size > min_free_margin &&
+                                std::chrono::duration_cast<std::chrono::milliseconds>(now - b.last_used).count() > 100;
+            if (should_clean) {
+                // free the buffer if the size is needed to be freed
+                ACL_CHECK(aclrtFree(b.ptr));
+                pool_size -= b.size;
+                buffer_pool.erase(b.ptr);
+#ifdef DEBUG_CANN_MALLOC
+                GGML_LOG_INFO(
+                    "cann pool[%d]: clean    %p, "
+                    "pool_size = %5u MB, "
+                    "size = %5u MB\n",
+                    device, b.ptr,
+                    (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576),
+                    (uint32_t)(GGML_PAD(b.size, 1048576) / 1048576));
+#endif
+                continue;
             }
+            free_buffers_rest.push_back(b);
+        }
+        for (ggml_cann_buffer &b : free_buffers_rest) {
+            free_buffers.push(std::move(b));
+        }
 
-            // allocate a new buffer if no buffer can be reused
-            ggml_cann_set_device(device);
-            ACL_CHECK(aclrtMalloc(&ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
-            *actual_size = size;
-            pool_size += size;
-    #ifdef DEBUG_CANN_MALLOC
-            GGML_LOG_INFO(
-                "cann pool[%d]: allocate %p, "
-                "pool_size = %5u MB, "
-                "size = %5u MB\n",
-                device, ptr, (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576),
-                (uint32_t)(GGML_PAD(size, 1048576) / 1048576));
-    #endif
-            buffer_pool.emplace(ptr, size);
+#ifdef DEBUG_CANN_MALLOC
+        GGML_LOG_INFO("cann pool[%d] free pool_size = %5u MB\n\n", device, (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576));
+#endif
+        if (ptr != nullptr) {
             return ptr;
         }
 
-        /**
-         * @brief Free a buffer and return it to the pool.
-         *
-         * @param ptr Pointer to the buffer to free.
-         * @param size Size of the buffer to free.
-         */
-        void free(void* ptr, size_t size) override {
-            auto it = buffer_pool.find(ptr);
-            if (it == buffer_pool.end()) {
-                GGML_ABORT("cann pool[%d]: buffer %p not found in pool\n", device, ptr);
-            }
+        // allocate a new buffer if no buffer can be reused
+        ggml_cann_set_device(device);
+        ACL_CHECK(aclrtMalloc(&ptr, size, ACL_MEM_MALLOC_HUGE_FIRST));
+        *actual_size = size;
+        pool_size += size;
+#ifdef DEBUG_CANN_MALLOC
+        GGML_LOG_INFO(
+            "cann pool[%d]: allocate %p, "
+            "pool_size = %5u MB, "
+            "size = %5u MB\n",
+            device, ptr, (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576),
+            (uint32_t)(GGML_PAD(size, 1048576) / 1048576));
+#endif
+        buffer_pool.emplace(ptr, size);
+        return ptr;
+    }
 
-            auto now = std::chrono::steady_clock::now();
-            free_buffers.emplace(ggml_cann_buffer{ptr, it->second, now});
-    #ifdef DEBUG_CANN_MALLOC
-            GGML_LOG_INFO(
-                "cann pool[%d]: return   %p, "
-                "pool_size = %5u MB\n",
-                device, ptr,
-                (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576));
-    #endif
+    /**
+     * @brief Free a buffer and return it to the pool.
+     *
+     * @param ptr Pointer to the buffer to free.
+     * @param size Size of the buffer to free.
+     */
+    void free(void* ptr, size_t size) override {
+        GGML_UNUSED(size);
+        auto it = buffer_pool.find(ptr);
+        if (it == buffer_pool.end()) {
+            GGML_ABORT("cann pool[%d]: buffer %p not found in pool\n", device, ptr);
         }
-    };
+
+        auto now = std::chrono::steady_clock::now();
+        free_buffers.emplace(ggml_cann_buffer{ptr, it->second, now});
+#ifdef DEBUG_CANN_MALLOC
+        GGML_LOG_INFO(
+            "cann pool[%d]: return   %p, "
+            "pool_size = %5u MB\n",
+            device, ptr,
+            (uint32_t)(GGML_PAD(pool_size, 1048576) / 1048576));
+#endif
+    }
+};
 
 /**
  * @brief A pool of CANN buffers(segment buffer).
@@ -531,6 +532,7 @@ struct ggml_cann_pool_buf : public ggml_cann_pool {
      * @param size Size of the buffer to free.
      */
     void free(void* ptr, size_t size) override {
+        GGML_UNUSED(size);
         for (int i = 0; i < MAX_BUFFERS; ++i) {
             ggml_cann_buffer& b = buffer_pool[i];
             if (b.ptr != ptr) {
@@ -1604,7 +1606,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                     auto lambda = [](ggml_backend_cann_context& ctx,
                         aclTensor* acl_src,
                         aclTensor* acl_dst) {
-                        GGML_CANN_CALL_ACLNN_OP(GeluV2, acl_src, 0, acl_dst);
+                        GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
                     };
                     ggml_cann_unary_op(lambda, ctx, dst);
                 } break;
@@ -1787,12 +1789,11 @@ static void ggml_backend_cann_free(ggml_backend_t backend) {
     delete backend;
 }
 
+
 /**
  * @brief Sets tensor data asynchronously in the CANN backend.
  *
- * This function asynchronously sets tensor data in the CANN backend. Depending
- * on the tensor type, it may perform data transformations before copying data
- * to the device.
+ * This function asynchronously sets tensor data in the CANN backend.
  *
  * @param backend Pointer to the CANN backend structure.
  * @param tensor Pointer to the tensor structure to set data for.
@@ -1807,23 +1808,28 @@ static void ggml_backend_cann_set_tensor_async(ggml_backend_t backend,
                                                size_t size) {
     ggml_backend_cann_context *cann_ctx =
         (ggml_backend_cann_context *)backend->context;
+    ggml_backend_buffer_t buf =
+        tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
 
-    if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpyAsync((char *)tensor->data + offset, size, data,
-                                   size, ACL_MEMCPY_HOST_TO_DEVICE,
-                                   cann_ctx->stream()));
-    } else {
-        void *transform_buffer = malloc(size);
-        ggml_backend_cann_transform(tensor, data, transform_buffer);
+    GGML_ASSERT(buf->buft == ggml_backend_cann_buffer_type(cann_ctx->device) &&
+        "unsupported buffer type");
+    GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-        ACL_CHECK(aclrtMemcpyAsync(
-            (char *)tensor->data + offset, size, transform_buffer, size,
-            ACL_MEMCPY_HOST_TO_DEVICE, cann_ctx->stream()));
-        ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
-        free(transform_buffer);
-    }
+    ggml_cann_async_memcpy(cann_ctx, (char *)tensor->data + offset, data, size,
+        ACL_MEMCPY_HOST_TO_DEVICE);
 }
 
+/**
+ * @brief Gets tensor data asynchronously in the CANN backend.
+ *
+ * This function asynchronously gets tensor data in the CANN backend.
+ *
+ * @param backend Pointer to the CANN backend structure.
+ * @param tensor Pointer to the tensor structure to get data from.
+ * @param data Pointer to the host data to copy from the tensor.
+ * @param offset Offset in bytes within the host data.
+ * @param size Size of the data to copy in bytes.
+ */
 static void ggml_backend_cann_get_tensor_async(
     ggml_backend_t backend, const ggml_tensor *tensor, void *data,
     size_t offset, size_t size) {
@@ -1834,20 +1840,11 @@ static void ggml_backend_cann_get_tensor_async(
 
     GGML_ASSERT(buf->buft == ggml_backend_cann_buffer_type(cann_ctx->device) &&
                 "unsupported buffer type");
+    GGML_ASSERT(!ggml_is_quantized(tensor->type));
 
-    if (!need_transform(tensor->type)) {
-        ACL_CHECK(aclrtMemcpyAsync(data, size, (char *)tensor->data + offset,
-                                   size, ACL_MEMCPY_DEVICE_TO_HOST,
-                                   cann_ctx->stream()));
-    } else {
-        void *transform_buffer = malloc(size);
-        ACL_CHECK(aclrtMemcpyAsync(
-            transform_buffer, size, (char *)tensor->data + offset, size,
-            ACL_MEMCPY_DEVICE_TO_HOST, cann_ctx->stream()));
-        ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
-        ggml_backend_cann_transform_back(tensor, transform_buffer, data);
-        free(transform_buffer);
-    }
+    ggml_cann_async_memcpy(cann_ctx, data, (char *)tensor->data + offset, size,
+        ACL_MEMCPY_DEVICE_TO_HOST);
+
 }
 
 /**
@@ -1907,6 +1904,8 @@ static bool ggml_backend_cann_cpy_tensor_async(
         ggml_cann_set_device(cann_ctx_src->device);
         ACL_CHECK(aclrtDeviceEnablePeerAccess(cann_ctx_dst->device, 0));
 
+        // wait for task_queue empty to keep task order.
+        cann_ctx_src->task_queue.wait();
         ACL_CHECK(aclrtMemcpyAsync(dst->data, copy_size, src->data, copy_size,
                                    ACL_MEMCPY_DEVICE_TO_DEVICE,
                                    cann_ctx_src->stream()));
@@ -1934,9 +1933,8 @@ static bool ggml_backend_cann_cpy_tensor_async(
 static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
-
+    cann_ctx->task_queue.wait();
     ggml_cann_set_device(cann_ctx->device);
-
     ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
 }
 
@@ -2020,6 +2018,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                     return true;
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
+#ifdef ASCEND_310P
+                    // Q4 && Q8 per group is not suppor on 310p device
+                    return false;
+#endif
                     // only support contiguous for quantized types.
                     return ggml_is_contiguous(op->src[0]) &&
                             ggml_is_contiguous(op->src[1]);
@@ -2105,6 +2107,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         }
         case GGML_OP_POOL_2D: {
             const int32_t * opts = (const int32_t *) op->op_params;
+#ifdef ASCEND_310P
+            enum ggml_op_pool opt = static_cast<ggml_op_pool>(opts[0]);
+            if(opt == GGML_OP_POOL_MAX){
+                return false;
+            }
+#endif
             const int       k0   = opts[1];
             const int       k1   = opts[2];
             const int       p0   = opts[5];
