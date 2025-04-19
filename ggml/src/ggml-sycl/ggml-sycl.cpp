@@ -3168,11 +3168,6 @@ static void ggml_sycl_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_op_diag_mask_inf(ctx, dst);
 }
 
-static void ggml_sycl_rope(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(ggml_is_contiguous(dst->src[0])); // TODO: this restriction is temporary until non-cont support is implemented
-    ggml_sycl_op_rope(ctx, dst);
-}
-
 static void ggml_sycl_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_pool2d(ctx, dst);
 }
@@ -4002,7 +3997,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if (mode == GGML_ROPE_TYPE_MROPE) {
                     return false;
                 }
-                return ggml_is_contiguous(op->src[0]);
+                return true;
             }
         case GGML_OP_IM2COL:
             return true;
