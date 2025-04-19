@@ -10,10 +10,6 @@ data class ModelInfo(
     val name: String,
     val path: String,
     val sizeInBytes: Long,
-    val parameters: String?,
-    val quantization: String?,
-    val type: String?,
-    val contextLength: Int?,
     val lastUsed: Long? = null
 ) {
     val formattedSize: String

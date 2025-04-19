@@ -12,7 +12,25 @@ import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.channels.ReadableByteChannel
 import java.nio.channels.WritableByteChannel
+import java.util.Locale
 
+/**
+ * Convert bytes into human readable sizes
+ */
+fun formatSize(sizeInBytes: Long) = when {
+    sizeInBytes >= 1_000_000_000 -> {
+        val sizeInGb = sizeInBytes / 1_000_000_000.0
+        String.format(Locale.getDefault(), "%.2f GB", sizeInGb)
+    }
+    sizeInBytes >= 1_000_000 -> {
+        val sizeInMb = sizeInBytes / 1_000_000.0
+        String.format(Locale.getDefault(), "%.2f MB", sizeInMb)
+    }
+    else -> {
+        val sizeInKb = sizeInBytes / 1_000.0
+        String.format(Locale.getDefault(), "%.2f KB", sizeInKb)
+    }
+}
 
 /**
  * Gets the file name from a content URI

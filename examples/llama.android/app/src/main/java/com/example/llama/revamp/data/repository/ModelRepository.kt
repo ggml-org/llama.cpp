@@ -8,11 +8,9 @@ import com.example.llama.revamp.data.local.ModelDao
 import com.example.llama.revamp.data.local.ModelEntity
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository.ImportProgressTracker
+import com.example.llama.revamp.util.GgufMetadataReader
 import com.example.llama.revamp.util.copyWithBuffer
 import com.example.llama.revamp.util.copyWithChannels
-import com.example.llama.revamp.util.extractModelTypeFromFilename
-import com.example.llama.revamp.util.extractParametersFromFilename
-import com.example.llama.revamp.util.extractQuantizationFromFilename
 import com.example.llama.revamp.util.formatSize
 import com.example.llama.revamp.util.getFileNameFromUri
 import com.example.llama.revamp.util.getFileSizeFromUri
@@ -188,10 +186,15 @@ class ModelRepositoryImpl @Inject constructor(
                 }
             }
 
-            // Extract model parameters from filename
-            val modelType = extractModelTypeFromFilename(fileName)
-            val parameters = extractParametersFromFilename(fileName)
-            val quantization = extractQuantizationFromFilename(fileName)
+            // Extract GGUF metadata if possible
+            val metadata = try {
+                val filePath = modelFile.absolutePath
+                Log.i(TAG, "Extracting GGUF Metadata from $filePath")
+                GgufMetadataReader().readStructuredMetadata(filePath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to extract GGUF metadata: ${e.message}", e)
+                null
+            }
 
             // Create model entity and save via DAO
             ModelEntity(
@@ -199,12 +202,9 @@ class ModelRepositoryImpl @Inject constructor(
                 name = fileName.substringBeforeLast('.'),
                 path = modelFile.absolutePath,
                 sizeInBytes = modelFile.length(),
-                parameters = parameters,
-                quantization = quantization,
-                type = modelType,
-                contextLength = DEFAULT_CONTEXT_SIZE,
-                lastUsed = null,
-                dateAdded = System.currentTimeMillis()
+                // TODO-han.yin: add metadata here
+                dateAdded = System.currentTimeMillis(),
+                lastUsed = null
             ).let {
                 modelDao.insertModel(it)
 
