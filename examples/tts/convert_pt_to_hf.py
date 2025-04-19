@@ -12,7 +12,7 @@ import re
 from safetensors.torch import save_file
 
 # default
-model_path = './model.pt';
+model_path = './model.pt'
 
 # read from CLI
 if len(sys.argv) > 1:
