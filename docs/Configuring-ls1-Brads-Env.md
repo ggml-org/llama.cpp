@@ -184,5 +184,6 @@ Congratulations! You are ready to copy `llams-server-one` executable to the shar
 
 ```
 sudo cp llama-server-one /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-LLMs
+sudo cp llama-server-one /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-LLMs/llama-server-one.exe
 printf "\n**********\n*\n* FINISHED: Copy llama-server-one for Deployment.\n*\n**********\n\n"
 ```
