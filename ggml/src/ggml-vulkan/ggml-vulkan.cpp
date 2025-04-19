@@ -1742,7 +1742,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
         // chip specific tuning
         if (device->architecture == AMD_GCN)
-            m_warptile_mmq = { 256, 64, 64, 32, subgroup_size_8, 16, 2, 2, tn_m, tk_m, subgroup_size_8 };
+            m_warptile_mmq = { 256, 64, 64, 32, 16, 16, 2, 2, tn_m, tk_m, 16 };
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
