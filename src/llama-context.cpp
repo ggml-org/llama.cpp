@@ -2216,6 +2216,13 @@ void llama_context::perf_reset() {
     t_p_eval_us = n_p_eval = 0;
 }
 
+/**
+ * @brief Get the number of graph splits.
+ */
+int llama_context::get_graph_splits() const{
+    return ggml_backend_sched_get_n_splits(sched.get());
+}
+
 //
 // interface implementation
 //
