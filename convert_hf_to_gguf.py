@@ -67,6 +67,11 @@ class Model:
     dir_model_card: Path
     remote_hf_model_id: str | None
 
+    # for vision encoders
+    mmproj: bool
+    ignore_vision: bool = False # subclasses may overwrite this
+    mtmd_model: MultimodalModel | None = None
+
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
 
@@ -74,7 +79,8 @@ class Model:
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
+                 mmproj: bool = False):
         if type(self) is Model:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
@@ -109,6 +115,7 @@ class Model:
         self.metadata_override = metadata_override
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
+        self.mmproj = mmproj
 
         # Apply heuristics to figure out typical tensor encoding based on first layer tensor encoding type
         if self.ftype == gguf.LlamaFileType.GUESSED:
@@ -124,6 +131,28 @@ class Model:
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+
+        # vision encoder
+        if mmproj:
+            vision_hparams = self.hparams.get("vision_config")
+            if vision_hparams is None:
+                raise ValueError("Vision config not found in model config")
+            elif self.ignore_vision:
+                raise ValueError("Vision config found, but mmproj conversion for this model is not supported yet")
+            else:
+                self.mtmd_model = MultimodalModel(
+                    hparams=vision_hparams,
+                    ftype=self.ftype,
+                    fname_out=self.fname_out,
+                    endianess=self.endianess,
+                    use_temp_file=self.use_temp_file,
+                )
+
+    @classmethod
+    def add_prefix_to_filename(cls, path: Path, prefix: str) -> Path:
+        stem, suffix = path.stem, path.suffix
+        new_name = f"{prefix}{stem}{suffix}"
+        return path.with_name(new_name)
 
     @classmethod
     def __init_subclass__(cls):
@@ -272,8 +301,13 @@ class Model:
             self.gguf_writer.add_key_length(head_dim)
             self.gguf_writer.add_value_length(head_dim)
 
-        self.gguf_writer.add_file_type(self.ftype)
-        logger.info(f"gguf: file type = {self.ftype}")
+        if not self.mmproj:
+            self.gguf_writer.add_file_type(self.ftype)
+            logger.info(f"gguf: file type = {self.ftype}")
+        else:
+            assert self.mtmd_model is not None
+            self.mtmd_model.set_gguf_parameters(n_embd_text=n_embd)
+            logger.info(f"mmproj: file type = {self.mtmd_model.ftype}")
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -311,6 +345,10 @@ class Model:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                # skip adding tensor if we're working with a vision model
+                if self.mmproj:
+                    continue
+
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -455,12 +493,18 @@ class Model:
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
     def write(self):
-        self.prepare_tensors()
-        self.prepare_metadata(vocab_only=False)
-        self.gguf_writer.write_header_to_file(path=self.fname_out)
-        self.gguf_writer.write_kv_data_to_file()
-        self.gguf_writer.write_tensors_to_file(progress=True)
-        self.gguf_writer.close()
+        if self.mtmd_model is not None:
+            self.prepare_tensors()
+            self.prepare_metadata(vocab_only=False)
+            logger.info("Writing vision model")
+            self.mtmd_model.write()
+        else:
+            self.prepare_tensors()
+            self.prepare_metadata(vocab_only=False)
+            self.gguf_writer.write_header_to_file(path=self.fname_out)
+            self.gguf_writer.write_kv_data_to_file()
+            self.gguf_writer.write_tensors_to_file(progress=True)
+            self.gguf_writer.close()
 
     def write_vocab(self):
         if len(self.gguf_writer.tensors) != 1:
@@ -485,7 +529,10 @@ class Model:
     @staticmethod
     def load_hparams(dir_model: Path):
         with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+            hparams = json.load(f)
+            if "text_config" in hparams:
+                hparams = {**hparams, **hparams["text_config"]}
+            return hparams
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -1022,6 +1069,101 @@ class Model:
             self.gguf_writer.add_add_bos_token(field.parts[-1].tolist()[0])
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
+
+
+# for converting mmproj file
+class MultimodalModel:
+    hparams: dict
+    dir_model: Path
+    ftype: gguf.LlamaFileType
+    fname_out: Path
+    tensor_map: gguf.TensorNameMap
+    gguf_writer: gguf.GGUFWriter
+
+    def __init__(self, hparams: dict, ftype: gguf.LlamaFileType, fname_out: Path, endianess: gguf.GGUFEndian, use_temp_file: bool):
+        self.hparams = hparams
+        self.ftype = ftype
+        self.fname_out = fname_out
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, 128)
+        self.gguf_writer = gguf.GGUFWriter(path=None,
+                                           arch="clip",
+                                           endianess=endianess,
+                                           use_temp_file=use_temp_file)
+
+    def set_gguf_parameters(self, n_embd_text: int):
+        """Function to be called by Model.set_gguf_parameters()"""
+        self.gguf_writer.add_type(gguf.GGUFType.CLIP_VISION)
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.PROJECTION_DIM, n_embd_text)
+        self.gguf_writer.add_bool(gguf.Keys.ClipVision.HAS_VISION_ENCODER, True)
+
+        # vision config
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.IMAGE_SIZE,           self.find_hparam(["image_size"]))
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.PATCH_SIZE,           self.find_hparam(["patch_size"]))
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.EMBEDDING_LENGTH,     self.find_hparam(["hidden_size"]))
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.FEED_FORWARD_LENGTH,  self.find_hparam(["intermediate_size"]))
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.BLOCK_COUNT,          self.find_hparam(["num_hidden_layers"]))
+        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.Attention.HEAD_COUNT, self.find_hparam(["num_attention_heads"]))
+
+    def find_hparam(self, keys: Iterable[str], optional: bool = False) -> Any:
+        key = next((k for k in keys if k in self.hparams), None)
+        if key is not None:
+            return self.hparams[key]
+        if optional:
+            return None
+        raise KeyError(f"could not find any of: {keys}")
+
+    def get_quantization(self, mapped_name: str, data_torch: Tensor) -> gguf.GGMLQuantizationType:
+        is_1d = len(data_torch.shape) == 1
+        is_embd = "_embd" in mapped_name
+        can_quantize = not is_1d and not is_embd
+        data_qtype = gguf.GGMLQuantizationType.F32
+        if can_quantize:
+            if self.ftype == gguf.LlamaFileType.ALL_F32:
+                data_qtype = gguf.GGMLQuantizationType.F32
+            elif self.ftype == gguf.LlamaFileType.MOSTLY_F16:
+                data_qtype = gguf.GGMLQuantizationType.F16
+            elif self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
+                data_qtype = gguf.GGMLQuantizationType.BF16
+            elif self.ftype == gguf.LlamaFileType.MOSTLY_Q8_0:
+                data_qtype = gguf.GGMLQuantizationType.Q8_0
+            else:
+                raise ValueError(f"Unsupported file type: {self.ftype}")
+        return data_qtype
+
+    def add_tensor(self, original_name: str, data_torch: Tensor) -> None:
+        """Function to be called inside Model.modify_tensors()"""
+        # name mapping
+        new_name = self.tensor_map.get_name(key=original_name, try_suffixes=(".weight", ".bias"))
+        if new_name is None:
+            raise ValueError(f"Can not map tensor {original_name!r}")
+
+        # process data
+        # old_dtype = data_torch.dtype
+        data_qtype = self.get_quantization(new_name, data_torch)
+        data = data_torch.numpy()
+        try:
+            data = gguf.quants.quantize(data, data_qtype)
+        except Exception as e:
+            logger.error(f"Error quantizing tensor '{new_name}': {e}, fallback to F16")
+            data_qtype = gguf.GGMLQuantizationType.F16
+            data = gguf.quants.quantize(data, data_qtype)
+
+        # reverse shape to make it similar to the internal ggml dimension order
+        # TODO: we don't print old_dtype because it's not correct, to be fixed later
+        old_dtype = ""
+        shape_str = f"{{{', '.join(str(n) for n in reversed(data_torch.shape))}}}"
+        logger.info(f"{f'%-32s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
+
+        # add tensor
+        self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
+
+    def write(self):
+        """Function to be called by Model.write()"""
+        self.gguf_writer.write_header_to_file(path=self.fname_out)
+        self.gguf_writer.write_kv_data_to_file()
+        self.gguf_writer.write_tensors_to_file(progress=True)
+        self.gguf_writer.close()
 
 
 @Model.register("GPTNeoXForCausalLM")
@@ -1781,20 +1923,13 @@ class LlamaModel(Model):
 @Model.register("Llama4ForConditionalGeneration")
 class Llama4Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA4
-    has_vision: bool = False
     undo_permute = False
+    ignore_vision = True
 
     # TODO @ngxson : avoid duplicate this code everywhere by at least support "text_config"
     # same with llama, but we need to merge the text_config into the root level of hparams
     def __init__(self, *args, **kwargs):
-        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
-        if "text_config" in hparams:
-            hparams = {**hparams, **hparams["text_config"]}
-            kwargs["hparams"] = hparams
         super().__init__(*args, **kwargs)
-        if "vision_config" in hparams:
-            logger.info("Has vision encoder, but it will be ignored")
-            self.has_vision = True
         # IMPORTANT: the normal "intermediate_size" is renamed to "intermediate_size_mlp", we need to undo this
         self.hparams["intermediate_size_moe"] = self.hparams["intermediate_size"]
         self.hparams["intermediate_size"] = self.hparams["intermediate_size_mlp"]
@@ -3474,24 +3609,9 @@ class Gemma2Model(Model):
 @Model.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
 class Gemma3Model(Model):
     model_arch = gguf.MODEL_ARCH.GEMMA3
-    has_vision: bool = False
-
-    # we need to merge the text_config into the root level of hparams
-    def __init__(self, *args, **kwargs):
-        hparams = kwargs["hparams"] if "hparams" in kwargs else Model.load_hparams(args[0])
-        if "text_config" in hparams:
-            hparams = {**hparams, **hparams["text_config"]}
-            kwargs["hparams"] = hparams
-        super().__init__(*args, **kwargs)
-        if "vision_config" in hparams:
-            logger.info("Has vision encoder, but it will be ignored")
-            self.has_vision = True
 
     def write(self):
         super().write()
-        if self.has_vision:
-            logger.info("NOTE: this script only convert the language model to GGUF")
-            logger.info("      for the vision model, please use gemma3_convert_encoder_to_gguf.py")
 
     def set_vocab(self):
         self._set_vocab_sentencepiece()
@@ -3524,15 +3644,42 @@ class Gemma3Model(Model):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(hparams["rope_scaling"]["factor"])
 
+        if self.mtmd_model is not None:
+            self.mtmd_model.set_gguf_parameters(n_embd_text=hparams["hidden_size"])
+            vgguf = self.mtmd_model.gguf_writer
+            vgguf.add_string(gguf.Keys.ClipVision.PROJECTOR_TYPE, "gemma3")
+            # default values below are taken from HF tranformers code
+            vgguf.add_float32(gguf.Keys.ClipVision.Attention.LAYERNORM_EPS, self.mtmd_model.hparams.get("layer_norm_eps", 1e-6))
+            vgguf.add_array(gguf.Keys.ClipVision.IMAGE_MEAN, [0.5, 0.5, 0.5])
+            vgguf.add_array(gguf.Keys.ClipVision.IMAGE_STD,  [0.5, 0.5, 0.5])
+            vgguf.add_bool (gguf.Keys.ClipVision.USE_GELU,   True)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
         if name.startswith("language_model."):
             name = name.replace("language_model.", "")
+
         elif name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
-                or name.startswith("multimodal_projector.") or name.startswith("vision_model."): # this is for old HF model, should be removed later
-            # ignore vision tensors
-            return []
+                or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
+            if self.mmproj:
+                assert self.mtmd_model is not None
+                # process vision tensors
+                name = name.replace("_weight", ".weight")
+                if "fc1" in name:
+                    name = name.replace("fc1", "fc2")
+                else:
+                    name = name.replace("fc2", "fc1")
+
+                # corrent norm value ; only this "soft_emb_norm" need to be corrected as it's part of Gemma projector
+                # the other norm values are part of SigLIP model, and they are already correct
+                # ref code: Gemma3RMSNorm
+                if "soft_emb_norm.weight" in name:
+                    logger.info(f"Correcting norm value for '{name}'")
+                    data_torch = data_torch + 1
+
+                self.mtmd_model.add_tensor(name, data_torch)
+            return [] # vision tensor already handled
 
         # remove OOV (out-of-vocabulary) rows in token_embd
         if "embed_tokens.weight" in name:
@@ -5554,6 +5701,10 @@ def parse_args() -> argparse.Namespace:
         "--remote", action="store_true",
         help="(Experimental) Read safetensors file remotely without downloading to disk. Config and tokenizer files will still be downloaded. To use this feature, you need to specify Hugging Face model repo name instead of a local directory. For example: 'HuggingFaceTB/SmolLM2-1.7B-Instruct'. Note: To access gated repo, set HF_TOKEN environment variable to your Hugging Face token.",
     )
+    parser.add_argument(
+        "--mmproj", action="store_true",
+        help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -5633,6 +5784,10 @@ def main() -> None:
 
     hparams = Model.load_hparams(dir_model)
 
+    if args.mmproj:
+        if "mmproj" not in fname_out.name:
+            fname_out = Model.add_prefix_to_filename(fname_out, "mmproj-")
+
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
         model_architecture = hparams["architectures"][0]
@@ -5649,7 +5804,8 @@ def main() -> None:
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
-                                     remote_hf_model_id=str(args.model) if args.remote else None)
+                                     remote_hf_model_id=str(args.model) if args.remote else None,
+                                     mmproj=args.mmproj)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")

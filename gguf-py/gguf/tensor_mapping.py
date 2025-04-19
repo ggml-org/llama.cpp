@@ -886,6 +886,150 @@ class TensorNameMap:
         MODEL_TENSOR.POSNET_ATTN_OUT: (
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
         ),
+
+        #############################################################################
+        ## Vision encoder
+
+        MODEL_TENSOR.V_MMPROJ: (
+            "multi_modal_projector.linear_{bid}",
+        ),
+
+        MODEL_TENSOR.V_MMPROJ_FC: (
+            "model.connector.modality_projection.proj", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_MMPROJ_MLP: (
+            "model.mm_projector.mlp.mlp.{bid}",
+        ),
+
+        MODEL_TENSOR.V_MMPROJ_PEG: (
+            "model.mm_projector.peg.peg.{bid}",
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_CLS: (
+            "vision_tower.vision_model.embeddings.class_embedding",
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_PATCH: (
+            "vision_tower.vision_model.embeddings.patch_embedding",
+            "vpm.embeddings.patch_embedding",
+            "model.vision_model.embeddings.patch_embedding", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_POS: (
+            "vision_tower.vision_model.embeddings.position_embedding",
+            "vpm.embeddings.position_embedding",
+            "model.vision_model.embeddings.position_embedding", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_Q: (
+            "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
+            "vpm.encoder.layers.{bid}.self_attn.q_proj",
+            "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_K: (
+            "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
+            "vpm.encoder.layers.{bid}.self_attn.k_proj",
+            "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_V: (
+            "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
+            "vpm.encoder.layers.{bid}.self_attn.v_proj",
+            "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
+            "vpm.encoder.layers.{bid}.layer_norm1",
+            "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_OUTPUT: (
+            "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
+            "vpm.encoder.layers.{bid}.self_attn.out_proj",
+            "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
+            "vpm.encoder.layers.{bid}.layer_norm2",
+            "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_UP: (
+            "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
+            "vpm.encoder.layers.{bid}.mlp.fc1",
+            "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_DOWN: (
+            "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
+            "vpm.encoder.layers.{bid}.mlp.fc2",
+            "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_PRE_NORM: (
+            "vision_tower.vision_model.pre_layrnorm",
+        ),
+
+        MODEL_TENSOR.V_POST_NORM: (
+            "vision_tower.vision_model.post_layernorm",
+            "model.vision_model.post_layernorm", # SmolVLM
+        ),
+
+        MODEL_TENSOR.V_MM_INP_PROJ: (
+            "multi_modal_projector.mm_input_projection",
+        ),
+
+        MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
+            "multi_modal_projector.mm_soft_emb_norm",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_POS_EMBD_K: (
+            "resampler.pos_embed_k",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_ATTN_Q: (
+            "resampler.attn.in_proj_q", # tensor generated from resampler.attn.in_proj
+        ),
+
+        MODEL_TENSOR.V_RESMPL_ATTN_K: (
+            "resampler.attn.in_proj_k", # tensor generated from resampler.attn.in_proj
+        ),
+
+        MODEL_TENSOR.V_RESMPL_ATTN_V: (
+            "resampler.attn.in_proj_v", # tensor generated from resampler.attn.in_proj
+        ),
+
+        MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
+            "resampler.attn.out_proj",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_KV: (
+            "resampler.kv_proj",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_POST_NORM: (
+            "resampler.ln_post",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_KV_NORM: (
+            "resampler.ln_kv",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_Q_NORM: (
+            "resampler.ln_q",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_PROJ: (
+            "resampler.proj",
+        ),
+
+        MODEL_TENSOR.V_RESMPL_QUERY: (
+            "resampler.query",
+        ),
     }
 
     # architecture-specific block mappings
