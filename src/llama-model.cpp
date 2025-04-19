@@ -8660,7 +8660,7 @@ struct llm_build_mamba : public llm_graph_context {
              ggml_tensor * state_mask,
       const llama_ubatch & ubatch,
                      int   il) const {
-        const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
         const auto kv_head = kv_self->head;
 
@@ -11408,7 +11408,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
             ggml_tensor * state_mask,
             const llama_ubatch & ubatch,
             int   il) const {
-        const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -11804,7 +11804,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
             ggml_tensor *& first_layer_value,
             const llama_ubatch & ubatch,
             int   il) const {
-        const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -12764,8 +12764,30 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
-llama_memory_i * llama_model::create_memory() const {
+llama_memory_i * llama_model::create_memory(llama_cparams & cparams, const llama_memory_params & params) const {
     llama_memory_i * res;
+
+    const bool offload = cparams.offload_kqv;
+
+    auto get_buft = [this, offload](int il) {
+        const char * dev_name = "CPU";
+
+        ggml_backend_buffer_type_t buft;
+        if (offload) {
+            auto * dev = dev_layer(il);
+            buft = ggml_backend_dev_buffer_type(dev);
+
+            dev_name = ggml_backend_dev_name(dev);
+        } else {
+            buft = ggml_backend_cpu_buffer_type();
+        }
+
+        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", il, dev_name);
+
+        return buft;
+    };
+
+    LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
 
     switch (arch) {
         case LLM_ARCH_MAMBA:
@@ -12774,26 +12796,43 @@ llama_memory_i * llama_model::create_memory() const {
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
             {
-                res = new llama_kv_cache_unified(hparams, {
-                    /*.get_rope_factors =*/ nullptr
-                });
+                res = new llama_kv_cache_recurrent(
+                        hparams,
+                        {
+                            /*.get_rope_factors =*/ nullptr,
+                            /*.get_buft         =*/ get_buft,
+                        },
+                        GGML_TYPE_F32,
+                        GGML_TYPE_F32,
+                        std::max((uint32_t) 1, cparams.n_seq_max));
             } break;
         default:
             {
-                res = new llama_kv_cache_unified(hparams, {
-                    /*.get_rope_factors =*/ [this](uint32_t n_ctx_per_seq, int il) {
-                        // choose long/short freq factors based on the context size
-                        if (layers[il].rope_freqs != nullptr) {
-                            return layers[il].rope_freqs;
-                        }
+                cparams.n_ctx = GGML_PAD(cparams.n_ctx, llama_kv_cache_unified::get_padding(cparams));
 
-                        if (n_ctx_per_seq > hparams.n_ctx_orig_yarn) {
-                            return layers[il].rope_long;
-                        }
+                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
-                        return layers[il].rope_short;
-                    }
-                });
+                res = new llama_kv_cache_unified(
+                        hparams,
+                        {
+                            /*.get_rope_factors =*/ [this](uint32_t n_ctx_per_seq, int il) {
+                                // choose long/short freq factors based on the context size
+                                if (layers[il].rope_freqs != nullptr) {
+                                    return layers[il].rope_freqs;
+                                }
+
+                                if (n_ctx_per_seq > hparams.n_ctx_orig_yarn) {
+                                    return layers[il].rope_long;
+                                }
+
+                                return layers[il].rope_short;
+                            },
+                            /*.get_buft         =*/ get_buft,
+                        },
+                        params.type_k,
+                        params.type_v,
+                        !cparams.flash_attn,
+                        cparams.n_ctx);
             }
     }
 

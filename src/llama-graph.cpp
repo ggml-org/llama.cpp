@@ -274,7 +274,7 @@ void llm_graph_input_s_copy::set_input(const llama_ubatch * ubatch) {
 
             //////////////////////////////////////////////
             // TODO: this should not mutate the KV cache !
-            llama_kv_cell & kv_cell = const_cast<class llama_kv_cache_unified *>(kv_self)->cells[i];
+            llama_kv_cell & kv_cell = const_cast<class llama_kv_cache_recurrent *>(kv_self)->cells[i];
 
             // prevent out-of-bound sources
             if (kv_cell.src < 0 || (uint32_t) kv_cell.src >= kv_self->size) {
@@ -307,7 +307,7 @@ void llm_graph_input_s_mask::set_input(const llama_ubatch * ubatch) {
 
             //////////////////////////////////////////////
             // TODO: this should not mutate the KV cache !
-            llama_kv_cell & kv_cell = const_cast<class llama_kv_cache_unified *>(kv_self)->cells[i];
+            llama_kv_cell & kv_cell = const_cast<class llama_kv_cache_recurrent *>(kv_self)->cells[i];
 
             data[i] = (float) (kv_cell.src >= 0);
 
@@ -1079,7 +1079,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_s_copy() const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
     auto inp = std::make_unique<llm_graph_input_s_copy>(kv_self);
 
@@ -1096,7 +1096,7 @@ ggml_tensor * llm_graph_context::build_inp_s_copy() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_s_mask() const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
     auto inp = std::make_unique<llm_graph_input_s_mask>(kv_self);
 
@@ -1410,8 +1410,6 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // store to KV cache
     {
-        GGML_ASSERT(!kv_self->recurrent);
-
         const auto kv_head = kv_self->head;
 
         GGML_ASSERT(kv_self->size == n_ctx);
@@ -1561,7 +1559,7 @@ ggml_tensor * llm_graph_context::build_copy_mask_state(
          ggml_tensor * state_mask,
              int32_t   n_state,
              int32_t   n_seqs) const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
     const auto n_kv    = kv_self->n;
     const auto kv_head = kv_self->head;
@@ -1593,7 +1591,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
          ggml_tensor * state_mask,
   const llama_ubatch & ubatch,
                  int   il) const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
     const auto token_shift_count = hparams.token_shift_count;
 
@@ -1614,7 +1612,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
          ggml_tensor * token_shift,
   const llama_ubatch & ubatch,
                  int   il) const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
     const auto token_shift_count = hparams.token_shift_count;
     const auto n_embd = hparams.n_embd;
