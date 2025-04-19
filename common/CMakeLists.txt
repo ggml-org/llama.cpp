@@ -71,6 +71,8 @@ add_library(${TARGET} STATIC
     minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
+    regex-partial.cpp
+    regex-partial.h
     sampling.cpp
     sampling.h
     speculative.cpp
