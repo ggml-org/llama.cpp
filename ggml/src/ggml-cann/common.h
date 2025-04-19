@@ -31,9 +31,16 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <unistd.h>
+#include <functional>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
+#include "../ggml-impl.h"
 
 #define MATRIX_ROW_PADDING 512
 #define GGML_CANN_MAX_STREAMS 8
@@ -206,6 +213,127 @@ struct ggml_cann_pool_alloc {
 };
 
 /**
+ * @brief Function pointer type for ACLNN operator calls.
+ */
+using aclnn_func_t = aclnnStatus (*)(void*, uint64_t, aclOpExecutor*, aclrtStream);
+
+/**
+ * @brief Base class for all CANN tasks to be submitted to the task queue.
+ *
+ * Users should override the run_task() method with actual task logic.
+ */
+class cann_task {
+public:
+    virtual void run_task() {}
+};
+
+/**
+ * @brief A lock-free ring-buffer based task queue for asynchronously executing cann_task instances.
+ */
+class cann_task_queue {
+public:
+    /**
+     * @brief Constructs a task queue with a fixed power-of-two capacity for a specific device.
+     *
+     * @param capacity Queue capacity. Must be a power of 2.
+     * @param device Target device ID (used for context setting).
+     */
+    explicit cann_task_queue(size_t capacity, int32_t device)
+        : buffer_(capacity), capacity_(capacity), head_(0), tail_(0),
+          running_(false), device_(device) {
+        GGML_ASSERT((capacity & (capacity - 1)) == 0 && "capacity must be power of 2");
+        mask_ = capacity_ - 1;
+    }
+
+    /**
+     * @brief Attempts to enqueue a task into the queue.
+     *
+     * @param item Unique pointer to the task.
+     * @return true if the task was successfully enqueued, false if the queue was full.
+     */
+    bool enqueue(std::unique_ptr<cann_task>&& item) {
+        size_t next_tail = (tail_ + 1) & mask_;
+
+        if (next_tail == head_) {
+            return false;
+        }
+
+        buffer_[tail_] = std::move(item);
+        std::atomic_thread_fence(std::memory_order_release);
+        tail_ = next_tail;
+
+        return true;
+    }
+
+    /**
+     * @brief Submits a task to the queue, and starts the worker thread if not already running.
+     *
+     * @param task Task to be submitted.
+     */
+    void submit_task(std::unique_ptr<cann_task>&& task) {
+        while(!enqueue(std::move(task))) {
+            std::this_thread::yield();
+            continue;
+        }
+
+        if (!running_) {
+            running_ = true;
+            thread_ = std::thread(&cann_task_queue::execute, this);
+        }
+
+    }
+
+    /**
+     * @brief Waits until the queue is completely empty and no tasks are being processed.
+     */
+    void wait() {
+        while (running_ && head_ != tail_) {
+            std::this_thread::yield();
+            continue;
+        }
+    }
+
+    /**
+     * @brief Stops the task queue and joins the worker thread.
+     */
+    void stop() {
+        running_ = false;
+        if (thread_.joinable()) {
+            thread_.join();
+        }
+    }
+
+private:
+    /**
+     * @brief Worker thread function that continuously dequeues and executes tasks.
+     */
+    void execute() {
+        ggml_cann_set_device(device_);
+
+        while (running_) {
+            if(head_ == tail_) {
+                std::this_thread::yield();
+                continue;
+            }
+
+            std::atomic_thread_fence(std::memory_order_acquire);
+            buffer_[head_]->run_task();
+            buffer_[head_].reset();
+            head_ = (head_ + 1) & mask_;
+        }
+    }
+
+    std::vector<std::unique_ptr<cann_task>> buffer_;
+    const size_t capacity_;
+    size_t mask_;
+    size_t head_;
+    size_t tail_;
+    bool running_;
+    std::thread thread_;
+    int32_t device_;
+};
+
+/**
  * @brief Context for managing CANN backend operations.
  */
 struct ggml_backend_cann_context {
@@ -213,6 +341,8 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    cann_task_queue task_queue;
+    bool async_mode;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -221,9 +351,12 @@ struct ggml_backend_cann_context {
      * @param device Device ID.
      */
     explicit ggml_backend_cann_context(int device)
-        : device(device), name("CANN" + std::to_string(device)) {
+        : device(device), name("CANN" + std::to_string(device)), task_queue(1024, device) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
+        async_mode = (getenv("GGML_CANN_ASYNC_MODE") != nullptr);
+        GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
+            device, async_mode ? "ON" : "OFF");
     }
 
     /**
@@ -231,6 +364,7 @@ struct ggml_backend_cann_context {
      */
     ~ggml_backend_cann_context() {
         ggml_cann_set_device(device);
+        task_queue.stop();
         if (copy_event != nullptr) {
             ACL_CHECK(aclrtDestroyEvent(copy_event));
         }
