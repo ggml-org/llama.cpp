@@ -2488,7 +2488,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #endif
         }
 
-        if (node->op == GGML_OP_MUL_MAT_ID) {
+        if (node->op == GGML_OP_MUL_MAT_ID && node->ne[2] != 1) {
             use_cuda_graph = false; // This node type is not supported by CUDA graph capture
 #ifndef NDEBUG
             GGML_LOG_DEBUG("%s: disabling CUDA graphs due to unsupported node type\n", __func__);
@@ -3202,9 +3202,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         }
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK: {
-            const size_t ts = ggml_type_size(op->src[0]->type);
-            const int64_t ne0_012 = op->src[0]->ne[0] * op->src[0]->ne[1] * op->src[0]->ne[2];
-            return op->src[0]->nb[0] == ts && op->src[0]->nb[3] == ne0_012*ts;
+            return op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && ggml_is_contiguous_2(op->src[0]);
         }
         case GGML_OP_IM2COL:
         case GGML_OP_POOL_2D:
