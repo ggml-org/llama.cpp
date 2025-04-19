@@ -266,7 +266,7 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
     printf("  -r, --repetitions <n>                     (default: %d)\n", cmd_params_defaults.reps);
-    printf("  --prio <0|1|2|3>                          (default: %d)\n", cmd_params_defaults.prio);
+    printf("  --prio <-1|0|1|2|3>                       (default: %d)\n", cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 (default: %d)\n", cmd_params_defaults.delay);
     printf("  -o, --output <csv|json|jsonl|md|sql>      (default: %s)\n",
            output_format_str(cmd_params_defaults.output_format));
