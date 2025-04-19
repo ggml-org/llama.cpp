@@ -141,8 +141,16 @@ struct ggml_backend_hexagon_context;
 
 #define GGMLHEXAGON_LOG_ERROR(...)                      ggmlhexagon_log_internal(GGML_LOG_LEVEL_ERROR, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLHEXAGON_LOG_WARN(...)                       ggmlhexagon_log_internal(GGML_LOG_LEVEL_WARN , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+
+#if !defined (DISABLE_ALL_LOG)
 #define GGMLHEXAGON_LOG_INFO(...)                       ggmlhexagon_log_internal(GGML_LOG_LEVEL_INFO , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
 #define GGMLHEXAGON_LOG_VERBOSE(...)                    ggmlhexagon_log_internal(GGML_LOG_LEVEL_CONT , __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
+#else
+//manually disable all foreground logs in ggml-hexagon/CMakeLists.txt to
+//make compare NPU performance through llama-bench more clear
+#define GGMLHEXAGON_LOG_INFO(...)
+#define GGMLHEXAGON_LOG_VERBOSE(...)
+#endif
 
 #if GGMLHEXAGON_DEBUG
 #define GGMLHEXAGON_LOG_DEBUG(...)                      ggmlhexagon_log_internal(GGML_LOG_LEVEL_DEBUG, __FILE__, __FUNCTION__, __LINE__, __VA_ARGS__)
@@ -6365,7 +6373,27 @@ struct ggml_backend_hexagon_reg_context {
 
 static const char * ggml_backend_hexagon_reg_get_name(ggml_backend_reg_t reg) {
     GGML_UNUSED(reg);
-    return "ggml-hexagon";
+    //return "ggml-hexagon";
+
+    //return accurate backend name rather than "ggml-hexagon" to
+    //make compare NPU performance through llama-bench more clear
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
+        GGML_ASSERT(HEXAGON_BACKEND_CDSP == g_hexagon_appcfg.hexagon_backend);
+        return "Hexagon-cDSP";
+    }
+
+    if (HWACCEL_QNN == g_hexagon_appcfg.hwaccel_approach) {
+        if (HEXAGON_BACKEND_QNNNPU == g_hexagon_appcfg.hexagon_backend)
+            return "QNN-NPU";
+
+        if (HEXAGON_BACKEND_QNNGPU == g_hexagon_appcfg.hexagon_backend)
+            return "QNN-GPU";
+
+        if (HEXAGON_BACKEND_QNNCPU == g_hexagon_appcfg.hexagon_backend)
+            return "QNN-CPU";
+    }
+
+    return "unknown";
 }
 
 static size_t ggml_backend_hexagon_reg_get_device_count(ggml_backend_reg_t reg) {
