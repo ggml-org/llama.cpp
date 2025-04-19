@@ -6006,6 +6006,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_REPEAT:
     case GGML_OP_REPEAT_BACK:
     case GGML_OP_ROPE:
+    case GGML_OP_RMS_NORM:
         return true;
     default:
         return false;
