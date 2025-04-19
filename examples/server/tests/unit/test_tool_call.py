@@ -138,6 +138,8 @@ def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict,
     ("deepseek-ai-DeepSeek-R1-Distill-Llama-8B",      PYTHON_TOOL,          "code"),
     ("fireworks-ai-llama-3-firefunction-v2",          TEST_TOOL,            "success"),
     # ("fireworks-ai-llama-3-firefunction-v2",          PYTHON_TOOL,          "code"),
+    ("microsoft-Phi-4-mini-instruct",                 TEST_TOOL,            "success"),
+    ("microsoft-Phi-4-mini-instruct",                 PYTHON_TOOL,          "code"),
 ])
 def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict, argument_key: str | None):
     global server
@@ -163,6 +165,10 @@ def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict,
     (TEST_TOOL,    "success",  "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      None),
     (PYTHON_TOOL,  "code",     "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      None),
     (PYTHON_TOOL,  "code",     "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      "chatml"),
+
+    (TEST_TOOL,    "success",  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
+    (PYTHON_TOOL,  "code",     "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
+    (PYTHON_TOOL,  "code",     "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      "chatml"),
 
     (TEST_TOOL,    "success",  "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M",      None),
     (PYTHON_TOOL,  "code",     "bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M",      None),
@@ -306,6 +312,9 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
     ("bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      None),
     ("bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      "chatml"),
 
+    ("bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
+    ("bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      "chatml"),
+
     ("bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M",      None),
     ("bartowski/Qwen2.5-1.5B-Instruct-GGUF:Q4_K_M",      "chatml"),
 
@@ -385,6 +394,9 @@ def do_test_weather(server: ServerProcess, **kwargs):
 @pytest.mark.slow
 @pytest.mark.parametrize("result_override,n_predict,hf_repo,template_override", [
     (None,                                           128,  "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       "chatml"),
+    # Answers using text, not tools, complaining it wants to measure from the positive Z-axis not x-axis.
+    # (None,                                           128,  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M", ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
+    (None,                                           128,  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M", "chatml"),
     (None,                                           128,  "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M", None),
     (None,                                           128,  "bartowski/Qwen2.5-Coder-3B-Instruct-GGUF:Q4_K_M", "chatml"),
     (None,                                           128,  "bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M",         "chatml"),
@@ -394,6 +406,7 @@ def do_test_weather(server: ServerProcess, **kwargs):
     (None,                                           128,  "bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q4_K_M",  None),
     (None,                                           128,  "bartowski/Mistral-Nemo-Instruct-2407-GGUF:Q4_K_M",  "chatml"),
     (None,                                           128,  "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       None),
+    (None,                                           128,  "bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M", None),
     ("[\\s\\S]*?\\*\\*\\s*0.5($|\\*\\*)",            8192, "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", ("llama-cpp-deepseek-r1", None)),
 
     # TODO: fix these (wrong results, either didn't respect decimal instruction or got wrong value)
@@ -534,6 +547,9 @@ def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] 
 
     ("bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      None),
     ("bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",      "chatml"),
+
+    ("bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      ("llama-cpp-microsoft-Phi-4-mini-instruct", None)),
+    ("bartowski/microsoft_Phi-4-mini-instruct-GGUF:Q4_K_M",      "chatml"),
 
     ("bartowski/functionary-small-v3.2-GGUF:Q8_0",       ("meetkai-functionary-medium-v3.2", None)),
     ("bartowski/functionary-small-v3.2-GGUF:Q8_0",       "chatml"),
