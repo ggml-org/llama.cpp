@@ -384,7 +384,7 @@ static float make_qx_quants(int n, int nmax, const float * GGML_RESTRICT x, int8
         float ax = fabsf(x[i]);
         if (ax > amax) { amax = ax; max = x[i]; }
     }
-    if (amax < GROUP_MAX_EPS) { // all zero
+    if (fabsf(amax) < GROUP_MAX_EPS) { // all zero
         for (int i = 0; i < n; ++i) {
             L[i] = 0;
         }
@@ -829,7 +829,7 @@ static float make_qp_quants(int n, int nmax, const float * GGML_RESTRICT x, uint
     for (int i = 0; i < n; ++i) {
         max = MAX(max, x[i]);
     }
-    if (!max) { // all zero
+    if (fabsf(max) < GROUP_MAX_EPS) { // all zero
         for (int i = 0; i < n; ++i) { L[i] = 0; }
         return 0.f;
     }
@@ -3021,7 +3021,7 @@ static void quantize_row_iq2_xxs_impl(const float * GGML_RESTRICT x, void * GGML
             }
             float max = xval[0];
             for (int i = 1; i < 32; ++i) max = MAX(max, xval[i]);
-            if (max < GROUP_MAX_EPS) {
+            if (fabsf(max) < GROUP_MAX_EPS) {
                 scales[ib] = 0;
                 memset(L, 0, 32);
                 continue;
@@ -3197,7 +3197,7 @@ static void quantize_row_iq2_xs_impl(const float * GGML_RESTRICT x, void * GGML_
             }
             float max = xval[0];
             for (int i = 1; i < 16; ++i) max = MAX(max, xval[i]);
-            if (max < GROUP_MAX_EPS) {
+            if (fabsf(max) < GROUP_MAX_EPS) {
                 scales[ib] = 0;
                 memset(L, 0, 16);
                 continue;
@@ -3638,7 +3638,7 @@ static void quantize_row_iq3_xxs_impl(int grid_size, const float * GGML_RESTRICT
             }
             float max = xval[0];
             for (int i = 1; i < 32; ++i) max = MAX(max, xval[i]);
-            if (max < GROUP_MAX_EPS_IQ3_XXS) {
+            if (fabsf(max) < GROUP_MAX_EPS_IQ3_XXS) {
                 scales[ib] = 0;
                 memset(L, 0, 32);
                 continue;
@@ -4808,7 +4808,7 @@ static void quantize_row_iq2_s_impl(const float * GGML_RESTRICT x, void * GGML_R
             }
             float max = xval[0];
             for (int i = 1; i < 16; ++i) max = MAX(max, xval[i]);
-            if (max < GROUP_MAX_EPS_IQ2_S) {
+            if (fabsf(max) < GROUP_MAX_EPS_IQ2_S) {
                 scales[ib] = 0;
                 continue;
             }
