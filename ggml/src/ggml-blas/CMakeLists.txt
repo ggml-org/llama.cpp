@@ -54,6 +54,8 @@ if (BLAS_FOUND)
         endif()
         if (DepBLAS_FOUND)
             set(BLAS_INCLUDE_DIRS ${DepBLAS_INCLUDE_DIRS})
+            set(BLAS_LIBRARIES ${DepBLAS_LIBRARIES})
+            set(BLAS_LINKER_FLAGS ${DepBLAS_LINKER_FLAGS})
         else()
             message(WARNING "BLAS_INCLUDE_DIRS neither been provided nor been automatically"
             " detected by pkgconfig, trying to find cblas.h from possible paths...")
