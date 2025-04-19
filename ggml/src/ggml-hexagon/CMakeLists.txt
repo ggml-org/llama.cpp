@@ -22,6 +22,9 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     message("Debug mode:${DEBUG_FLAG}")
 else()
     set(DEBUG_FLAG "-DNDEBUG -Wall")
+#manually disable all foreground logs in ggml-hexagon/CMakeLists.txt to
+#make compare NPU performance through llama-bench more clear
+#set(DEBUG_FLAG "-DNDEBUG -Wall -DDISABLE_ALL_LOG")
     message("Release mode:${DEBUG_FLAG}")
 endif()
 
