@@ -10,12 +10,12 @@ This file contains instructions for building `llama.cpp` with `cosmocc` to yield
 Let's define some environment variables, resetting those that affect the Makefile:
 ```
 BUILDING_DIR="1-BUILDING-llama.cpp"
-export CC=""
-export CXX=""
-export AR=""
-export UNAME_S=""
-export UNAME_P=""
-export UNAME_M=""
+unset CC
+unset CXX
+unset AR
+unset UNAME_S
+unset UNAME_P
+unset UNAME_M
 printf "\n**********\n*\n* FINISHED: Environment Variables.\n*\n**********\n\n"
 ```
 
