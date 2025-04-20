@@ -10,7 +10,6 @@ This file contains instructions for building `llama.cpp` with `cosmocc` to yield
 Let's define some environment variables:
 ```
 BUILDING_DIR="1-BUILDING-llama.cpp"
-LLAMA_SERVER_SSL=1
 printf "\n**********\n*\n* FINISHED: Environment Variables.\n*\n**********\n\n"
 ```
 
@@ -61,6 +60,7 @@ We use the old `Makefile` rather than CMake. We've updated the `Makefile` in thi
 ```
 cd ~/$BUILDING_DIR
 export LLAMA_MAKEFILE=1
+export LLAMA_SERVER_SSL=1
 make clean
 make
 printf "\n**********\n*\n* FINISHED: Make llama.cpp.\n*\n**********\n\n"
