@@ -91,6 +91,7 @@ printf "\n**********\n*\n* FINISHED: Verify certs Directory in Archive.\n*\n****
 ```
 mkdir website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
+cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt website/CA.crt
 rm website/*.txt
 rm website/images/*.svg
 rm website/images/*.psd
