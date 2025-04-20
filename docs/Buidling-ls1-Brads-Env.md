@@ -116,6 +116,19 @@ printf "\n**********\n*\n* FINISHED: Prepare to make llama.cpp with Cosmo.\n*\n*
 ```
 
 ---
+### Make openssl with Cosmo
+We need cross-architectire `libssl` and `libcrypto` static libraries to support SSL in `llama-server-one`.
+```
+cp -r /usr/include/openssl/ ./cosmocc/include/
+cp -r /usr/include/x86_64-linux-gnu/openssl/* ./cosmocc/include/openssl
+git clone https://github.com/openssl/openssl.git
+cd openssl
+./Configure no-asm no-dso no-afalgeng no-shared no-pinshared no-apps
+make
+cd ..
+```
+
+---
 ### Make llama.cpp with Cosmo
 ```
 make clean
