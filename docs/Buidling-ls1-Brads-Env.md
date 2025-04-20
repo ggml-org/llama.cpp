@@ -126,6 +126,8 @@ cd openssl
 ./Configure no-asm no-dso no-afalgeng no-shared no-pinshared no-apps
 make
 cd ..
+printf "\n**********\n*\n* FINISHED: Make openssl with Cosmo.\n*\n**********\n\n"
+
 ```
 
 ---
