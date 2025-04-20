@@ -54,8 +54,7 @@ zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
 printf "\n**********\n*\n* FINISHED: Delete Extraneous Timezone Files.\n*\n**********\n\n"
 ```
 
----
-### Verify Contents of Zip Archive
+#### Verify Contents of Zip Archive
 
 Verify that these files are no longer in the archive:
 ```
@@ -69,9 +68,9 @@ printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n*******
 **SSL DOESN'T WORK WITH COSMOCC YET.** Add self-signed certs to the archive. CA crt might need to go in the website folder?
 ```
 mkdir certs
-cp /mnt/hyperv/Mmojo-certs/dot-local.crt certs
-cp /mnt/hyperv/Mmojo-certs/dot-local.key certs
-cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/mmojo.local.crt certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/mmojo.local.key certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/selfsignCA.crt certs
 zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
 printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
 ```
@@ -91,7 +90,7 @@ printf "\n**********\n*\n* FINISHED: Verify certs Directory in Archive.\n*\n****
 ```
 mkdir website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
-cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt website/CA.crt
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/selfsignCA.crt website/CA.crt
 rm website/*.txt
 rm website/images/*.svg
 rm website/images/*.psd
@@ -129,25 +128,6 @@ model.gguf
 8
 --path
 /zip/website
-...
-EOF
-printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
-```
-
-```
-cat << EOF > $DEFAULT_ARGS
--m
-model.gguf
---host
-127.0.0.1
---port
-8080
---ctx-size
-8192
---threads-http
-8
---path
-/zip/website
 --ssl-key-file
 /zip/certs/dot-local.key
 --ssl-cert-file
@@ -166,8 +146,7 @@ zip -0 -r $LLAMA_SERVER_ONE_ZIP $DEFAULT_ARGS
 printf "\n**********\n*\n* FINISHED: Add default-args File to Archive.\n*\n**********\n\n"
 ```
 
----
-### Verify default-args File in Archive
+#### Verify default-args File in Archive
 
 Verify that the archive contains the `default-args` file:
 ```
@@ -209,8 +188,7 @@ After starting up and loading the model, it should display:
 
 Hit `ctrl-C` on your keyboard to stop it.
 
----
-### Test Run on Public Interfaces
+#### Test Run on Public Interfaces
 
 If you'd like it to listen on all available interfaces, so you can connect from a browser on another computer:
 ```
