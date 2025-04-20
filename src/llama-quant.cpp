@@ -14,7 +14,7 @@
 #include <unordered_map>
 
 //static std::vector prune_map = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29};
-static std::vector<int> prune_map = {7};
+static std::vector<int> prune_map = {3};
 
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
@@ -47,6 +47,28 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
 
         std::string name = mapped[blk] == "X" ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
         return name;
+    }
+
+    return orig_name;
+}
+
+static std::string remap_imatrix (const std::string & orig_name, const std::map<int, std::string>& mapped) {
+    if (mapped.empty()) {
+        return orig_name;
+    }
+
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const std::string blk(match[1]);
+        std::string new_name = orig_name;
+
+        for (const auto & p : mapped) {
+            if (p.second == blk) {
+                //LLAMA_LOG_DEBUG("(imatrix -> %d) ", p.first);
+                return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
+            }
+        }
+        GGML_ABORT("\n%s: imatrix mapping error for %s\n", __func__, orig_name.c_str());
     }
 
     return orig_name;
@@ -882,7 +904,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             const float * imatrix = nullptr;
             if (imatrix_data) {
-                auto it = imatrix_data->find(tensor->name);
+                auto it = imatrix_data->find(remap_imatrix(tensor->name, mapped));
                 if (it == imatrix_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
