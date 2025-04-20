@@ -48,6 +48,7 @@ import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
+import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
 import com.example.llama.revamp.viewmodel.PerformanceViewModel
 import dagger.hilt.android.AndroidEntryPoint
@@ -74,6 +75,7 @@ class MainActivity : ComponentActivity() {
 fun AppContent(
     mainViewModel: MainViewModel = hiltViewModel(),
     performanceViewModel: PerformanceViewModel = hiltViewModel(),
+    modelSelectionViewModel: ModelSelectionViewModel = hiltViewModel(),
     modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
     benchmarkViewModel: BenchmarkViewModel = hiltViewModel(),
     conversationViewModel: ConversationViewModel = hiltViewModel(),
@@ -104,9 +106,7 @@ fun AppContent(
     val drawerGesturesEnabled by remember(currentRoute, drawerState.currentValue) {
         derivedStateOf {
             // Always allow gesture dismissal when drawer is open
-            if (drawerState.currentValue == DrawerValue.Open) true
-            // Only enable drawer opening by gesture on these screens
-            else currentRoute == AppDestinations.MODEL_SELECTION_ROUTE
+            if (drawerState.currentValue == DrawerValue.Open) true else false
         }
     }
     val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
@@ -118,7 +118,10 @@ fun AppContent(
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Default(
                     title = "Models",
-                    navigationIcon = NavigationIcon.Menu(openDrawer)
+                    navigationIcon = NavigationIcon.Menu {
+                        modelSelectionViewModel.resetSelection()
+                        openDrawer()
+                    }
                 )
             )
 
@@ -290,12 +293,13 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                     ModelSelectionScreen(
-                        onModelSelected = { modelInfo ->
+                        onModelConfirmed = { modelInfo ->
                             navigationActions.navigateToModelLoading()
                         },
                         onManageModelsClicked = {
                             navigationActions.navigateToModelsManagement()
                         },
+                        viewModel = modelSelectionViewModel
                     )
                 }
 

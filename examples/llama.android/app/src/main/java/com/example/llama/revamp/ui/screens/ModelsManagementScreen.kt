@@ -26,6 +26,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
@@ -33,6 +35,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.ModelCardExpandable
 import com.example.llama.revamp.ui.components.ScaffoldEvent
 import com.example.llama.revamp.util.formatFileByteSize
@@ -57,6 +60,8 @@ fun ModelsManagementScreen(
     val isMultiSelectionMode by viewModel.isMultiSelectionMode.collectAsState()
     val selectedModels by viewModel.selectedModels.collectAsState()
 
+    var expandedModels = remember { mutableStateMapOf<String, ModelInfo>() }
+
     BackHandler(
         enabled = isMultiSelectionMode
             || managementState is Importation.Importing
@@ -73,33 +78,28 @@ fun ModelsManagementScreen(
     Box(modifier = Modifier.fillMaxSize()) {
         // Model cards
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp)
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(items = sortedModels, key = { it.id }) { model ->
                 val isSelected = if (isMultiSelectionMode) selectedModels.contains(model.id) else null
 
                 ModelCardExpandable(
                     model = model,
-                    onClick = {
+                    isSelected = isSelected,
+                    onSelected = {
                         if (isMultiSelectionMode) {
                             viewModel.toggleModelSelectionById(model.id)
-                        } else {
-                            viewModel.viewModelDetails(model)
                         }
                     },
-                    expanded = isSelected == true,
-                    isSelected = isSelected,
-                    // TODO-han.yin: refactor this
-//                    actionButton =
-//                        if (!isMultiSelectionMode) {
-//                            {
-//                                ModelCardActions.InfoButton(
-//                                    onClick = { viewModel.viewModelDetails(model) }
-//                                )
-//                            }
-//                        } else null
+                    isExpanded = expandedModels.contains(model.id),
+                    onExpanded = { expanded ->
+                        if (expanded) {
+                            expandedModels.put(model.id, model)
+                        } else {
+                            expandedModels.remove(model.id)
+                        }
+                    }
                 )
             }
         }

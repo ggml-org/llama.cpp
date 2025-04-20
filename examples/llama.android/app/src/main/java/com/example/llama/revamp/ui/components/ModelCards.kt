@@ -140,25 +140,26 @@ fun ModelCardContentCore(
  * toggled by clicking on the content area of the card.
  *
  * @param model The model information to display
- * @param onClick Action to perform when the card is clicked (for selection)
- * @param expanded Whether additional details are currently shown
  * @param isSelected Optional selection state (shows checkbox when not null)
+ * @param onSelected Action to perform when the card is selected (in multi-selection mode)
+ * @param isExpanded Whether additional details is expanded or shrunk
+ * @param onExpanded Action to perform when the card is expanded or shrunk
  */
 @Composable
 fun ModelCardExpandable(
     model: ModelInfo,
-    onClick: () -> Unit,
-    expanded: Boolean,
     isSelected: Boolean? = null,
+    onSelected: ((Boolean) -> Unit)? = null,
+    isExpanded: Boolean = false,
+    onExpanded: ((Boolean) -> Unit)? = null,
 ) {
-    var isExpanded by remember { mutableStateOf(expanded) }
-
     CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { isExpanded = !isExpanded }
-            ,
+                .clickable {
+                    onExpanded?.invoke(!isExpanded)
+                },
             colors = when (isSelected) {
                 true -> CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                 false -> CardDefaults.cardColors()
@@ -173,16 +174,17 @@ fun ModelCardExpandable(
                     verticalAlignment = Alignment.Top
                 ) {
                     // Show checkbox if in selection mode
-                    if (isSelected != null) {
+                    isSelected?.let { selected ->
                         Checkbox(
-                            checked = isSelected,
-                            onCheckedChange = { onClick() },
+                            checked = selected,
+                            onCheckedChange = { onSelected?.invoke(it) },
                             modifier = Modifier.padding(top = 16.dp, start = 16.dp)
                         )
                     }
 
                     Box(
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier
+                            .weight(1f)
                             .padding(start = 16.dp, top = 16.dp, end = 16.dp)
                     ) {
                         // Core content always visible
@@ -197,7 +199,9 @@ fun ModelCardExpandable(
                     exit = shrinkVertically() + fadeOut()
                 ) {
                     Box(
-                        modifier = Modifier.weight(1f).padding(horizontal = 16.dp)
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 16.dp)
                     ) {
                         ExpandableModelDetails(model = model)
                     }

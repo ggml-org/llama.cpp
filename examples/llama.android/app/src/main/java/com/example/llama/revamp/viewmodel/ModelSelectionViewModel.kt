@@ -6,18 +6,23 @@ import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.engine.InferenceService
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 
 
 @HiltViewModel
 class ModelSelectionViewModel @Inject constructor(
     private val inferenceService: InferenceService,
-    private val modelRepository: ModelRepository
+    modelRepository: ModelRepository
 ) : ViewModel() {
+
+    private val _preselectedModel = MutableStateFlow<ModelInfo?>(null)
+    val preselectedModel: StateFlow<ModelInfo?> = _preselectedModel.asStateFlow()
 
     /**
      * Available models for selection
@@ -30,14 +35,24 @@ class ModelSelectionViewModel @Inject constructor(
         )
 
     /**
-     * Select a model and update its last used timestamp
+     * Pre-select a model
      */
-    fun selectModel(modelInfo: ModelInfo) {
+    fun preselectModel(modelInfo: ModelInfo, preselected: Boolean) =
+        _preselectedModel.update { current ->
+            if (preselected) modelInfo else null
+        }
+
+    /**
+     * Confirm currently selected model
+     */
+    fun confirmSelectedModel(modelInfo: ModelInfo) =
         inferenceService.setCurrentModel(modelInfo)
 
-        viewModelScope.launch {
-            modelRepository.updateModelLastUsed(modelInfo.id)
-        }
+    /**
+     * Reset selected model to none (before navigating away)
+     */
+    fun resetSelection() {
+        _preselectedModel.value = null
     }
 
     companion object {

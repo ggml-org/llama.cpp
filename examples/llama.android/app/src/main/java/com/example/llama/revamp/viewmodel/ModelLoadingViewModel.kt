@@ -2,6 +2,7 @@ package com.example.llama.revamp.viewmodel
 
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.SystemPrompt
+import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.data.repository.SystemPromptRepository
 import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.engine.ModelLoadingService
@@ -15,7 +16,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ModelLoadingViewModel @Inject constructor(
     private val modelLoadingService: ModelLoadingService,
-    private val repository: SystemPromptRepository
+    private val systemPromptRepository: SystemPromptRepository,
+    private val modelRepository: ModelRepository,
 ) : ModelUnloadingViewModel(modelLoadingService) {
 
     /**
@@ -26,7 +28,7 @@ class ModelLoadingViewModel @Inject constructor(
     /**
      * Preset prompts
      */
-    val presetPrompts: StateFlow<List<SystemPrompt>> = repository.getPresetPrompts()
+    val presetPrompts: StateFlow<List<SystemPrompt>> = systemPromptRepository.getPresetPrompts()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
@@ -36,7 +38,7 @@ class ModelLoadingViewModel @Inject constructor(
     /**
      * Recent prompts
      */
-    val recentPrompts: StateFlow<List<SystemPrompt>> = repository.getRecentPrompts()
+    val recentPrompts: StateFlow<List<SystemPrompt>> = systemPromptRepository.getRecentPrompts()
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
@@ -48,7 +50,7 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun savePromptToRecents(prompt: SystemPrompt) {
         viewModelScope.launch {
-            repository.savePromptToRecents(prompt)
+            systemPromptRepository.savePromptToRecents(prompt)
         }
     }
 
@@ -57,7 +59,7 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun saveCustomPromptToRecents(content: String) {
         viewModelScope.launch {
-            repository.saveCustomPrompt(content)
+            systemPromptRepository.saveCustomPrompt(content)
         }
     }
 
@@ -66,7 +68,7 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun deletePrompt(id: String) {
         viewModelScope.launch {
-            repository.deletePrompt(id)
+            systemPromptRepository.deletePrompt(id)
         }
     }
 
@@ -75,7 +77,7 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun clearRecentPrompts() {
         viewModelScope.launch {
-            repository.deleteAllPrompts()
+            systemPromptRepository.deleteAllPrompts()
         }
     }
 
@@ -84,6 +86,9 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun onBenchmarkSelected(onNavigateToBenchmark: (ModelLoadingMetrics) -> Unit) =
         viewModelScope.launch {
+            selectedModel.value?.let {
+                modelRepository.updateModelLastUsed(it.id)
+            }
             onNavigateToBenchmark(modelLoadingService.loadModelForBenchmark())
         }
 
@@ -95,6 +100,9 @@ class ModelLoadingViewModel @Inject constructor(
         systemPrompt: String? = null,
         onNavigateToConversation: (ModelLoadingMetrics) -> Unit
     ) = viewModelScope.launch {
+        selectedModel.value?.let {
+            modelRepository.updateModelLastUsed(it.id)
+        }
         onNavigateToConversation(modelLoadingService.loadModelForConversation(systemPrompt))
     }
 
