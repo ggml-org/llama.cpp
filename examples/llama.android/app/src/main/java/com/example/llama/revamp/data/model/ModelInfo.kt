@@ -12,7 +12,8 @@ data class ModelInfo(
     val path: String,
     val sizeInBytes: Long,
     val metadata: GgufMetadata,
-    val lastUsed: Long? = null
+    val dateAdded: Long,
+    val dateLastUsed: Long? = null,
 ) {
     val formattedSize: String
         get() = formatSize(sizeInBytes)

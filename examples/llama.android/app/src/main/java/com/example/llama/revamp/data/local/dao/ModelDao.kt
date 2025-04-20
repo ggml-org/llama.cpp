@@ -28,6 +28,6 @@ interface ModelDao {
     @Delete
     suspend fun deleteModels(models: List<ModelEntity>)
 
-    @Query("UPDATE models SET lastUsed = :timestamp WHERE id = :id")
+    @Query("UPDATE models SET dateLastUsed = :timestamp WHERE id = :id")
     suspend fun updateLastUsed(id: String, timestamp: Long)
 }

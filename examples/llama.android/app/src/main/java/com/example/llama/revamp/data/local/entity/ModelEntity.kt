@@ -18,7 +18,7 @@ data class ModelEntity(
     @field:TypeConverters(GgufMetadataConverters::class)
     val metadata: GgufMetadata,
     val dateAdded: Long,
-    val lastUsed: Long?
+    val dateLastUsed: Long?
 ) {
     fun toModelInfo() = ModelInfo(
         id = id,
@@ -26,6 +26,7 @@ data class ModelEntity(
         path = path,
         sizeInBytes = sizeInBytes,
         metadata = metadata,
-        lastUsed = lastUsed,
+        dateAdded = dateAdded,
+        dateLastUsed = this@ModelEntity.dateLastUsed,
     )
 }

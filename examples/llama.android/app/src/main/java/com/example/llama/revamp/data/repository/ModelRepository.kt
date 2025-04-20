@@ -204,7 +204,7 @@ class ModelRepositoryImpl @Inject constructor(
                 sizeInBytes = modelFile.length(),
                 metadata = metadata,
                 dateAdded = System.currentTimeMillis(),
-                lastUsed = null
+                dateLastUsed = null
             ).let {
                 modelDao.insertModel(it)
                 it.toModelInfo()
