@@ -126,6 +126,25 @@ static void dequantize_row_q4_0_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
+static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
+                                     dpct::queue_ptr stream) {
+
+    dpct::has_capability_or_fail(stream->get_device(),
+                                    {sycl::aspect::fp16});
+
+    int constexpr WARP_K = WARP_SIZE * QK4_0;
+    const int n_warp = (k + WARP_K - 1) / WARP_K;
+    GGML_ASSERT(k % 2 == 0);
+    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
+        sycl::range<3>(1, 1, WARP_SIZE),
+        sycl::range<3>(1, 1, WARP_SIZE)),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
+            dequantize_block_q4_0_reorder(vx, y, k, item_ct1);
+        });
+
+}
+
+template <typename dst_t>
 static void dequantize_row_q4_1_sycl(const void *vx, dst_t *y, const int64_t k,
                                      dpct::queue_ptr stream) {
     const int64_t nb32 = k / 32;
@@ -452,10 +471,15 @@ static void convert_unary_sycl(const void *__restrict__ vx,
     }
 }
 
-to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type) {
+to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor *dst) {
     switch (type) {
         case GGML_TYPE_Q4_0:
-            return dequantize_block_sycl<QK4_0, QR4_0, dequantize_q4_0>;
+            if (dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_q4_0_sycl_reorder;
+            } else {
+                return dequantize_block_sycl<QK4_0, QR4_0, dequantize_q4_0>;
+            }
         case GGML_TYPE_Q4_1:
             return dequantize_block_sycl<QK4_1, QR4_1, dequantize_q4_1>;
         case GGML_TYPE_Q5_0:
@@ -499,10 +523,15 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type) {
     }
 }
 
-to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type) {
+to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
     switch (type) {
         case GGML_TYPE_Q4_0:
-            return dequantize_row_q4_0_sycl;
+            if (dst->src[0]->extra &&
+                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_q4_0_sycl_reorder;
+            } else {
+                return dequantize_row_q4_0_sycl;
+            }
         case GGML_TYPE_Q4_1:
             return dequantize_row_q4_1_sycl;
         case GGML_TYPE_Q5_0:

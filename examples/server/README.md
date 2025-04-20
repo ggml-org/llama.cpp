@@ -7,14 +7,15 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
- * Reranking endoint (WIP: https://github.com/ggerganov/llama.cpp/pull/9510)
+ * Reranking endoint (WIP: https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
  * Multimodal (wip)
  * Monitoring endpoints
  * Schema-constrained JSON response format
+ * [Function calling](../../docs/function-calling.md) / tool use for ~any model
 
-The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggerganov/llama.cpp/issues/4216).
+The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggml-org/llama.cpp/issues/4216).
 
 ## Usage
 
@@ -65,7 +66,7 @@ The project is under active development, and we are [looking for feedback and co
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
 | `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--no-mmap` | do not memory-map model (slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_NO_MMAP) |
-| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggerganov/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
+| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | number of layers to store in VRAM<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
@@ -126,7 +127,8 @@ The project is under active development, and we are [looking for feedback and co
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '') |
 | `--grammar-file FNAME` | file to read grammar from |
 | `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `--jinja` | Enable experimental Jinja templating engine (needed for tool use) |
+| `--jinja` | Enable experimental Jinja templating engine (required for tool use) |
+| `--reasoning-format FORMAT` | Controls extraction of model thinking traces and the format / field in which they are returned (default: `deepseek`; allowed values: `deepseek`, `none`; requires `--jinja`). `none` will leave thinking traces inline in `message.content` in a model-specific format, while `deepseek` will return them separately under `message.reasoning_content` |
 
 **Example-specific params**
 
@@ -177,7 +179,7 @@ Example usage of docker compose with environment variables:
 ```yml
 services:
   llamacpp-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
+    image: ghcr.io/ggml-org/llama.cpp:server
     ports:
       - 8080:8080
     volumes:
@@ -220,7 +222,7 @@ services:
 The project includes a web-based user interface that enables interaction with the model through the `/chat/completions` endpoint.
 
 The web UI is developed using:
-- `vue` framework for frontend development
+- `react` framework for frontend development
 - `tailwindcss` and `daisyui` for styling
 - `vite` for build tooling
 
@@ -236,9 +238,13 @@ npm i
 # to run the dev server
 npm run dev
 
-# to build the public/index.html
+# to build the public/index.html.gz
 npm run build
 ```
+After `public/index.html.gz` has been generated we need to generate the c++
+headers (like build/examples/server/index.html.gz.hpp) that will be included
+by server.cpp. This is done by building `llama-server` as described in the
+[build](#build) section above.
 
 NOTE: if you are using the vite dev server, you can change the API base URL to llama.cpp. To do that, run this code snippet in browser's console:
 
@@ -268,10 +274,10 @@ You can consume the endpoints with Postman or NodeJS with axios library. You can
 ### Docker
 
 ```bash
-docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggerganov/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
+docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:server -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080
 
 # or, with CUDA:
-docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggerganov/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
+docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
 
 ## Testing with CURL
@@ -456,7 +462,7 @@ These words will not be included in the completion, so make sure to add them to 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
 - `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
-  ```json
+  ```
   {
     "content": "<the generated completion text>",
     "tokens": [ generated token ids if requested ],
@@ -557,7 +563,7 @@ If `with_pieces` is `true`:
 ```
 
 With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
-```json
+```
 {
   "tokens": [
     {"id": 198, "piece": [195]}, // hex C3
@@ -571,6 +577,18 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 *Options:*
 
 `tokens`: Set the tokens to detokenize.
+
+### POST `/apply-template`: Apply chat template to a conversation
+
+Uses the server's prompt template formatting functionality to convert chat messages to a single string expected by a chat model as input, but does not perform inference. Instead, the prompt string is returned in the `prompt` field of the JSON response. The prompt can then be modified as desired (for example, to insert "Sure!" at the beginning of the model's response) before sending to `/completion` to generate the chat response.
+
+*Options:*
+
+`messages`: (Required) Chat turns in the same format as `/v1/chat/completions`.
+
+**Response format**
+
+Returns a JSON object with a field `prompt` containing a string of the input messages formatted according to the model's chat template format.
 
 ### POST `/embedding`: Generate embedding of a given text
 
@@ -764,7 +782,7 @@ Same as the `/v1/embeddings` endpoint.
 
 **Response format**
 
-```json
+```
 [
   {
     "index": 0,
@@ -1049,11 +1067,11 @@ print(completion.choices[0].text)
 
 ### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
 
-Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggerganov/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
 *Options:*
 
-See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). While some OpenAI-specific features such as function calling aren't supported, llama.cpp `/completion`-specific features such as `mirostat` are supported.
+See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
@@ -1100,6 +1118,12 @@ curl http://localhost:8080/v1/chat/completions \
 ]
 }'
 ```
+
+*Tool call support*
+
+[OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
+
+**See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
@@ -1204,7 +1228,7 @@ Apart from error types supported by OAI, we also have custom types that are spec
 
 ### Legacy completion web UI
 
-A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggerganov/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
+A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
 
 For example:
 

@@ -1,6 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
-#include "llama-context.h"
+#include "llama-model.h"
 #include "common.h"
 
 #include <algorithm>
@@ -328,7 +328,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    const auto & tensors = llama_internal_get_tensor_map(ctx);
+    const auto & tensors = llama_internal_get_tensor_map(model);
 
     // check layer tensors
     int included_layers = 0;

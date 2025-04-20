@@ -5,7 +5,7 @@ description = "Scripts that ship with llama.cpp"
 authors = ["GGML <ggml@ggml.ai>"]
 readme = "README.md"
 homepage = "https://ggml.ai"
-repository = "https://github.com/ggerganov/llama.cpp"
+repository = "https://github.com/ggml-org/llama.cpp"
 keywords = ["ggml", "gguf", "llama.cpp"]
 packages = [{ include = "*.py", from = "." }]
 classifiers = [

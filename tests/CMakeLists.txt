@@ -86,6 +86,9 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen2             ARGS ${CMAKE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-refact.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-starcoder.gguf)
 
+if (LLAMA_LLGUIDANCE)
+    llama_target_and_test(test-grammar-llguidance.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-bpe.gguf)
+endif ()
 
 if (NOT WIN32)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API
@@ -93,6 +96,7 @@ if (NOT WIN32)
     llama_target_and_test(test-grammar-parser.cpp)
     llama_target_and_test(test-grammar-integration.cpp)
     llama_target_and_test(test-llama-grammar.cpp)
+    llama_target_and_test(test-chat.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_target_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -127,8 +131,12 @@ if (NOT WIN32)
 endif()
 
 llama_target_and_test(test-log.cpp)
-llama_target_and_test(test-arg-parser.cpp)
 llama_target_and_test(test-chat-template.cpp)
+
+# this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
+if (NOT WIN32)
+    llama_target_and_test(test-arg-parser.cpp)
+endif()
 
 # llama_target_and_test(test-opt.cpp) # SLOW
 llama_target_and_test(test-gguf.cpp)

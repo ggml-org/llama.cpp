@@ -62,6 +62,6 @@ Beware that none of the topics under [Using llama.cpp securely](#using-llamacpp-
 <!-- normal version -->
 However, If you have discovered a security vulnerability in this project, please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
 
-Please disclose it as a private [security advisory](https://github.com/ggerganov/llama.cpp/security/advisories/new).
+Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
 
 A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.

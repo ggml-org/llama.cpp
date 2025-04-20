@@ -5,6 +5,7 @@
 #include "sampling.h"
 
 #include <cstring>
+#include <algorithm>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -172,7 +173,7 @@ llama_tokens common_speculative_gen_draft(
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         prompt.clear();
     } else {
@@ -191,14 +192,14 @@ llama_tokens common_speculative_gen_draft(
         }
 
         if (reuse_i > 0) {
-            llama_kv_cache_seq_rm (ctx, 0, 0, reuse_i);
-            llama_kv_cache_seq_add(ctx, 0, reuse_i, -1, -reuse_i);
+            llama_kv_self_seq_rm (ctx, 0, 0, reuse_i);
+            llama_kv_self_seq_add(ctx, 0, reuse_i, -1, -reuse_i);
 
             prompt.erase(prompt.begin(), prompt.begin() + reuse_i);
         }
 
         if (reuse_n < (int) prompt.size()) {
-            llama_kv_cache_seq_rm (ctx, 0, reuse_n, -1);
+            llama_kv_self_seq_rm (ctx, 0, reuse_n, -1);
 
             prompt.erase(prompt.begin() + reuse_n, prompt.end());
         }
@@ -252,16 +253,16 @@ llama_tokens common_speculative_gen_draft(
         // add drafted token for each sequence
         const llama_token id = cur_p->data[0].id;
 
-        // only collect very high-confidence draft tokens
-        if (cur_p->data[0].p < params.p_min) {
-            break;
-        }
-
         common_sampler_accept(smpl, id, true);
 
         result.push_back(id);
 
         if (params.n_draft <= (int) result.size()) {
+            break;
+        }
+
+        // only collect very high-confidence draft tokens
+        if (cur_p->data[0].p < params.p_min) {
             break;
         }
 

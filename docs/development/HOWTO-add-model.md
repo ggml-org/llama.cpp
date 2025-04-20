@@ -104,16 +104,16 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 
 ## GGUF specification
 
-https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
+https://github.com/ggml-org/ggml/blob/master/docs/gguf.md
 
 ## Resources
 
-- YaRN RoPE scaling https://github.com/ggerganov/llama.cpp/pull/2268
-- support Baichuan serial models https://github.com/ggerganov/llama.cpp/pull/3009
-- support attention bias https://github.com/ggerganov/llama.cpp/pull/4283
-- Mixtral support https://github.com/ggerganov/llama.cpp/pull/4406
-- BERT embeddings https://github.com/ggerganov/llama.cpp/pull/5423
-- Grok-1 support https://github.com/ggerganov/llama.cpp/pull/6204
-- Command R Plus support https://github.com/ggerganov/llama.cpp/pull/6491
-- support arch DBRX https://github.com/ggerganov/llama.cpp/pull/6515
-- How to convert HuggingFace model to GGUF format https://github.com/ggerganov/llama.cpp/discussions/2948
+- YaRN RoPE scaling https://github.com/ggml-org/llama.cpp/pull/2268
+- support Baichuan serial models https://github.com/ggml-org/llama.cpp/pull/3009
+- support attention bias https://github.com/ggml-org/llama.cpp/pull/4283
+- Mixtral support https://github.com/ggml-org/llama.cpp/pull/4406
+- BERT embeddings https://github.com/ggml-org/llama.cpp/pull/5423
+- Grok-1 support https://github.com/ggml-org/llama.cpp/pull/6204
+- Command R Plus support https://github.com/ggml-org/llama.cpp/pull/6491
+- support arch DBRX https://github.com/ggml-org/llama.cpp/pull/6515
+- How to convert HuggingFace model to GGUF format https://github.com/ggml-org/llama.cpp/discussions/2948

@@ -11,7 +11,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        repository: "ggerganov/llama.cpp"
+        repository: "ggml-org/llama.cpp"
     - uses: actions/labeler@v5
       with:
         configuration-path: '.github/labeler.yml'

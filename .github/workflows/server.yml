@@ -81,13 +81,36 @@ jobs:
         with:
           node-version: '22.11.0'
 
+      - name: WebUI - Install dependencies
+        id: webui_lint
+        run: |
+          cd examples/server/webui
+          npm ci
+
+      - name: WebUI - Check code format
+        id: webui_format
+        run: |
+          git config --global --add safe.directory $(realpath .)
+          cd examples/server/webui
+          git status
+
+          npm run format
+          git status
+          modified_files="$(git status -s)"
+          echo "Modified files: ${modified_files}"
+          if [ -n "${modified_files}" ]; then
+            echo "Files do not follow coding style. To fix: npm run format"
+            echo "${modified_files}"
+            exit 1
+          fi
+
       - name: Verify bundled index.html
         id: verify_server_index_html
         run: |
           git config --global --add safe.directory $(realpath .)
           cd examples/server/webui
           git status
-          npm ci
+
           npm run build
           git status
           modified_files="$(git status -s)"
@@ -106,7 +129,6 @@ jobs:
           cmake -B build \
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
               -DGGML_OPENMP=OFF ;
@@ -119,7 +141,6 @@ jobs:
           cmake -B build \
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
@@ -131,13 +152,14 @@ jobs:
           cmake -B build \
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
-              -DLLAMA_CURL=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
       - name: Tests
         id: server_integration_tests
         if: ${{ matrix.sanitizer == '' }}
+        env:
+          GITHUB_ACTIONS: "true"
         run: |
           cd examples/server/tests
           ./tests.sh
@@ -170,17 +192,14 @@ jobs:
 
       - name: libCURL
         id: get_libcurl
-        env:
-          CURL_VERSION: 8.6.0_6
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/curl.zip -L "https://curl.se/windows/dl-${env:CURL_VERSION}/curl-${env:CURL_VERSION}-win64-mingw.zip"
-          mkdir $env:RUNNER_TEMP/libcurl
-          tar.exe -xvf $env:RUNNER_TEMP/curl.zip --strip-components=1 -C $env:RUNNER_TEMP/libcurl
+        uses: ./.github/actions/windows-setup-curl
 
       - name: Build
         id: cmake_build
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -B build -DLLAMA_CURL=ON -DCURL_LIBRARY="$env:RUNNER_TEMP/libcurl/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:RUNNER_TEMP/libcurl/include"
+          cmake -B build -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
@@ -196,8 +215,10 @@ jobs:
 
       - name: Copy Libcurl
         id: prepare_libcurl
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cp $env:RUNNER_TEMP/libcurl/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
+          cp $env:CURL_PATH/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
 
       - name: Tests
         id: server_integration_tests
@@ -205,7 +226,7 @@ jobs:
         run: |
           cd examples/server/tests
           $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x
+          pytest -v -x -m "not slow"
 
       - name: Slow tests
         id: server_integration_tests_slow

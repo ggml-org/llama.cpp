@@ -3,6 +3,7 @@
 #include "log.h"
 #include "llama.h"
 
+#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -360,7 +361,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -546,7 +547,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -850,7 +851,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
 
     LOG_INF("%s : calculating hellaswag score over selected tasks.\n", __func__);
 
-    LOG("\ntask\tacc_norm\n");
+    LOG("\ntask\tacc_norm\t95%% confidence interval\n");
 
     double acc = 0.0f;
 
@@ -923,7 +924,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
             return;
         }
 
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -984,8 +985,22 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
                 acc += 1.0;
             }
 
-            // Print the accumulated accuracy mean x 100
-            LOG("%zu\t%.8lf\n", i + 1, acc/double(i + 1)*100.0);
+            double freq = acc / double(i + 1);
+
+            const double za = 1.95996398454;
+
+            // // Wald normal approx
+            // double conf =za*sqrt(freq*(1-freq)/double(i + 1));
+            // LOG("%zu\t%.8lf +/- %.8lf\n", i + 1, freq*100.0, conf*100.0);
+
+            // Wilson score interval, more accurate
+            double z   = za * za / double(i + 1);
+            double cnf = z * sqrt(double(i + 1) * (4.0 * freq * (1 - freq) + z)) / (za + za);
+            double a   = (freq + z * 0.5 - cnf) / (1.0 + z);
+            double b   = (freq + z * 0.5 + cnf) / (1.0 + z);
+
+            // Print the accumulated accuracy mean x 100 and confidence interval
+            LOG("%zu\t%3.8lf%%\t[%3.4lf%%, %3.4lf%%]\n", i + 1, freq * 100.0, a * 100.0, b * 100.0);
         }
 
         i0 = i1 - 1;
@@ -1202,7 +1217,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
             return;
         }
 
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1574,7 +1589,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
             return;
         }
 
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1764,7 +1779,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         }
 
         // clear the KV cache
-        llama_kv_cache_clear(ctx);
+        llama_kv_self_clear(ctx);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 

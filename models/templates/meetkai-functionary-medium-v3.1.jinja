@@ -1,0 +1,58 @@
+{# version=v3-llama3.1 #}{%- if not tools is defined -%}
+    {%- set tools = none -%}
+{%- endif -%}
+
+{%- set has_code_interpreter = tools | selectattr("type", "equalto", "code_interpreter") | list | length > 0 -%}
+{%- if has_code_interpreter -%}
+    {%- set tools = tools | rejectattr("type", "equalto", "code_interpreter") | list -%}
+{%- endif -%}
+
+{#- System message + builtin tools #}
+{{- bos_token + "<|start_header_id|>system<|end_header_id|>\n\n" }}
+{%- if has_code_interpreter %}
+    {{- "Environment: ipython\n\n" }}
+{%- else -%}
+    {{ "\n"}}
+{%- endif %}
+{{- "Cutting Knowledge Date: December 2023\n\n" }}
+{%- if tools %}
+    {{- "\nYou have access to the following functions:\n\n" }}
+    {%- for t in tools %}
+        {%- if "type" in t -%}
+            {{ "Use the function '"|safe + t["function"]["name"] + "' to '"|safe + t["function"]["description"] + "'\n"|safe + t["function"] | tojson() }}
+        {%- else -%}
+            {{ "Use the function '"|safe + t["name"] + "' to '"|safe + t["description"] + "'\n"|safe + t | tojson() }}
+        {%- endif -%}
+        {{- "\n\n" }}
+    {%- endfor %}
+    {{- '\nThink very carefully before calling functions.\nIf a you choose to call a function ONLY reply in the following format:\n<{start_tag}={function_name}>{parameters}{end_tag}\nwhere\n\nstart_tag => `<function`\nparameters => a JSON dict with the function argument name as key and function argument value as value.\nend_tag => `</function>`\n\nHere is an example,\n<function=example_function_name>{"example_name": "example_value"}</function>\n\nReminder:\n- If looking for real time information use relevant functions before falling back to brave_search\n- Function calls MUST follow the specified format, start with <function= and end with </function>\n- Required parameters MUST be specified\n- Only call one function at a time\n- Put the entire function call reply on one line\n\n' -}}
+{%- endif %}
+{{- "<|eot_id|>" -}}
+
+{%- for message in messages -%}
+    {%- if message['role'] == 'user' or message['role'] == 'system' -%}
+        {{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}
+    {%- elif message['role'] == 'tool' -%}
+        {{ '<|start_header_id|>ipython<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>' }}
+    {%- else -%}
+        {{ '<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n'}}
+        {%- if message['content'] -%}
+            {{ message['content'] }}
+        {%- endif -%}
+        {%- if 'tool_calls' in message and message['tool_calls'] -%}
+            {%- for tool_call in message['tool_calls'] -%}
+                {%- if tool_call["function"]["name"] == "python" -%}
+                    {{ '<|python_tag|>' + tool_call['function']['arguments'] }}
+                {%- else -%}
+                    {{ '<function=' + tool_call['function']['name'] + '>' + tool_call['function']['arguments'] + '</function>' }}
+                {%- endif -%}
+            {%- endfor -%}
+            {{ '<|eom_id|>' }}
+        {%- else -%}
+            {{ '<|eot_id|>' }}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}
+{%- endif -%}

@@ -3,9 +3,9 @@
 This example demonstrates how to generate a control vector using gguf models.
 
 Related PRs:
-- [Add support for control vectors](https://github.com/ggerganov/llama.cpp/pull/5970)
-- (Issue) [Generate control vector using llama.cpp](https://github.com/ggerganov/llama.cpp/issues/6880)
-- [Add cvector-generator example](https://github.com/ggerganov/llama.cpp/pull/7514)
+- [Add support for control vectors](https://github.com/ggml-org/llama.cpp/pull/5970)
+- (Issue) [Generate control vector using llama.cpp](https://github.com/ggml-org/llama.cpp/issues/6880)
+- [Add cvector-generator example](https://github.com/ggml-org/llama.cpp/pull/7514)
 
 ## Examples
 

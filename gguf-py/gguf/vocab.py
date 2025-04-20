@@ -127,7 +127,7 @@ class SpecialVocab:
                         self.merges = merges
                     elif isinstance(merges[0], list) and len(merges[0]) == 2 and isinstance(merges[0][0], str):
                         # New format since transformers 4.45 to support spaces in merges
-                        # ref: https://github.com/ggerganov/llama.cpp/issues/9692
+                        # ref: https://github.com/ggml-org/llama.cpp/issues/9692
                         # TODO: internally store as the new format instead of converting to old
                         if any(' ' in s for pair in merges for s in pair):
                             logger.warning(f'Spaces in merges detected, encoding as {chr(ord(" ") + 256)!r}')
@@ -154,7 +154,12 @@ class SpecialVocab:
             return True
         with open(tokenizer_config_file, encoding = 'utf-8') as f:
             tokenizer_config = json.load(f)
-        chat_template = tokenizer_config.get('chat_template')
+        chat_template_alt = None
+        chat_template_file = path / 'chat_template.json'
+        if chat_template_file.is_file():
+            with open(chat_template_file, encoding = 'utf-8') as f:
+                chat_template_alt = json.load(f).get('chat_template')
+        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:

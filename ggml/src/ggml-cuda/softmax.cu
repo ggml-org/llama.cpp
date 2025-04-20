@@ -18,7 +18,7 @@ __device__ float __forceinline__ t2f32<half>(half val) {
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
-#endif
+#endif // __clang__
 template <bool use_shared, int ncols_template, int block_size_template, typename T>
 static __global__ void soft_max_f32(
         const float * x, const T * mask, float * dst, const int ncols_par, const int nrows_y,
@@ -126,7 +126,7 @@ static __global__ void soft_max_f32(
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
-#endif
+#endif // __clang__
 
 static __global__ void soft_max_back_f32(
         const float * grad, const float * dstf, float * dst, const int ncols, const float scale) {

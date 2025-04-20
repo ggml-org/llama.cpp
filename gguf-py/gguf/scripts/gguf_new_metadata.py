@@ -8,7 +8,6 @@ import sys
 import json
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 from typing import Any, Sequence, NamedTuple
 
@@ -27,45 +26,10 @@ class MetadataDetails(NamedTuple):
     description: str = ''
 
 
-def get_byteorder(reader: gguf.GGUFReader) -> gguf.GGUFEndian:
-    if np.uint32(1) == np.uint32(1).newbyteorder("<"):
-        # Host is little endian
-        host_endian = gguf.GGUFEndian.LITTLE
-        swapped_endian = gguf.GGUFEndian.BIG
-    else:
-        # Sorry PDP or other weird systems that don't use BE or LE.
-        host_endian = gguf.GGUFEndian.BIG
-        swapped_endian = gguf.GGUFEndian.LITTLE
-
-    if reader.byte_order == "S":
-        return swapped_endian
-    else:
-        return host_endian
-
-
-def decode_field(field: gguf.ReaderField | None) -> Any:
-    if field and field.types:
-        main_type = field.types[0]
-
-        if main_type == gguf.GGUFValueType.ARRAY:
-            sub_type = field.types[-1]
-
-            if sub_type == gguf.GGUFValueType.STRING:
-                return [str(bytes(field.parts[idx]), encoding='utf-8') for idx in field.data]
-            else:
-                return [pv for idx in field.data for pv in field.parts[idx].tolist()]
-        if main_type == gguf.GGUFValueType.STRING:
-            return str(bytes(field.parts[-1]), encoding='utf-8')
-        else:
-            return field.parts[-1][0]
-
-    return None
-
-
 def get_field_data(reader: gguf.GGUFReader, key: str) -> Any:
     field = reader.get_field(key)
 
-    return decode_field(field)
+    return field.contents() if field else None
 
 
 def find_token(token_list: Sequence[int], token: str) -> Sequence[int]:
@@ -93,7 +57,7 @@ def copy_with_new_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, new
             logger.debug(f'Removing {field.name}')
             continue
 
-        old_val = MetadataDetails(field.types[0], decode_field(field))
+        old_val = MetadataDetails(field.types[0], field.contents())
         val = new_metadata.get(field.name, old_val)
 
         if field.name in new_metadata:
@@ -192,7 +156,6 @@ def main() -> None:
     reader = gguf.GGUFReader(args.input, 'r')
 
     arch = get_field_data(reader, gguf.Keys.General.ARCHITECTURE)
-    endianess = get_byteorder(reader)
 
     token_list = get_field_data(reader, gguf.Keys.Tokenizer.LIST) or []
 
@@ -230,7 +193,7 @@ def main() -> None:
             sys.exit(0)
 
     logger.info(f'* Writing: {args.output}')
-    writer = gguf.GGUFWriter(args.output, arch=arch, endianess=endianess)
+    writer = gguf.GGUFWriter(args.output, arch=arch, endianess=reader.endianess)
 
     alignment = get_field_data(reader, gguf.Keys.General.ALIGNMENT)
     if alignment is not None:

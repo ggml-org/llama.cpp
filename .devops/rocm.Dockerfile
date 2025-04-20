@@ -11,14 +11,14 @@ ARG BASE_ROCM_DEV_CONTAINER=rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-co
 FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
-# List from https://github.com/ggerganov/llama.cpp/pull/1087#issuecomment-1682807878
+# List from https://github.com/ggml-org/llama.cpp/pull/1087#issuecomment-1682807878
 # This is mostly tied to rocBLAS supported archs.
 # gfx803, gfx900, gfx1032, gfx1101, gfx1102,not officialy supported
 # gfx906 is deprecated
 #check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-6.2.4/reference/system-requirements.html
 
-#ARG ROCM_DOCKER_ARCH='gfx803,gfx900,gfx906,gfx908,gfx90a,gfx942,gfx1010,gfx1030,gfx1032,gfx1100,gfx1101,gfx1102'
-ARG ROCM_DOCKER_ARCH=gfx1100
+ARG ROCM_DOCKER_ARCH='gfx803,gfx900,gfx906,gfx908,gfx90a,gfx942,gfx1010,gfx1030,gfx1032,gfx1100,gfx1101,gfx1102'
+#ARG ROCM_DOCKER_ARCH=gfx1100
 
 # Set nvcc architectured
 ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}
@@ -40,7 +40,7 @@ WORKDIR /app
 COPY . .
 
 RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
-    cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=$ROCM_DOCKER_ARCH -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON \
+    cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=$ROCM_DOCKER_ARCH -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=ON \
     && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib \

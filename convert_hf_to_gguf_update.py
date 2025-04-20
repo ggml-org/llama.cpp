@@ -8,7 +8,7 @@
 # provide the necessary information to llama.cpp via the GGUF header in order to implement
 # the same pre-tokenizer.
 #
-# ref: https://github.com/ggerganov/llama.cpp/pull/6920
+# ref: https://github.com/ggml-org/llama.cpp/pull/6920
 #
 # Instructions:
 #
@@ -109,6 +109,12 @@ models = [
     {"name": "megrez",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Infinigence/Megrez-3B-Instruct"},
     {"name": "deepseek-v3",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-V3"},
     {"name": "deepseek-r1-qwen", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"},
+    {"name": "gpt-4o",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Xenova/gpt-4o", },
+    {"name": "superbpe",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/UW/OLMo2-8B-SuperBPE-t180k", },
+    {"name": "trillion",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/trillionlabs/Trillion-7B-preview", },
+    {"name": "bailingmoe",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/inclusionAI/Ling-lite", },
+    {"name": "llama4",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct", },
+    {"name": "glm4",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/THUDM/glm-4-9b-hf", },
 ]
 
 
@@ -130,6 +136,10 @@ def download_model(model):
     os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
 
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
+
+    if name == "gpt-4o":
+        # Xenova/gpt-4o is tokenizer-only, it does not contain config.json
+        files = ["tokenizer.json", "tokenizer_config.json"]
 
     if tokt == TOKENIZER_TYPE.SPM:
         files.append("tokenizer.model")
@@ -246,7 +256,7 @@ src_func = f"""
             logger.warning("**          - the model has not been added to convert_hf_to_gguf_update.py yet")
             logger.warning("**          - the pre-tokenization config has changed upstream")
             logger.warning("**          Check your model files and convert_hf_to_gguf_update.py and update them accordingly.")
-            logger.warning("** ref:     https://github.com/ggerganov/llama.cpp/pull/6920")
+            logger.warning("** ref:     https://github.com/ggml-org/llama.cpp/pull/6920")
             logger.warning("**")
             logger.warning(f"** chkhsh:  {{chkhsh}}")
             logger.warning("**************************************************************************************")

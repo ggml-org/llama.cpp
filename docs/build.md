@@ -3,7 +3,7 @@
 **To get the Code:**
 
 ```bash
-git clone https://github.com/ggerganov/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 ```
 
@@ -46,7 +46,7 @@ cmake --build build --config Release
   ```
 
 - Building for Windows (x86, x64 and arm64) with MSVC or clang as compilers:
-    - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/de/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
+    - Install Visual Studio 2022, e.g. via the [Community Edition](https://visualstudio.microsoft.com/vs/community/). In the installer, select at least the following options (this also automatically installs the required additional tools like CMake,...):
     - Tab Workload: Desktop-development with C++
     - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
     - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
@@ -125,26 +125,73 @@ For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
 
 ## CUDA
 
-This provides GPU acceleration using an NVIDIA GPU. Make sure to have the CUDA toolkit installed. You can download it from your Linux distro's package manager (e.g. `apt install nvidia-cuda-toolkit`) or from the [NVIDIA developer site](https://developer.nvidia.com/cuda-downloads).
+This provides GPU acceleration using an NVIDIA GPU. Make sure to have the [CUDA toolkit](https://developer.nvidia.com/cuda-toolkit) installed.
 
-If you are using Fedora (using Fedora Workstation, or an 'Atomic' variant such as Silverblue), or would like to set up CUDA in a toolbox, please consider our [Fedora CUDA guide](./cuda-fedora.md). Unfortunately, the process is not as simple as one might expect.
+#### Download directly from NVIDIA
+You may find the official downloads here: [NVIDIA developer site](https://developer.nvidia.com/cuda-downloads).
 
-- Using `CMake`:
 
-  ```bash
-  cmake -B build -DGGML_CUDA=ON
-  cmake --build build --config Release
-  ```
+#### Compile and run inside a Fedora Toolbox Container
+We also have a [guide](./backend/CUDA-FEDORA.md) for setting up CUDA toolkit in a Fedora [toolbox container](https://containertoolbx.org/).
 
-The environment variable [`CUDA_VISIBLE_DEVICES`](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars) can be used to specify which GPU(s) will be used.
+**Recommended for:**
+- ***Necessary*** for users of [Atomic Desktops for Fedora](https://fedoraproject.org/atomic-desktops/); such as: [Silverblue](https://fedoraproject.org/atomic-desktops/silverblue/) and [Kinoite](https://fedoraproject.org/atomic-desktops/kinoite/).
+  - (there are no supported CUDA packages for these systems)
+- ***Necessary*** for users that have a host that is not a: [Supported Nvidia CUDA Release Platform](https://developer.nvidia.com/cuda-downloads).
+  - (for example, you may have [Fedora 42 Beta](https://fedoramagazine.org/announcing-fedora-linux-42-beta/) as your your host operating system)
+- ***Convenient*** For those running [Fedora Workstation](https://fedoraproject.org/workstation/) or [Fedora KDE Plasma Desktop](https://fedoraproject.org/spins/kde), and want to keep their host system clean.
+- *Optionally* toolbox packages are available: [Arch Linux](https://archlinux.org/), [Red Hat Enterprise Linux >= 8.5](https://www.redhat.com/en/technologies/linux-platforms/enterprise-linux), or [Ubuntu](https://ubuntu.com/download)
+
+
+### Compilation
+```bash
+cmake -B build -DGGML_CUDA=ON
+cmake --build build --config Release
+```
+
+### Override Compute Capability Specifications
+
+If `nvcc` cannot detect your gpu, you may get compile-warnings such as:
+ ```text
+nvcc warning : Cannot find valid GPU for '-arch=native', default arch is used
+```
+
+To override the `native` GPU detection:
+
+#### 1. Take note of the `Compute Capability` of your NVIDIA devices: ["CUDA: Your GPU Compute > Capability"](https://developer.nvidia.com/cuda-gpus).
+
+```text
+GeForce RTX 4090      8.9
+GeForce RTX 3080 Ti   8.6
+GeForce RTX 3070      8.6
+```
+
+#### 2. Manually list each varying `Compute Capability` in the `CMAKE_CUDA_ARCHITECTURES` list.
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="86;89"
+```
+
+### Runtime CUDA environmental variables
+
+You may set the [cuda environmental variables](https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#env-vars) at runtime.
+
+```bash
+# Use `CUDA_VISIBLE_DEVICES` to hide the first compute device.
+CUDA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
+```
+
+### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
+
+### Performance Tuning
 
 The following compilation options are also available to tweak performance:
 
 | Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                             |
 |-------------------------------|------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, RDNA3). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
+| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, CDNA and RDNA3+). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
 | GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models                                                                                                                                                                                       |
 | GGML_CUDA_F16                 | Boolean                | false   | If enabled, use half-precision floating point arithmetic for the CUDA dequantization + mul mat vec kernels and for the q4_1 and q5_1 matrix matrix multiplication kernels. Can improve performance on relatively recent GPUs.                                                           |
 | GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                         |
@@ -152,20 +199,53 @@ The following compilation options are also available to tweak performance:
 
 ## MUSA
 
-This provides GPU acceleration using the MUSA cores of your Moore Threads MTT GPU. Make sure to have the MUSA SDK installed. You can download it from here: [MUSA SDK](https://developer.mthreads.com/sdk/download/musa).
+This provides GPU acceleration using a Moore Threads GPU. Make sure to have the [MUSA SDK](https://developer.mthreads.com/musa/musa-sdk) installed.
 
-- Using `CMake`:
+#### Download directly from Moore Threads
 
-  ```bash
-  cmake -B build -DGGML_MUSA=ON
+You may find the official downloads here: [Moore Threads developer site](https://developer.mthreads.com/sdk/download/musa).
+
+### Compilation
+
+```bash
+cmake -B build -DGGML_MUSA=ON
+cmake --build build --config Release
+```
+
+#### Override Compute Capability Specifications
+
+By default, all supported compute capabilities are enabled. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
+
+```bash
+cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+cmake --build build --config Release
+```
+
+This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
+
+#### Compilation options
+
+Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
+
+- For static builds, add `-DBUILD_SHARED_LIBS=OFF` and `-DCMAKE_POSITION_INDEPENDENT_CODE=ON`:
+  ```
+  cmake -B build -DGGML_MUSA=ON \
+    -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
   cmake --build build --config Release
   ```
 
-The environment variable [`MUSA_VISIBLE_DEVICES`](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) can be used to specify which GPU(s) will be used.
+### Runtime MUSA environmental variables
+
+You may set the [musa environmental variables](https://docs.mthreads.com/musa-sdk/musa-sdk-doc-online/programming_guide/Z%E9%99%84%E5%BD%95/) at runtime.
+
+```bash
+# Use `MUSA_VISIBLE_DEVICES` to hide the first compute device.
+MUSA_VISIBLE_DEVICES="-0" ./build/bin/llama-server --model /srv/models/llama.gguf
+```
+
+### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted.
-
-Most of the compilation options available for CUDA should also be available for MUSA, though they haven't been thoroughly tested yet.
 
 ## HIP
 
@@ -179,8 +259,12 @@ You can download it from your Linux distro's package manager or from here: [ROCm
       cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
       && cmake --build build --config Release -- -j 16
   ```
-  On Linux it is also possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting `-DGGML_HIP_UMA=ON`.
-  However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
+
+  To enhance flash attention performance on RDNA3+ or CDNA architectures, you can utilize the rocWMMA library by enabling the `-DGGML_HIP_ROCWMMA_FATTN=ON` option. This requires rocWMMA headers to be installed on the build system.
+
+  The rocWMMA library is included by default when installing the ROCm SDK using the `rocm` meta package provided by AMD. Alternatively, if you are not using the meta package, you can install the library using the `rocwmma-dev` or `rocwmma-devel` package, depending on your system's package manager.
+
+  As an alternative, you can manually install the library by cloning it from the official [GitHub repository](https://github.com/ROCm/rocWMMA), checkout the corresponding version tag (e.g. `rocm-6.2.4`) and set `-DCMAKE_CXX_FLAGS="-I<path/to/rocwmma>/library/include/"` in CMake. This also works under Windows despite not officially supported by AMD.
 
   Note that if you get the following error:
   ```
@@ -209,6 +293,10 @@ You can download it from your Linux distro's package manager or from here: [ROCm
 
 The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
 If your GPU is not officially supported you can use the environment variable [`HSA_OVERRIDE_GFX_VERSION`] set to a similar GPU, for example 10.3.0 on RDNA2 (e.g. gfx1030, gfx1031, or gfx1035) or 11.0.0 on RDNA3.
+
+### Unified Memory
+
+On Linux it is possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1`. However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
 
 ## Vulkan
 
@@ -349,6 +437,116 @@ llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
 ```
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
+
+## Arm® KleidiAI™
+KleidiAI is a library of optimized microkernels for AI workloads, specifically designed for Arm CPUs. These microkernels enhance performance and can be enabled for use by the CPU backend.
+
+To enable KleidiAI, go to the llama.cpp directory and build using CMake
+```bash
+cmake -B build -DGGML_CPU_KLEIDIAI=ON
+cmake --build build --config Release
+```
+You can verify that KleidiAI is being used by running
+```bash
+./build/bin/llama-cli -m PATH_TO_MODEL -p "What is a car?"
+```
+If KleidiAI is enabled, the ouput will contain a line similar to:
+```
+load_tensors: CPU_KLEIDIAI model buffer size =  3474.00 MiB
+```
+KleidiAI's microkernels implement optimized tensor operations using Arm CPU features such as dotprod, int8mm and SME. llama.cpp selects the most efficient kernel based on runtime CPU feature detection. However, on platforms that support SME, you must manually enable SME microkernels by setting the environment variable `GGML_KLEIDIAI_SME=1`.
+
+Depending on your build target, other higher priority backends may be enabled by default. To ensure the CPU backend is used, you must disable the higher priority backends either at compile time, e.g. -DGGML_METAL=OFF, or during run-time using the command line option `--device none`.
+
+## OpenCL
+
+This provides GPU acceleration through OpenCL on recent Adreno GPU.
+More information about OpenCL backend can be found in [OPENCL.md](./backend/OPENCL.md) for more information.
+
+### Android
+
+Assume NDK is available in `$ANDROID_NDK`. First, install OpenCL headers and ICD loader library if not available,
+
+```sh
+mkdir -p ~/dev/llm
+cd ~/dev/llm
+
+git clone https://github.com/KhronosGroup/OpenCL-Headers && \
+cd OpenCL-Headers && \
+cp -r CL $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+
+cd ~/dev/llm
+
+git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && \
+cd OpenCL-ICD-Loader && \
+mkdir build_ndk && cd build_ndk && \
+cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DOPENCL_ICD_LOADER_HEADERS_DIR=$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=24 \
+  -DANDROID_STL=c++_shared && \
+ninja && \
+cp libOpenCL.so $ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android
+```
+
+Then build llama.cpp with OpenCL enabled,
+
+```sh
+cd ~/dev/llm
+
+git clone https://github.com/ggml-org/llama.cpp && \
+cd llama.cpp && \
+mkdir build-android && cd build-android
+
+cmake .. -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
+  -DANDROID_ABI=arm64-v8a \
+  -DANDROID_PLATFORM=android-28 \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_OPENCL=ON
+
+ninja
+```
+
+### Windows Arm64
+
+First, install OpenCL headers and ICD loader library if not available,
+
+```powershell
+mkdir -p ~/dev/llm
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-Headers && cd OpenCL-Headers
+mkdir build && cd build
+cmake .. -G Ninja `
+  -DBUILD_TESTING=OFF `
+  -DOPENCL_HEADERS_BUILD_TESTING=OFF `
+  -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF `
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && cd OpenCL-ICD-Loader
+mkdir build && cd build
+cmake .. -G Ninja `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" `
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+```
+
+Then build llama.cpp with OpenCL enabled,
+
+```powershell
+cmake .. -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$HOME/dev/llm/llama.cpp/cmake/arm64-windows-llvm.cmake" `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" `
+  -DBUILD_SHARED_LIBS=OFF `
+  -DGGML_OPENCL=ON
+ninja
+```
 
 ## Android
 
