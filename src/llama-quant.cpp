@@ -13,9 +13,6 @@
 #include <thread>
 #include <unordered_map>
 
-//static std::vector prune_map = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29};
-static std::vector<int> prune_map = {3};
-
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -64,7 +61,7 @@ static std::string remap_imatrix (const std::string & orig_name, const std::map<
 
         for (const auto & p : mapped) {
             if (p.second == blk) {
-                //LLAMA_LOG_DEBUG("(imatrix -> %d) ", p.first);
+                LLAMA_LOG_DEBUG("(blk.%d imatrix) ", p.first);
                 return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
             }
         }
@@ -621,14 +618,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
+    std::vector<int> prune_list = {};
+    if (params->prune_layers) {
+        prune_list = *static_cast<const std::vector<int> *>(params->prune_layers);
+    }
+
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out.get(), ml.meta.get());
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
-    // ToDo: Add test for --tensor-prune condition
-    const auto block_count = gguf_get_val_u32(ctx_out.get(), LLM_KV_BLOCK_COUNT) - prune_map.size();
-    gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count);
+    if (!prune_list.empty()) {
+        const auto block_count = gguf_get_val_u32(ctx_out.get(), LLM_KV_BLOCK_COUNT) - prune_list.size();
+        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count);
+    }
 
     // Remove split metadata
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
@@ -661,8 +664,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
-        // ToDo: Add test for --tensor-prune condition
-        const std::string remapped_name(remap_layer(it.first, prune_map, mapped, next_blk_id));
+        const std::string remapped_name(remap_layer(it.first, prune_list, mapped, next_blk_id));
         if (remapped_name == "X") {
             if (it.first.find("attn_v.weight") != std::string::npos ||
                 it.first.find("attn_qkv.weight") != std::string::npos ||
@@ -673,7 +675,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             continue;
         } else if (remapped_name != it.first) {
             ggml_set_name(it.second.tensor, remapped_name.c_str());
-            //LLAMA_LOG_DEBUG("%s: tensor %s remmaped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
+            LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
         }
         tensors.push_back(&it.second);
     }
@@ -1019,6 +1021,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
+        /*.prune_layers                =*/ nullptr
     };
 
     return result;
