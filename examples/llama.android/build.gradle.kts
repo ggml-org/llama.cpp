@@ -5,5 +5,6 @@ plugins {
     alias(libs.plugins.kotlin.symbol.processing) apply false
     alias(libs.plugins.jetbrains.kotlin.android) apply false
     alias(libs.plugins.jetbrains.kotlin.compose.compiler) apply false
+    alias(libs.plugins.jetbrains.kotlin.serialization) apply false
     alias(libs.plugins.hilt) apply false
 }

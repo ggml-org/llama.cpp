@@ -15,8 +15,9 @@ navigation = "2.8.9"
 room = "2.7.0"
 hilt = "1.2.0"
 
-# Coroutines
+# Kotlin Extensions
 coroutines = "1.10.2"
+serialization = "1.8.1"
 
 # Compose
 compose-bom = "2025.03.01"
@@ -40,6 +41,7 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-symbol-processing = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 jetbrains-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 jetbrains-kotlin-compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+jetbrains-kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "dagger-hilt" }
 
 
@@ -55,10 +57,13 @@ androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "l
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigation"}
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 
-# Coroutines
+# Kotlin Extensions
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "serialization" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 
 # Compose
 compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
@@ -94,6 +99,7 @@ androidx = [
     "androidx-lifecycle-viewmodel-compose",
     "androidx-navigation-compose",
     "androidx-room-ktx",
+    "androidx-room-runtime",
 ]
 compose = [
     "compose-foundation",
@@ -102,9 +108,11 @@ compose = [
     "compose-ui",
     "compose-ui-graphics",
 ]
-coroutines = [
+kotlinx = [
     "kotlinx-coroutines-core",
     "kotlinx-coroutines-android",
+    "kotlinx-serialization-core",
+    "kotlinx-serialization-json",
 ]
 hilt = [
     "hilt-android",
