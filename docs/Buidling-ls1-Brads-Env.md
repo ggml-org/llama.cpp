@@ -10,6 +10,7 @@ This file contains instructions for building `llama.cpp` with `cosmocc` to yield
 Let's define some environment variables:
 ```
 BUILDING_DIR="1-BUILDING-llama.cpp"
+LLAMA_SERVER_SSL=1
 printf "\n**********\n*\n* FINISHED: Environment Variables.\n*\n**********\n\n"
 ```
 
