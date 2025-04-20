@@ -84,6 +84,15 @@ Verify that the archive has your website:
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 printf "\n**********\n*\n* FINISHED: Verify website Directory in Archive.\n*\n**********\n\n"
 ```
+
+#### Add Certs to Archive
+mkdir certs
+cp /mnt/hyperv/Mmojo-certs/dot-local.crt certs
+cp /mnt/hyperv/Mmojo-certs/dot-local.key certs
+cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt certs
+zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
+printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
+
 ---
 ### Create default-args File
 
@@ -106,6 +115,10 @@ model.gguf
 8
 --path
 /zip/website
+--ssl-key-file
+/zip/certs/dot-local.key
+--ssl-cert-file
+/zip/certs/dot-local.crt
 ...
 EOF
 printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
