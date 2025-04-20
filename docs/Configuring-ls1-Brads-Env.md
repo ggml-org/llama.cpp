@@ -137,8 +137,7 @@ EOF
 printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
 ```
 
----
-### Add default-args File to Archive
+#### Add default-args File to Archive
 
 Add the `default-args` file to the archive:
 ```
