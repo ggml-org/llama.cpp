@@ -116,7 +116,7 @@ class ModelsManagementViewModel @Inject constructor(
             ModelSortOrder.NAME_DESC -> models.sortedByDescending { it.name }
             ModelSortOrder.SIZE_ASC -> models.sortedBy { it.sizeInBytes }
             ModelSortOrder.SIZE_DESC -> models.sortedByDescending { it.sizeInBytes }
-            ModelSortOrder.LAST_USED -> models.sortedByDescending { it.lastUsed ?: 0 }
+            ModelSortOrder.LAST_USED -> models.sortedByDescending { it.dateLastUsed ?: 0 }
         }
 
     // Internal state

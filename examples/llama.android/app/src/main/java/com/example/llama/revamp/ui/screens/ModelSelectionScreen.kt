@@ -27,8 +27,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.ui.components.ModelCard
-import com.example.llama.revamp.ui.components.ModelCardActions
+import com.example.llama.revamp.ui.components.ModelCardExpandable
 import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -55,16 +54,17 @@ fun ModelSelectionScreen(
         } else {
             LazyColumn {
                 items(models) { model ->
-                    ModelCard(
+                    ModelCardExpandable(
                         model = model,
                         onClick = { handleModelSelection(model) },
-                        modifier = Modifier.padding(vertical = 4.dp),
+                        expanded = false,
                         isSelected = null, // Not in selection mode
-                        actionButton = {
-                            ModelCardActions.PlayButton {
-                                handleModelSelection(model)
-                            }
-                        }
+                        // TODO-han.yin: refactor this
+//                        actionButton = {
+//                            ModelCardActions.PlayButton {
+//                                handleModelSelection(model)
+//                            }
+//                        },
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                 }

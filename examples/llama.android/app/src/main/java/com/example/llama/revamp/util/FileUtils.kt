@@ -17,18 +17,29 @@ import java.util.Locale
 /**
  * Convert bytes into human readable sizes
  */
-fun formatSize(sizeInBytes: Long) = when {
+fun formatFileByteSize(sizeInBytes: Long) = when {
     sizeInBytes >= 1_000_000_000 -> {
         val sizeInGb = sizeInBytes / 1_000_000_000.0
-        String.format(Locale.getDefault(), "%.2f GB", sizeInGb)
+        String.format(Locale.getDefault(), "%.1f GB", sizeInGb)
     }
     sizeInBytes >= 1_000_000 -> {
         val sizeInMb = sizeInBytes / 1_000_000.0
-        String.format(Locale.getDefault(), "%.2f MB", sizeInMb)
+        String.format(Locale.getDefault(), "%.0f MB", sizeInMb)
     }
     else -> {
         val sizeInKb = sizeInBytes / 1_000.0
-        String.format(Locale.getDefault(), "%.2f KB", sizeInKb)
+        String.format(Locale.getDefault(), "%.0f KB", sizeInKb)
+    }
+}
+
+/**
+ * Formats numbers to human-readable form (K, M)
+ */
+fun formatContextLength(contextLength: Int): String {
+    return when {
+        contextLength >= 1_000_000 -> String.format(Locale.getDefault(), "%.1fM", contextLength / 1_000_000.0)
+        contextLength >= 1_000 -> String.format(Locale.getDefault(), "%.0fK", contextLength / 1_000.0)
+        else -> contextLength.toString()
     }
 }
 

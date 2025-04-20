@@ -11,7 +11,7 @@ import com.example.llama.revamp.data.repository.ModelRepository.ImportProgressTr
 import com.example.llama.revamp.util.GgufMetadataReader
 import com.example.llama.revamp.util.copyWithBuffer
 import com.example.llama.revamp.util.copyWithChannels
-import com.example.llama.revamp.util.formatSize
+import com.example.llama.revamp.util.formatFileByteSize
 import com.example.llama.revamp.util.getFileNameFromUri
 import com.example.llama.revamp.util.getFileSizeFromUri
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -135,7 +135,7 @@ class ModelRepositoryImpl @Inject constructor(
         val fileSize = size ?: getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
         if (!hasEnoughSpaceForImport(fileSize)) {
             throw InsufficientStorageException(
-                "Not enough storage space. Required: ${formatSize(fileSize)}, Available: ${formatSize(availableSpaceBytes)}"
+                "Not enough storage space. Required: ${formatFileByteSize(fileSize)}, Available: ${formatFileByteSize(availableSpaceBytes)}"
             )
         }
 

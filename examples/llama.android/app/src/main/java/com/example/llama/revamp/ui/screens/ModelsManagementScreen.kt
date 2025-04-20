@@ -33,10 +33,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
-import com.example.llama.revamp.ui.components.ModelCard
-import com.example.llama.revamp.ui.components.ModelCardActions
+import com.example.llama.revamp.ui.components.ModelCardExpandable
 import com.example.llama.revamp.ui.components.ScaffoldEvent
-import com.example.llama.revamp.util.formatSize
+import com.example.llama.revamp.util.formatFileByteSize
 import com.example.llama.revamp.viewmodel.ModelManagementState
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
 import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
@@ -79,7 +78,9 @@ fun ModelsManagementScreen(
                 .padding(horizontal = 16.dp)
         ) {
             items(items = sortedModels, key = { it.id }) { model ->
-                ModelCard(
+                val isSelected = if (isMultiSelectionMode) selectedModels.contains(model.id) else null
+
+                ModelCardExpandable(
                     model = model,
                     onClick = {
                         if (isMultiSelectionMode) {
@@ -88,17 +89,17 @@ fun ModelsManagementScreen(
                             viewModel.viewModelDetails(model)
                         }
                     },
-                    modifier = Modifier.padding(bottom = 8.dp),
-                    isSelected =
-                        if (isMultiSelectionMode) selectedModels.contains(model.id) else null,
-                    actionButton =
-                        if (!isMultiSelectionMode) {
-                            {
-                                ModelCardActions.InfoButton(
-                                    onClick = { viewModel.viewModelDetails(model) }
-                                )
-                            }
-                        } else null
+                    expanded = isSelected == true,
+                    isSelected = isSelected,
+                    // TODO-han.yin: refactor this
+//                    actionButton =
+//                        if (!isMultiSelectionMode) {
+//                            {
+//                                ModelCardActions.InfoButton(
+//                                    onClick = { viewModel.viewModelDetails(model) }
+//                                )
+//                            }
+//                        } else null
                 )
             }
         }
@@ -254,7 +255,7 @@ fun ImportProgressDialog(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        text = "Are you sure you want to import this model (${formatSize(fileSize)})? " +
+                        text = "Are you sure you want to import this model (${formatFileByteSize(fileSize)})? " +
                             "This may take up to several minutes.",
                         style = MaterialTheme.typography.bodyMedium,
                     )

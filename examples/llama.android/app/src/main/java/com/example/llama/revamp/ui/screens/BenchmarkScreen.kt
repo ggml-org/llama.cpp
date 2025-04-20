@@ -25,7 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.engine.ModelLoadingMetrics
-import com.example.llama.revamp.ui.components.ModelCard
+import com.example.llama.revamp.ui.components.ModelCardCore
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
@@ -59,10 +59,9 @@ fun BenchmarkScreen(
     ) {
         // Selected model card
         selectedModel?.let { model ->
-            ModelCard(
+            ModelCardCore(
                 model = model,
                 onClick = { /* No action on click */ },
-                modifier = Modifier.padding(bottom = 16.dp),
                 isSelected = null
             )
         }

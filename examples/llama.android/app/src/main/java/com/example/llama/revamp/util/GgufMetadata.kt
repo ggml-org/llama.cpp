@@ -67,10 +67,6 @@ data class GgufMetadata(
         get() = author?.author
             ?: baseModels?.firstNotNullOfOrNull { it.author }
 
-    /** Context length with unit, e.g. “32768 tokens”. */
-    val formattedContextLength: String?
-        get() = dimensions?.contextLength?.let { "$it tokens" }
-
     @Serializable
     enum class GgufVersion(val code: Int, val label: String) {
         /** First public draft; little‑endian only, no alignment key. */
