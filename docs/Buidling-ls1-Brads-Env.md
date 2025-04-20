@@ -107,7 +107,7 @@ export PATH="$(pwd)/cosmocc/bin:$PATH"
 export CC="cosmocc -I$(pwd)/cosmocc/include -L$(pwd)/cosmocc/lib"
 export CXX="cosmocc -I$(pwd)/cosmocc/include \
     -I$(pwd)/cosmocc/include/third_party/libcxx \
-    -L$(pwd)/cosmocc/lib"
+    -L$(pwd)/cosmocc/lib -L$(pwd)/openssl"
 export AR="cosmoar"
 export UNAME_S="cosmocc"
 export UNAME_P="cosmocc"
