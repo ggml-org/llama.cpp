@@ -128,9 +128,28 @@ model.gguf
 8
 --path
 /zip/website
---ssl-key-file-xx
+...
+EOF
+printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
+```
+
+```
+cat << EOF > $DEFAULT_ARGS
+-m
+model.gguf
+--host
+127.0.0.1
+--port
+8080
+--ctx-size
+8192
+--threads-http
+8
+--path
+/zip/website
+--ssl-key-file
 /zip/certs/dot-local.key
---ssl-cert-file-xx
+--ssl-cert-file
 /zip/certs/dot-local.crt
 ...
 EOF
