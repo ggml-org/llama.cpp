@@ -129,9 +129,9 @@ model.gguf
 --path
 /zip/website
 --ssl-key-file
-/zip/certs/dot-local.key
+/zip/certs/mmojo.local.key
 --ssl-cert-file
-/zip/certs/dot-local.crt
+/zip/certs/mmojo.local.crt
 ...
 EOF
 printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
