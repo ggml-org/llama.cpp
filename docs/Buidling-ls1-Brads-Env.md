@@ -53,7 +53,6 @@ printf "\n**********\n*\n* FINISHED: Checkout work-in-progress.\n*\n**********\n
 APP_NAME='Mmojo Chat'
 sed -i -e "s/<title>.*<\/title>/<title>$APP_NAME<\/title>/g" examples/server/webui/index.html
 sed -i -e "s/>llama.cpp<\/div>/>$APP_NAME<\/div>/g" examples/server/webui/src/components/Header.tsx
-sed -i -e "s/<\/head>/  <link rel=\"manifest\" href=\"chat-manifest.json\" \/>\n    <link rel=\"icon\" href=\"images\/chat-logo-128.png\" \/>\n  <\/head>/g" examples/server/webui/index.html
 cd examples/server/webui
 npm i
 npm run build
