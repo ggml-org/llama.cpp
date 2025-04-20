@@ -85,13 +85,17 @@ unzip -l $LLAMA_SERVER_ONE_ZIP
 printf "\n**********\n*\n* FINISHED: Verify website Directory in Archive.\n*\n**********\n\n"
 ```
 
-#### Add Certs to Archive
+---
+### Add Certs to Archive
+Add self-signed certs to the archive. CA crt might need to go in the website folder?
+```
 mkdir certs
 cp /mnt/hyperv/Mmojo-certs/dot-local.crt certs
 cp /mnt/hyperv/Mmojo-certs/dot-local.key certs
 cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt certs
 zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
 printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
+```
 
 ---
 ### Create default-args File
