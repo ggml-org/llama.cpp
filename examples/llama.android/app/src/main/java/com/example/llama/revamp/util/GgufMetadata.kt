@@ -1,8 +1,6 @@
 package com.example.llama.revamp.util
 
-import androidx.room.TypeConverter
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.IOException
 
 
@@ -187,18 +185,6 @@ data class GgufMetadata(
         val count: Int? = null,
         val usedCount: Int? = null,
     )
-}
-
-class GgufMetadataConverters {
-    private val json = Json { encodeDefaults = false; ignoreUnknownKeys = true }
-
-    @TypeConverter
-    fun toJson(value: GgufMetadata?): String? =
-        value?.let { json.encodeToString(GgufMetadata.serializer(), it) }
-
-    @TypeConverter
-    fun fromJson(value: String?): GgufMetadata? =
-        value?.let { json.decodeFromString(GgufMetadata.serializer(), it) }
 }
 
 /**

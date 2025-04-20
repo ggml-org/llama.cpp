@@ -1,10 +1,11 @@
-package com.example.llama.revamp.data.local
+package com.example.llama.revamp.data.local.dao
 
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import com.example.llama.revamp.data.local.entity.SystemPromptEntity
 import kotlinx.coroutines.flow.Flow
 
 /**

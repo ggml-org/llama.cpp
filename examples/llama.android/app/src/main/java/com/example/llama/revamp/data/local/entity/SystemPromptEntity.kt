@@ -1,4 +1,4 @@
-package com.example.llama.revamp.data.local
+package com.example.llama.revamp.data.local.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey

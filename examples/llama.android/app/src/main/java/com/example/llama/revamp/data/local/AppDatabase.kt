@@ -4,6 +4,10 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.llama.revamp.data.local.dao.ModelDao
+import com.example.llama.revamp.data.local.dao.SystemPromptDao
+import com.example.llama.revamp.data.local.entity.ModelEntity
+import com.example.llama.revamp.data.local.entity.SystemPromptEntity
 import javax.inject.Singleton
 
 /**

@@ -1,11 +1,11 @@
-package com.example.llama.revamp.data.local
+package com.example.llama.revamp.data.local.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverters
+import com.example.llama.revamp.data.local.converter.GgufMetadataConverters
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.util.GgufMetadata
-import com.example.llama.revamp.util.GgufMetadataConverters
 
 
 @Entity(tableName = "models")

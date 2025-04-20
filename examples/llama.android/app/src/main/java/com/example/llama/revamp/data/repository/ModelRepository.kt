@@ -4,8 +4,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
-import com.example.llama.revamp.data.local.ModelDao
-import com.example.llama.revamp.data.local.ModelEntity
+import com.example.llama.revamp.data.local.dao.ModelDao
+import com.example.llama.revamp.data.local.entity.ModelEntity
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository.ImportProgressTracker
 import com.example.llama.revamp.util.GgufMetadataReader

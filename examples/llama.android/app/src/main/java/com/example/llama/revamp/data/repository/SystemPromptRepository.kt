@@ -1,7 +1,7 @@
 package com.example.llama.revamp.data.repository
 
-import com.example.llama.revamp.data.local.SystemPromptDao
-import com.example.llama.revamp.data.local.SystemPromptEntity
+import com.example.llama.revamp.data.local.dao.SystemPromptDao
+import com.example.llama.revamp.data.local.entity.SystemPromptEntity
 import com.example.llama.revamp.data.model.SystemPrompt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
