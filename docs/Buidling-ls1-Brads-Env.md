@@ -66,8 +66,7 @@ We use the old `Makefile` rather than CMake. We've updated the `Makefile` in thi
 ```
 cd ~/$BUILDING_DIR
 export LLAMA_MAKEFILE=1
-# LLAMA_SERVER_SSL doesn't work with cosmocc yet.
-# export LLAMA_SERVER_SSL=ON
+export LLAMA_SERVER_SSL=ON
 make clean
 make
 printf "\n**********\n*\n* FINISHED: Make llama.cpp.\n*\n**********\n\n"
