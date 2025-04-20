@@ -1,11 +1,15 @@
 package com.example.llama.revamp.util
 
+import androidx.room.TypeConverter
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.IOException
 
 
 /**
  * Structured metadata of GGUF
  */
+@Serializable
 data class GgufMetadata(
     // Basic file info
     val version: GgufVersion,
@@ -69,6 +73,7 @@ data class GgufMetadata(
     val formattedContextLength: String?
         get() = dimensions?.contextLength?.let { "$it tokens" }
 
+    @Serializable
     enum class GgufVersion(val code: Int, val label: String) {
         /** First public draft; little‑endian only, no alignment key. */
         LEGACY_V1(1, "Legacy v1"),
@@ -88,6 +93,7 @@ data class GgufMetadata(
         override fun toString(): String = "$label (code=$code)"
     }
 
+    @Serializable
     data class BasicInfo(
         val uuid: String? = null,
         val name: String? = null,
@@ -95,6 +101,7 @@ data class GgufMetadata(
         val sizeLabel: String? = null,  // Size label like "7B"
     )
 
+    @Serializable
     data class AuthorInfo(
         val organization: String? = null,
         val author: String? = null,
@@ -105,6 +112,7 @@ data class GgufMetadata(
         val licenseLink: String? = null,
     )
 
+    @Serializable
     data class AdditionalInfo(
         val type: String? = null,
         val description: String? = null,
@@ -112,6 +120,7 @@ data class GgufMetadata(
         val languages: List<String>? = null,
     )
 
+    @Serializable
     data class ArchitectureInfo(
         val architecture: String? = null,
         val fileType: Int? = null,
@@ -120,6 +129,7 @@ data class GgufMetadata(
         val quantizationVersion: Int? = null,
     )
 
+    @Serializable
     data class BaseModelInfo(
         val name: String? = null,
         val author: String? = null,
@@ -131,6 +141,7 @@ data class GgufMetadata(
         val repoUrl: String? = null,
     )
 
+    @Serializable
     data class TokenizerInfo(
         val model: String? = null,
         val bosTokenId: Int? = null,
@@ -142,6 +153,7 @@ data class GgufMetadata(
         val chatTemplate: String? = null,
     )
 
+    @Serializable
     data class DimensionsInfo(
         val contextLength: Int? = null,
         val embeddingSize: Int? = null,
@@ -149,6 +161,7 @@ data class GgufMetadata(
         val feedForwardSize: Int? = null,
     )
 
+    @Serializable
     data class AttentionInfo(
         val headCount: Int? = null,
         val headCountKv: Int? = null,
@@ -158,6 +171,7 @@ data class GgufMetadata(
         val layerNormRmsEpsilon: Float? = null,
     )
 
+    @Serializable
     data class RopeInfo(
         val frequencyBase: Float? = null,
         val dimensionCount: Int? = null,
@@ -168,10 +182,23 @@ data class GgufMetadata(
         val finetuned: Boolean? = null,
     )
 
+    @Serializable
     data class ExpertsInfo(
         val count: Int? = null,
         val usedCount: Int? = null,
     )
+}
+
+class GgufMetadataConverters {
+    private val json = Json { encodeDefaults = false; ignoreUnknownKeys = true }
+
+    @TypeConverter
+    fun toJson(value: GgufMetadata?): String? =
+        value?.let { json.encodeToString(GgufMetadata.serializer(), it) }
+
+    @TypeConverter
+    fun fromJson(value: String?): GgufMetadata? =
+        value?.let { json.decodeFromString(GgufMetadata.serializer(), it) }
 }
 
 /**

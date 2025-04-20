@@ -192,8 +192,8 @@ class ModelRepositoryImpl @Inject constructor(
                 Log.i(TAG, "Extracting GGUF Metadata from $filePath")
                 GgufMetadataReader().readStructuredMetadata(filePath)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to extract GGUF metadata: ${e.message}", e)
-                null
+                Log.e(TAG, "Cannot extract GGUF metadata: ${e.message}", e)
+                throw e
             }
 
             // Create model entity and save via DAO
@@ -202,15 +202,11 @@ class ModelRepositoryImpl @Inject constructor(
                 name = fileName.substringBeforeLast('.'),
                 path = modelFile.absolutePath,
                 sizeInBytes = modelFile.length(),
-                // TODO-han.yin: add metadata here
+                metadata = metadata,
                 dateAdded = System.currentTimeMillis(),
                 lastUsed = null
             ).let {
                 modelDao.insertModel(it)
-
-                importJob = null
-                currentModelFile = null
-
                 it.toModelInfo()
             }
 

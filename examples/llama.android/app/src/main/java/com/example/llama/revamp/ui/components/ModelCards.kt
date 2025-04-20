@@ -174,41 +174,7 @@ private fun ModelInfoContent(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Model details row (parameters, quantization, size)
-        Row {
-            if (model.parameters != null) {
-                Text(
-                    text = model.parameters,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (model.quantization != null) {
-                Text(
-                    text = " • ${model.quantization}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Text(
-                text = " • ${model.formattedSize}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        Spacer(modifier = Modifier.height(4.dp))
-
-        // Context length
-        if (model.contextLength != null) {
-            Text(
-                text = "Context Length: ${model.contextLength}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+        // TODO-han.yin: make use of GGUF metadata
 
         // Last used date
         model.lastUsed?.let { lastUsed ->

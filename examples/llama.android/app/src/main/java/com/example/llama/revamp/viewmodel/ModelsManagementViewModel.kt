@@ -2,6 +2,7 @@ package com.example.llama.revamp.viewmodel
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
@@ -126,8 +127,9 @@ class ModelsManagementViewModel @Inject constructor(
         _managementState.value = ModelManagementState.Idle
     }
 
-    fun viewModelDetails(modelId: String) {
-        // TODO-han.yin: Stub for now. Would navigate to model details screen or show dialog
+    fun viewModelDetails(model: ModelInfo) {
+        // TODO-han.yin: print logs for now. Would navigate to model details screen or show dialog
+        Log.i(TAG, "${model.name} metadata: \n" + model.metadata.toString())
     }
 
     /**

@@ -85,7 +85,7 @@ fun ModelsManagementScreen(
                         if (isMultiSelectionMode) {
                             viewModel.toggleModelSelectionById(model.id)
                         } else {
-                            viewModel.viewModelDetails(model.id)
+                            viewModel.viewModelDetails(model)
                         }
                     },
                     modifier = Modifier.padding(bottom = 8.dp),
@@ -95,7 +95,7 @@ fun ModelsManagementScreen(
                         if (!isMultiSelectionMode) {
                             {
                                 ModelCardActions.InfoButton(
-                                    onClick = { viewModel.viewModelDetails(model.id) }
+                                    onClick = { viewModel.viewModelDetails(model) }
                                 )
                             }
                         } else null

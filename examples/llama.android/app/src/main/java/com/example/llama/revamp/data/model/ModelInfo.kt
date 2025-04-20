@@ -1,5 +1,6 @@
 package com.example.llama.revamp.data.model
 
+import com.example.llama.revamp.util.GgufMetadata
 import com.example.llama.revamp.util.formatSize
 
 /**
@@ -10,6 +11,7 @@ data class ModelInfo(
     val name: String,
     val path: String,
     val sizeInBytes: Long,
+    val metadata: GgufMetadata,
     val lastUsed: Long? = null
 ) {
     val formattedSize: String
