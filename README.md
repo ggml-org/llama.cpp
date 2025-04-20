@@ -1,3 +1,35 @@
+# GGML GRAPH LOGGING FORK OF LLAMA.CPP
+
+This fork includes a feature to log the computation graph of the model to a CSV file.
+
+## Graph Logging
+
+To enable graph logging, set the environment variable `GGML_LOG_GRAPH` to `1` or `true`:
+
+```bash
+export GGML_LOG_GRAPH=1
+```
+
+By default, the graph will be written to `ggml_graph.csv` in the current working directory. You can specify a different filename using the `GGML_LOG_GRAPH_FILENAME` environment variable:
+
+```bash
+export GGML_LOG_GRAPH_FILENAME=/path/to/your/graph_log.csv
+```
+
+**Important:** When graph logging is enabled, the program will terminate immediately after writing the log file.
+
+### Output Format
+
+The output CSV file contains the following columns for each node (tensor) in the graph:
+
+-   `node_id`: The memory address of the tensor, serving as a unique ID.
+-   `name`: The name assigned to the tensor (if any).
+-   `op`: The GGML operation that produces this tensor.
+-   `dim0`, `dim1`, `dim2`, `dim3`: The dimensions of the tensor.
+-   `bytes`: The size of the tensor data in bytes.
+-   `flags`: Tensor flags (e.g., `PARAM`, `INPUT`, `OUTPUT`, `LEAF`).
+-   `src0`...`srcN`: The `node_id` (memory address) of the source tensors for this node, up to `GGML_MAX_SRC`.
+
 # llama.cpp
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)

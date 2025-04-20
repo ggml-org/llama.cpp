@@ -13064,6 +13064,9 @@ llm_graph_result_ptr llama_model::build_graph(
     // add on pooling layer
     llm->build_pooling(gf, cls, cls_b, cls_out, cls_out_b);
 
+    // Log the entire computation graph after it's built
+    ggml_log_graph(gf);
+
     return std::move(llm->res);
 }
 

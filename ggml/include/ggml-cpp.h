@@ -8,6 +8,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
+#include "ggml-graph-logging.h"
 #include <memory>
 
 // Smart pointers for ggml types
