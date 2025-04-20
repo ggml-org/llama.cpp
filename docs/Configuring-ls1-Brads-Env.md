@@ -64,6 +64,27 @@ printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n*******
 ```
 
 ---
+### Add Certs to Archive
+
+**SSL DOESN'T WORK WITH COSMOCC YET.** Add self-signed certs to the archive. CA crt might need to go in the website folder?
+```
+mkdir certs
+cp /mnt/hyperv/Mmojo-certs/dot-local.crt certs
+cp /mnt/hyperv/Mmojo-certs/dot-local.key certs
+cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt certs
+zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
+printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
+```
+
+#### Verify certs Directory in Archive
+
+Verify that the archive has your certs:
+```
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+printf "\n**********\n*\n* FINISHED: Verify certs Directory in Archive.\n*\n**********\n\n"
+```
+
+---
 ### Create website Directory in Archive
 
 `llama.cpp` has a built in chat UI. If you'd like to provide a custom UI, you should add a `website` directory to the `llama-server-one` archive. `llama.cpp`'s chat UI is optimized for serving inside the project's source code. But we can copy the unoptimized source:
@@ -83,18 +104,6 @@ Verify that the archive has your website:
 ```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 printf "\n**********\n*\n* FINISHED: Verify website Directory in Archive.\n*\n**********\n\n"
-```
-
----
-### Add Certs to Archive
-Add self-signed certs to the archive. CA crt might need to go in the website folder?
-```
-mkdir certs
-cp /mnt/hyperv/Mmojo-certs/dot-local.crt certs
-cp /mnt/hyperv/Mmojo-certs/dot-local.key certs
-cp /mnt/hyperv/Mmojo-certs/selfsignCA.crt certs
-zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
-printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
 ```
 
 ---
@@ -119,9 +128,9 @@ model.gguf
 8
 --path
 /zip/website
---ssl-key-file
+--ssl-key-file-xx
 /zip/certs/dot-local.key
---ssl-cert-file
+--ssl-cert-file-xx
 /zip/certs/dot-local.crt
 ...
 EOF
