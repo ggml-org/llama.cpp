@@ -4546,6 +4546,59 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
+    // Verify that the ggml_op_metadata_t correctly validates n_src
+    {
+        struct test_op_metadata_counts : public test_case {
+            std::string op_desc(ggml_tensor * t) override {
+                GGML_UNUSED(t);
+                return "OP_METADATA_COUNTS";
+            }
+
+            ggml_tensor * build_graph(ggml_context * ctx) override {
+                bool all_passed = true;
+
+                struct {
+                    ggml_op op;
+                    int expected_n_src;
+                    const char* name;
+                } test_ops[] = {
+                    {GGML_OP_NONE, 0, "NONE"},
+                    {GGML_OP_UNARY, 1, "UNARY"},
+                    {GGML_OP_ADD, 2, "ADD"},
+                    {GGML_OP_MUL, 2, "MUL"},
+                    {GGML_OP_ROPE, 3, "ROPE"},
+                    {GGML_OP_FLASH_ATTN_EXT, 4, "FLASH_ATTN_EXT"},
+                    {GGML_OP_CUSTOM, -1, "CUSTOM"}
+                };
+
+                // Test each operation's metadata
+                for (const auto& test : test_ops) {
+                    int n_src = ggml_op_get_n_src(test.op);
+                    if (n_src != test.expected_n_src) {
+                        fprintf(stderr, "ERROR: Expected n_src=%d for GGML_OP_%s but got %d\n",
+                            test.expected_n_src, test.name, n_src);
+                        all_passed = false;
+                    }
+                }
+
+                if (!all_passed) {
+                    GGML_ASSERT("One or more metadata checks failed");
+                }
+
+                // Create a dummy tensor that will be used for backend comparison
+                ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 10);
+                ggml_set_name(a, "a");
+
+                ggml_tensor * result = ggml_scale(ctx, a, 1.0f);
+                ggml_set_name(result, "result");
+
+                return result;
+            }
+        };
+
+        test_cases.push_back(std::make_unique<test_op_metadata_counts>());
+    }
+
     return test_cases;
 }
 

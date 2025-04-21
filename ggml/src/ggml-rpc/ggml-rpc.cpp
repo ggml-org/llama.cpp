@@ -754,6 +754,43 @@ static void serialize_graph(const ggml_cgraph * cgraph, std::vector<uint8_t> & o
     memcpy(out_tensors, tensors.data(), n_tensors * sizeof(rpc_tensor));
 }
 
+// Helper function to validate graph operands before computation
+static bool validate_graph_operands(const ggml_cgraph *graph) {
+    GGML_PRINT_DEBUG("[%s] Validating graph with %d nodes\n", __func__, graph->n_nodes);
+    for (uint32_t i = 0; i < (uint32_t)graph->n_nodes; ++i) {
+        const ggml_tensor* node = graph->nodes[i];
+        // Initial null check added for safety.
+        if (node == nullptr) {
+             GGML_LOG_ERROR("[%s] Graph node %d is null.\n", __func__, i);
+             return false;
+        }
+
+        const int n_src = ggml_op_get_n_src(node->op);
+
+        if (n_src == -1) {
+            // Ops like GGML_OP_CUSTOM have variable inputs, cannot validate here.
+            GGML_PRINT_DEBUG("[%s] Skipping operand validation for node %d (op %s, name '%s') with variable inputs.\n", __func__, i, ggml_op_name(node->op), node->name);
+            continue;
+        } else if (n_src == -2) {
+            GGML_LOG_ERROR("[%s] Graph node %d (name '%s') has invalid op type %d.\n", __func__, i, node->name, (int)node->op);
+            return false;
+        } else if (n_src > GGML_MAX_SRC) {
+            GGML_LOG_ERROR("[%s] Graph node %d (op %s, name '%s') requires %d sources, exceeding GGML_MAX_SRC (%d).\n", __func__, i, ggml_op_name(node->op), node->name, n_src, GGML_MAX_SRC);
+            return false;
+        }
+
+        // Check required source operands
+        for (int s_idx = 0; s_idx < n_src; ++s_idx) {
+            if (node->src[s_idx] == nullptr) {
+                GGML_LOG_ERROR("[%s] Graph node %d (op %s, name '%s') missing required input src[%d].\n", __func__, i, ggml_op_name(node->op), node->name, s_idx);
+                return false;
+            }
+        }
+    }
+    GGML_PRINT_DEBUG("[%s] Graph validation successful\n", __func__);
+    return true;
+}
+
 static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
     std::vector<uint8_t> input;
@@ -1357,6 +1394,11 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
             return false;
         }
     }
+
+    if (!validate_graph_operands(graph)) {
+        return false;
+    }
+
     ggml_status status = ggml_backend_graph_compute(backend, graph);
     response.result = status;
     return true;

@@ -1387,6 +1387,9 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         // initialize time system (required on Windows)
         ggml_time_init();
 
+        ggml_op_metadata_check();
+
+
         for (int i = 0; i < (1 << 16); ++i) {
             union {
                 uint16_t u16;
