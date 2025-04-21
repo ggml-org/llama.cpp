@@ -13,20 +13,20 @@
 
 #include <string>
 
-namespace qnn {
+namespace common {
 
 #ifdef __linux__
 typedef void * dl_handler_t;
 
-inline qnn::dl_handler_t dl_load(const std::string & lib_path) {
-    return dlopen(lib_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+inline dl_handler_t dl_load(const std::string & lib_path) {
+    return dlopen(lib_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
 }
 
-inline void * dl_sym(qnn::dl_handler_t handle, const std::string & symbol) {
+inline void * dl_sym(dl_handler_t handle, const std::string & symbol) {
     return dlsym(handle, symbol.c_str());
 }
 
-inline bool dl_unload(qnn::dl_handler_t handle) {
+inline bool dl_unload(dl_handler_t handle) {
     return dlclose(handle) == 0;
 }
 
@@ -36,7 +36,7 @@ inline const char * dl_error() {
 #elif defined(_WIN32)
 using dl_handler_t = HMODULE;
 
-inline qnn::dl_handler_t dl_load(const std::string & lib_path) {
+inline dl_handler_t dl_load(const std::string & lib_path) {
     // suppress error dialogs for missing DLLs
     auto old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
     SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
@@ -47,7 +47,7 @@ inline qnn::dl_handler_t dl_load(const std::string & lib_path) {
     return handle;
 }
 
-inline void * dl_sym(qnn::dl_handler_t handle, const std::string & symbol) {
+inline void * dl_sym(dl_handler_t handle, const std::string & symbol) {
     auto old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
     SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
 
@@ -57,7 +57,7 @@ inline void * dl_sym(qnn::dl_handler_t handle, const std::string & symbol) {
     return p;
 }
 
-inline bool dl_unload(qnn::dl_handler_t handle) {
+inline bool dl_unload(dl_handler_t handle) {
     FreeLibrary(handle);
     return true;
 }
@@ -69,8 +69,8 @@ inline const char * dl_error() {
 
 #endif
 
-template <typename Fn> Fn dl_sym_typed(qnn::dl_handler_t handle, const std::string & function_name) {
+template <typename Fn> Fn dl_sym_typed(dl_handler_t handle, const std::string & function_name) {
     return reinterpret_cast<Fn>(dl_sym(handle, function_name));
 }
 
-}  // namespace qnn
+}  // namespace common

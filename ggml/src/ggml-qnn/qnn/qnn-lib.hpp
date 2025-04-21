@@ -24,8 +24,9 @@
 #include <QnnTypes.h>
 #include <System/QnnSystemInterface.h>
 
-#include "dl-loader.hpp"
+#include "dyn-lib-loader.hpp"
 #include "qnn-types.hpp"
+#include "rpc-mem.hpp"
 #include "utils.hpp"
 
 namespace qnn {
@@ -48,7 +49,7 @@ class qnn_system_interface {
     }
 
   public:
-    qnn_system_interface(const QnnSystemInterface_t & qnn_sys_interface, dl_handler_t lib_handle);
+    qnn_system_interface(const QnnSystemInterface_t & qnn_sys_interface, common::dl_handler_t lib_handle);
     ~qnn_system_interface();
 
     bool is_valid() const { return _qnn_system_handle != nullptr; }
@@ -67,7 +68,7 @@ class qnn_system_interface {
     void operator=(qnn_system_interface &&)            = delete;
 
     const QnnSystemInterface_t _qnn_sys_interface = {};
-    dl_handler_t               _lib_handle        = nullptr;
+    common::dl_handler_t       _lib_handle        = nullptr;
     QnnSystemContext_Handle_t  _qnn_system_handle = nullptr;
 };
 
@@ -152,12 +153,12 @@ class qnn_instance {
   public:
     using BackendIdType = decltype(QnnInterface_t{}.backendId);
 
-    explicit qnn_instance(const std::string & lib_path, QNNBackend device);
+    explicit qnn_instance(const std::string & lib_path, backend_index_type device);
 
     ~qnn_instance() {}
 
-    int qnn_init(const QnnSaver_Config_t ** saver_config);
-    int qnn_finalize();
+    bool qnn_init(const QnnSaver_Config_t ** saver_config);
+    bool qnn_finalize();
 
     qnn_interface_ptr get_qnn_interface() {
         if (!_qnn_interface) {
@@ -277,18 +278,14 @@ class qnn_instance {
 
     std::string & get_qnn_graph_name() { return _graph_name; }
 
-    bool is_rpcmem_initialized() { return _rpcmem_initialized; }
-
-    size_t get_rpcmem_capacity() { return _rpcmem_capacity; }
-
     void * alloc_rpcmem(size_t bytes, size_t alignment) {
-        if (!_rpcmem_initialized) {
+        if (!_rpc_mem) {
             QNN_LOG_WARN("rpc memory not initialized\n");
             return nullptr;
         }
 
         auto   allocate_bytes = static_cast<int64_t>(bytes + alignment);
-        void * buf            = _pfn_rpc_mem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (int) allocate_bytes);
+        void * buf            = _rpc_mem->alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (int) allocate_bytes);
         if (!buf) {
             QNN_LOG_WARN("failed to allocate rpc memory, size: %d MB\n", (int) (allocate_bytes / (1 << 20)));
             return nullptr;
@@ -298,32 +295,34 @@ class qnn_instance {
         bool status      = _rpcmem_store_map.insert(std::pair<void *, void *>(aligned_buf, buf)).second;
         if (!status) {
             QNN_LOG_WARN("failed to allocate rpc memory\n");
-            _pfn_rpc_mem_free(buf);
+            _rpc_mem->free(buf);
         }
 
         return aligned_buf;
     }
 
     void free_rpcmem(void * buf) {
-        if (!_rpcmem_initialized) {
+        if (!_rpc_mem) {
             QNN_LOG_WARN("rpc memory not initialized\n");
         } else if (_rpcmem_store_map.count(buf) == 0) {
             QNN_LOG_WARN("no allocated tensor\n");
         } else {
-            _pfn_rpc_mem_free(_rpcmem_store_map[buf]);
+            _rpc_mem->free(_rpcmem_store_map[buf]);
             _rpcmem_store_map.erase(buf);
         }
     }
 
-    int32_t rpcmem_to_fd(void * buf) {
-        int32_t mem_fd = -1;
-        if (!is_rpcmem_initialized()) {
+    int rpcmem_to_fd(void * buf) {
+        int fd = -1;
+        if (!_rpc_mem) {
             QNN_LOG_WARN("rpc memory not initialized\n");
+        } else if (_rpcmem_store_map.count(buf) == 0) {
+            QNN_LOG_WARN("no allocated tensor\n");
         } else {
-            mem_fd = _pfn_rpc_mem_to_fd(buf);
+            buf = _rpcmem_store_map[buf];
+            fd  = _rpc_mem->to_fd(buf);
         }
-
-        return mem_fd;
+        return fd;
     }
 
     Qnn_MemHandle_t register_rpcmem(void * p_data, const uint32_t rank, uint32_t * dimensions,
@@ -333,7 +332,7 @@ class qnn_instance {
             return nullptr;
         }
 
-        if (!is_rpcmem_initialized()) {
+        if (!_rpc_mem) {
             QNN_LOG_WARN("rpc memory not initialized\n");
             return nullptr;
         }
@@ -390,10 +389,12 @@ class qnn_instance {
 
     const qnn::qcom_socinfo & get_soc_info() { return _soc_info; }
 
+    bool has_custom_op_package() const { return _has_custom_op_package; }
+
   private:
-    int load_system();
-    int load_backend(std::string & lib_path, const QnnSaver_Config_t ** /*saver_config*/);
-    int unload_backend();
+    int  load_system();
+    bool load_backend(std::string & lib_path, const QnnSaver_Config_t ** /*saver_config*/);
+    void unload_backend();
 
   private:
     static constexpr const int _required_num_providers = 1;
@@ -422,23 +423,19 @@ class qnn_instance {
     std::unordered_map<void *, Qnn_MemHandle_t> _qnn_rpc_buffer_to_handles;
 
     std::mutex                                                _init_mutex;
-    std::unordered_map<BackendIdType, dl_handler_t>           _loaded_lib_handle;
+    std::unordered_map<BackendIdType, common::dl_handler_t>   _loaded_lib_handle;
     std::unordered_map<std::string, BackendIdType>            _lib_path_to_backend_id;
     std::unordered_map<BackendIdType, const QnnInterface_t *> _loaded_backend;
 
-    dl_handler_t                       _rpc_lib_handle = nullptr;
-    std::atomic_bool                   _rpcmem_initialized{ false };
-    qnn::pfn_rpc_mem_alloc             _pfn_rpc_mem_alloc  = nullptr;
-    qnn::pfn_rpc_mem_free              _pfn_rpc_mem_free   = nullptr;
-    qnn::pfn_rpc_mem_to_fd             _pfn_rpc_mem_to_fd  = nullptr;
-    qnn::pfn_rpc_mem_init              _pfn_rpc_mem_init   = nullptr;
-    qnn::pfn_rpc_mem_deinit            _pfn_rpc_mem_deinit = nullptr;
+    std::unique_ptr<common::rpc_mem>   _rpc_mem;
     std::unordered_map<void *, void *> _rpcmem_store_map;
-    size_t                             _rpcmem_capacity = 512;
 
     std::string _graph_name;
 
     qnn::qcom_socinfo _soc_info = {};
+
+    bool                 _has_custom_op_package      = false;
+    common::dl_handler_t _custom_op_extra_lib_handle = nullptr;
 };
 
 using qnn_instance_ptr = std::shared_ptr<qnn_instance>;
@@ -457,6 +454,6 @@ struct device_caps {
     size_t max_tensor_size_in_bytes;
 };
 
-const device_caps & get_device_caps(QNNBackend device);
+const device_caps & get_device_caps(backend_index_type device);
 
 }  // namespace qnn

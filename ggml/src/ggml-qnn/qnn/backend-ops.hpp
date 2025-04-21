@@ -1,4 +1,3 @@
-
 #pragma once
 
 #ifndef NDEBUG
@@ -18,15 +17,15 @@
 #include "qnn-lib.hpp"
 
 namespace qnn {
+
 typedef std::unordered_map<std::string, std::unique_ptr<qnn::qnn_graph>> qnn_graph_cache_t;
-}  // namespace qnn
 
 struct ggml_backend_qnn_device_context {
     // initialize in constructor
-    QNNBackend  device;
-    size_t      threads;
-    std::string name;
-    std::string description;
+    backend_index_type device;
+    size_t             threads;
+    std::string        name;
+    std::string        description;
 
     // initialize in qnn init
     qnn::qcom_socinfo                   socinfo = {};
@@ -46,10 +45,15 @@ struct ggml_backend_qnn_device_context {
     uint64_t supported_types;
     uint64_t cpu_preprocess_types;
 
-    explicit ggml_backend_qnn_device_context(QNNBackend device, size_t threads, const char * name,
+    explicit ggml_backend_qnn_device_context(backend_index_type device, size_t threads, const char * name,
                                              uint64_t supported_types) :
         device(device),
         threads(threads),
         name(name),
         supported_types(supported_types) {}
 };
+
+bool device_supports_op(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op);
+bool device_compute_graph(ggml_backend_qnn_device_context * ctx, ggml_cgraph * cgraph);
+
+}  // namespace qnn

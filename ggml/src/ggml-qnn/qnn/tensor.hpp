@@ -25,7 +25,7 @@ class ggml_qnn_tensor : public std::enable_shared_from_this<ggml_qnn_tensor> {
 
     explicit ggml_qnn_tensor(tensor_type_t tensor_type, const std::string & name,
                              const qnn_dimension_array_t & dimensions, Qnn_DataType_t data_type, int rank,
-                             QNNBackend device, Qnn_GraphHandle_t graph_handle, qnn_instance_ptr qnn_instance) :
+                             backend_index_type device, Qnn_GraphHandle_t graph_handle, qnn_instance_ptr qnn_instance) :
         _tensor_name(name),
         _device(device),
         _qnn_instance(qnn_instance),
@@ -45,7 +45,7 @@ class ggml_qnn_tensor : public std::enable_shared_from_this<ggml_qnn_tensor> {
 
     explicit ggml_qnn_tensor(tensor_type_t tensor_type, const std::string & name,
                              const ggml_dimension_array_t & dimensions, ggml_type data_type, int rank,
-                             QNNBackend device, Qnn_GraphHandle_t graph_handle, qnn_instance_ptr qnn_instance) :
+                             backend_index_type device, Qnn_GraphHandle_t graph_handle, qnn_instance_ptr qnn_instance) :
         ggml_qnn_tensor(tensor_type, name, get_internal_dimension(dimensions, rank),
                         qnn_datatype_from_ggml_datatype(data_type), rank, device, graph_handle, qnn_instance) {}
 
@@ -318,7 +318,7 @@ class ggml_qnn_tensor : public std::enable_shared_from_this<ggml_qnn_tensor> {
     std::string           _tensor_name;
     qnn_buffer_ptr        _buffer;
     bool                  _can_unbind = true;
-    QNNBackend            _device;
+    backend_index_type    _device;
     qnn_instance_ptr      _qnn_instance;
     Qnn_Tensor_t          _qnn_tensor   = qnn_tensor_init(kDefaultQnnTensorVersion);
     qnn_dimension_array_t _dimensions   = {};
@@ -408,7 +408,7 @@ struct tensor_create_common_params {
     const char *                       name_prefix;
     int                                tensor_rank;
     bool                               is_input;
-    QNNBackend                         device;
+    backend_index_type                 device;
     Qnn_GraphHandle_t                  graph_handle;
     std::shared_ptr<qnn::qnn_instance> qnn_instance;
 };

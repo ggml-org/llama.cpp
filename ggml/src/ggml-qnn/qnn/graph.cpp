@@ -35,7 +35,7 @@ int get_op_max_rank(const ggml_tensor * op) {
 }
 
 qnn::qnn_tensor_ptr_t create_tensor_with_cache(ggml_tensor * tensor, qnn::ggml_qnn_tensor::tensor_type_t type, int rank,
-                                               ggml_type override_data_type, QNNBackend device,
+                                               ggml_type override_data_type, backend_index_type device,
                                                Qnn_GraphHandle_t                  graph_handle,
                                                std::shared_ptr<qnn::qnn_instance> qnn_instance,
                                                qnn_tensor_cache_t &               tensor_cache) {
@@ -60,7 +60,7 @@ qnn::qnn_tensor_ptr_t create_tensor_with_cache(ggml_tensor * tensor, qnn::ggml_q
 
 qnn::qnn_tensor_array_t create_tensors_with_cache(const qnn::ggml_tensor_array_t &    ggml_tensors,
                                                   qnn::ggml_qnn_tensor::tensor_type_t type, int rank,
-                                                  ggml_type override_data_type, QNNBackend device,
+                                                  ggml_type override_data_type, backend_index_type device,
                                                   Qnn_GraphHandle_t                  graph_handle,
                                                   std::shared_ptr<qnn::qnn_instance> qnn_instance,
                                                   qnn_tensor_cache_t &               tensor_cache) {
@@ -74,7 +74,7 @@ qnn::qnn_tensor_array_t create_tensors_with_cache(const qnn::ggml_tensor_array_t
 }
 
 qnn::qnn_op_config_ptr_t create_operation_from_op_tensor(ggml_tensor * dst, const std::string & name, int rank,
-                                                         QNNBackend device, Qnn_GraphHandle_t graph_handle,
+                                                         backend_index_type device, Qnn_GraphHandle_t graph_handle,
                                                          std::shared_ptr<qnn::qnn_instance> qnn_instance,
                                                          qnn_tensor_cache_t &               tensor_cache) {
     auto operation = qnn::create_op(dst, name, qnn_instance);
@@ -335,7 +335,7 @@ ggml_type qnn_graph::get_graph_key_from_cgraph(const ggml_cgraph * cgraph, std::
     return min_op_type;
 }
 
-qnn_graph::qnn_graph(const std::string & graph_name, QNNBackend device, qnn_instance_ptr qnn_instance,
+qnn_graph::qnn_graph(const std::string & graph_name, backend_index_type device, qnn_instance_ptr qnn_instance,
                      htp_precision precision, size_t vtcm_size_in_mb) :
     _graph_name(graph_name),
     _device(device),

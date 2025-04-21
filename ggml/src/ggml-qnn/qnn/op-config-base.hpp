@@ -3,6 +3,7 @@
 #include <memory>
 #include <vector>
 
+#include "common.hpp"
 #include "ggml-qnn.h"
 #include "qnn-types.hpp"
 #include "tensor.hpp"
@@ -60,7 +61,7 @@ class ggml_qnn_op_config {
      * @param graph_handle
      * @return true if tensors and nodes are successfully created, false otherwise.
      */
-    virtual bool initialize_op_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle) = 0;
+    virtual bool initialize_op_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle) = 0;
 
     /**
      * @brief Pure virtual function to retrieve the input tensors.

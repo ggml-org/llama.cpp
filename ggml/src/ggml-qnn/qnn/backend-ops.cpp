@@ -12,7 +12,7 @@
 
 namespace {
 
-qnn::qnn_graph * get_qnn_graph_from_cache(ggml_backend_qnn_device_context * ctx, const ggml_cgraph * cgraph) {
+qnn::qnn_graph * get_qnn_graph_from_cache(qnn::ggml_backend_qnn_device_context * ctx, const ggml_cgraph * cgraph) {
     auto &      graph_cache = ctx->qnn_graph_cache;
     std::string graph_key;
     auto        op_data_type = qnn::qnn_graph::get_graph_key_from_cgraph(cgraph, graph_key);
@@ -178,7 +178,7 @@ inline bool is_type_bit_enabled(uint64_t bits, ggml_type type) {
     return bits & (uint64_t(1) << type);
 }
 
-inline bool is_tensor_size_valid(ggml_backend_qnn_device_context * ctx, const ggml_tensor * tensor) {
+inline bool is_tensor_size_valid(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * tensor) {
     constexpr const auto get_tensor_size_in_bytes = [](const ggml_tensor * tensor, ggml_type type) -> size_t {
         return tensor->ne[0] * tensor->ne[1] * tensor->ne[2] * tensor->ne[3] * ggml_type_size(type);
     };
@@ -200,7 +200,7 @@ inline bool is_tensor_size_valid(ggml_backend_qnn_device_context * ctx, const gg
     return true;
 }
 
-bool is_tensor_type_valid(ggml_backend_qnn_device_context * ctx, const ggml_tensor * tensor) {
+bool is_tensor_type_valid(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * tensor) {
     if (!tensor) {
         QNN_LOG_DEBUG("tensor is nullptr\n");
         return false;
@@ -239,7 +239,7 @@ bool is_data_reinterpretation_op(ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_PERMUTE;
 }
 
-bool ggnl_qnn_supports_op_tensor(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
+bool ggnl_qnn_supports_op_tensor(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
     if (op->op == GGML_OP_NONE) {
         return true;
     }
@@ -265,7 +265,7 @@ bool ggnl_qnn_supports_op_tensor(ggml_backend_qnn_device_context * ctx, const gg
     return true;
 }
 
-bool ggml_qnn_have_same_tensor_types(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
+bool ggml_qnn_have_same_tensor_types(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
     auto * src0 = op->src[0];
     auto * src1 = op->src[1];
     if (src1) {
@@ -291,7 +291,7 @@ bool ggml_qnn_have_same_tensor_types(ggml_backend_qnn_device_context * ctx, cons
 }
 
 // TODO: move to caps array?
-bool ggml_qnn_supports_matmul_op(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
+bool ggml_qnn_supports_matmul_op(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
     auto * src0 = op->src[0];
     auto * src1 = op->src[1];
     if (is_data_reinterpretation_op(src0->op) || is_data_reinterpretation_op(src1->op)) {
@@ -343,7 +343,7 @@ bool ggml_qnn_supports_matmul_op(ggml_backend_qnn_device_context * ctx, const gg
 
 #ifndef NDEBUG
 
-void print_tensor_info(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op, bool is_supported) {
+void print_tensor_info(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * op, bool is_supported) {
     const char * supported = is_supported ? "supported" : "unsupported";
     std::string  op_key;
     qnn::get_qnn_op_desc(op, true, GGML_TYPE_COUNT, op_key);
@@ -358,7 +358,7 @@ void print_tensor_info(ggml_backend_qnn_device_context * ctx, const ggml_tensor 
 
 namespace qnn {
 
-bool device_supports_op(ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
+bool device_supports_op(qnn::ggml_backend_qnn_device_context * ctx, const ggml_tensor * op) {
     // Note that this function could be called before the device context is initialized
     if (op->op == GGML_OP_NONE) {
         return true;
@@ -435,7 +435,7 @@ bool device_supports_op(ggml_backend_qnn_device_context * ctx, const ggml_tensor
     return is_op_supported;
 }
 
-bool device_compute_graph(ggml_backend_qnn_device_context * ctx, ggml_cgraph * cgraph) {
+bool device_compute_graph(qnn::ggml_backend_qnn_device_context * ctx, ggml_cgraph * cgraph) {
     QNN_LOG_DEBUG("[%s]compute graph start, nodes count: %d\n", qnn::get_backend_name(ctx->device),
                   (int) cgraph->n_nodes);
 

@@ -45,7 +45,7 @@ class qnn_graph {
      */
     static ggml_type get_graph_key_from_cgraph(const ggml_cgraph * cgraph, std::string & output);
 
-    explicit qnn_graph(const std::string & graph_name, QNNBackend device, qnn_instance_ptr qnn_instance,
+    explicit qnn_graph(const std::string & graph_name, backend_index_type device, qnn_instance_ptr qnn_instance,
                        htp_precision precision, size_t vtcm_size_in_mb);
 
     ~qnn_graph();
@@ -62,17 +62,17 @@ class qnn_graph {
 
     const std::string & get_name() const { return _graph_name; }
 
-    QNNBackend get_device() const { return _device; }
+    backend_index_type get_device() const { return _device; }
 
   private:
     bool finalize();
 
-    const std::string     _graph_name;
-    const QNNBackend      _device;
-    Qnn_GraphHandle_t     _graph_handle = nullptr;
-    qnn_instance_ptr      _qnn_instance;
-    qnn_interface_ptr     _qnn_interface;
-    qnn_op_config_array_t _operations;
+    const std::string        _graph_name;
+    const backend_index_type _device;
+    Qnn_GraphHandle_t        _graph_handle = nullptr;
+    qnn_instance_ptr         _qnn_instance;
+    qnn_interface_ptr        _qnn_interface;
+    qnn_op_config_array_t    _operations;
 
     qnn_tensor_array_t        _tensor_inputs;
     qnn_tensor_array_t        _tensor_outputs;

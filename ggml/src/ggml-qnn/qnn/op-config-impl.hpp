@@ -23,7 +23,7 @@ class ggml_qnn_op_config_base : public ggml_qnn_op_config {
 
     void add_scalar_param(const std::string & name, const Qnn_Scalar_t scalar);
     bool add_tensor_param(const std::string & name, const qnn_dimension_array_t & dimensions, int rank,
-                          const uint8_t * data, const Qnn_DataType_t data_type, QNNBackend device,
+                          const uint8_t * data, const Qnn_DataType_t data_type, backend_index_type device,
                           Qnn_GraphHandle_t graph_handle);
 
     void set_input_tensors(qnn::qnn_tensor_array_t & tensor_inputs) override;
@@ -65,7 +65,7 @@ class ggml_qnn_single_op_config : public ggml_qnn_op_config_base {
                                        const std::string & op_type, qnn_instance_ptr qnn_instance) :
         ggml_qnn_op_config_base(name, package_name, op_type, qnn_instance) {}
 
-    bool initialize_op_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle) override;
+    bool initialize_op_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle) override;
 
   private:
     DISABLE_COPY(ggml_qnn_single_op_config);
@@ -78,7 +78,7 @@ class ggml_qnn_rmsnorm_op_config : public ggml_qnn_op_config_base {
                                         const std::string & op_type, qnn_instance_ptr qnn_instance) :
         ggml_qnn_op_config_base(name, package_name, op_type, qnn_instance) {}
 
-    bool initialize_op_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle) override;
+    bool initialize_op_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle) override;
 
   private:
     DISABLE_COPY(ggml_qnn_rmsnorm_op_config);
@@ -143,15 +143,16 @@ class ggml_qnn_matmul_op_config : public ggml_qnn_aggregate_op_config {
     ggml_qnn_matmul_op_config(const std::string & name, qnn_instance_ptr qnn_instance) :
         ggml_qnn_aggregate_op_config(name, qnn_instance) {}
 
-    bool initialize_op_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle) override;
+    bool initialize_op_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle) override;
 
   private:
-    qnn_tensor_ptr_t    create_gather_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle, const int rank,
-                                            qnn_tensor_ptr_t tensor_input, qnn_dimension_array_t output_dimensions);
-    Qnn_DataType_t      create_input_convert_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle, const int rank,
-                                                   qnn_tensor_array_t & tensor_inputs);
-    qnn_op_config_ptr_t create_output_convert_nodes(QNNBackend device, Qnn_GraphHandle_t graph_handle, const int rank,
-                                                    Qnn_DataType_t tensor_type, qnn_tensor_array_t & tensor_outputs);
+    qnn_tensor_ptr_t create_gather_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle, const int rank,
+                                         qnn_tensor_ptr_t tensor_input, qnn_dimension_array_t output_dimensions);
+    Qnn_DataType_t create_input_convert_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle, const int rank,
+                                              qnn_tensor_array_t & tensor_inputs);
+    qnn_op_config_ptr_t create_output_convert_nodes(backend_index_type device, Qnn_GraphHandle_t graph_handle,
+                                                    const int rank, Qnn_DataType_t tensor_type,
+                                                    qnn_tensor_array_t & tensor_outputs);
     bool                create_mat_mul_nodes(qnn_tensor_array_t & tensor_inputs, qnn_tensor_array_t & tensor_outputs);
 
     DISABLE_COPY(ggml_qnn_matmul_op_config);
