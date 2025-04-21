@@ -54,13 +54,33 @@ zip -d $LLAMA_SERVER_ONE_ZIP "/usr/*"
 printf "\n**********\n*\n* FINISHED: Delete Extraneous Timezone Files.\n*\n**********\n\n"
 ```
 
----
-### Verify Contents of Zip Archive
+#### Verify Contents of Zip Archive
 
 Verify that these files are no longer in the archive:
 ```
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n**********\n\n"
+```
+
+---
+### Add Certs to Archive
+
+Add self-signed certs to the archive. CA cert is added to the website folder.
+```
+mkdir certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/mmojo.local.crt certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/mmojo.local.key certs
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/selfsignCA.crt certs
+zip -0 -r $LLAMA_SERVER_ONE_ZIP certs/*
+printf "\n**********\n*\n* FINISHED: Add Certs to Archive.\n*\n**********\n\n"
+```
+
+#### Verify certs Directory in Archive
+
+Verify that the archive has your certs:
+```
+unzip -l $LLAMA_SERVER_ONE_ZIP 
+printf "\n**********\n*\n* FINISHED: Verify certs Directory in Archive.\n*\n**********\n\n"
 ```
 
 ---
@@ -70,9 +90,10 @@ printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n*******
 ```
 mkdir website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
+cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/selfsignCA.crt website/CA.crt
 rm website/*.txt
-rm website/images/*.svg
-rm website/images/*.psd
+rm website/completion/images/*.svg
+rm website/completion/images/*.psd
 zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 printf "\n**********\n*\n* FINISHED: Create website Directory in Archive.\n*\n**********\n\n"
 ```
@@ -84,8 +105,9 @@ Verify that the archive has your website:
 unzip -l $LLAMA_SERVER_ONE_ZIP 
 printf "\n**********\n*\n* FINISHED: Verify website Directory in Archive.\n*\n**********\n\n"
 ```
+
 ---
-### Create default-args File
+### Create default-args File in Archive
 
 A `default-args` file in the archive can specify sane default parameters. The format of the file is parameter name on a line, parameter value on a line, rinse, repeat. End the file with a `...` line to include user specified parameters.
 
@@ -106,22 +128,17 @@ model.gguf
 8
 --path
 /zip/website
+--ssl-key-file
+/zip/certs/mmojo.local.key
+--ssl-cert-file
+/zip/certs/mmojo.local.crt
 ...
 EOF
-printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
-```
-
----
-### Add default-args File to Archive
-
-Add the `default-args` file to the archive:
-```
 zip -0 -r $LLAMA_SERVER_ONE_ZIP $DEFAULT_ARGS
-printf "\n**********\n*\n* FINISHED: Add default-args File to Archive.\n*\n**********\n\n"
+printf "\n**********\n*\n* FINISHED: Create Default args File in Archive.\n*\n**********\n\n"
 ```
 
----
-### Verify default-args File in Archive
+#### Verify default-args File in Archive
 
 Verify that the archive contains the `default-args` file:
 ```
@@ -163,8 +180,7 @@ After starting up and loading the model, it should display:
 
 Hit `ctrl-C` on your keyboard to stop it.
 
----
-### Test Run on Public Interfaces
+#### Test Run on Public Interfaces
 
 If you'd like it to listen on all available interfaces, so you can connect from a browser on another computer:
 ```
@@ -184,5 +200,6 @@ Congratulations! You are ready to copy `llams-server-one` executable to the shar
 
 ```
 sudo cp llama-server-one /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-LLMs
+sudo cp llama-server-one /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-LLMs/llama-server-one.exe
 printf "\n**********\n*\n* FINISHED: Copy llama-server-one for Deployment.\n*\n**********\n\n"
 ```

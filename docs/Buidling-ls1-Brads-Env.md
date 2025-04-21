@@ -7,9 +7,15 @@ This file contains instructions for building `llama.cpp` with `cosmocc` to yield
 
 ### Environment Variables
 
-Let's define some environment variables:
+Let's define some environment variables, resetting those that affect the Makefile:
 ```
 BUILDING_DIR="1-BUILDING-llama.cpp"
+unset CC
+unset CXX
+unset AR
+unset UNAME_S
+unset UNAME_P
+unset UNAME_M
 printf "\n**********\n*\n* FINISHED: Environment Variables.\n*\n**********\n\n"
 ```
 
@@ -60,6 +66,7 @@ We use the old `Makefile` rather than CMake. We've updated the `Makefile` in thi
 ```
 cd ~/$BUILDING_DIR
 export LLAMA_MAKEFILE=1
+export LLAMA_SERVER_SSL=ON
 make clean
 make
 printf "\n**********\n*\n* FINISHED: Make llama.cpp.\n*\n**********\n\n"
@@ -100,11 +107,27 @@ export PATH="$(pwd)/cosmocc/bin:$PATH"
 export CC="cosmocc -I$(pwd)/cosmocc/include -L$(pwd)/cosmocc/lib"
 export CXX="cosmocc -I$(pwd)/cosmocc/include \
     -I$(pwd)/cosmocc/include/third_party/libcxx \
-    -L$(pwd)/cosmocc/lib"
+    -L$(pwd)/cosmocc/lib -L$(pwd)/openssl"
+export AR="cosmoar"
 export UNAME_S="cosmocc"
 export UNAME_P="cosmocc"
 export UNAME_M="cosmocc"
 printf "\n**********\n*\n* FINISHED: Prepare to make llama.cpp with Cosmo.\n*\n**********\n\n"
+```
+
+---
+### Make openssl with Cosmo
+We need cross-architectire `libssl` and `libcrypto` static libraries to support SSL in `llama-server-one`.
+```
+cp -r /usr/include/openssl/ ./cosmocc/include/
+cp -r /usr/include/x86_64-linux-gnu/openssl/* ./cosmocc/include/openssl
+git clone https://github.com/openssl/openssl.git
+cd openssl
+./Configure no-asm no-dso no-afalgeng no-shared no-pinshared no-apps
+make
+cd ..
+printf "\n**********\n*\n* FINISHED: Make openssl with Cosmo.\n*\n**********\n\n"
+
 ```
 
 ---
