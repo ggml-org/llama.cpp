@@ -65,7 +65,7 @@ printf "\n**********\n*\n* FINISHED: Verify Contents of Zip Archive.\n*\n*******
 ---
 ### Add Certs to Archive
 
-**SSL DOESN'T WORK WITH COSMOCC YET.** Add self-signed certs to the archive. CA crt might need to go in the website folder?
+Add self-signed certs to the archive. CA cert is added to the website folder.
 ```
 mkdir certs
 cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/mmojo.local.crt certs
