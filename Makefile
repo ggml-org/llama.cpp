@@ -38,6 +38,7 @@ BUILD_TARGETS = \
 	llama-tokenize \
 	llama-ts \
 	llama-ts-rebuild	\
+	llama-ts-multi-thread	\
 	llama-vdot \
 	llama-cvector-generator \
 	llama-gen-docs \
@@ -1340,6 +1341,11 @@ llama-ts: examples/tensor/ts.cpp \
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 llama-ts-rebuild: examples/tensor/ts-rebuild.cpp \
+	$(OBJ_ALL)
+	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
+
+llama-ts-multi-thread: examples/tensor/ts-multi-thread.cpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
