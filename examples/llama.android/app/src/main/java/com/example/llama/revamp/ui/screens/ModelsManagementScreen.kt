@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -36,6 +39,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.ui.components.InfoView
 import com.example.llama.revamp.ui.components.ModelCardFullExpandable
 import com.example.llama.revamp.ui.scaffold.ScaffoldEvent
 import com.example.llama.revamp.util.formatFileByteSize
@@ -52,14 +56,23 @@ fun ModelsManagementScreen(
     onScaffoldEvent: (ScaffoldEvent) -> Unit,
     viewModel: ModelsManagementViewModel,
 ) {
-    // ViewModel states
+    // Data: models
     val filteredModels by viewModel.filteredModels.collectAsState()
-    val managementState by viewModel.managementState.collectAsState()
 
-    // Selection state from ViewModel
+    // Selection state
     val isMultiSelectionMode by viewModel.isMultiSelectionMode.collectAsState()
     val selectedModels by viewModel.selectedModels.collectAsState()
 
+    // Filter state
+    val activeFilters by viewModel.activeFilters.collectAsState()
+    val activeFiltersCount by remember(activeFilters) {
+        derivedStateOf { activeFilters.count { it.value }  }
+    }
+
+    // Model management state
+    val managementState by viewModel.managementState.collectAsState()
+
+    // UI states
     var expandedModels = remember { mutableStateMapOf<String, ModelInfo>() }
 
     BackHandler(
@@ -76,31 +89,45 @@ fun ModelsManagementScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Model cards
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(items = filteredModels, key = { it.id }) { model ->
-                val isSelected = if (isMultiSelectionMode) selectedModels.contains(model.id) else null
+        if (filteredModels.isEmpty()) {
+            val message = when (activeFiltersCount) {
+                0 -> "Tap the \"+\" button to import a model!"
+                1 -> "No models match the selected filter"
+                else -> "No models match the selected filters"
+            }
+            InfoView(
+                title = "No Models Available",
+                icon = Icons.Default.FolderOpen,
+                message = message,
+            )
+        } else {
+            // Model cards
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                items(items = filteredModels, key = { it.id }) { model ->
+                    val isSelected =
+                        if (isMultiSelectionMode) selectedModels.contains(model.id) else null
 
-                ModelCardFullExpandable(
-                    model = model,
-                    isSelected = isSelected,
-                    onSelected = {
-                        if (isMultiSelectionMode) {
-                            viewModel.toggleModelSelectionById(model.id)
+                    ModelCardFullExpandable(
+                        model = model,
+                        isSelected = isSelected,
+                        onSelected = {
+                            if (isMultiSelectionMode) {
+                                viewModel.toggleModelSelectionById(model.id)
+                            }
+                        },
+                        isExpanded = expandedModels.contains(model.id),
+                        onExpanded = { expanded ->
+                            if (expanded) {
+                                expandedModels.put(model.id, model)
+                            } else {
+                                expandedModels.remove(model.id)
+                            }
                         }
-                    },
-                    isExpanded = expandedModels.contains(model.id),
-                    onExpanded = { expanded ->
-                        if (expanded) {
-                            expandedModels.put(model.id, model)
-                        } else {
-                            expandedModels.remove(model.id)
-                        }
-                    }
-                )
+                    )
+                }
             }
         }
 
@@ -197,7 +224,7 @@ fun ModelsManagementScreen(
 }
 
 @Composable
-fun ImportProgressDialog(
+private fun ImportProgressDialog(
     fileName: String,
     fileSize: Long,
     isImporting: Boolean,
@@ -297,7 +324,7 @@ fun ImportProgressDialog(
 }
 
 @Composable
-fun BatchDeleteConfirmationDialog(
+private fun BatchDeleteConfirmationDialog(
     count: Int,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
@@ -365,7 +392,7 @@ fun BatchDeleteConfirmationDialog(
 }
 
 @Composable
-fun ErrorDialog(
+private fun ErrorDialog(
     title: String,
     message: String,
     onDismiss: () -> Unit
