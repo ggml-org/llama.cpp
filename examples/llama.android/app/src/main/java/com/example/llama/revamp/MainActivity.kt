@@ -306,6 +306,7 @@ fun AppContent(
                 // Mode Selection Screen
                 composable(AppDestinations.MODEL_LOADING_ROUTE) {
                     ModelLoadingScreen(
+                        onScaffoldEvent = handleScaffoldEvent,
                         onNavigateBack = { navigationActions.navigateUp() },
                         onNavigateToBenchmark = { navigationActions.navigateToBenchmark(it) },
                         onNavigateToConversation = { navigationActions.navigateToConversation(it) },

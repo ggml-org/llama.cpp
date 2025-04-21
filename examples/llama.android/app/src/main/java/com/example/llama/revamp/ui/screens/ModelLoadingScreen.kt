@@ -52,6 +52,7 @@ import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.ui.components.ModelCardCoreExpandable
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
+import com.example.llama.revamp.ui.components.ScaffoldEvent
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 
 
@@ -67,6 +68,7 @@ enum class SystemPromptTab(val label: String) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ModelLoadingScreen(
+    onScaffoldEvent: (ScaffoldEvent) -> Unit,
     onNavigateBack: () -> Unit,
     onNavigateToBenchmark: (ModelLoadingMetrics) -> Unit,
     onNavigateToConversation: (ModelLoadingMetrics) -> Unit,
@@ -83,6 +85,7 @@ fun ModelLoadingScreen(
     var isModelCardExpanded by remember { mutableStateOf(false) }
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
+    var showedSystemPromptWarning by remember { mutableStateOf(false) }
     var selectedPrompt by remember { mutableStateOf<SystemPrompt?>(null) }
     var selectedTab by remember { mutableStateOf(SystemPromptTab.PRESETS) }
     var customPromptText by remember { mutableStateOf("") }
@@ -216,6 +219,15 @@ fun ModelLoadingScreen(
                     Switch(
                         checked = useSystemPrompt,
                         onCheckedChange = {
+                            // First show a warning message if not yet
+                            if (!showedSystemPromptWarning) {
+                                onScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+                                    message = "Model may not support system prompt!\nProceed with caution.",
+                                ))
+                                showedSystemPromptWarning = true
+                            }
+
+                            // Then update states
                             useSystemPrompt = it
                             if (it && selectedMode != Mode.CONVERSATION) {
                                 selectedMode = Mode.CONVERSATION

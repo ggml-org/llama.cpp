@@ -116,6 +116,8 @@ class LLamaAndroid private constructor() : InferenceEngine {
 
     /**
      * Process the plain text system prompt
+     *
+     * TODO-han.yin: return error code if system prompt not correct processed?
      */
     override suspend fun setSystemPrompt(prompt: String) =
         withContext(llamaDispatcher) {
