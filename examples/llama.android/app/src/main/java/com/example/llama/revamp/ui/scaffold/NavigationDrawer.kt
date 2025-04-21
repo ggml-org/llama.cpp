@@ -1,4 +1,4 @@
-package com.example.llama.revamp.ui.components
+package com.example.llama.revamp.ui.scaffold
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -33,6 +33,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.APP_NAME
+import com.example.llama.revamp.navigation.AppDestinations
 import com.example.llama.revamp.navigation.NavigationActions
 import kotlinx.coroutines.launch
 
@@ -132,7 +133,7 @@ private fun DrawerContent(
         DrawerNavigationItem(
             icon = Icons.Default.Home,
             label = "Home",
-            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.MODEL_SELECTION_ROUTE,
+            isSelected = currentRoute == AppDestinations.MODEL_SELECTION_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToModelSelection() } }
         )
 
@@ -149,14 +150,14 @@ private fun DrawerContent(
         DrawerNavigationItem(
             icon = Icons.Default.Settings,
             label = "General Settings",
-            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.SETTINGS_GENERAL_ROUTE,
+            isSelected = currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToSettingsGeneral() } }
         )
 
         DrawerNavigationItem(
             icon = Icons.Default.Folder,
             label = "Models",
-            isSelected = currentRoute == com.example.llama.revamp.navigation.AppDestinations.MODELS_MANAGEMENT_ROUTE,
+            isSelected = currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToModelsManagement() } }
         )
     }

@@ -1,4 +1,4 @@
-package com.example.llama.revamp.ui.components
+package com.example.llama.revamp.ui.scaffold
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.Scaffold

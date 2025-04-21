@@ -1,4 +1,4 @@
-package com.example.llama.revamp.ui.components
+package com.example.llama.revamp.ui.scaffold
 
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,7 +37,6 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.llama.R
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.ui.components.BottomBarConfig.ModelsManagement
 import com.example.llama.revamp.viewmodel.ModelSortOrder
 
 /**
@@ -253,10 +252,10 @@ fun ModelSelectionBottomBar(
 
 @Composable
 fun ModelsManagementBottomBar(
-    sorting: ModelsManagement.SortingConfig,
-    filtering: ModelsManagement.FilteringConfig,
-    selection: ModelsManagement.SelectionConfig,
-    importing: ModelsManagement.ImportConfig
+    sorting: BottomBarConfig.ModelsManagement.SortingConfig,
+    filtering: BottomBarConfig.ModelsManagement.FilteringConfig,
+    selection: BottomBarConfig.ModelsManagement.SelectionConfig,
+    importing: BottomBarConfig.ModelsManagement.ImportConfig
 ) {
     BottomAppBar(
         actions = {

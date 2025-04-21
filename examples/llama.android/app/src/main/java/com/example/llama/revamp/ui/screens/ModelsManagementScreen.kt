@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.ui.components.ModelCardFullExpandable
-import com.example.llama.revamp.ui.components.ScaffoldEvent
+import com.example.llama.revamp.ui.scaffold.ScaffoldEvent
 import com.example.llama.revamp.util.formatFileByteSize
 import com.example.llama.revamp.viewmodel.ModelManagementState
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion

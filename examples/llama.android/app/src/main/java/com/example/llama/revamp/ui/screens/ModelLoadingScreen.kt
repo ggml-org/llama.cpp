@@ -52,7 +52,7 @@ import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.ModelLoadingMetrics
 import com.example.llama.revamp.ui.components.ModelCardCoreExpandable
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
-import com.example.llama.revamp.ui.components.ScaffoldEvent
+import com.example.llama.revamp.ui.scaffold.ScaffoldEvent
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 
 

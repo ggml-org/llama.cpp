@@ -1,4 +1,4 @@
-package com.example.llama.revamp.ui.components
+package com.example.llama.revamp.ui.scaffold
 
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.LinearOutSlowInEasing

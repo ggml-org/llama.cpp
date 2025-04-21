@@ -1,4 +1,4 @@
-package com.example.llama.revamp.ui.components
+package com.example.llama.revamp.ui.scaffold
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
