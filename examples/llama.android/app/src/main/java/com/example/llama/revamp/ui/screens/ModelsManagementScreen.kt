@@ -36,7 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.ui.components.ModelCardExpandable
+import com.example.llama.revamp.ui.components.ModelCardFullExpandable
 import com.example.llama.revamp.ui.components.ScaffoldEvent
 import com.example.llama.revamp.util.formatFileByteSize
 import com.example.llama.revamp.viewmodel.ModelManagementState
@@ -84,7 +84,7 @@ fun ModelsManagementScreen(
             items(items = sortedModels, key = { it.id }) { model ->
                 val isSelected = if (isMultiSelectionMode) selectedModels.contains(model.id) else null
 
-                ModelCardExpandable(
+                ModelCardFullExpandable(
                     model = model,
                     isSelected = isSelected,
                     onSelected = {

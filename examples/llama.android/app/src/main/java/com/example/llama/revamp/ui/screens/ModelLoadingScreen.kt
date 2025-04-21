@@ -50,7 +50,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.SystemPrompt
 import com.example.llama.revamp.engine.ModelLoadingMetrics
-import com.example.llama.revamp.ui.components.ModelCardCore
+import com.example.llama.revamp.ui.components.ModelCardCoreExpandable
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 
@@ -72,12 +72,15 @@ fun ModelLoadingScreen(
     onNavigateToConversation: (ModelLoadingMetrics) -> Unit,
     viewModel: ModelLoadingViewModel,
 ) {
+    // View model states
     val engineState by viewModel.engineState.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
     val presetPrompts by viewModel.presetPrompts.collectAsState()
     val recentPrompts by viewModel.recentPrompts.collectAsState()
     val unloadDialogState by viewModel.unloadModelState.collectAsState()
 
+    // UI states
+    var isModelCardExpanded by remember { mutableStateOf(false) }
     var selectedMode by remember { mutableStateOf<Mode?>(null) }
     var useSystemPrompt by remember { mutableStateOf(false) }
     var selectedPrompt by remember { mutableStateOf<SystemPrompt?>(null) }
@@ -116,11 +119,13 @@ fun ModelLoadingScreen(
     ) {
         // Selected model card
         selectedModel?.let { model ->
-            ModelCardCore(
+            ModelCardCoreExpandable(
                 model = model,
-                onClick = { /* No action on click */ },
-                isSelected = null
+                isExpanded = isModelCardExpanded,
+                onExpanded = { isModelCardExpanded = !isModelCardExpanded },
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Benchmark card
@@ -148,7 +153,7 @@ fun ModelLoadingScreen(
                 )
                 Text(
                     text = "Benchmark",
-                    style = MaterialTheme.typography.titleLarge,
+                    style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(start = 8.dp)
                 )
             }
@@ -159,6 +164,12 @@ fun ModelLoadingScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 4.dp)
+                .selectable(
+                    selected = selectedMode == Mode.CONVERSATION,
+                    onClick = { selectedMode = Mode.CONVERSATION },
+                    enabled = !isLoading,
+                    role = Role.RadioButton
+                )
                 // Only fill height if system prompt is active
                 .then(if (useSystemPrompt) Modifier.weight(1f) else Modifier)
         ) {
@@ -173,12 +184,6 @@ fun ModelLoadingScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .selectable(
-                            selected = selectedMode == Mode.CONVERSATION,
-                            onClick = { selectedMode = Mode.CONVERSATION },
-                            enabled = !isLoading,
-                            role = Role.RadioButton
-                        )
                         .padding(top = 16.dp, start = 16.dp, end = 16.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -188,7 +193,7 @@ fun ModelLoadingScreen(
                     )
                     Text(
                         text = "Conversation",
-                        style = MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }

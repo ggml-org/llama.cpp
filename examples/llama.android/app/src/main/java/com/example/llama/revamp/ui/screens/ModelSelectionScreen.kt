@@ -34,7 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.ui.components.ModelCardExpandable
+import com.example.llama.revamp.ui.components.ModelCardFullExpandable
 import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,7 +65,7 @@ fun ModelSelectionScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(items = models, key = { it.id }) { model ->
-                        ModelCardExpandable(
+                        ModelCardFullExpandable(
                             model = model,
                             isSelected = if (model == preselectedModel) true else null,
                             onSelected = { selected ->

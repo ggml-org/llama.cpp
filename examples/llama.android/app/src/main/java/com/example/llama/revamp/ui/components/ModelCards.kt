@@ -17,11 +17,16 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -49,44 +54,70 @@ import java.util.Locale
  * architecture, quantization and file size in a compact card format.
  *
  * @param model The model information to display
- * @param onClick Action to perform when the card is clicked
- * @param isSelected Optional selection state (shows checkbox when not null)
+ * @param isExpanded Whether additional details is expanded or shrunk
+ * @param onExpanded Action to perform when the card is expanded or shrunk
  */
 @Composable
-fun ModelCardCore(
+fun ModelCardCoreExpandable(
     model: ModelInfo,
-    onClick: () -> Unit,
-    isSelected: Boolean? = null,
+    isExpanded: Boolean = false,
+    onExpanded: ((Boolean) -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = when (isSelected) {
-            true -> CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+            .clickable { onExpanded?.invoke(!isExpanded) },
+        colors = when (isExpanded) {
+            true -> CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
             false -> CardDefaults.cardColors()
-            else -> CardDefaults.cardColors()
         },
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Row(
+        Column(
             modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
         ) {
-            // Show checkbox if in selection mode
-            if (isSelected != null) {
-                Checkbox(
-                    checked = isSelected,
-                    onCheckedChange = { onClick() },
-                    modifier = Modifier.padding(end = 8.dp)
-                )
+            // Row 1: Model full name + chevron
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ModelCardContentTitleRow(model)
+
+                CompositionLocalProvider(
+                    LocalMinimumInteractiveComponentSize provides Dp.Unspecified
+                ) {
+                    IconButton(onClick = { onExpanded?.invoke(!isExpanded) }) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = "Tap to ${if (isExpanded) "shrink" else "expand"} model card"
+                        )
+                    }
+                }
             }
 
-            // Core model info
-            ModelCardContentCore(
-                model = model,
-                modifier = Modifier.weight(1f)
-            )
+            // Expandable content
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Row 2: Context length, size label
+                    ModelCardContentContextRow(model)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Row 3: Architecture, quantization, formatted size
+                    ModelCardContentArchitectureRow(model)
+                }
+            }
         }
     }
 }
@@ -106,7 +137,7 @@ fun ModelCardCore(
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ModelCardExpandable(
+fun ModelCardFullExpandable(
     model: ModelInfo,
     isSelected: Boolean? = null,
     onSelected: ((Boolean) -> Unit)? = null,
@@ -117,11 +148,11 @@ fun ModelCardExpandable(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable {
-                    onExpanded?.invoke(!isExpanded)
-                },
+                .clickable { onExpanded?.invoke(!isExpanded) },
             colors = when (isSelected) {
-                true -> CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                true -> CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                )
                 false -> CardDefaults.cardColors()
                 else -> CardDefaults.cardColors()
             },
@@ -148,11 +179,7 @@ fun ModelCardExpandable(
                             .padding(start = 16.dp, top = 16.dp, end = 16.dp)
                     ) {
                         // Row 1: Model full name
-                        Text(
-                            text = model.formattedFullName,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Medium
-                        )
+                        ModelCardContentTitleRow(model)
                     }
                 }
 
@@ -283,11 +310,7 @@ fun ModelCardContentCore(
 ) =
     Column(modifier = modifier) {
         // Row 1: Model full name
-        Text(
-            text = model.formattedFullName,
-            style = MaterialTheme.typography.headlineSmall, // TODO
-            fontWeight = FontWeight.Medium
-        )
+        ModelCardContentTitleRow(model)
 
         Spacer(modifier = Modifier.height(12.dp))
 
@@ -299,6 +322,14 @@ fun ModelCardContentCore(
         // Row 3: Architecture, quantization, formatted size
         ModelCardContentArchitectureRow(model)
     }
+
+@Composable
+private fun ModelCardContentTitleRow(model: ModelInfo) =
+    Text(
+        text = model.formattedFullName,
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Medium
+    )
 
 @Composable
 private fun ModelCardContentContextRow(model: ModelInfo) =

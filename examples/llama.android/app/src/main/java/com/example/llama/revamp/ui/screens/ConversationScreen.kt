@@ -69,6 +69,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ConversationScreen(
+    // TODO-han.yin: Use loading metrics to show UI
     loadingMetrics: ModelLoadingMetrics,
     onNavigateBack: () -> Unit,
     viewModel: ConversationViewModel

@@ -21,25 +21,33 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.engine.ModelLoadingMetrics
-import com.example.llama.revamp.ui.components.ModelCardCore
+import com.example.llama.revamp.ui.components.ModelCardCoreExpandable
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
 import com.example.llama.revamp.ui.theme.MonospacedTextStyle
 import com.example.llama.revamp.viewmodel.BenchmarkViewModel
 
 @Composable
 fun BenchmarkScreen(
+    // TODO-han.yin: Use loading metrics to show UI
     loadingMetrics: ModelLoadingMetrics,
     onNavigateBack: () -> Unit,
     viewModel: BenchmarkViewModel
 ) {
+    // View model states
     val engineState by viewModel.engineState.collectAsState()
     val benchmarkResults by viewModel.benchmarkResults.collectAsState()
     val selectedModel by viewModel.selectedModel.collectAsState()
     val unloadDialogState by viewModel.unloadModelState.collectAsState()
+
+    // UI states
+    var isModelCardExpanded by remember { mutableStateOf(false) }
 
     // Run benchmark when entering the screen
     LaunchedEffect(selectedModel) {
@@ -59,10 +67,10 @@ fun BenchmarkScreen(
     ) {
         // Selected model card
         selectedModel?.let { model ->
-            ModelCardCore(
+            ModelCardCoreExpandable(
                 model = model,
-                onClick = { /* No action on click */ },
-                isSelected = null
+                isExpanded = isModelCardExpanded,
+                onExpanded = { isModelCardExpanded = !isModelCardExpanded },
             )
         }
 
