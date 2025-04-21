@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FilterAlt
+import androidx.compose.material.icons.outlined.FilterAltOff
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
@@ -236,6 +237,12 @@ fun ModelSelectionBottomBar(
 
                     DropdownMenuItem(
                         text = { Text("Clear filters") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.FilterAltOff,
+                                contentDescription = "Clear all filters"
+                            )
+                        },
                         onClick = {
                             filtering.onClearFilters()
                             filtering.toggleMenu(false)
@@ -388,6 +395,12 @@ fun ModelsManagementBottomBar(
 
                     DropdownMenuItem(
                         text = { Text("Clear filters") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.FilterAltOff,
+                                contentDescription = "Clear all filters"
+                            )
+                        },
                         onClick = {
                             filtering.onClearFilters()
                             filtering.toggleMenu(false)
