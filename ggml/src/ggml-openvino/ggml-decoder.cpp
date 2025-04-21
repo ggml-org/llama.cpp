@@ -43,12 +43,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
 
     switch (node->op) {
     case GGML_OP_CONT: {
-        if (ggml_is_contiguous(node->src[0]) && ggml_is_contiguous(node) &&
-            (node->src[0]->ne[0] * node->src[0]->nb[0] == node->src[0]->nb[1])) {
-            m_continuous = true;
-        } else {
-            m_continuous = false;
-        }
+        // Currently only two cases, either the input comes from a VIEW which is subtensor or from a PERMUTE
+        m_continuous = ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src);
         break;
     }
     case GGML_OP_CPY: {
@@ -183,9 +179,9 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgr
             // Init model input and output
             set_input_output(cur_node, m_inputs, m_outputs);
         }
-        #ifdef GGML_OPENVINO_DEBUG
-            ggml_graph_op_print(m_cgraph);
-        #endif
+        if (getenv("GGML_OPENVINO_DEBUG")) {
+          ggml_graph_op_print(m_cgraph);
+        }
     }
 }
 
