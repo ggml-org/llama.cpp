@@ -22,7 +22,7 @@ import javax.inject.Inject
  * ViewModel that manages performance monitoring for the app.
  */
 @HiltViewModel
-class PerformanceViewModel @Inject constructor(
+class SettingsViewModel @Inject constructor(
     private val userPreferences: UserPreferences,
     private val performanceMonitor: PerformanceMonitor,
     private val modelRepository: ModelRepository,
@@ -54,16 +54,26 @@ class PerformanceViewModel @Inject constructor(
     private val _monitoringInterval = MutableStateFlow(5000L)
     val monitoringInterval: StateFlow<Long> = _monitoringInterval.asStateFlow()
 
+    private val _themeMode = MutableStateFlow(UserPreferences.THEME_MODE_AUTO)
+    val themeMode: StateFlow<Int> = _themeMode.asStateFlow()
+
     init {
         viewModelScope.launch {
             // Load user preferences
             _isMonitoringEnabled.value = userPreferences.isPerformanceMonitoringEnabled().first()
             _useFahrenheitUnit.value = userPreferences.usesFahrenheitTemperature().first()
             _monitoringInterval.value = userPreferences.getMonitoringInterval().first()
+            _themeMode.value = userPreferences.getThemeMode().first()
 
             // Start monitoring if enabled
             if (_isMonitoringEnabled.value) {
                 startMonitoring()
+            }
+
+            viewModelScope.launch {
+                userPreferences.getThemeMode().collect { mode ->
+                    _themeMode.value = mode
+                }
             }
         }
     }
@@ -143,5 +153,15 @@ class PerformanceViewModel @Inject constructor(
      */
     private fun isMonitoringActive(): Boolean {
         return _isMonitoringEnabled.value
+    }
+
+    /**
+     * Sets the theme mode.
+     */
+    fun setThemeMode(mode: Int) {
+        viewModelScope.launch {
+            userPreferences.setThemeMode(mode)
+            _themeMode.value = mode
+        }
     }
 }

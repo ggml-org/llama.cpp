@@ -64,8 +64,3 @@ val md_theme_dark_inversePrimary = Color(0xFF6750A4)
 val md_theme_dark_surfaceTint = Color(0xFFCFBCFF)
 val md_theme_dark_outlineVariant = Color(0xFF49454E)
 val md_theme_dark_scrim = Color(0xFF000000)
-
-// Additional app-specific colors
-val CriticalColor = Color(0xFFFF0000)
-val WarningColor = Color(0xFFFFA000)
-val SuccessColor = Color(0xFF388E3C)

@@ -50,7 +50,7 @@ import com.example.llama.revamp.viewmodel.MainViewModel
 import com.example.llama.revamp.viewmodel.ModelLoadingViewModel
 import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 import com.example.llama.revamp.viewmodel.ModelsManagementViewModel
-import com.example.llama.revamp.viewmodel.PerformanceViewModel
+import com.example.llama.revamp.viewmodel.SettingsViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -58,13 +58,17 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContent {
-            LlamaTheme {
+            val settingsViewModel: SettingsViewModel = hiltViewModel()
+            val themeMode by settingsViewModel.themeMode.collectAsState()
+
+            LlamaTheme(themeMode) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppContent()
+                    AppContent(settingsViewModel)
                 }
             }
         }
@@ -73,8 +77,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun AppContent(
+    settingsViewModel: SettingsViewModel,
     mainViewModel: MainViewModel = hiltViewModel(),
-    performanceViewModel: PerformanceViewModel = hiltViewModel(),
     modelSelectionViewModel: ModelSelectionViewModel = hiltViewModel(),
     modelLoadingViewModel: ModelLoadingViewModel = hiltViewModel(),
     benchmarkViewModel: BenchmarkViewModel = hiltViewModel(),
@@ -88,10 +92,10 @@ fun AppContent(
     val engineState by mainViewModel.engineState.collectAsState()
 
     // Metric states for scaffolds
-    val memoryUsage by performanceViewModel.memoryUsage.collectAsState()
-    val temperatureInfo by performanceViewModel.temperatureMetrics.collectAsState()
-    val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
-    val storageMetrics by performanceViewModel.storageMetrics.collectAsState()
+    val memoryUsage by settingsViewModel.memoryUsage.collectAsState()
+    val temperatureInfo by settingsViewModel.temperatureMetrics.collectAsState()
+    val useFahrenheit by settingsViewModel.useFahrenheitUnit.collectAsState()
+    val storageMetrics by settingsViewModel.storageMetrics.collectAsState()
 
     // Navigation
     val navController = rememberNavController()
@@ -293,9 +297,6 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                     ModelSelectionScreen(
-                        onNavigateBack = {
-                            navigationActions.navigateUp()
-                        },
                         onModelConfirmed = { modelInfo ->
                             navigationActions.navigateToModelLoading()
                         },
@@ -371,7 +372,9 @@ fun AppContent(
 
                 // Settings General Screen
                 composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
-                    SettingsGeneralScreen()
+                    SettingsGeneralScreen(
+                        viewModel = settingsViewModel
+                    )
                 }
 
                 // Models Management Screen

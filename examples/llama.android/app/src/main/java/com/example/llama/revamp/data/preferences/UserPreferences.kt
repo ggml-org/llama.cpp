@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -28,9 +29,15 @@ class UserPreferences @Inject constructor (
         val PERFORMANCE_MONITORING_ENABLED = booleanPreferencesKey("performance_monitoring_enabled")
         val USE_FAHRENHEIT_TEMPERATURE = booleanPreferencesKey("use_fahrenheit_temperature")
         val MONITORING_INTERVAL_MS = longPreferencesKey("monitoring_interval_ms")
+        val THEME_MODE = intPreferencesKey("theme_mode")
 
         // Default values
         const val DEFAULT_MONITORING_INTERVAL_MS = 5000L
+
+        // Theme mode values
+        const val THEME_MODE_AUTO = 0
+        const val THEME_MODE_LIGHT = 1
+        const val THEME_MODE_DARK = 2
     }
 
     /**
@@ -38,7 +45,7 @@ class UserPreferences @Inject constructor (
      */
     fun isPerformanceMonitoringEnabled(): Flow<Boolean> {
         return context.dataStore.data.map { preferences ->
-            preferences[PERFORMANCE_MONITORING_ENABLED] ?: true
+            preferences[PERFORMANCE_MONITORING_ENABLED] != false
         }
     }
 
@@ -56,7 +63,7 @@ class UserPreferences @Inject constructor (
      */
     fun usesFahrenheitTemperature(): Flow<Boolean> {
         return context.dataStore.data.map { preferences ->
-            preferences[USE_FAHRENHEIT_TEMPERATURE] ?: false
+            preferences[USE_FAHRENHEIT_TEMPERATURE] == true
         }
     }
 
@@ -86,6 +93,24 @@ class UserPreferences @Inject constructor (
     suspend fun setMonitoringInterval(intervalMs: Long) {
         context.dataStore.edit { preferences ->
             preferences[MONITORING_INTERVAL_MS] = intervalMs
+        }
+    }
+
+    /**
+     * Gets the current theme mode.
+     */
+    fun getThemeMode(): Flow<Int> {
+        return context.dataStore.data.map { preferences ->
+            preferences[THEME_MODE] ?: THEME_MODE_AUTO
+        }
+    }
+
+    /**
+     * Sets the theme mode.
+     */
+    suspend fun setThemeMode(mode: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[THEME_MODE] = mode
         }
     }
 }

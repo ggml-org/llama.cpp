@@ -12,6 +12,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,20 +23,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.llama.revamp.APP_NAME
-import com.example.llama.revamp.viewmodel.PerformanceViewModel
+import com.example.llama.revamp.data.preferences.UserPreferences
+import com.example.llama.revamp.viewmodel.SettingsViewModel
 
 /**
  * Screen for general app settings
  */
 @Composable
 fun SettingsGeneralScreen(
-    performanceViewModel: PerformanceViewModel = hiltViewModel(),
+    viewModel: SettingsViewModel,
 ) {
     // Collect state from ViewModel
-    val isMonitoringEnabled by performanceViewModel.isMonitoringEnabled.collectAsState()
-    val useFahrenheit by performanceViewModel.useFahrenheitUnit.collectAsState()
+    val isMonitoringEnabled by viewModel.isMonitoringEnabled.collectAsState()
+    val useFahrenheit by viewModel.useFahrenheitUnit.collectAsState()
+    val themeMode by viewModel.themeMode.collectAsState()
 
     Column(
         modifier = Modifier
@@ -44,28 +48,66 @@ fun SettingsGeneralScreen(
         SettingsCategory(title = "Performance Monitoring") {
             SettingsSwitch(
                 title = "Enable Monitoring",
-                description = "Display memory, battery and temperature information",
+                description = "Display memory, battery and temperature info",
                 checked = isMonitoringEnabled,
-                onCheckedChange = { performanceViewModel.setMonitoringEnabled(it) }
+                onCheckedChange = { viewModel.setMonitoringEnabled(it) }
             )
 
             SettingsSwitch(
                 title = "Use Fahrenheit",
                 description = "Display temperature in Fahrenheit instead of Celsius",
                 checked = useFahrenheit,
-                onCheckedChange = { performanceViewModel.setUseFahrenheitUnit(it) }
+                onCheckedChange = { viewModel.setUseFahrenheitUnit(it) }
             )
         }
 
         SettingsCategory(title = "Theme") {
-            SettingsSwitch(
-                title = "Dark Theme",
-                description = "Use dark theme throughout the app",
-                checked = true, // This would be connected to theme state in a real app
-                onCheckedChange = {
-                    /* TODO-hyin: Implement theme switching between Auto, Light and Dark */
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Theme Mode",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Text(
+                    text = "Follow system setting or override with your choice",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    SegmentedButton(
+                        selected = themeMode == UserPreferences.THEME_MODE_AUTO,
+                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_AUTO) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
+                    ) {
+                        Text("Auto")
+                    }
+
+                    SegmentedButton(
+                        selected = themeMode == UserPreferences.THEME_MODE_LIGHT,
+                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_LIGHT) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+                    ) {
+                        Text("Light")
+                    }
+
+                    SegmentedButton(
+                        selected = themeMode == UserPreferences.THEME_MODE_DARK,
+                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_DARK) },
+                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+                    ) {
+                        Text("Dark")
+                    }
                 }
-            )
+            }
         }
 
         SettingsCategory(title = "About") {

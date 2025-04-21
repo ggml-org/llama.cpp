@@ -1,8 +1,6 @@
 package com.example.llama.revamp.ui.theme
 
-
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -15,8 +13,10 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
+import com.example.llama.revamp.data.preferences.UserPreferences
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
+// TODO-han.yin: support more / custom color palettes?
 private val LightColorScheme = lightColorScheme(
     primary = md_theme_light_primary,
     onPrimary = md_theme_light_onPrimary,
@@ -83,19 +83,18 @@ private val DarkColorScheme = darkColorScheme(
 
 @Composable
 fun LlamaTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = false,
+    themeMode: Int = UserPreferences.THEME_MODE_AUTO,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val darkTheme = when (themeMode) {
+        UserPreferences.THEME_MODE_LIGHT -> false
+        UserPreferences.THEME_MODE_DARK -> true
+        else -> isSystemInDarkTheme()
     }
+
+    val context = LocalContext.current
+    val colorScheme =
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
 
     val view = LocalView.current
     if (!view.isInEditMode) {
