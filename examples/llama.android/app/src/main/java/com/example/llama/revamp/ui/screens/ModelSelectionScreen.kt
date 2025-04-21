@@ -51,9 +51,11 @@ fun ModelSelectionScreen(
     onManageModelsClicked: () -> Unit,
     viewModel: ModelSelectionViewModel,
 ) {
+    // Data: models
     val filteredModels by viewModel.filteredModels.collectAsState()
     val preselectedModel by viewModel.preselectedModel.collectAsState()
 
+    // Query states
     val textFieldState = viewModel.searchFieldState
     val isSearchActive by viewModel.isSearchActive.collectAsState()
     val searchQuery by remember(textFieldState) {
@@ -61,15 +63,15 @@ fun ModelSelectionScreen(
     }
     val queryResults by viewModel.queryResults.collectAsState()
 
+    // Filter states
     val activeFilters by viewModel.activeFilters.collectAsState()
     val activeFiltersCount by remember(activeFilters) {
         derivedStateOf { activeFilters.count { it.value }  }
     }
 
-
+    // UI states
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
-
     val toggleSearchFocusAndIme: (Boolean) -> Unit = { show ->
         if (show) {
             focusRequester.requestFocus()

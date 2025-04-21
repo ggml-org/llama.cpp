@@ -1,5 +1,10 @@
 package com.example.llama.revamp.ui.scaffold
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.input.TextFieldState
@@ -236,9 +241,13 @@ fun ModelSelectionBottomBar(
         },
         floatingActionButton = {
             // Only show FAB if a model is selected
-            runAction.selectedModel?.let { model ->
+            AnimatedVisibility(
+                visible = runAction.selectedModel != null,
+                enter = scaleIn() + fadeIn(),
+                exit = scaleOut() + fadeOut()
+            ) {
                 FloatingActionButton(
-                    onClick = { runAction.onRun(model) },
+                    onClick = { runAction.selectedModel?.let { runAction.onRun(it) } },
                     containerColor = MaterialTheme.colorScheme.primary
                 ) {
                     Icon(
