@@ -5,8 +5,11 @@ import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.llama.revamp.data.model.ModelFilter
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.model.ModelSortOrder
+import com.example.llama.revamp.data.model.filterBy
+import com.example.llama.revamp.data.model.sortByOrder
 import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.util.getFileNameFromUri
@@ -17,15 +20,15 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.FileNotFoundException
 import javax.inject.Inject
+import kotlin.collections.set
 
 @HiltViewModel
 class ModelsManagementViewModel @Inject constructor(
@@ -33,16 +36,9 @@ class ModelsManagementViewModel @Inject constructor(
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
-    // Data: available models
-    private val _availableModels: StateFlow<List<ModelInfo>> = modelRepository.getModels()
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(SUBSCRIPTION_TIMEOUT_MS),
-            initialValue = emptyList()
-        )
-
-    private val _sortedModels = MutableStateFlow<List<ModelInfo>>(emptyList())
-    val sortedModels: StateFlow<List<ModelInfo>> = _sortedModels.asStateFlow()
+    // Data: models
+    private val _filteredModels = MutableStateFlow<List<ModelInfo>>(emptyList())
+    val filteredModels: StateFlow<List<ModelInfo>> = _filteredModels.asStateFlow()
 
     // UI state: multi-selection mode
     private val _isMultiSelectionMode = MutableStateFlow(false)
@@ -61,7 +57,7 @@ class ModelsManagementViewModel @Inject constructor(
 
     fun toggleModelSelectionById(modelId: String) {
         val current = _selectedModels.value.toMutableMap()
-        val model = _sortedModels.value.find { it.id == modelId }
+        val model = _filteredModels.value.find { it.id == modelId }
 
         if (model != null) {
             if (current.containsKey(modelId)) {
@@ -75,7 +71,7 @@ class ModelsManagementViewModel @Inject constructor(
 
     fun toggleAllSelection(selectAll: Boolean) {
         if (selectAll) {
-            _selectedModels.value = _sortedModels.value.associateBy { it.id }
+            _selectedModels.value = _filteredModels.value.associateBy { it.id }
         } else {
             _selectedModels.value = emptyMap()
         }
@@ -96,6 +92,33 @@ class ModelsManagementViewModel @Inject constructor(
         _showSortMenu.value = show
     }
 
+    // UI state: filters
+    private val _activeFilters = MutableStateFlow<Map<ModelFilter, Boolean>>(
+        ModelFilter.ALL_FILTERS.associateWith { false }
+    )
+    val activeFilters: StateFlow<Map<ModelFilter, Boolean>> = _activeFilters.asStateFlow()
+
+    fun toggleFilter(filter: ModelFilter, enabled: Boolean) {
+        _activeFilters.update { current ->
+            current.toMutableMap().apply {
+                this[filter] = enabled
+            }
+        }
+    }
+
+    fun clearFilters() {
+        _activeFilters.update { current ->
+            current.mapValues { false }
+        }
+    }
+
+    private val _showFilterMenu = MutableStateFlow(false)
+    val showFilterMenu: StateFlow<Boolean> = _showFilterMenu.asStateFlow()
+
+    fun toggleFilterMenu(visible: Boolean) {
+        _showFilterMenu.value = visible
+    }
+
     // UI state: import menu
     private val _showImportModelMenu = MutableStateFlow(false)
     val showImportModelMenu: StateFlow<Boolean> = _showImportModelMenu.asStateFlow()
@@ -106,19 +129,17 @@ class ModelsManagementViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(_availableModels, _sortOrder, ::sortModels)
-                .collect { _sortedModels.value = it }
+            combine(
+                modelRepository.getModels(),
+                _activeFilters,
+                _sortOrder,
+            ) { models, filters, sortOrder ->
+                models.filterBy(filters).sortByOrder(sortOrder)
+            }.collectLatest {
+                _filteredModels.value = it
+            }
         }
     }
-
-    private fun sortModels(models: List<ModelInfo>, order: ModelSortOrder) =
-        when (order) {
-            ModelSortOrder.NAME_ASC -> models.sortedBy { it.name }
-            ModelSortOrder.NAME_DESC -> models.sortedByDescending { it.name }
-            ModelSortOrder.SIZE_ASC -> models.sortedBy { it.sizeInBytes }
-            ModelSortOrder.SIZE_DESC -> models.sortedByDescending { it.sizeInBytes }
-            ModelSortOrder.LAST_USED -> models.sortedByDescending { it.dateLastUsed ?: 0 }
-        }
 
     // Internal state
     private val _managementState = MutableStateFlow<ModelManagementState>(ModelManagementState.Idle)

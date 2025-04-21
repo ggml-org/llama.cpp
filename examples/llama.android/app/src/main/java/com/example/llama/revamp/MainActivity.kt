@@ -228,6 +228,8 @@ fun AppContent(
             val isMultiSelectionMode by modelsManagementViewModel.isMultiSelectionMode.collectAsState()
             val selectedModels by modelsManagementViewModel.selectedModels.collectAsState()
             val showSortMenu by modelsManagementViewModel.showSortMenu.collectAsState()
+            val activeFilters by modelsManagementViewModel.activeFilters.collectAsState()
+            val showFilterMenu by modelsManagementViewModel.showFilterMenu.collectAsState()
             val showImportModelMenu by modelsManagementViewModel.showImportModelMenu.collectAsState()
 
             // Create file launcher for importing local models
@@ -246,7 +248,12 @@ fun AppContent(
                     }
                 ),
                 filtering = BottomBarConfig.ModelsManagement.FilteringConfig(
-                    onClick = { /* TODO: implement filtering */ },
+                    isActive = activeFilters.any { it.value },
+                    filters = activeFilters,
+                    onToggleFilter = modelsManagementViewModel::toggleFilter,
+                    onClearFilters = modelsManagementViewModel::clearFilters,
+                    isMenuVisible = showFilterMenu,
+                    toggleMenu = modelsManagementViewModel::toggleFilterMenu
                 ),
                 selection = BottomBarConfig.ModelsManagement.SelectionConfig(
                     isActive = isMultiSelectionMode,

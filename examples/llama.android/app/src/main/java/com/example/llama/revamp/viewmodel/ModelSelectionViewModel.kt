@@ -63,7 +63,7 @@ class ModelSelectionViewModel @Inject constructor(
         _showSortMenu.value = visible
     }
 
-    // UI state: filters
+    // UI state: filter menu
     private val _activeFilters = MutableStateFlow<Map<ModelFilter, Boolean>>(
         ModelFilter.ALL_FILTERS.associateWith { false }
     )

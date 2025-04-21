@@ -53,7 +53,7 @@ fun ModelsManagementScreen(
     viewModel: ModelsManagementViewModel,
 ) {
     // ViewModel states
-    val sortedModels by viewModel.sortedModels.collectAsState()
+    val filteredModels by viewModel.filteredModels.collectAsState()
     val managementState by viewModel.managementState.collectAsState()
 
     // Selection state from ViewModel
@@ -81,7 +81,7 @@ fun ModelsManagementScreen(
             modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(items = sortedModels, key = { it.id }) { model ->
+            items(items = filteredModels, key = { it.id }) { model ->
                 val isSelected = if (isMultiSelectionMode) selectedModels.contains(model.id) else null
 
                 ModelCardFullExpandable(

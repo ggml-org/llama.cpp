@@ -17,13 +17,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Checkbox
@@ -101,7 +101,12 @@ sealed class BottomBarConfig {
         )
 
         data class FilteringConfig(
-            val onClick: () -> Unit
+            val isActive: Boolean,
+            val filters: Map<ModelFilter, Boolean>,
+            val onToggleFilter: (ModelFilter, Boolean) -> Unit,
+            val onClearFilters: () -> Unit,
+            val isMenuVisible: Boolean,
+            val toggleMenu: (Boolean) -> Unit
         )
 
         data class SelectionConfig(
@@ -271,20 +276,6 @@ fun ModelsManagementBottomBar(
         actions = {
             if (selection.isActive) {
                 /* Multi-selection mode actions */
-                IconButton(onClick = { selection.toggleAllSelection(true) }) {
-                    Icon(
-                        imageVector = Icons.Default.SelectAll,
-                        contentDescription = "Select all"
-                    )
-                }
-
-                IconButton(onClick = { selection.toggleAllSelection(false) }) {
-                    Icon(
-                        imageVector = Icons.Default.ClearAll,
-                        contentDescription = "Deselect all"
-                    )
-                }
-
                 IconButton(
                     onClick = selection.deleteSelected,
                     enabled = selection.selectedModels.isNotEmpty()
@@ -299,8 +290,29 @@ fun ModelsManagementBottomBar(
                     )
                 }
 
+                IconButton(onClick = { selection.toggleAllSelection(false) }) {
+                    Icon(
+                        imageVector = Icons.Default.ClearAll,
+                        contentDescription = "Deselect all"
+                    )
+                }
+
+                IconButton(onClick = { selection.toggleAllSelection(true) }) {
+                    Icon(
+                        imageVector = Icons.Default.SelectAll,
+                        contentDescription = "Select all"
+                    )
+                }
             } else {
                 /* Default mode actions */
+
+                // Multi-selection action
+                IconButton(onClick = { selection.toggleMode(true) }) {
+                    Icon(
+                        imageVector = Icons.Outlined.DeleteSweep,
+                        contentDescription = "Delete models"
+                    )
+                }
 
                 // Sorting action
                 IconButton(onClick = { sorting.toggleMenu(true) }) {
@@ -339,20 +351,47 @@ fun ModelsManagementBottomBar(
                 }
 
                 // Filtering action
-                IconButton(
-                    onClick = filtering.onClick
-                ) {
+                IconButton(onClick = { filtering.toggleMenu(true) }) {
                     Icon(
-                        imageVector = Icons.Default.FilterAlt,
+                        imageVector =
+                            if (filtering.isActive) Icons.Default.FilterAlt
+                            else Icons.Outlined.FilterAlt,
                         contentDescription = "Filter models"
                     )
                 }
 
-                // Selection action
-                IconButton(onClick = { selection.toggleMode(true) }) {
-                    Icon(
-                        imageVector = Icons.Default.DeleteSweep,
-                        contentDescription = "Delete models"
+                // Filter dropdown menu
+                DropdownMenu(
+                    expanded = filtering.isMenuVisible,
+                    onDismissRequest = { filtering.toggleMenu(false) }
+                ) {
+                    Text(
+                        text = "Filter by",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+
+                    filtering.filters.forEach { (filter, isEnabled) ->
+                        DropdownMenuItem(
+                            text = { Text(filter.displayName) },
+                            leadingIcon = {
+                                Checkbox(
+                                    checked = isEnabled,
+                                    onCheckedChange = null
+                                )
+                            },
+                            onClick = { filtering.onToggleFilter(filter, !isEnabled) }
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    DropdownMenuItem(
+                        text = { Text("Clear filters") },
+                        onClick = {
+                            filtering.onClearFilters()
+                            filtering.toggleMenu(false)
+                        }
                     )
                 }
             }
