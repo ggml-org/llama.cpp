@@ -107,7 +107,7 @@ printf "\n**********\n*\n* FINISHED: Verify website Directory in Archive.\n*\n**
 ```
 
 ---
-### Create default-args File
+### Create default-args File in Archive
 
 A `default-args` file in the archive can specify sane default parameters. The format of the file is parameter name on a line, parameter value on a line, rinse, repeat. End the file with a `...` line to include user specified parameters.
 
@@ -134,15 +134,8 @@ model.gguf
 /zip/certs/mmojo.local.crt
 ...
 EOF
-printf "\n**********\n*\n* FINISHED: Create Default args File.\n*\n**********\n\n"
-```
-
-#### Add default-args File to Archive
-
-Add the `default-args` file to the archive:
-```
 zip -0 -r $LLAMA_SERVER_ONE_ZIP $DEFAULT_ARGS
-printf "\n**********\n*\n* FINISHED: Add default-args File to Archive.\n*\n**********\n\n"
+printf "\n**********\n*\n* FINISHED: Create Default args File in Archive.\n*\n**********\n\n"
 ```
 
 #### Verify default-args File in Archive
