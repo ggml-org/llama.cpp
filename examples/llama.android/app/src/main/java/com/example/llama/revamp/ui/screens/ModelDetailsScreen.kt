@@ -22,7 +22,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.ui.components.ModelCardContentCore
+import com.example.llama.revamp.ui.components.ModelCardContentArchitectureRow
+import com.example.llama.revamp.ui.components.ModelCardContentContextRow
+import com.example.llama.revamp.ui.components.ModelCardContentTitleRow
 import com.example.llama.revamp.util.FileType
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,8 +41,18 @@ fun ModelDetailsScreen(
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        // Always show the core and expanded content
-        ModelCardContentCore(model = model)
+        // Row 1: Model full name
+        ModelCardContentTitleRow(model)
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Row 2: Context length, size label
+        ModelCardContentContextRow(model)
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Row 3: Architecture, quantization, formatted size
+        ModelCardContentArchitectureRow(model)
 
         Spacer(modifier = Modifier.height(16.dp))
 

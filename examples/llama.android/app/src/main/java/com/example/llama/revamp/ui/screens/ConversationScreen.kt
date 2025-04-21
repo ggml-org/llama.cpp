@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -52,14 +53,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.llama.revamp.APP_NAME
+import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.ModelLoadingMetrics
-import com.example.llama.revamp.ui.components.ModelCardWithSystemPrompt
+import com.example.llama.revamp.ui.components.ModelCardContentArchitectureRow
+import com.example.llama.revamp.ui.components.ModelCardContentContextRow
+import com.example.llama.revamp.ui.components.ModelCardContentField
+import com.example.llama.revamp.ui.components.ModelCardCoreExpandable
 import com.example.llama.revamp.ui.components.ModelUnloadDialogHandler
+import com.example.llama.revamp.util.formatMilliSeconds
 import com.example.llama.revamp.viewmodel.ConversationViewModel
 import com.example.llama.revamp.viewmodel.Message
 import kotlinx.coroutines.launch
@@ -69,11 +77,11 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun ConversationScreen(
-    // TODO-han.yin: Use loading metrics to show UI
     loadingMetrics: ModelLoadingMetrics,
     onNavigateBack: () -> Unit,
     viewModel: ConversationViewModel
 ) {
+    // View model states
     val engineState by viewModel.engineState.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
@@ -83,10 +91,12 @@ fun ConversationScreen(
     val isProcessing = engineState is State.ProcessingUserPrompt
     val isGenerating = engineState is State.Generating
 
+    // UI states
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
+    var isModelCardExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var inputText by remember { mutableStateOf("") }
-    val coroutineScope = rememberCoroutineScope()
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     // Auto-scroll to bottom when messages change or when typing
     val shouldScrollToBottom by remember(messages.size, isGenerating) {
@@ -129,7 +139,15 @@ fun ConversationScreen(
     ) {
         // System prompt display (collapsible)
         selectedModel?.let {
-            ModelCardWithSystemPrompt(it, systemPrompt)
+            Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                ModelCardWithSystemPrompt(
+                    model = it,
+                    loadingMetrics = loadingMetrics,
+                    systemPrompt = systemPrompt,
+                    isExpanded = isModelCardExpanded,
+                    onExpanded = { isModelCardExpanded = !isModelCardExpanded }
+                )
+            }
         }
 
         // Messages list
@@ -165,6 +183,58 @@ fun ConversationScreen(
         onUnloadDismissed = { viewModel.onUnloadDismissed() },
         onNavigateBack = onNavigateBack,
     )
+}
+
+
+@Composable
+fun ModelCardWithSystemPrompt(
+    model: ModelInfo,
+    loadingMetrics: ModelLoadingMetrics,
+    systemPrompt: String?,
+    isExpanded: Boolean = false,
+    onExpanded: ((Boolean) -> Unit)? = null,
+) = ModelCardCoreExpandable(model, isExpanded, onExpanded) {
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Row 2: Context length, size label
+    ModelCardContentContextRow(model)
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Row 3: Architecture, quantization, formatted size
+    ModelCardContentArchitectureRow(model)
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Row 4: Model loading time
+    ModelCardContentField("Loading time", formatMilliSeconds(loadingMetrics.modelLoadingTimeMs))
+
+    if (!systemPrompt.isNullOrBlank()) {
+        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+        Text(
+            text = "System Prompt",
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        Text(
+            text = systemPrompt,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.ExtraLight,
+            fontStyle = FontStyle.Italic,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Spacer(Modifier.height(6.dp))
+
+        loadingMetrics.systemPromptProcessingTimeMs?.let {
+            ModelCardContentField("Processing time", formatMilliSeconds(it))
+        }
+    }
 }
 
 @Composable
