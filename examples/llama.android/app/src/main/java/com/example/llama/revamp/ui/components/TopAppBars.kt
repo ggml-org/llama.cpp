@@ -14,7 +14,6 @@ import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.Label
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -35,6 +34,12 @@ import java.util.Locale
 sealed class TopBarConfig {
     abstract val title: String
     abstract val navigationIcon: NavigationIcon
+
+    // No top bar at all
+    data class None(
+        override val title: String = "",
+        override val navigationIcon: NavigationIcon = NavigationIcon.None
+    ) : TopBarConfig()
 
     // Default/simple top bar with only a navigation icon
     data class Default(

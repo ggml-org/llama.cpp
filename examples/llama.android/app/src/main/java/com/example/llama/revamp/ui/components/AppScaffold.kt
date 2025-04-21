@@ -40,6 +40,8 @@ fun AppScaffold(
 ) {
     val topBar: @Composable () -> Unit = {
         when (val topConfig = topBarconfig) {
+            is TopBarConfig.None -> {}
+
             is TopBarConfig.Default -> DefaultTopBar(
                 title = topBarconfig.title,
                 onNavigateBack = topConfig.navigationIcon.backAction,
@@ -65,6 +67,15 @@ fun AppScaffold(
     val bottomBar: @Composable () -> Unit = {
         when (val config = bottomBarConfig) {
             is BottomBarConfig.None -> { /* No bottom bar */ }
+
+            is BottomBarConfig.ModelSelection -> {
+                ModelSelectionBottomBar(
+                    search = config.search,
+                    sorting = config.sorting,
+                    filtering = config.filtering,
+                    runAction = config.runAction
+                )
+            }
 
             is BottomBarConfig.ModelsManagement -> {
                 ModelsManagementBottomBar(

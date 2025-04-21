@@ -118,16 +118,60 @@ fun AppContent(
     // Create scaffold's top & bottom bar configs based on current route
     val scaffoldConfig = when {
         // Model selection screen
-        currentRoute == AppDestinations.MODEL_SELECTION_ROUTE ->
+        currentRoute == AppDestinations.MODEL_SELECTION_ROUTE -> {
+            // Collect states for bottom bar
+            val isSearchActive by modelSelectionViewModel.isSearchActive.collectAsState()
+            val sortOrder by modelSelectionViewModel.sortOrder.collectAsState()
+            val showSortMenu by modelSelectionViewModel.showSortMenu.collectAsState()
+            val activeFilters by modelSelectionViewModel.activeFilters.collectAsState()
+            val showFilterMenu by modelSelectionViewModel.showFilterMenu.collectAsState()
+            val preselectedModel by modelSelectionViewModel.preselectedModel.collectAsState()
+
             ScaffoldConfig(
-                topBarConfig = TopBarConfig.Default(
-                    title = "Models",
-                    navigationIcon = NavigationIcon.Menu {
-                        modelSelectionViewModel.resetSelection()
-                        openDrawer()
-                    }
+                topBarConfig =
+                    if (isSearchActive) TopBarConfig.None()
+                    else TopBarConfig.Default(
+                        title = "Select a Model",
+                        navigationIcon = NavigationIcon.Menu {
+                            modelSelectionViewModel.resetSelection()
+                            openDrawer()
+                        }
+                    ),
+                bottomBarConfig = BottomBarConfig.ModelSelection(
+                    search = BottomBarConfig.ModelSelection.SearchConfig(
+                        isActive = isSearchActive,
+                        onToggleSearch = modelSelectionViewModel::toggleSearchState,
+                        textFieldState = modelSelectionViewModel.searchFieldState,
+                        onSearch = { /* No-op for now */ }
+                    ),
+                    sorting = BottomBarConfig.ModelSelection.SortingConfig(
+                        currentOrder = sortOrder,
+                        isMenuVisible = showSortMenu,
+                        toggleMenu = modelSelectionViewModel::toggleSortMenu,
+                        selectOrder = {
+                            modelSelectionViewModel.setSortOrder(it)
+                            modelSelectionViewModel.toggleSortMenu(false)
+                        }
+                    ),
+                    filtering = BottomBarConfig.ModelSelection.FilteringConfig(
+                        isActive = activeFilters.any { it.value },
+                        filters = activeFilters,
+                        onToggleFilter = modelSelectionViewModel::toggleFilter,
+                        onClearFilters = modelSelectionViewModel::clearFilters,
+                        isMenuVisible = showFilterMenu,
+                        toggleMenu = modelSelectionViewModel::toggleFilterMenu
+                    ),
+                    runAction = BottomBarConfig.ModelSelection.RunActionConfig(
+                        selectedModel = preselectedModel,
+                        onRun = { model ->
+                            modelSelectionViewModel.confirmSelectedModel(model)
+                            navigationActions.navigateToModelLoading()
+                            modelSelectionViewModel.toggleSearchState(false)
+                        }
+                    )
                 )
             )
+        }
 
         // Model loading screen
         currentRoute == AppDestinations.MODEL_LOADING_ROUTE ->
@@ -297,9 +341,6 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                     ModelSelectionScreen(
-                        onModelConfirmed = { modelInfo ->
-                            navigationActions.navigateToModelLoading()
-                        },
                         onManageModelsClicked = {
                             navigationActions.navigateToModelsManagement()
                         },
