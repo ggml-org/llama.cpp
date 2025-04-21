@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
+import com.example.llama.revamp.util.GgufMetadataReader
 import com.example.llama.revamp.util.getFileNameFromUri
 import com.example.llama.revamp.util.getFileSizeFromUri
 import com.example.llama.revamp.viewmodel.ModelManagementState.Deletion
@@ -192,7 +193,14 @@ class ModelsManagementViewModel @Inject constructor(
     }
 
     // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
-    fun importFromHuggingFace() {}
+    fun importFromHuggingFace() {
+        viewModelScope.launch {
+//            val path = "/data/user/0/com.example.llama/files/models/Phi-4-mini-instruct-Q4_0.gguf"
+            val path = "/data/user/0/com.example.llama/files/models/gemma-3-4b-it-Q4_K_M.gguf"
+            val metadata = GgufMetadataReader().readStructuredMetadata(path)
+            Log.i("JOJO", "GGUF Metadata for $path:\n $metadata")
+        }
+    }
 
     /**
      * First show confirmation instead of starting deletion immediately

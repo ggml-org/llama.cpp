@@ -46,8 +46,7 @@ import java.util.Locale
  * Displays model information in a card format with core details.
  *
  * This component shows essential model information like name, context length,
- * architecture, and quantization in a compact card format. It can be used
- * in lists where only basic information is needed.
+ * architecture, quantization and file size in a compact card format.
  *
  * @param model The model information to display
  * @param onClick Action to perform when the card is clicked
@@ -92,52 +91,12 @@ fun ModelCardCore(
     }
 }
 
-@Composable
-fun ModelCardContentCore(
-    model: ModelInfo,
-    modifier: Modifier = Modifier
-) {
-    Column(modifier = modifier) {
-        // Row 1: Model full name
-        Text(
-            text = model.formattedFullName,
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Row 2: Context length, size label
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            ModelCardContentField("Context", model.formattedContextLength)
-
-            ModelCardContentField("Params", model.formattedParamSize)
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Row 3: Architecture, quantization, formatted size
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            ModelCardContentField("Architecture", model.formattedArchitecture)
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            ModelCardContentField(model.formattedQuantization, model.formattedFileSize)
-        }
-    }
-}
-
 /**
  * Displays model information in a card format with expandable details.
  *
  * This component shows essential model information and can be expanded to show
- * additional details such as dates, tags, and languages. The expanded state is
- * toggled by clicking on the content area of the card.
+ * additional details such as dates, tags, and languages.
+ * The expanded state is toggled by clicking on the content area of the card.
  *
  * @param model The model information to display
  * @param isSelected Optional selection state (shows checkbox when not null)
@@ -145,6 +104,7 @@ fun ModelCardContentCore(
  * @param isExpanded Whether additional details is expanded or shrunk
  * @param onExpanded Action to perform when the card is expanded or shrunk
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ModelCardExpandable(
     model: ModelInfo,
@@ -187,9 +147,25 @@ fun ModelCardExpandable(
                             .weight(1f)
                             .padding(start = 16.dp, top = 16.dp, end = 16.dp)
                     ) {
-                        // Core content always visible
-                        ModelCardContentCore(model = model)
+                        // Row 1: Model full name
+                        Text(
+                            text = model.formattedFullName,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                    // Row 2: Context length, size label
+                    ModelCardContentContextRow(model)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Row 3: Architecture, quantization, formatted size
+                    ModelCardContentArchitectureRow(model)
                 }
 
                 // Expandable content
@@ -203,86 +179,28 @@ fun ModelCardExpandable(
                             .weight(1f)
                             .padding(horizontal = 16.dp)
                     ) {
-                        ExpandableModelDetails(model = model)
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            // Divider between core and expanded content
+                            HorizontalDivider(modifier = Modifier.padding(bottom = 12.dp))
+
+                            // Row 4: Dates
+                            ModelCardContentDatesRow(model)
+
+                            // Row 5: Tags
+                            model.tags?.let { tags ->
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                ModelCardContentTagsSection(tags)
+                            }
+
+                            // Row 6: Languages
+                            model.languages?.let { languages ->
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                ModelCardContentLanguagesSections(languages)
+                            }
+                        }
                     }
-                }
-            }
-        }
-    }
-}
-
-// Displays expandable details for a model, to be used only inside ModelCardExpandable.
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ExpandableModelDetails(model: ModelInfo) {
-    val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-
-    Column(modifier = Modifier.padding(top = 16.dp)) {
-        // Divider between core and expanded content
-        HorizontalDivider(modifier = Modifier.padding(bottom = 16.dp))
-
-        // Dates
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            // Added date
-            ModelCardContentField("Added", dateFormatter.format(Date(model.dateAdded)))
-
-            // Last used date (if available)
-            model.dateLastUsed?.let { lastUsed ->
-                ModelCardContentField("Last used", dateFormatter.format(Date(lastUsed)))
-            }
-        }
-
-        // Tags (if available)
-        model.tags?.let { tags ->
-            Spacer(modifier = Modifier.height(8.dp))
-
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                tags.forEach { tag ->
-                    AssistChip(
-                        onClick = { /* No action */ },
-                        label = {
-                            Text(
-                                text = tag,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontStyle = FontStyle.Italic,
-                                fontWeight = FontWeight.Light,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    )
-                }
-            }
-        }
-
-        // Languages (if available)
-        model.languages?.let { languages ->
-            Spacer(modifier = Modifier.height(8.dp))
-
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                languages.forEach { language ->
-                    AssistChip(
-                        onClick = { /* No action */ },
-                        label = {
-                            Text(
-                                text = language,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontStyle = FontStyle.Italic,
-                                fontWeight = FontWeight.Light,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    )
                 }
             }
         }
@@ -357,6 +275,119 @@ fun ModelCardWithSystemPrompt(
         }
     }
 }
+
+@Composable
+fun ModelCardContentCore(
+    model: ModelInfo,
+    modifier: Modifier = Modifier
+) =
+    Column(modifier = modifier) {
+        // Row 1: Model full name
+        Text(
+            text = model.formattedFullName,
+            style = MaterialTheme.typography.headlineSmall, // TODO
+            fontWeight = FontWeight.Medium
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Row 2: Context length, size label
+        ModelCardContentContextRow(model)
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Row 3: Architecture, quantization, formatted size
+        ModelCardContentArchitectureRow(model)
+    }
+
+@Composable
+private fun ModelCardContentContextRow(model: ModelInfo) =
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        ModelCardContentField("Context", model.formattedContextLength)
+
+        ModelCardContentField("Params", model.formattedParamSize)
+    }
+
+@Composable
+private fun ModelCardContentArchitectureRow(model: ModelInfo) =
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        ModelCardContentField("Architecture", model.formattedArchitecture)
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        ModelCardContentField(model.formattedQuantization, model.formattedFileSize)
+    }
+
+@Composable
+private fun ModelCardContentDatesRow(model: ModelInfo) {
+    val dateFormatter = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        // Added date
+        ModelCardContentField("Added", dateFormatter.format(Date(model.dateAdded)))
+
+        // Last used date (if available)
+        model.dateLastUsed?.let { lastUsed ->
+            ModelCardContentField("Last used", dateFormatter.format(Date(lastUsed)))
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ModelCardContentTagsSection(tags: List<String>) =
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        tags.forEach { tag ->
+            AssistChip(
+                onClick = { /* No action */ },
+                label = {
+                    Text(
+                        text = tag,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontStyle = FontStyle.Italic,
+                        fontWeight = FontWeight.Light,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            )
+        }
+    }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ModelCardContentLanguagesSections(languages: List<String>) =
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        languages.forEach { language ->
+            AssistChip(
+                onClick = { /* No action */ },
+                label = {
+                    Text(
+                        text = language,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontStyle = FontStyle.Italic,
+                        fontWeight = FontWeight.Light,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            )
+        }
+    }
 
 @Composable
 private fun ModelCardContentField(name: String, value: String) =
