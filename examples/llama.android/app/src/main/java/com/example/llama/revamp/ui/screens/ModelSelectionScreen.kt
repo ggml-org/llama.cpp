@@ -68,6 +68,9 @@ fun ModelSelectionScreen(
                         ModelCardExpandable(
                             model = model,
                             isSelected = if (model == preselectedModel) true else null,
+                            onSelected = { selected ->
+                                if (!selected) viewModel.resetSelection()
+                            },
                             isExpanded = model == preselectedModel,
                             onExpanded = { expanded ->
                                 viewModel.preselectModel(model, expanded)
