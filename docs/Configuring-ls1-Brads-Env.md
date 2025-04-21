@@ -92,8 +92,8 @@ mkdir website
 cp -r /mnt/hyperv/web-apps/completion-tool/* website
 cp /mnt/hyperv/Mmojo-Raspberry-Pi/Mmojo-certs/selfsignCA.crt website/CA.crt
 rm website/*.txt
-rm website/images/*.svg
-rm website/images/*.psd
+rm website/completion/images/*.svg
+rm website/completion/images/*.psd
 zip -0 -r $LLAMA_SERVER_ONE_ZIP website/*
 printf "\n**********\n*\n* FINISHED: Create website Directory in Archive.\n*\n**********\n\n"
 ```
