@@ -1,5 +1,6 @@
 package com.example.llama.revamp.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -47,9 +48,9 @@ fun ModelSelectionScreen(
     val models by viewModel.availableModels.collectAsState()
     val preselectedModel by viewModel.preselectedModel.collectAsState()
 
-    val handleModelSelection = { model: ModelInfo ->
-        viewModel.confirmSelectedModel(model)
-        onModelConfirmed(model)
+    // Handle back button press
+    BackHandler(preselectedModel != null) {
+        viewModel.onBackPressed()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -89,7 +90,12 @@ fun ModelSelectionScreen(
             exit = scaleOut() + fadeOut()
         ) {
             FloatingActionButton(
-                onClick = { preselectedModel?.let { handleModelSelection(it) } },
+                onClick = {
+                    preselectedModel?.let {
+                        viewModel.confirmSelectedModel(it)
+                        onModelConfirmed(it)
+                    }
+                },
                 containerColor = MaterialTheme.colorScheme.primary
             ) {
                 Icon(

@@ -55,6 +55,15 @@ class ModelSelectionViewModel @Inject constructor(
         _preselectedModel.value = null
     }
 
+    /**
+     * Handle back press from both back button and top bar
+     */
+    fun onBackPressed() {
+        if (_preselectedModel.value != null) {
+            resetSelection()
+        }
+    }
+
     companion object {
         private val TAG = ModelSelectionViewModel::class.java.simpleName
 

@@ -293,6 +293,9 @@ fun AppContent(
                 // Model Selection Screen
                 composable(AppDestinations.MODEL_SELECTION_ROUTE) {
                     ModelSelectionScreen(
+                        onNavigateBack = {
+                            navigationActions.navigateUp()
+                        },
                         onModelConfirmed = { modelInfo ->
                             navigationActions.navigateToModelLoading()
                         },
