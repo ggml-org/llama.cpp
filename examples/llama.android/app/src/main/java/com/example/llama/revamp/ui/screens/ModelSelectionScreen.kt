@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.input.clearText
@@ -41,6 +40,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.llama.revamp.ui.components.InfoAction
+import com.example.llama.revamp.ui.components.InfoView
 import com.example.llama.revamp.ui.components.ModelCardFullExpandable
 import com.example.llama.revamp.viewmodel.ModelSelectionViewModel
 
@@ -188,6 +189,28 @@ fun ModelSelectionScreen(
 }
 
 @Composable
+private fun EmptyModelsView(
+    activeFiltersCount: Int,
+    onManageModelsClicked: () -> Unit
+) {
+    val message = when (activeFiltersCount) {
+        0 -> "Import some models to get started!"
+        1 -> "No models match the selected filter"
+        else -> "No models match the selected filters"
+    }
+    InfoView(
+        title = "No Models Available",
+        icon = Icons.Default.FolderOpen,
+        message = message,
+        action = InfoAction(
+            label = "Add Models",
+            icon = Icons.Default.Add,
+            onAction = onManageModelsClicked
+        )
+    )
+}
+
+@Composable
 private fun EmptySearchResultsView(
     onClearSearch: () -> Unit
 ) {
@@ -223,57 +246,6 @@ private fun EmptySearchResultsView(
 
         Button(onClick = onClearSearch) {
             Text("Clear Search")
-        }
-    }
-}
-
-@Composable
-private fun EmptyModelsView(
-    activeFiltersCount: Int,
-    onManageModelsClicked: () -> Unit
-) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Default.FolderOpen,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "No Models Available",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = when (activeFiltersCount) {
-                0 -> "Import some models to get started!"
-                1 -> "No models match the selected filter"
-                else -> "No models match the selected filters"
-            },
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(onClick = onManageModelsClicked) {
-            Icon(
-                imageVector = Icons.Default.Add,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Add Models")
         }
     }
 }
