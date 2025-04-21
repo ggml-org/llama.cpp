@@ -5,7 +5,12 @@ import androidx.compose.foundation.text.input.clearText
 import androidx.compose.runtime.snapshotFlow
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.llama.revamp.data.model.ModelFilter
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.data.model.ModelSortOrder
+import com.example.llama.revamp.data.model.filterBy
+import com.example.llama.revamp.data.model.queryBy
+import com.example.llama.revamp.data.model.sortByOrder
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.engine.InferenceService
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -59,17 +64,12 @@ class ModelSelectionViewModel @Inject constructor(
     }
 
     // UI state: filters
-    // TODO-han.yin: Refactor this into Enums!
-    private val _activeFilters = MutableStateFlow<Map<String, Boolean>>(mapOf(
-        "Has context length" to false,
-        "Support system prompt" to false,
-        "7B models" to false,
-        "13B models" to false,
-        "70B models" to false
-    ))
-    val activeFilters: StateFlow<Map<String, Boolean>> = _activeFilters.asStateFlow()
+    private val _activeFilters = MutableStateFlow<Map<ModelFilter, Boolean>>(
+        ModelFilter.ALL_FILTERS.associateWith { false }
+    )
+    val activeFilters: StateFlow<Map<ModelFilter, Boolean>> = _activeFilters.asStateFlow()
 
-    fun toggleFilter(filter: String, enabled: Boolean) {
+    fun toggleFilter(filter: ModelFilter, enabled: Boolean) {
         _activeFilters.update { current ->
             current.toMutableMap().apply {
                 this[filter] = enabled
@@ -110,7 +110,7 @@ class ModelSelectionViewModel @Inject constructor(
                 _sortOrder,
             ) { models, filters, sortOrder ->
                 models.filterBy(filters).sortByOrder(sortOrder)
-            }.collect {
+            }.collectLatest {
                 _filteredModels.value = it
             }
         }
@@ -128,50 +128,6 @@ class ModelSelectionViewModel @Inject constructor(
             }.collectLatest {
                 _queryResults.value = it
             }
-        }
-    }
-
-    private fun List<ModelInfo>.queryBy(query: String): List<ModelInfo> {
-        if (query.isBlank()) return this
-
-        return filter { model ->
-            model.name.contains(query, ignoreCase = true) ||
-                model.metadata.fullModelName?.contains(query, ignoreCase = true) == true ||
-                model.metadata.additional?.tags?.any { it.contains(query, ignoreCase = true) } == true ||
-                model.metadata.additional?.languages?.any { it.contains(query, ignoreCase = true) } == true ||
-                model.metadata.architecture?.architecture?.contains(query, ignoreCase = true) == true
-        }
-    }
-
-    // TODO-han.yin: Refactor this into Enums!
-    private fun List<ModelInfo>.filterBy(filters: Map<String, Boolean>): List<ModelInfo> {
-        val activeFilters = filters.filterValues { it }
-        if (activeFilters.isEmpty()) return this
-
-        return filter { model ->
-            activeFilters.all { (filter, _) ->
-                when (filter) {
-                    "Has context length" -> model.metadata.dimensions?.contextLength != null
-                    "Support system prompt" -> true
-                    "7B models" -> model.metadata.basic.sizeLabel?.contains("7B") == true
-                    "13B models" -> model.metadata.basic.sizeLabel?.contains("13B") == true
-                    "70B models" -> model.metadata.basic.sizeLabel?.contains("70B") == true
-                    else -> true
-                }
-            }
-        }
-    }
-
-    private fun List<ModelInfo>.sortByOrder(order: ModelSortOrder): List<ModelInfo> {
-        return when (order) {
-            ModelSortOrder.NAME_ASC -> sortedBy { it.name }
-            ModelSortOrder.NAME_DESC -> sortedByDescending { it.name }
-            ModelSortOrder.SIZE_ASC -> sortedBy { it.sizeInBytes }
-            ModelSortOrder.SIZE_DESC -> sortedByDescending { it.sizeInBytes }
-            ModelSortOrder.LAST_USED -> sortedWith(
-                compareByDescending<ModelInfo> { it.dateLastUsed }
-                    .thenBy { it.name }
-            )
         }
     }
 

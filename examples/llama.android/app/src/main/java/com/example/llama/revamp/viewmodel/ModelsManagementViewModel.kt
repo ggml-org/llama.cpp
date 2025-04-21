@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.data.model.ModelSortOrder
 import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.util.getFileNameFromUri
@@ -234,14 +235,6 @@ class ModelsManagementViewModel @Inject constructor(
         private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
         private const val SUCCESS_RESET_TIMEOUT_MS = 1000L
     }
-}
-
-enum class ModelSortOrder {
-    NAME_ASC,
-    NAME_DESC,
-    SIZE_ASC,
-    SIZE_DESC,
-    LAST_USED
 }
 
 sealed class ModelManagementState {

@@ -36,8 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import com.example.llama.R
+import com.example.llama.revamp.data.model.ModelFilter
 import com.example.llama.revamp.data.model.ModelInfo
-import com.example.llama.revamp.viewmodel.ModelSortOrder
+import com.example.llama.revamp.data.model.ModelSortOrder
 
 /**
  * [BottomAppBar] configurations
@@ -68,8 +69,8 @@ sealed class BottomBarConfig {
 
         data class FilteringConfig(
             val isActive: Boolean,
-            val filters: Map<String, Boolean>, // Filter name -> enabled
-            val onToggleFilter: (String, Boolean) -> Unit,
+            val filters: Map<ModelFilter, Boolean>,
+            val onToggleFilter: (ModelFilter, Boolean) -> Unit,
             val onClearFilters: () -> Unit,
             val isMenuVisible: Boolean,
             val toggleMenu: (Boolean) -> Unit
@@ -210,7 +211,7 @@ fun ModelSelectionBottomBar(
 
                     filtering.filters.forEach { (filter, isEnabled) ->
                         DropdownMenuItem(
-                            text = { Text(filter) },
+                            text = { Text(filter.displayName) },
                             leadingIcon = {
                                 Checkbox(
                                     checked = isEnabled,
