@@ -1,5 +1,6 @@
 package com.example.llama.revamp
 
+import android.llama.cpp.isUninterruptible
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -115,6 +116,36 @@ fun AppContent(
     }
     val openDrawer: () -> Unit = { coroutineScope.launch { drawerState.open() } }
 
+    // Handle child screens' scaffold events
+    val handleScaffoldEvent: (ScaffoldEvent) -> Unit = { event ->
+        when (event) {
+            is ScaffoldEvent.ShowSnackbar -> {
+                coroutineScope.launch {
+                    if (event.actionLabel != null && event.onAction != null) {
+                        val result = snackbarHostState.showSnackbar(
+                            message = event.message,
+                            actionLabel = event.actionLabel,
+                            withDismissAction = event.withDismissAction,
+                            duration = event.duration
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            event.onAction()
+                        }
+                    } else {
+                        snackbarHostState.showSnackbar(
+                            message = event.message,
+                            withDismissAction = event.withDismissAction,
+                            duration = event.duration
+                        )
+                    }
+                }
+            }
+            is ScaffoldEvent.ChangeTitle -> {
+                // TODO-han.yin: TBD
+            }
+        }
+    }
+
     // Create scaffold's top & bottom bar configs based on current route
     val scaffoldConfig = when {
         // Model selection screen
@@ -131,7 +162,7 @@ fun AppContent(
                 topBarConfig =
                     if (isSearchActive) TopBarConfig.None()
                     else TopBarConfig.Default(
-                        title = "Select a Model",
+                        title = "Pick your model",
                         navigationIcon = NavigationIcon.Menu {
                             modelSelectionViewModel.resetSelection()
                             openDrawer()
@@ -177,9 +208,9 @@ fun AppContent(
         currentRoute == AppDestinations.MODEL_LOADING_ROUTE ->
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
-                    title = "Load Model",
+                    title = "Select a mode",
                     navigationIcon = NavigationIcon.Back {
-                        benchmarkViewModel.onBackPressed { navigationActions.navigateUp() }
+                        modelLoadingViewModel.onBackPressed { navigationActions.navigateUp() }
                     },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = null
@@ -187,7 +218,9 @@ fun AppContent(
             )
 
         // Benchmark screen
-        currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) ->
+        currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) -> {
+            val engineState by benchmarkViewModel.engineState.collectAsState()
+
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Benchmark",
@@ -196,8 +229,23 @@ fun AppContent(
                     },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+                ),
+                bottomBarConfig = BottomBarConfig.Benchmark(
+                    engineIdle = !engineState.isUninterruptible,
+                    onRerun = {
+                        if (engineState.isUninterruptible) {
+                            handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+                                message = "Benchmark already in progress!\n" +
+                                    "Please wait for the current run to complete."
+                            ))
+                        } else {
+                            benchmarkViewModel.runBenchmark()
+                        }
+                    },
+                    onShare = benchmarkViewModel::shareResults,
                 )
             )
+        }
 
         // Conversation screen
         currentRoute.startsWith(AppDestinations.CONVERSATION_ROUTE) ->
@@ -294,36 +342,6 @@ fun AppContent(
         else -> ScaffoldConfig(
             topBarConfig = TopBarConfig.Default(title = "", navigationIcon = NavigationIcon.None)
         )
-    }
-
-    // Handle child screens' scaffold events
-    val handleScaffoldEvent: (ScaffoldEvent) -> Unit = { event ->
-        when (event) {
-            is ScaffoldEvent.ShowSnackbar -> {
-                coroutineScope.launch {
-                    if (event.actionLabel != null && event.onAction != null) {
-                        val result = snackbarHostState.showSnackbar(
-                            message = event.message,
-                            actionLabel = event.actionLabel,
-                            withDismissAction = event.withDismissAction,
-                            duration = event.duration
-                        )
-                        if (result == SnackbarResult.ActionPerformed) {
-                            event.onAction()
-                        }
-                    } else {
-                        snackbarHostState.showSnackbar(
-                            message = event.message,
-                            withDismissAction = event.withDismissAction,
-                            duration = event.duration
-                        )
-                    }
-                }
-            }
-            is ScaffoldEvent.ChangeTitle -> {
-                // TODO-han.yin: TBD
-            }
-        }
     }
 
     // Main UI hierarchy

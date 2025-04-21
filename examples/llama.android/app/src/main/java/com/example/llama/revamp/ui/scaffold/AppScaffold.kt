@@ -85,6 +85,14 @@ fun AppScaffold(
                     importing = config.importing,
                 )
             }
+
+            is BottomBarConfig.Benchmark -> {
+                BenchmarkBottomBar(
+                    engineIdle = config.engineIdle,
+                    onRerun = config.onRerun,
+                    onShare = config.onShare
+                )
+            }
         }
     }
 

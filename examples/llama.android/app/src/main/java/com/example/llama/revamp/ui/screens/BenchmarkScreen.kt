@@ -3,19 +3,26 @@ package com.example.llama.revamp.ui.screens
 import android.llama.cpp.InferenceEngine.State
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ProgressIndicatorDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -26,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.engine.ModelLoadingMetrics
@@ -64,75 +72,93 @@ fun BenchmarkScreen(
     }
 
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp)
-            .verticalScroll(rememberScrollState())
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
     ) {
         // Selected model card
         selectedModel?.let { model ->
-            ModelCardWithLoadingMetrics(
-                model = model,
-                loadingMetrics = loadingMetrics,
-                isExpanded = isModelCardExpanded,
-                onExpanded = { isModelCardExpanded = !isModelCardExpanded },
-            )
+            Box(
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp)
+            ) {
+                ModelCardWithLoadingMetrics(
+                    model = model,
+                    loadingMetrics = loadingMetrics,
+                    isExpanded = isModelCardExpanded,
+                    onExpanded = { isModelCardExpanded = !isModelCardExpanded },
+                )
+            }
         }
 
-        // Benchmark results or loading indicator
-        when {
-            engineState is State.Benchmarking -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator()
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "Running benchmark...",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+        Box(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            contentAlignment = Alignment.Center
+        ) {
+            // Benchmark results
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+            ) {
+                items(items = benchmarkResults) { result ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(16.dp)
+                        ) {
+                            Text(
+                                text = result.text,
+                                style = MonospacedTextStyle,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            ModelCardContentField("Time spent: ", formatMilliSeconds(result.duration))
+                        }
                     }
                 }
             }
 
-            benchmarkResults != null -> {
+            // Loading indicator
+            if (engineState is State.Benchmarking) {
                 Card(
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.align(Alignment.Center),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    ),
+                    shape = MaterialTheme.shapes.extraLarge
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(
-                                color = MaterialTheme.colorScheme.surfaceVariant,
-                                shape = RoundedCornerShape(8.dp)
-                            )
-                            .padding(16.dp)
+                    Column(
+                        modifier = Modifier.padding(horizontal = 32.dp, vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(64.dp),
+                            strokeWidth = ProgressIndicatorDefaults.CircularStrokeWidth * 1.5f
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
                         Text(
-                            text = benchmarkResults ?: "",
-                            style = MonospacedTextStyle,
+                            text = "Running benchmark...",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "This usually takes a few minutes",
+                            style = MaterialTheme.typography.bodyLarge,
+                            textAlign = TextAlign.Center,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                }
-            }
-
-            else -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(200.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "Benchmark results will appear here",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }

@@ -20,9 +20,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.FilterAlt
 import androidx.compose.material.icons.outlined.FilterAltOff
@@ -125,6 +127,12 @@ sealed class BottomBarConfig {
             val importFromHuggingFace: () -> Unit
         )
     }
+
+    data class Benchmark(
+        val engineIdle: Boolean,
+        val onRerun: () -> Unit,
+        val onShare: () -> Unit,
+    ) : BottomBarConfig()
 
     // TODO-han.yin: add bottom bar config for Conversation Screen!
 }
@@ -447,6 +455,45 @@ fun ModelsManagementBottomBar(
                     },
                     onClick = importing.importFromHuggingFace
                 )
+            }
+        }
+    )
+}
+
+@Composable
+fun BenchmarkBottomBar(
+    engineIdle: Boolean,
+    onRerun: () -> Unit,
+    onShare: () -> Unit,
+) {
+    BottomAppBar(
+        actions = {
+            IconButton(onClick = onRerun) {
+                Icon(
+                    imageVector = Icons.Default.Replay,
+                    contentDescription = "Run the benchmark again",
+                    tint =
+                        if (engineIdle) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                )
+            }
+        },
+        floatingActionButton = {
+            // Only show FAB if the benchmark result is ready
+            AnimatedVisibility(
+                visible = engineIdle,
+                enter = scaleIn() + fadeIn(),
+                exit = scaleOut() + fadeOut()
+            ) {
+                FloatingActionButton(
+                    onClick = onShare,
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "Share the benchmark results"
+                    )
+                }
             }
         }
     )
