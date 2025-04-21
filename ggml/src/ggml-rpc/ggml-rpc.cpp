@@ -746,6 +746,150 @@ static void serialize_graph(const ggml_cgraph * cgraph, std::vector<uint8_t> & o
     memcpy(out_tensors, tensors.data(), n_tensors * sizeof(rpc_tensor));
 }
 
+// Helper function to validate graph operands before computation
+static bool validate_graph_operands(const ggml_cgraph *graph) {
+    GGML_PRINT_DEBUG("[%s] Validating graph with %d nodes\n", __func__, graph->n_nodes);
+    for (uint32_t i = 0; i < (uint32_t)graph->n_nodes; ++i) {
+        const ggml_tensor* node = graph->nodes[i];
+        // Initial null check added for safety.
+        if (node == nullptr) {
+             GGML_LOG_ERROR("[%s] Graph node %d is null.\n", __func__, i);
+             return false;
+        }
+
+        // Lambda to check for required source operands up to max_src_idx
+        auto check_src = [&](int max_src_idx) -> bool {
+            for (int s_idx = 0; s_idx <= max_src_idx; ++s_idx) {
+                if (node->src[s_idx] == nullptr) {
+                    GGML_LOG_ERROR("[%s] Graph node %d (op %s, name '%s') missing required input src[%d].\n", __func__, i, ggml_op_name(node->op), node->name, s_idx);
+                    return false;
+                }
+            }
+            return true;
+        };
+
+        // Switch based on operation to determine required src operands
+        switch (node->op) {
+            // Ops requiring src[0]
+            case GGML_OP_DUP:
+            case GGML_OP_SQR:
+            case GGML_OP_SQRT:
+            case GGML_OP_LOG:
+            case GGML_OP_SIN:
+            case GGML_OP_COS:
+            case GGML_OP_SUM:
+            case GGML_OP_SUM_ROWS:
+            case GGML_OP_MEAN:
+            case GGML_OP_ARGMAX:
+            case GGML_OP_NORM:
+            case GGML_OP_RMS_NORM:
+            case GGML_OP_GROUP_NORM:
+            case GGML_OP_L2_NORM:
+            case GGML_OP_CONT:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_VIEW:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+            case GGML_OP_DIAG:
+            case GGML_OP_DIAG_MASK_INF:
+            case GGML_OP_DIAG_MASK_ZERO:
+            case GGML_OP_SOFT_MAX:
+            case GGML_OP_CLAMP:
+            case GGML_OP_POOL_1D:
+            case GGML_OP_POOL_2D:
+            case GGML_OP_UPSCALE:
+            case GGML_OP_PAD:
+            case GGML_OP_PAD_REFLECT_1D:
+            case GGML_OP_TIMESTEP_EMBEDDING:
+            case GGML_OP_ARGSORT:
+            case GGML_OP_LEAKY_RELU:
+            case GGML_OP_WIN_PART:
+            case GGML_OP_WIN_UNPART:
+            case GGML_OP_GET_REL_POS:
+            case GGML_OP_MAP_CUSTOM1:
+            case GGML_OP_UNARY:
+                if (!check_src(0)) { return false; }
+                break;
+
+            // Ops requiring src[0], src[1]
+            case GGML_OP_ADD:
+            case GGML_OP_ADD1:
+            case GGML_OP_SUB:
+            case GGML_OP_MUL:
+            case GGML_OP_DIV:
+            case GGML_OP_ACC:
+            case GGML_OP_SCALE:
+            case GGML_OP_RMS_NORM_BACK:
+            case GGML_OP_CROSS_ENTROPY_LOSS:
+            case GGML_OP_COUNT_EQUAL:
+            case GGML_OP_REPEAT:
+            case GGML_OP_REPEAT_BACK:
+            case GGML_OP_CONCAT:
+            case GGML_OP_SILU_BACK:
+            case GGML_OP_MUL_MAT:
+            case GGML_OP_OUT_PROD:
+            case GGML_OP_SET:
+            case GGML_OP_CPY:
+            case GGML_OP_GET_ROWS:
+            case GGML_OP_SOFT_MAX_BACK:
+            case GGML_OP_ROPE:
+            case GGML_OP_ROPE_BACK:
+            case GGML_OP_CONV_TRANSPOSE_1D:
+            case GGML_OP_IM2COL:
+            case GGML_OP_IM2COL_BACK:
+            case GGML_OP_CONV_TRANSPOSE_2D:
+            case GGML_OP_POOL_2D_BACK:
+            case GGML_OP_MAP_CUSTOM2:
+                if (!check_src(1)) { return false; }
+                break;
+
+            // Ops requiring src[0], src[1], src[2]
+            case GGML_OP_MUL_MAT_ID:
+            case GGML_OP_GET_ROWS_BACK:
+            case GGML_OP_ADD_REL_POS:
+            case GGML_OP_MAP_CUSTOM3:
+            case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+            case GGML_OP_SSM_CONV:
+                 if (!check_src(2)) { return false; }
+                break;
+
+            // Ops requiring src[0], src[1], src[2], src[3]
+            case GGML_OP_FLASH_ATTN_EXT:
+                 if (!check_src(2)) { return false; }
+                break;
+
+            // Ops requiring src[0], src[1], src[2], src[3], src[4]
+            case GGML_OP_FLASH_ATTN_BACK:
+            case GGML_OP_OPT_STEP_ADAMW:
+                 if (!check_src(4)) { return false; }
+                break;
+
+            // Ops requiring src[0], src[1], src[2], src[3], src[4], src[5]
+            case GGML_OP_SSM_SCAN:
+            case GGML_OP_RWKV_WKV6:
+            case GGML_OP_GATED_LINEAR_ATTN:
+                 if (!check_src(5)) { return false; }
+                break;
+
+             // Ops requiring src[0], src[1], src[2], src[3], src[4], src[5], src[6]
+            case GGML_OP_RWKV_WKV7:
+                 if (!check_src(6)) { return false; }
+                break;
+
+            // Ops with no required src[] inputs or handled by default
+            case GGML_OP_NONE:
+            case GGML_OP_ARANGE:
+            case GGML_OP_CUSTOM:
+            case GGML_OP_COUNT:
+            default:
+                // Assume valid or cannot validate generically
+                break;
+        }
+    }
+    GGML_PRINT_DEBUG("[%s] Graph validation successful\n", __func__);
+    return true;
+}
+
 static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *)backend->context;
     std::vector<uint8_t> input;
@@ -1354,6 +1498,11 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
             return false;
         }
     }
+
+    if (!validate_graph_operands(graph)) {
+        return false;
+    }
+
     ggml_status status = ggml_backend_graph_compute(backend, graph);
     response.result = status;
     return true;
