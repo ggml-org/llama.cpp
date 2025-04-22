@@ -103,12 +103,6 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(5) << node->src[0]->ne[3] << "] "
             << std::setw(12)
             << "0: " << std::left << std::setw(12) << ggml_op_name(node->src[0]->op) << std::right;
-            // // Custom logic to handle '\000'
-            // const char* name_ptr = node->src[0]->name;
-            // while (*name_ptr != '\0' || *(name_ptr + 1) != '\0' || *(name_ptr + 2) != '\0') {
-            //     file << *name_ptr;
-            //     name_ptr++;
-            // }
             file << std::left << std::setw(30) << node->src[0]->name << std::right
             << std::setw(16) << "[ "
             << std::setw(0) << node->src[0]->nb[0] << ", "
@@ -125,18 +119,28 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
             << std::setw(5) << node->src[1]->ne[3] << "] "
             << std::setw(12)
             << "1: " << std::left << std::setw(12) << ggml_op_name(node->src[1]->op) << std::right;
-            // // Custom logic to handle '\000'
-            // const char* name_ptr = node->src[1]->name;
-            // while (*name_ptr != '\0' || *(name_ptr + 1) != '\0' || *(name_ptr + 2) != '\0') {
-            //     file << *name_ptr;
-            //     name_ptr++;
-            // }
             file << std::left << std::setw(30) << node->src[1]->name << std::right
             << std::setw(16) << "[ "
             << std::setw(0) << node->src[1]->nb[0] << ", "
             << std::setw(5) << node->src[1]->nb[1] << ", "
             << std::setw(5) << node->src[1]->nb[2] << ", "
             << std::setw(5) << node->src[1]->nb[3] << "] "
+            << "\n";
+        }
+        if (node->src[2]) {
+            file << std::setw(10) << " [ "
+            << std::setw(5) << node->src[2]->ne[0] << ", "
+            << std::setw(5) << node->src[2]->ne[1] << ", "
+            << std::setw(5) << node->src[2]->ne[2] << ", "
+            << std::setw(5) << node->src[2]->ne[3] << "] "
+            << std::setw(12)
+            << "2: " << std::left << std::setw(12) << ggml_op_name(node->src[1]->op) << std::right;
+            file << std::left << std::setw(30) << node->src[2]->name << std::right
+            << std::setw(16) << "[ "
+            << std::setw(0) << node->src[2]->nb[0] << ", "
+            << std::setw(5) << node->src[2]->nb[1] << ", "
+            << std::setw(5) << node->src[2]->nb[2] << ", "
+            << std::setw(5) << node->src[2]->nb[3] << "] "
             << "\n";
         }
     }
