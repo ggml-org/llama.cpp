@@ -20,15 +20,22 @@ import javax.inject.Inject
 class BenchmarkViewModel @Inject constructor(
     private val benchmarkService: BenchmarkService
 ) : ModelUnloadingViewModel(benchmarkService) {
-    /**
-     * UI states
-     */
+
+    // Data
     val selectedModel: StateFlow<ModelInfo?> = benchmarkService.currentSelectedModel
 
     private val _benchmarkDuration = MutableSharedFlow<Long>()
 
     private val _benchmarkResults = MutableStateFlow<List<BenchmarkResult>>(emptyList())
     val benchmarkResults: StateFlow<List<BenchmarkResult>> = _benchmarkResults.asStateFlow()
+
+     // UI state: Model card
+    private val _showModelCard = MutableStateFlow(true)
+    val showModelCard = _showModelCard.asStateFlow()
+
+    fun toggleModelCard(show: Boolean) {
+        _showModelCard.value = show
+    }
 
     init {
         viewModelScope.launch {

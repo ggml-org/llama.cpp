@@ -106,7 +106,9 @@ fun AppScaffold(
                 BenchmarkBottomBar(
                     engineIdle = config.engineIdle,
                     onRerun = config.onRerun,
-                    onShare = config.onShare
+                    onShare = config.onShare,
+                    showModelCard = config.showModelCard,
+                    onToggleModelCard = config.onToggleModelCard,
                 )
             }
 
@@ -115,6 +117,8 @@ fun AppScaffold(
                     isReady = config.isEnabled,
                     textFieldState = config.textFieldState,
                     onSendClick = config.onSendClick,
+                    showModelCard = config.showModelCard,
+                    onToggleModelCard = config.onToggleModelCard,
                     onAttachPhotoClick = config.onAttachPhotoClick,
                     onAttachFileClick = config.onAttachFileClick,
                     onAudioInputClick = config.onAudioInputClick,

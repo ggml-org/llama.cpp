@@ -89,12 +89,16 @@ sealed class BottomBarConfig {
         val engineIdle: Boolean,
         val onRerun: () -> Unit,
         val onShare: () -> Unit,
+        val showModelCard: Boolean,
+        val onToggleModelCard: (Boolean) -> Unit,
     ) : BottomBarConfig()
 
     data class Conversation(
         val isEnabled: Boolean,
         val textFieldState: TextFieldState,
         val onSendClick: () -> Unit,
+        val showModelCard: Boolean,
+        val onToggleModelCard: (Boolean) -> Unit,
         val onAttachPhotoClick: () -> Unit,
         val onAttachFileClick: () -> Unit,
         val onAudioInputClick: () -> Unit,

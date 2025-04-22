@@ -6,8 +6,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -20,6 +22,8 @@ fun BenchmarkBottomBar(
     engineIdle: Boolean,
     onRerun: () -> Unit,
     onShare: () -> Unit,
+    showModelCard: Boolean,
+    onToggleModelCard: (Boolean) -> Unit,
 ) {
     BottomAppBar(
         actions = {
@@ -30,6 +34,13 @@ fun BenchmarkBottomBar(
                     tint =
                         if (engineIdle) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                )
+            }
+
+            IconButton(onClick = { onToggleModelCard(!showModelCard) } ) {
+                Icon(
+                    imageVector = if (showModelCard) Icons.Default.Badge else Icons.Outlined.Badge,
+                    contentDescription = "${if (showModelCard) "Hide" else "Show"} model card"
                 )
             }
         },

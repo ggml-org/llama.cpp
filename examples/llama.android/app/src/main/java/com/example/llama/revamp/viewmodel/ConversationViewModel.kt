@@ -28,11 +28,19 @@ class ConversationViewModel @Inject constructor(
     val selectedModel = conversationService.currentSelectedModel
     val systemPrompt = conversationService.systemPrompt
 
-    // Messages state
+    // UI state: Model card
+    private val _showModelCard = MutableStateFlow(true)
+    val showModelCard = _showModelCard.asStateFlow()
+
+    fun toggleModelCard(show: Boolean) {
+        _showModelCard.value = show
+    }
+
+    // UI state: conversation messages
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
-    // Input text field state
+    // UI state: Input text field
     val inputFieldState = TextFieldState()
 
     // Token generation job

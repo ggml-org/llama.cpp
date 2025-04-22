@@ -257,6 +257,7 @@ fun AppContent(
         // Benchmark screen
         currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) -> {
             val engineState by benchmarkViewModel.engineState.collectAsState()
+            val showModelCard by benchmarkViewModel.showModelCard.collectAsState()
             val benchmarkResults by benchmarkViewModel.benchmarkResults.collectAsState()
 
             ScaffoldConfig(
@@ -285,12 +286,16 @@ fun AppContent(
                             handleScaffoldEvent(ScaffoldEvent.ShareText(it.text))
                         }
                     },
+                    showModelCard = showModelCard,
+                    onToggleModelCard = benchmarkViewModel::toggleModelCard,
                 )
             )
         }
 
         // Conversation screen
         currentRoute.startsWith(AppDestinations.CONVERSATION_ROUTE) -> {
+            val showModelCard by conversationViewModel.showModelCard.collectAsState()
+
             val modelThinkingOrSpeaking =
                 engineState is State.ProcessingUserPrompt || engineState is State.Generating
 
@@ -313,6 +318,8 @@ fun AppContent(
                     isEnabled = !modelThinkingOrSpeaking,
                     textFieldState = conversationViewModel.inputFieldState,
                     onSendClick = conversationViewModel::sendMessage,
+                    showModelCard = showModelCard,
+                    onToggleModelCard = conversationViewModel::toggleModelCard,
                     onAttachPhotoClick = showStubMessage,
                     onAttachFileClick = showStubMessage,
                     onAudioInputClick = showStubMessage,

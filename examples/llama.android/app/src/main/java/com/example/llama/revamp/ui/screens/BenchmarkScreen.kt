@@ -54,9 +54,12 @@ fun BenchmarkScreen(
 ) {
     // View model states
     val engineState by viewModel.engineState.collectAsState()
-    val benchmarkResults by viewModel.benchmarkResults.collectAsState()
-    val selectedModel by viewModel.selectedModel.collectAsState()
     val unloadDialogState by viewModel.unloadModelState.collectAsState()
+
+    val showModelCard by viewModel.showModelCard.collectAsState()
+    val selectedModel by viewModel.selectedModel.collectAsState()
+
+    val benchmarkResults by viewModel.benchmarkResults.collectAsState()
 
     // UI states
     var isModelCardExpanded by remember { mutableStateOf(false) }
@@ -71,94 +74,91 @@ fun BenchmarkScreen(
         viewModel.onBackPressed(onNavigateBack)
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        // Selected model card
-        selectedModel?.let { model ->
-            Box(
-                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp)
-            ) {
-                ModelCardWithLoadingMetrics(
-                    model = model,
-                    loadingMetrics = loadingMetrics,
-                    isExpanded = isModelCardExpanded,
-                    onExpanded = { isModelCardExpanded = !isModelCardExpanded },
-                )
-            }
-        }
-
-        Box(
-            modifier = Modifier.fillMaxWidth().weight(1f),
-            contentAlignment = Alignment.Center
+        // Benchmark results
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(8.dp),
+            verticalArrangement = Arrangement.Bottom,
         ) {
-            // Benchmark results
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
-            ) {
-                items(items = benchmarkResults) { result ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    shape = RoundedCornerShape(8.dp)
-                                )
-                                .padding(16.dp)
-                        ) {
-                            Text(
-                                text = result.text,
-                                style = MonospacedTextStyle,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+            items(items = benchmarkResults) { result ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(8.dp)
                             )
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = result.text,
+                            style = MonospacedTextStyle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
 
-                            Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
-                            ModelCardContentField("Time spent: ", formatMilliSeconds(result.duration))
-                        }
+                        ModelCardContentField("Time spent: ", formatMilliSeconds(result.duration))
                     }
                 }
             }
+        }
 
-            // Loading indicator
-            if (engineState is State.Benchmarking) {
-                Card(
-                    modifier = Modifier.align(Alignment.Center),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    ),
-                    shape = MaterialTheme.shapes.extraLarge
+        // Loading indicator
+        if (engineState is State.Benchmarking) {
+            Card(
+                modifier = Modifier.align(Alignment.Center),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                ),
+                shape = MaterialTheme.shapes.extraLarge
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 32.dp, vertical = 48.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 32.dp, vertical = 48.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(64.dp),
-                            strokeWidth = ProgressIndicatorDefaults.CircularStrokeWidth * 1.5f
-                        )
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(64.dp),
+                        strokeWidth = ProgressIndicatorDefaults.CircularStrokeWidth * 1.5f
+                    )
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                        Text(
-                            text = "Running benchmark...",
-                            style = MaterialTheme.typography.headlineSmall
-                        )
+                    Text(
+                        text = "Running benchmark...",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
 
-                        Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                        Text(
-                            text = "This usually takes a few minutes",
-                            style = MaterialTheme.typography.bodyLarge,
-                            textAlign = TextAlign.Center,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = "This usually takes a few minutes",
+                        style = MaterialTheme.typography.bodyLarge,
+                        textAlign = TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Selected model card and loading metrics
+        if (showModelCard) {
+            selectedModel?.let { model ->
+                Box(
+                    modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp)
+                ) {
+                    ModelCardWithLoadingMetrics(
+                        model = model,
+                        loadingMetrics = loadingMetrics,
+                        isExpanded = isModelCardExpanded,
+                        onExpanded = { isModelCardExpanded = !isModelCardExpanded },
+                    )
                 }
             }
         }

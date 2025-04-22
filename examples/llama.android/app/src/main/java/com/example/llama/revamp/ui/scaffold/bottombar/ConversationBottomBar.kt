@@ -11,9 +11,11 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.BottomAppBarDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -37,6 +39,8 @@ fun ConversationBottomBar(
     textFieldState: TextFieldState,
     isReady: Boolean,
     onSendClick: () -> Unit,
+    showModelCard: Boolean,
+    onToggleModelCard: (Boolean) -> Unit,
     onAttachPhotoClick: () -> Unit,
     onAttachFileClick: () -> Unit,
     onAudioInputClick: () -> Unit,
@@ -58,7 +62,7 @@ fun ConversationBottomBar(
             ) {
                 OutlinedTextField(
                     state = textFieldState,
-                    modifier = Modifier.Companion.fillMaxWidth().padding(end = 8.dp),
+                    modifier = Modifier.Companion.fillMaxWidth(),
                     enabled = isReady,
                     placeholder = { Text(placeholder) },
                     lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
@@ -100,6 +104,13 @@ fun ConversationBottomBar(
                     Icon(
                         imageVector = Icons.Default.Mic,
                         contentDescription = "Input with voice",
+                    )
+                }
+
+                IconButton(onClick = { onToggleModelCard(!showModelCard) } ) {
+                    Icon(
+                        imageVector = if (showModelCard) Icons.Default.Badge else Icons.Outlined.Badge,
+                        contentDescription = "${if (showModelCard) "Hide" else "Show"} model card"
                     )
                 }
             },
