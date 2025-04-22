@@ -419,8 +419,12 @@ class ModelBase:
     def load_hparams(dir_model: Path):
         with open(dir_model / "config.json", "r", encoding="utf-8") as f:
             hparams = json.load(f)
+            architectures = hparams.get("architectures")
             if "text_config" in hparams:
                 hparams = {**hparams, **hparams["text_config"]}
+            if architectures is not None:
+                # preserve "architectures" from root level config
+                hparams["architectures"] = architectures
             return hparams
 
     @classmethod
@@ -1061,6 +1065,8 @@ class TextModel(ModelBase):
 class VisionModel(ModelBase):
     model_arch = gguf.MODEL_ARCH.CLIP_VISION
     n_text_embd = 0
+    preprocessor_config: dict[str, Any]
+    global_config: dict[str, Any]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1075,24 +1081,33 @@ class VisionModel(ModelBase):
 
         if "vision_config" not in self.hparams:
             raise ValueError("vision_config not found in hparams")
-        # move vision config to the top level
+        # move vision config to the top level, while preserving the original hparams in global_config
+        self.global_config = self.hparams
         self.hparams = self.hparams["vision_config"]
+
+        # load preprocessor config
+        with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
+            self.preprocessor_config = json.load(f)
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.CLIP_VISION)
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.PROJECTION_DIM, self.n_embd_text)
-        self.gguf_writer.add_bool(gguf.Keys.ClipVision.HAS_VISION_ENCODER, True)
+        self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
+        self.gguf_writer.add_vision_has_vision_encoder(True)
 
         # vision config
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.IMAGE_SIZE,           self.find_hparam(["image_size"]))
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.PATCH_SIZE,           self.find_hparam(["patch_size"]))
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.EMBEDDING_LENGTH,     self.find_hparam(["hidden_size"]))
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.FEED_FORWARD_LENGTH,  self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.BLOCK_COUNT,          self.find_hparam(["num_hidden_layers"]))
-        self.gguf_writer.add_uint32(gguf.Keys.ClipVision.Attention.HEAD_COUNT, self.find_hparam(["num_attention_heads"]))
+        self.gguf_writer.add_vision_image_size(self.find_hparam(["image_size"]))
+        self.gguf_writer.add_vision_patch_size(self.find_hparam(["patch_size"]))
+        self.gguf_writer.add_vision_embedding_length(self.find_hparam(["hidden_size"]))
+        self.gguf_writer.add_vision_feed_forward_length(self.find_hparam(["intermediate_size"]))
+        self.gguf_writer.add_vision_block_count(self.find_hparam(["num_hidden_layers"]))
+        self.gguf_writer.add_vision_head_count(self.find_hparam(["num_attention_heads"]))
+
+        # preprocessor config
+        self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
+        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_mean"])
 
     def write_vocab(self):
         raise ValueError("VisionModel does not support vocab writing")
@@ -1703,10 +1718,22 @@ class StableLMModel(TextModel):
                 raise ValueError(f"Unprocessed norms: {norms}")
 
 
-@ModelBase.register("LLaMAForCausalLM", "LlamaForCausalLM", "MistralForCausalLM", "MixtralForCausalLM")
+@ModelBase.register(
+    "LLaMAForCausalLM",
+    "LlamaForCausalLM",
+    "MistralForCausalLM",
+    "MixtralForCausalLM",
+    "Idefics3ForConditionalGeneration",
+    "SmolVLMForConditionalGeneration")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # fix for SmolVLM2, missing `num_attention_heads` in config.json
+        if self.hparams["architectures"][0] == "SmolVLMForConditionalGeneration":
+            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def set_vocab(self):
         try:
@@ -1770,6 +1797,12 @@ class LlamaModel(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
+        is_vision_tensor = "vision_tower" in name or "vision_model" in name or "model.connector" in name
+
+        if is_vision_tensor:
+            return [] # skip vision tensors
+        elif name.startswith("model.text_model"):
+            name = name.replace("text_model.", "") # for SmolVLM
 
         if self.undo_permute:
             if name.endswith(("q_proj.weight", "q_proj.bias")):
@@ -1850,6 +1883,41 @@ class LlamaModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Idefics3ForConditionalGeneration", "SmolVLMForConditionalGeneration")
+class SmolVLMModel(VisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # fix for SmolVLM2, missing some keys in config.json
+        # default values are taken from transformers code
+        if self.hparams["model_type"] == "smolvlm_vision":
+            self.hparams["hidden_size"] = self.hparams.get("hidden_size", 1152)
+            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 16)
+            self.hparams["intermediate_size"] = self.hparams.get("intermediate_size", 3072)
+            self.hparams["num_hidden_layers"] = self.hparams.get("num_hidden_layers", 12)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.IDEFICS3)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_projector_scale_factor(self.global_config.get("scale_factor", 2))
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, new_name, n_dims  # unused
+        if ".embeddings." in name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        is_vision_tensor = "vision_tower" in name or "vision_model" in name or "model.connector" in name
+
+        if is_vision_tensor:
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
 
 
 @ModelBase.register("Llama4ForConditionalGeneration")
@@ -3591,12 +3659,10 @@ class Gemma3VisionModel(VisionModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_string(gguf.Keys.ClipVision.PROJECTOR_TYPE, "gemma3")
+        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.GEMMA3)
         # default values below are taken from HF tranformers code
-        self.gguf_writer.add_float32(gguf.Keys.ClipVision.Attention.LAYERNORM_EPS, hparams.get("layer_norm_eps", 1e-6))
-        self.gguf_writer.add_array(gguf.Keys.ClipVision.IMAGE_MEAN, [0.5, 0.5, 0.5])
-        self.gguf_writer.add_array(gguf.Keys.ClipVision.IMAGE_STD,  [0.5, 0.5, 0.5])
-        self.gguf_writer.add_bool (gguf.Keys.ClipVision.USE_GELU,   True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_use_gelu(True)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, new_name, n_dims  # unused
@@ -3614,10 +3680,6 @@ class Gemma3VisionModel(VisionModel):
                 or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
             # process vision tensors
             name = name.replace("_weight", ".weight")
-            if "fc1" in name:
-                name = name.replace("fc1", "fc2")
-            else:
-                name = name.replace("fc2", "fc1")
 
             # correct norm value ; only this "soft_emb_norm" need to be corrected as it's part of Gemma projector
             # the other norm values are part of SigLIP model, and they are already correct

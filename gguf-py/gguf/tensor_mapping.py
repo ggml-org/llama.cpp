@@ -961,13 +961,13 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_FFN_UP: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vpm.encoder.layers.{bid}.mlp.fc1",
-            "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM
+            "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3 (note: name is swapped)
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vpm.encoder.layers.{bid}.mlp.fc2",
-            "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM
+            "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3 (note: name is swapped)
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
