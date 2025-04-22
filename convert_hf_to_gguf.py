@@ -538,7 +538,7 @@ class Model:
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
@@ -735,9 +735,6 @@ class Model:
         if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
             # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
             res = "llama4"
-        if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
-            # ref: https://huggingface.co/THUDM/glm-4-9b-hf
-            res = "glm4"
         if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
             # ref: https://huggingface.co/THUDM/glm-4-9b-hf
             res = "glm4"
@@ -5025,7 +5022,7 @@ class ChatGLMModel(Model):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
-        vocab_size = hparams.get("padded_vocab_size",hparams.get("vocab_size"))
+        vocab_size = hparams.get("padded_vocab_size", hparams.get("vocab_size"))
         assert max(tokenizer.get_vocab().values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
@@ -5052,16 +5049,12 @@ class ChatGLMModel(Model):
 
                     if added_tokens_decoder[i].special or self.does_token_look_special(token):
                         toktypes.append(gguf.TokenType.CONTROL)
-                    else:
-                        # NOTE: this was added for Gemma.
-                        # Encoding and decoding the tokens above isn't sufficient for this case.
-                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
-                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                    
                 else:
                     toktypes.append(gguf.TokenType.NORMAL)
                 tokens.append(token)
  
-        self.gguf_writer.add_tokenizer_model("llama")
+        self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
@@ -5076,11 +5069,9 @@ class ChatGLMModel(Model):
         #TODO In llama.cpp, special tokens are mapped one-to-one between a token and a coordinate. However, in reality, a transformer might associate a special token like eos_token_id with multiple tokens.
         #     Currently, llama.cpp only supports a one-to-one mapping.
         #     This can lead to an issue where the model fails to terminate properly.
-        #     I'm still unclear about how llama.cpp handles special_token and what the exact call chain is!
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|observation|>"])
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        #     You can see a temporary workaround here. https://github.com/ggml-org/llama.cpp/issues/9606
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"]) 
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"]) 
         # this one is usually not in config.json anyway
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
