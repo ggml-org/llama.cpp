@@ -29,6 +29,12 @@ sealed class ScaffoldEvent {
     ) : ScaffoldEvent()
 
     data class ChangeTitle(val newTitle: String) : ScaffoldEvent()
+
+    data class ShareText(
+        val text: String,
+        val title: String? = null,
+        val mimeType: String = "text/plain"
+    ) : ScaffoldEvent()
 }
 
 @Composable

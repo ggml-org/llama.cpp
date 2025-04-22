@@ -60,10 +60,6 @@ class BenchmarkViewModel @Inject constructor(
         }
         return true
     }
-
-    fun shareResults() {
-        // TODO-han.yin: TO BE IMPLEMENTED
-    }
 }
 
 data class BenchmarkResult(

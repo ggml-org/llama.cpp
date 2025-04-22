@@ -1,5 +1,8 @@
 package com.example.llama.revamp
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.llama.cpp.isUninterruptible
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
@@ -143,6 +147,38 @@ fun AppContent(
             is ScaffoldEvent.ChangeTitle -> {
                 // TODO-han.yin: TBD
             }
+            is ScaffoldEvent.ShareText -> {
+                val shareIntent = Intent().apply {
+                    action = Intent.ACTION_SEND
+                    putExtra(Intent.EXTRA_TEXT, event.text)
+                    event.title?.let { putExtra(Intent.EXTRA_SUBJECT, it) }
+                    type = event.mimeType
+                }
+
+                val shareChooser = Intent.createChooser(shareIntent, event.title ?: "Share via")
+
+                // Use the current activity for context
+                val context = (navController.context as? Activity)
+                    ?: throw IllegalStateException("Activity context required for sharing")
+
+                try {
+                    context.startActivity(shareChooser)
+                } catch (_: ActivityNotFoundException) {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(
+                            message = "No app found to share content",
+                            duration = SnackbarDuration.Short
+                        )
+                    }
+                } catch (e: Exception) {
+                    coroutineScope.launch {
+                        snackbarHostState.showSnackbar(
+                            message = "Share failed due to ${e.message}",
+                            duration = SnackbarDuration.Short
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -220,6 +256,7 @@ fun AppContent(
         // Benchmark screen
         currentRoute.startsWith(AppDestinations.BENCHMARK_ROUTE) -> {
             val engineState by benchmarkViewModel.engineState.collectAsState()
+            val benchmarkResults by benchmarkViewModel.benchmarkResults.collectAsState()
 
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
@@ -242,7 +279,11 @@ fun AppContent(
                             benchmarkViewModel.runBenchmark()
                         }
                     },
-                    onShare = benchmarkViewModel::shareResults,
+                    onShare = {
+                        benchmarkResults.lastOrNull()?.let {
+                            handleScaffoldEvent(ScaffoldEvent.ShareText(it.text))
+                        }
+                    },
                 )
             )
         }
