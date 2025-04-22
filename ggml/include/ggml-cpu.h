@@ -57,6 +57,8 @@ extern "C" {
     GGML_BACKEND_API int                           ggml_threadpool_get_n_threads (struct ggml_threadpool * threadpool);
     GGML_BACKEND_API void                          ggml_threadpool_pause         (struct ggml_threadpool * threadpool);
     GGML_BACKEND_API void                          ggml_threadpool_resume        (struct ggml_threadpool * threadpool);
+    GGML_BACKEND_API void                          ggml_threadpool_atomic_store_explicit(struct ggml_threadpool * threadpool, int value);
+    GGML_BACKEND_API int                           ggml_threadpool_atomic_fetch_add_explicit(struct ggml_threadpool * threadpool, int value);
 
     // ggml_graph_plan() has to be called before ggml_graph_compute()
     // when plan.work_size > 0, caller must allocate memory for plan.work_data
@@ -119,6 +121,8 @@ extern "C" {
     GGML_BACKEND_API const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type);
 
     GGML_BACKEND_API void ggml_cpu_init(void);
+
+    GGML_BACKEND_API void ggml_cpu_tmac_init(const char * fname);
 
     //
     // CPU backend

@@ -2,6 +2,10 @@
 
 #include "ggml.h"
 
+#ifdef GGML_USE_TMAC
+    #include "tmac.h"
+#endif
+
 #include <array>
 #include <cinttypes>
 #include <cstring>
@@ -59,6 +63,15 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ4_XS:   return "IQ4_XS - 4.25 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_BN_0:      return "TMAC_BN_0";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_0:   return "TMAC_W2G64_0 - 2.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_1:   return "TMAC_W2G64_1 - 3.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_0:  return "TMAC_W2G128_0 - 2.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_1:  return "TMAC_W2G128_1 - 2.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_0:   return "TMAC_W4G64_0 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_1:   return "TMAC_W4G64_1 - 5.0 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_0:  return "TMAC_W4G128_0 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_1:  return "TMAC_W4G128_1 - 4.5 bpw";
 
         default: return "unknown, may not work";
     }
@@ -634,6 +647,15 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_IQ4_NL:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_NL;  break;
             case GGML_TYPE_IQ4_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ4_XS;  break;
             case GGML_TYPE_IQ3_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_S;   break;
+            case GGML_TYPE_TMAC_BN_0:      ftype = LLAMA_FTYPE_MOSTLY_TMAC_BN_0;   break;
+            case GGML_TYPE_TMAC_W2G64_0:   ftype = LLAMA_FTYPE_MOSTLY_TMAC_W2G64_0;   break;
+            case GGML_TYPE_TMAC_W2G64_1:   ftype = LLAMA_FTYPE_MOSTLY_TMAC_W2G64_1;   break;
+            case GGML_TYPE_TMAC_W2G128_0:  ftype = LLAMA_FTYPE_MOSTLY_TMAC_W2G128_0;   break;
+            case GGML_TYPE_TMAC_W2G128_1:  ftype = LLAMA_FTYPE_MOSTLY_TMAC_W2G128_1;   break;
+            case GGML_TYPE_TMAC_W4G64_0:   ftype = LLAMA_FTYPE_MOSTLY_TMAC_W4G64_0;   break;
+            case GGML_TYPE_TMAC_W4G64_1:   ftype = LLAMA_FTYPE_MOSTLY_TMAC_W4G64_1;   break;
+            case GGML_TYPE_TMAC_W4G128_0:  ftype = LLAMA_FTYPE_MOSTLY_TMAC_W4G128_0;   break;
+            case GGML_TYPE_TMAC_W4G128_1:  ftype = LLAMA_FTYPE_MOSTLY_TMAC_W4G128_1;   break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1066,6 +1088,11 @@ bool llama_model_loader::load_all_data(
         }
 
         size_done += n_size;
+
+// #if defined(GGML_USE_TMAC)
+//         // Do pre-transformation to reduce first-run latency
+//         ggml_tmac_transform_tensor(cur);
+// #endif
     }
 
     // free temporary resources used for async uploads

@@ -50,6 +50,10 @@
 #include "llamafile/sgemm.h"
 #endif
 
+#ifdef GGML_USE_TMAC
+#include "tmac.h"
+#endif
+
 #if defined(_MSC_VER)
 // disable "possible loss of data" to avoid hundreds of casts
 // we should just be careful :)
@@ -373,7 +377,51 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
     },
-};
+    [GGML_TYPE_TMAC_BN_0] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W2G64_0] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W2G64_1] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W2G128_0] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W2G128_1] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W4G64_0] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W4G64_1] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W4G128_0] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TMAC_W4G128_1] = {
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },};
 
 const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
     return &type_traits_cpu[type];
@@ -2639,6 +2687,14 @@ void ggml_threadpool_resume(struct ggml_threadpool * threadpool) {
 #endif
 }
 
+void ggml_threadpool_atomic_store_explicit(struct ggml_threadpool * threadpool, int value) {
+    atomic_store_explicit(&threadpool->current_chunk, value, memory_order_relaxed);
+}
+
+int ggml_threadpool_atomic_fetch_add_explicit(struct ggml_threadpool * threadpool, int value) {
+    return (int)atomic_fetch_add_explicit(&threadpool->current_chunk, value, memory_order_relaxed);
+}
+
 struct ggml_cplan ggml_graph_plan(
           const struct ggml_cgraph * cgraph,
                                int   n_threads,
@@ -3404,6 +3460,10 @@ void ggml_cpu_init(void) {
 
 #if defined(__ARM_ARCH)
         ggml_init_arm_arch_features();
+#endif
+
+#ifdef GGML_USE_TMAC
+        ggml_tmac_init();
 #endif
 
         is_first_call = false;
