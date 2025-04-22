@@ -11,6 +11,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -131,13 +132,18 @@ fun ConversationScreen(
         viewModel.onBackPressed(onNavigateBack)
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
+    Box(
+        modifier = Modifier.fillMaxSize()
     ) {
-        // System prompt display (collapsible)
+        ConversationMessageList(
+            messages = messages,
+            listState = listState,
+        )
+
         selectedModel?.let {
-            Box(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+            Box(
+                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter)
+            ) {
                 ModelCardWithSystemPrompt(
                     model = it,
                     loadingMetrics = loadingMetrics,
@@ -146,18 +152,6 @@ fun ConversationScreen(
                     onExpanded = { isModelCardExpanded = !isModelCardExpanded }
                 )
             }
-        }
-
-        // Messages list
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-        ) {
-            ConversationMessageList(
-                messages = messages,
-                listState = listState,
-            )
         }
     }
 
@@ -229,10 +223,8 @@ private fun ConversationMessageList(
 ) {
     LazyColumn(
         state = listState,
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-        reverseLayout = false
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
     ) {
         items(
             items = messages,
@@ -433,69 +425,6 @@ private fun PulsatingDots(small: Boolean = false) {
             )
 
             Spacer(modifier = Modifier.width(2.dp))
-        }
-    }
-}
-
-@Composable
-private fun ConversationInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    onSendClick: () -> Unit,
-    isEnabled: Boolean
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth(),
-        shadowElevation = 4.dp,
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.Bottom
-        ) {
-            OutlinedTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(end = 8.dp),
-                placeholder = { Text("Message $APP_NAME...") },
-                maxLines = 5,
-                enabled = isEnabled,
-                colors = TextFieldDefaults.colors(
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedContainerColor = Color.Transparent
-                ),
-                shape = RoundedCornerShape(24.dp)
-            )
-
-            IconButton(
-                onClick = onSendClick,
-                enabled = value.isNotBlank() && isEnabled,
-                modifier = Modifier
-                    .padding(bottom = 4.dp)
-                    .size(48.dp)
-            ) {
-                if (isEnabled) {
-                    Icon(
-                        imageVector = Icons.Default.Send,
-                        contentDescription = "Send message",
-                        tint = if (value.isNotBlank())
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
-                } else {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.dp,
-                        strokeCap = StrokeCap.Round
-                    )
-                }
-            }
         }
     }
 }
