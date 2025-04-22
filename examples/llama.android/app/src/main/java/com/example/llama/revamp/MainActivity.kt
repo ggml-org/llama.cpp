@@ -3,6 +3,7 @@ package com.example.llama.revamp
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.llama.cpp.InferenceEngine.State
 import android.llama.cpp.isUninterruptible
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -289,17 +290,35 @@ fun AppContent(
         }
 
         // Conversation screen
-        currentRoute.startsWith(AppDestinations.CONVERSATION_ROUTE) ->
+        currentRoute.startsWith(AppDestinations.CONVERSATION_ROUTE) -> {
+            val modelThinkingOrSpeaking =
+                engineState is State.ProcessingUserPrompt || engineState is State.Generating
+
+            val showStubMessage = {
+                handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
+                    message = "Stub for now, let me know if you want it done :)"
+                ))
+            }
+
             ScaffoldConfig(
                 topBarConfig = TopBarConfig.Performance(
                     title = "Chat",
                     navigationIcon = NavigationIcon.Back {
-                         conversationViewModel.onBackPressed { navigationActions.navigateUp() }
+                        conversationViewModel.onBackPressed { navigationActions.navigateUp() }
                     },
                     memoryMetrics = memoryUsage,
                     temperatureInfo = Pair(temperatureInfo, useFahrenheit)
+                ),
+                bottomBarConfig = BottomBarConfig.Conversation(
+                    isEnabled = !modelThinkingOrSpeaking,
+                    textFieldState = conversationViewModel.inputFieldState,
+                    onSendClick = conversationViewModel::sendMessage,
+                    onAttachPhotoClick = showStubMessage,
+                    onAttachFileClick = showStubMessage,
+                    onAudioInputClick = showStubMessage,
                 )
             )
+        }
 
         // Settings screen
         currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE ->

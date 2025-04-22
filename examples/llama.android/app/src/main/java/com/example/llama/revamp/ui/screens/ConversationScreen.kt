@@ -88,7 +88,6 @@ fun ConversationScreen(
     val selectedModel by viewModel.selectedModel.collectAsState()
     val unloadDialogState by viewModel.unloadModelState.collectAsState()
 
-    val isProcessing = engineState is State.ProcessingUserPrompt
     val isGenerating = engineState is State.Generating
 
     // UI states
@@ -96,7 +95,6 @@ fun ConversationScreen(
     val coroutineScope = rememberCoroutineScope()
     var isModelCardExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    var inputText by remember { mutableStateOf("") }
 
     // Auto-scroll to bottom when messages change or when typing
     val shouldScrollToBottom by remember(messages.size, isGenerating) {
@@ -161,19 +159,6 @@ fun ConversationScreen(
                 listState = listState,
             )
         }
-
-        // Input area
-        ConversationInputField(
-            value = inputText,
-            onValueChange = { inputText = it },
-            onSendClick = {
-                if (inputText.isNotBlank()) {
-                    viewModel.sendMessage(inputText)
-                    inputText = ""
-                }
-            },
-            isEnabled = !isProcessing && !isGenerating
-        )
     }
 
     // Unload confirmation dialog

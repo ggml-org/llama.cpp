@@ -1,5 +1,7 @@
 package com.example.llama.revamp.viewmodel
 
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.lifecycle.viewModelScope
 import com.example.llama.revamp.engine.ConversationService
 import com.example.llama.revamp.engine.GenerationUpdate
@@ -22,21 +24,25 @@ import javax.inject.Inject
 class ConversationViewModel @Inject constructor(
     private val conversationService: ConversationService
 ) : ModelUnloadingViewModel(conversationService) {
-
+    // Data
     val selectedModel = conversationService.currentSelectedModel
     val systemPrompt = conversationService.systemPrompt
 
-    // Messages in conversation
+    // Messages state
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
 
-    // Keep track of token generation job
+    // Input text field state
+    val inputFieldState = TextFieldState()
+
+    // Token generation job
     private var tokenCollectionJob: Job? = null
 
     /**
      * Send a message with the provided content
      */
-    fun sendMessage(content: String) {
+    fun sendMessage() {
+        val content = inputFieldState.text.toString()
         if (content.isBlank()) return
 
         // Cancel ongoing collection
@@ -55,6 +61,9 @@ class ConversationViewModel @Inject constructor(
             timestamp = System.currentTimeMillis()
         )
         _messages.value = _messages.value + assistantMessage
+
+        // Clear input field
+        inputFieldState.clearText()
 
         // Collect response
         tokenCollectionJob = viewModelScope.launch {

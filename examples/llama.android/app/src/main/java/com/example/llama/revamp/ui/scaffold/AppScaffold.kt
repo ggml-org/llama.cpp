@@ -99,6 +99,17 @@ fun AppScaffold(
                     onShare = config.onShare
                 )
             }
+
+            is BottomBarConfig.Conversation -> {
+                ConversationBottomBar(
+                    isReady = config.isEnabled,
+                    textFieldState = config.textFieldState,
+                    onSendClick = config.onSendClick,
+                    onAttachPhotoClick = config.onAttachPhotoClick,
+                    onAttachFileClick = config.onAttachFileClick,
+                    onAudioInputClick = config.onAudioInputClick,
+                )
+            }
         }
     }
 

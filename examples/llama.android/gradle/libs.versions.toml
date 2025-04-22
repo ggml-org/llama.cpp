@@ -23,7 +23,7 @@ serialization = "1.8.1"
 compose-bom = "2025.03.01"
 compose-foundation = "1.7.8"
 compose-material-icons = "1.7.8"
-compose-material3 = "1.3.2"
+compose-material3 = "1.4.0-alpha12"
 compose-ui = "1.7.8"
 
 # Accompanist
