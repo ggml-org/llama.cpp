@@ -40,8 +40,9 @@ To protect sensitive data from potential leaks or unauthorized access, it is cru
 ### Untrusted environments or networks
 
 If you can't run your models in a secure and isolated environment or if it must be exposed to an untrusted network, make sure to take the following security precautions:
-* Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value
+* Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value.
 * Encrypt your data if sending it over the network.
+* Do not use the RPC backend and [rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/examples/rpc) functionality.
 
 ### Multi-Tenant environments
 
