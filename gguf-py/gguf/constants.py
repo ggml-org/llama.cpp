@@ -231,10 +231,14 @@ class Keys:
         IMAGE_MEAN          = "clip.vision.image_mean"
         IMAGE_STD           = "clip.vision.image_std"
         USE_GELU            = "clip.use_gelu"
+        USE_SILU            = "clip.use_silu"
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
+
+        class Projector:
+            SCALE_FACTOR    = "clip.vision.projector.scale_factor"
 
 #
 # recommended mapping of model tensor names for storage in gguf
@@ -2120,6 +2124,11 @@ class GGUFValueType(IntEnum):
         # TODO: need help with 64-bit types in Python
         else:
             raise ValueError(f"Unknown type: {type(val)}")
+
+
+class VisionProjectorType:
+    GEMMA3 = "gemma3"
+    IDEFICS3 = "idefics3"
 
 
 # Items here are (block size, type size)

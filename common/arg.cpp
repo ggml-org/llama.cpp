@@ -976,14 +976,13 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-gritlm",
         "llama-imatrix",
         "llama-infill",
-        "llama-llava-cli",
+        "llama-mtmd-cli",
         "llama-llava-clip-quantize-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
-        "llama-minicpmv-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
@@ -2726,7 +2725,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LLAVA}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(

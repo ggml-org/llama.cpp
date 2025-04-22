@@ -159,6 +159,7 @@ struct clip_hparams {
     int32_t projection_dim;
     int32_t n_head;
     int32_t n_layer;
+    int32_t proj_scale_factor = 0; // idefics3
 
     patch_merge_type mm_patch_merge_type = PATCH_MERGE_FLAT;
 
@@ -506,6 +507,35 @@ static ggml_cgraph * clip_image_build_graph_siglip(clip_ctx * ctx, const clip_im
         embeddings = ggml_mul_mat(ctx0,
             ggml_cont(ctx0, ggml_transpose(ctx0, model.mm_input_proj_w)),
             embeddings);
+
+    } else if (ctx->proj_type == PROJECTOR_TYPE_IDEFICS3) {
+        // https://github.com/huggingface/transformers/blob/0a950e0bbe1ed58d5401a6b547af19f15f0c195e/src/transformers/models/idefics3/modeling_idefics3.py#L578
+
+        ggml_tensor * cur = embeddings;
+        const int scale_factor = model.hparams.proj_scale_factor;
+        const int n_embd = cur->ne[0];
+        const int seq    = cur->ne[1];
+        const int bsz    = 1; // batch size, always 1 for now since we don't support batching
+        const int height = std::sqrt(seq);
+        const int width  = std::sqrt(seq);
+        GGML_ASSERT(scale_factor != 0);
+        cur = ggml_reshape_4d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height, bsz);
+        cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+        cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
+            n_embd * scale_factor * scale_factor,
+            height / scale_factor,
+            width / scale_factor,
+            bsz);
+        cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+        cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur),
+            n_embd * scale_factor * scale_factor,
+            seq / (scale_factor * scale_factor),
+            bsz);
+
+        cur = ggml_mul_mat(ctx0, model.projection, cur);
+        embeddings = cur;
+    } else {
+        GGML_ABORT("SigLIP: Unsupported projector type");
     }
 
     // build the graph
@@ -1081,12 +1111,20 @@ static ggml_cgraph * clip_image_build_graph_legacy(clip_ctx * ctx, const clip_im
 }
 
 static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32_batch & imgs, struct clip_image_size load_image_size, bool is_inf = false) {
-    if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
-        return clip_image_build_graph_siglip(ctx, imgs);
-    } else {
-        // TODO: we should have one build_* function per model
-        return clip_image_build_graph_legacy(ctx, imgs, load_image_size, is_inf);
+    ggml_cgraph * res;
+    switch (ctx->proj_type) {
+        case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_IDEFICS3:
+            {
+                res = clip_image_build_graph_siglip(ctx, imgs);
+            } break;
+        default:
+            {
+                // TODO: we should have one build_* function per model
+                res = clip_image_build_graph_legacy(ctx, imgs, load_image_size, is_inf);
+            } break;
     }
+    return res;
 }
 
 struct clip_model_loader {
@@ -1147,6 +1185,8 @@ struct clip_model_loader {
     }
 
     void load_hparams() {
+        auto & hparams = ctx_clip.vision_model.hparams;
+
         // projector type
         {
             std::string proj_type;
@@ -1177,7 +1217,6 @@ struct clip_model_loader {
             get_bool(KEY_USE_GELU, ctx_clip.use_gelu, false);
             get_bool(KEY_USE_SILU, ctx_clip.use_silu, false);
 
-            auto & hparams = ctx_clip.vision_model.hparams;
             get_u32(string_format(KEY_N_EMBD,         "vision"), hparams.hidden_size);
             get_u32(string_format(KEY_N_HEAD,         "vision"), hparams.n_head);
             get_u32(string_format(KEY_N_FF,           "vision"), hparams.n_intermediate);
@@ -1232,6 +1271,16 @@ struct clip_model_loader {
             LOG_INF("%s: glm_projector:      %d\n", __func__, ctx_clip.has_glm_projector);
             LOG_INF("%s: model size:         %.2f MiB\n", __func__, model_size / 1024.0 / 1024.0);
             LOG_INF("%s: metadata size:      %.2f MiB\n", __func__, ggml_get_mem_size(ctx_meta.get()) / 1024.0 / 1024.0);
+        }
+
+        // model-specific params
+        switch (ctx_clip.proj_type) {
+            case PROJECTOR_TYPE_IDEFICS3:
+                {
+                    get_u32(KEY_PROJ_SCALE_FACTOR, hparams.proj_scale_factor, false);
+                } break;
+            default:
+                break;
         }
     }
 
@@ -1421,6 +1470,10 @@ struct clip_model_loader {
                 {
                     vision_model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
                     vision_model.mm_soft_emb_norm_w = get_tensor(TN_MM_SOFT_EMB_N);
+                } break;
+            case PROJECTOR_TYPE_IDEFICS3:
+                {
+                    vision_model.projection = get_tensor(TN_MM_PROJECTOR);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -2195,10 +2248,12 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         return true;
     }
 
-    if (ctx->has_glm_projector || ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
+    if (ctx->has_glm_projector
+            || ctx->proj_type == PROJECTOR_TYPE_GEMMA3
+            || ctx->proj_type == PROJECTOR_TYPE_IDEFICS3) {
         clip_image_u8 resized_image;
         int sz = params.image_size;
-        image_manipulation::bicubic_resize(*img, resized_image, sz, sz);
+        image_manipulation::resize_and_pad_image(*img, resized_image, {sz, sz});
         clip_image_f32_ptr img_f32(clip_image_f32_init());
         //clip_image_save_to_bmp(resized_image, "resized.bmp");
         normalize_image_u8_to_f32(resized_image, *img_f32, ctx->image_mean, ctx->image_std);
@@ -2330,6 +2385,8 @@ int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * i
         n_patches = x_patch * y_patch;
     } else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
         n_patches = 256;
+    } else if (ctx->proj_type == PROJECTOR_TYPE_IDEFICS3) {
+        n_patches /= ctx->vision_model.hparams.proj_scale_factor;
     }
 
     return n_patches;
@@ -2597,6 +2654,9 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         else if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
             // do nothing
         }
+        else if (ctx->proj_type == PROJECTOR_TYPE_IDEFICS3) {
+            // do nothing
+        }
         else {
             struct ggml_tensor * positions = ggml_graph_get_tensor(gf, "positions");
 
@@ -2783,37 +2843,34 @@ bool clip_model_quantize(const char * fname_inp, const char * fname_out, const i
 }
 
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
-    if (ctx->proj_type == PROJECTOR_TYPE_LDP) {
-        return ctx->vision_model.mm_model_block_1_block_2_1_b->ne[0];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_LDPV2) {
-        return ctx->vision_model.mm_model_peg_0_b->ne[0];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_MLP) {
-        return ctx->vision_model.mm_2_b->ne[0];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_MLP_NORM) {
-        return ctx->vision_model.mm_3_b->ne[0];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_RESAMPLER) {
-        if (ctx->minicpmv_version == 2) {
-            return 4096;
-        }
-        else if (ctx->minicpmv_version == 3) {
-            return 3584;
-        }
-        else if (ctx->minicpmv_version == 4) {
-            return 3584;
-        }
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_GLM_EDGE){
-        return ctx->vision_model.mm_model_mlp_3_w->ne[1];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_MERGER) {
-        return ctx->vision_model.mm_1_b->ne[0];
-    }
-    if (ctx->proj_type == PROJECTOR_TYPE_GEMMA3) {
-        return ctx->vision_model.mm_input_proj_w->ne[0];
+    switch (ctx->proj_type) {
+        case PROJECTOR_TYPE_LDP:
+            return ctx->vision_model.mm_model_block_1_block_2_1_b->ne[0];
+        case PROJECTOR_TYPE_LDPV2:
+            return ctx->vision_model.mm_model_peg_0_b->ne[0];
+        case PROJECTOR_TYPE_MLP:
+            return ctx->vision_model.mm_2_b->ne[0];
+        case PROJECTOR_TYPE_MLP_NORM:
+            return ctx->vision_model.mm_3_b->ne[0];
+        case PROJECTOR_TYPE_RESAMPLER:
+            if (ctx->minicpmv_version == 2) {
+                return 4096;
+            } else if (ctx->minicpmv_version == 3) {
+                return 3584;
+            } else if (ctx->minicpmv_version == 4) {
+                return 3584;
+            }
+            break; // Should not happen if version is valid
+        case PROJECTOR_TYPE_GLM_EDGE:
+            return ctx->vision_model.mm_model_mlp_3_w->ne[1];
+        case PROJECTOR_TYPE_MERGER:
+            return ctx->vision_model.mm_1_b->ne[0];
+        case PROJECTOR_TYPE_GEMMA3:
+            return ctx->vision_model.mm_input_proj_w->ne[0];
+        case PROJECTOR_TYPE_IDEFICS3:
+            return ctx->vision_model.projection->ne[1];
+        default:
+            break; // Fall through to throw
     }
 
     std::string proj_type = PROJECTOR_TYPE_NAMES[ctx->proj_type];

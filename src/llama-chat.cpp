@@ -62,6 +62,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
+    { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -81,7 +82,9 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
     if (tmpl_contains("<|im_start|>")) {
         return tmpl_contains("<|im_sep|>")
             ? LLM_CHAT_TEMPLATE_PHI_4
-            : LLM_CHAT_TEMPLATE_CHATML;
+            : tmpl_contains("<end_of_utterance>")
+                ? LLM_CHAT_TEMPLATE_SMOLVLM // SmolVLM uses <|im_start|> as BOS, but it is NOT chatml
+                : LLM_CHAT_TEMPLATE_CHATML;
     } else if (tmpl.find("mistral") == 0 || tmpl_contains("[INST]")) {
         if (tmpl_contains("[SYSTEM_PROMPT]")) {
             return LLM_CHAT_TEMPLATE_MISTRAL_V7;
@@ -121,6 +124,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_PHI_3;
     } else if (tmpl_contains("<|assistant|>") && tmpl_contains("<|user|>")) {
         return tmpl_contains("</s>") ? LLM_CHAT_TEMPLATE_FALCON_3 : LLM_CHAT_TEMPLATE_GLMEDGE;
+    } else if (tmpl_contains("<|{{ item['role'] }}|>") && tmpl_contains("<|begin_of_image|>")) {
+        return LLM_CHAT_TEMPLATE_GLMEDGE;
     } else if (tmpl_contains("<|user|>") && tmpl_contains("<|endoftext|>")) {
         return LLM_CHAT_TEMPLATE_ZEPHYR;
     } else if (tmpl_contains("bos_token + message['role']")) {
@@ -620,7 +625,23 @@ int32_t llm_chat_apply_template(
         if (add_ass) {
             ss << "<|header_start|>assistant<|header_end|>\n\n";
         }
-    }  else {
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SMOLVLM) {
+        // SmolVLM
+        ss << "<|im_start|>"; // uses <|im_start|> as BOS, but the actual content is NOT chatml
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << message->content << "\n\n";
+            } else if (role == "user") {
+                ss << "User: " << message->content << "<end_of_utterance>\n";
+            } else {
+                ss << "Assistant: " << message->content << "<end_of_utterance>\n";
+            }
+        }
+        if (add_ass) {
+            ss << "Assistant:";
+        }
+    } else {
         // template not supported
         return -1;
     }

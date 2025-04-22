@@ -28,15 +28,16 @@ static bool g_is_generating = false;
 
 /**
  * Please note that this is NOT a production-ready stuff.
- * It is a playground for trying Gemma 3 vision capabilities.
+ * It is a playground for trying multimodal support in llama.cpp.
  * For contributors: please keep this code simple and easy to understand.
  */
 
 static void show_additional_info(int /*argc*/, char ** argv) {
     LOG(
-        "Experimental CLI for using Gemma 3 vision model\n\n"
+        "Experimental CLI for multimodal\n\n"
         "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
+        "  -hf user/repo can replace both -m and --mmproj in most cases\n"
         "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n",
         argv[0]
     );
@@ -56,7 +57,7 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-struct gemma3_context {
+struct mtmd_cli_context {
     mtmd_context_ptr ctx_vision;
     common_init_result llama_init;
 
@@ -70,18 +71,38 @@ struct gemma3_context {
     // so here we don't need to keep track of chat history
     common_chat_templates_ptr tmpls;
 
+    // support for legacy templates (models not having EOT token)
+    llama_tokens antiprompt_tokens;
+
     int n_threads    = 1;
     llama_pos n_past = 0;
 
-    gemma3_context(common_params & params) : llama_init(common_init_from_params(params)) {
+    mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
         model = llama_init.model.get();
         lctx = llama_init.context.get();
         vocab = llama_model_get_vocab(model);
         n_threads = params.cpuparams.n_threads;
         batch = llama_batch_init(params.n_batch, 0, 1);
         n_batch = params.n_batch;
+
+        if (!llama_model_chat_template(model, nullptr) && params.chat_template.empty()) {
+            LOG_ERR("Model does not have chat template.\n");
+            LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
+            LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
+            exit(1);
+        }
+
         tmpls = common_chat_templates_init(model, params.chat_template);
+        LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(tmpls.get(), params.use_jinja).c_str());
+
         init_vision_context(params);
+
+        // load antiprompt tokens for legacy templates
+        if (params.chat_template == "vicuna") {
+            antiprompt_tokens = common_tokenize(lctx, "ASSISTANT:", false, true);
+        } else if (params.chat_template == "deepseek") {
+            antiprompt_tokens = common_tokenize(lctx, "###", false, true);
+        }
     }
 
     void init_vision_context(common_params & params) {
@@ -96,6 +117,17 @@ struct gemma3_context {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);
         }
+    }
+
+    bool check_antiprompt(const llama_tokens & generated_tokens) {
+        if (antiprompt_tokens.empty() || generated_tokens.size() < antiprompt_tokens.size()) {
+            return false;
+        }
+        return std::equal(
+            generated_tokens.end() - antiprompt_tokens.size(),
+            generated_tokens.end(),
+            antiprompt_tokens.begin()
+        );
     }
 };
 
@@ -132,7 +164,8 @@ struct decode_embd_batch {
     }
 };
 
-static int generate_response(gemma3_context & ctx, common_sampler * smpl, int n_predict) {
+static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int n_predict) {
+    llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating) {
             printf("\n");
@@ -140,9 +173,10 @@ static int generate_response(gemma3_context & ctx, common_sampler * smpl, int n_
         }
 
         llama_token token_id = common_sampler_sample(smpl, ctx.lctx, -1);
+        generated_tokens.push_back(token_id);
         common_sampler_accept(smpl, token_id, true);
 
-        if (llama_vocab_is_eog(ctx.vocab, token_id)) {
+        if (llama_vocab_is_eog(ctx.vocab, token_id) || ctx.check_antiprompt(generated_tokens)) {
             printf("\n");
             break; // end of generation
         }
@@ -161,7 +195,7 @@ static int generate_response(gemma3_context & ctx, common_sampler * smpl, int n_
     return 0;
 }
 
-static int eval_message(gemma3_context & ctx, common_chat_msg & msg, std::vector<std::string> & images_fname, bool add_bos = false) {
+static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vector<std::string> & images_fname, bool add_bos = false) {
     std::vector<mtmd_bitmap> bitmaps;
 
     common_chat_templates_inputs tmpl_inputs;
@@ -218,7 +252,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    gemma3_context ctx(params);
+    mtmd_cli_context ctx(params);
     printf("%s: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();

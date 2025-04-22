@@ -33,13 +33,13 @@
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 #define KEY_PROJ_DIM            "clip.%s.projection_dim"
 #define KEY_TOKENS              "tokenizer.ggml.tokens"
-#define KEY_N_POSITIONS         "clip.text.context_length"
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
 #define KEY_IMAGE_STD           "clip.vision.image_std"
-#define KEY_PROJ_TYPE           "clip.projector_type"
 #define KEY_FEATURE_LAYER       "clip.vision.feature_layer"
+#define KEY_PROJ_SCALE_FACTOR   "clip.vision.projector.scale_factor"
+#define KEY_PROJ_TYPE           "clip.projector_type"
 
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
@@ -72,6 +72,7 @@
 #define TN_IMAGE_NEWLINE   "model.image_newline"
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
+#define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
 
 // mimicpmv
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
@@ -99,6 +100,7 @@ enum projector_type {
     PROJECTOR_TYPE_GLM_EDGE,
     PROJECTOR_TYPE_MERGER,
     PROJECTOR_TYPE_GEMMA3,
+    PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -110,6 +112,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLM_EDGE,  "adapter"},
     { PROJECTOR_TYPE_MERGER,    "qwen2vl_merger"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
+    { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
