@@ -8,6 +8,7 @@ import com.example.llama.revamp.data.local.dao.ModelDao
 import com.example.llama.revamp.data.local.entity.ModelEntity
 import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.repository.ModelRepository.ImportProgressTracker
+import com.example.llama.revamp.monitoring.StorageMetrics
 import com.example.llama.revamp.util.GgufMetadataReader
 import com.example.llama.revamp.util.copyWithBuffer
 import com.example.llama.revamp.util.copyWithChannels
@@ -337,7 +338,3 @@ class ModelRepositoryImpl @Inject constructor(
     }
 }
 
-data class StorageMetrics(
-    val usedGB: Float,
-    val availableGB: Float
-)

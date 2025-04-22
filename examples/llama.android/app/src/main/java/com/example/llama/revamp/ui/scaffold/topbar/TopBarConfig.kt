@@ -1,7 +1,7 @@
 package com.example.llama.revamp.ui.scaffold.topbar
 
-import com.example.llama.revamp.data.repository.StorageMetrics
 import com.example.llama.revamp.monitoring.MemoryMetrics
+import com.example.llama.revamp.monitoring.StorageMetrics
 import com.example.llama.revamp.monitoring.TemperatureMetrics
 
 /**
