@@ -14,6 +14,8 @@ lifecycle = "2.8.7"
 navigation = "2.8.9"
 room = "2.7.0"
 hilt = "1.2.0"
+retrofit2 = "2.11.0"
+okhttp3 = "4.12.0"
 
 # Kotlin Extensions
 coroutines = "1.10.2"
@@ -85,6 +87,11 @@ hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref
 hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "dagger-hilt" }
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hilt" }
 
+# Retrofit
+squareup-retrofit2 = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit2" }
+squareup-retrofit2-converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit2" }
+squareup-okhttp3-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp3" }
+
 # Testing
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espresso-core" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidx-junit" }
@@ -117,6 +124,11 @@ kotlinx = [
 hilt = [
     "hilt-android",
     "androidx-hilt-navigation-compose",
+]
+retrofit = [
+    "squareup-retrofit2",
+    "squareup-retrofit2-converter-gson",
+    "squareup-okhttp3-logging-interceptor",
 ]
 debug = [
     "compose-ui-tooling",

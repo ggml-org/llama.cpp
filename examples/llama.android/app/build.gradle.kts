@@ -59,6 +59,7 @@ dependencies {
     implementation(libs.bundles.kotlinx)
     ksp(libs.hilt.android.compiler)
     implementation(libs.bundles.hilt)
+    implementation(libs.bundles.retrofit)
 
     // Individual dependencies
     implementation(libs.accompanist.systemuicontroller)
