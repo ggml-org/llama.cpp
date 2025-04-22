@@ -1,3 +1,9 @@
+#include "arg.h"
+#include "common.h"
+#include "llama-impl.h"
+#include "llama.h"
+#include "log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -10,11 +16,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
-
-#include "arg.h"
-#include "common.h"
-#include "llama.h"
-#include "log.h"
+#include <regex>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -36,16 +38,17 @@ struct Stats {
 
 struct tensor_statistics {
     std::string tensor;
-    float total = 0;
-    float mean = 0;
-    float max = 0;
-    float min = 0;
+    Stats stats;
+    float total_bias = 0;
+    float mean_bias = 0;
+    float max_bias = 0;
+    float min_bias = 0;
+    int elements = 0;
     float stddev = 0;
-    float cv = 0;
-    float zd = 0;
     float active = 0;
     float entropy = 0;
-    int elements = 0;
+    float zd = 0;
+    float cossim = 0;
 };
 
 class IMatrixCollector {
@@ -332,7 +335,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
 }
 
-bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_statistics> * ts) {
+bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_statistics> * tstats) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
         LOG_ERR("%s: failed to open %s\n",__func__, fname);
@@ -381,31 +384,29 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
         std::vector<float> activations;
         activations.reserve(nval);
-
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
             e.counts[i] += ncall;
-            activations.push_back(e.values[i] / static_cast<float>(e.counts[i]));
+            activations.push_back(e.values[i] / e.counts[i]);
         }
         e.ncall += ncall;
 
-        if (ts) {
-            float total_bias = std::accumulate(activations.begin(), activations.end(), 0.0f);
-            float max_bias = * std::max_element(activations.begin(), activations.end());
-            float min_bias = * std::min_element(activations.begin(), activations.end());
-            float mean_bias = total_bias / activations.size();
-            float sq_total_bias = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-            float dev = std::sqrt((sq_total_bias / activations.size()) - (mean_bias * mean_bias));
-            float rmsd = mean_bias > 0.0f ? dev / mean_bias : 0.0f;
+        if (tstats) {
+            float total = std::accumulate(activations.begin(), activations.end(), 0.0f);
+            float max = * std::max_element(activations.begin(), activations.end());
+            float min = * std::min_element(activations.begin(), activations.end());
+            float mean = total / activations.size();
+            float sq_total = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
+            float dev = std::sqrt((sq_total / activations.size()) - (mean * mean));
 
-            float threshold = 1e-6f;
-            int inactive_count = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabs(v) < threshold; });
-            float active_ratio = 1 -  (static_cast<float>(inactive_count) / activations.size());
+            float threshold = min + min * 0.5f;
+            int inactive_count = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabs(v) <= threshold; });
+            float active_ratio = 1 -  static_cast<float>(inactive_count) / activations.size();
 
-            float ent = 0.0f;
-            if (total_bias > 0) {
+            float ent = 0;
+            if (total > 0) {
                 for (auto act : activations) {
-                    if (float p = act / total_bias; p > 0) {
+                    if (float p = act / total; p > 0) {
                         ent -= p* std::log2(p);
                     }
                 }
@@ -413,26 +414,48 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
 
             int z_score = 0;
             for (auto act : activations) {
-                if (float p = (act - mean_bias) / dev; p > 1) {
+                if (float p = (act - mean) / dev; p > 1) {
                     z_score++;
                 }
             }
 
-            ts->emplace_back();
-            auto & [tensor, total, mean, max, min, stddev, cv, zd, active, entropy, elements] = (*ts)[i];
-            tensor = name_as_vec.data();
-            total = total_bias;
-            mean = mean_bias;
-            max = max_bias;
-            min = min_bias;
-            stddev = dev;
-            cv = rmsd;
-            active = active_ratio;
-            entropy = ent;
-            elements = static_cast<int>(activations.size());
-            zd = static_cast<float>(z_score) / static_cast<float>(elements);
+            tstats->emplace_back();
+            auto & ts     = (*tstats)[i];
+            ts.tensor     = name_as_vec.data();
+            ts.stats      = e;
+            ts.total_bias = total;
+            ts.mean_bias  = mean;
+            ts.max_bias   = max;
+            ts.min_bias   = min;
+            ts.elements   = static_cast<int>(activations.size());
+            ts.stddev     = dev;
+            ts.active     = active_ratio;
+            ts.entropy    = ent;
+            ts.zd = static_cast<float>(z_score) / ts.elements;
         }
     }
+
+    if (tstats) {
+        static const std::regex pattern(R"(blk\.(\d+)\.)");
+        for (auto & ts : *tstats) {
+            if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
+                const int blk = std::stoi(match[1]);
+                std::string tname(ts.tensor);
+                tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
+                auto prev = std::find_if(tstats->begin(), tstats->end(), [tname](const tensor_statistics & t) { return t.tensor == tname; });
+                if (prev != tstats->end()) {
+                    const float dp = std::inner_product(ts.stats.values.begin(), ts.stats.values.end(), prev->stats.values.begin(), 0.0f);
+                    const float curr_mag = std::sqrt(std::inner_product(ts.stats.values.begin(), ts.stats.values.end(), ts.stats.values.begin(), 0.0f));
+                    const float prev_mag = std::sqrt(std::inner_product(prev->stats.values.begin(), prev->stats.values.end(), prev->stats.values.begin(), 0.0f));
+                    const float cs = dp / (curr_mag * prev_mag);
+                    ts.cossim = cs;
+                }
+            } else {
+                ts.cossim = 0;
+            }
+        }
+    }
+
     return true;
 }
 
@@ -700,20 +723,22 @@ int main(int argc, char ** argv) {
                 std::string layer, name_a, name_b;;
                 process_tensor_name(a.tensor, layer, name_a);
                 process_tensor_name(b.tensor, layer, name_b);
-                return name_a < name_b || (name_a == name_b && a.total > b.total);
+                return name_a < name_b || (name_a == name_b && a.total_bias > b.total_bias);
             }
         };
         std::sort(ts.begin(), ts.end(), tensor_comparer());
 
         LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-        LOG_INF("\n%5s\t%-20s\t%10s\t%7s\t%12s\t%9s\t%10s\t%9s\t%6s\t%12s\t%7s\t%10s\n",
-            "Layer", "Tensor", "Σ(Bias)", "Min", "Max", "μ", "σ", "% Active", "N", "Entropy", "E (norm)", "ZD Score");
-        LOG_INF("==========================================================================================================================================================================\n");
-        for (const auto & [tensor, total, mean, max, min, stddev, cv, zd, active, entropy, elements] : ts) {
+        LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+            " Layer", "       Tensor", "          Σ(Bias)", "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD", "  CosSim");
+        LOG_INF("=========================================================================================================================================================================\n");
+        for (const auto & tstat : ts) {
             std::string layer, name;
-            process_tensor_name(tensor, layer, name);
-            LOG_INF("%5s\t%-20s\t%10.2f\t%7.4f\t%12.4f\t%8.4f\t%9.4f\t%8.2f%%\t%6d\t%12.4f\t%7.2f%%\t%9.2f%%\n",
-                layer.c_str(), name.c_str(), total, min, max, mean, stddev, active * 100.0f, elements, entropy, 100.0f * (entropy / std::log2(elements)), 100.0f * zd);
+            process_tensor_name(tstat.tensor, layer, name);
+            LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
+                layer.c_str(), name.c_str(), tstat.total_bias, tstat.min_bias, tstat.max_bias, tstat.mean_bias, tstat.stddev,
+                tstat.active * 100.0f, tstat.elements, tstat.entropy, 100.0f * (tstat.entropy / std::log2(tstat.elements)),
+                100.0f * tstat.zd, tstat.cossim);
         }
         LOG_INF("\n");
 
