@@ -24,7 +24,7 @@ if 'NO_LOCAL_GGUF' not in os.environ:
 import gguf
 
 # reuse model definitions from convert_hf_to_gguf.py
-from convert_hf_to_gguf import LazyTorchTensor, Model
+from convert_hf_to_gguf import LazyTorchTensor, ModelBase
 
 logger = logging.getLogger("lora-to-gguf")
 
@@ -340,11 +340,11 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         logger.info(f"Loading base model: {dir_base_model.name}")
-        hparams = Model.load_hparams(dir_base_model)
+        hparams = ModelBase.load_hparams(dir_base_model)
 
     with torch.inference_mode():
         try:
-            model_class = Model.from_model_architecture(hparams["architectures"][0])
+            model_class = ModelBase.from_model_architecture(hparams["architectures"][0])
         except NotImplementedError:
             logger.error(f"Model {hparams['architectures'][0]} is not supported")
             sys.exit(1)
