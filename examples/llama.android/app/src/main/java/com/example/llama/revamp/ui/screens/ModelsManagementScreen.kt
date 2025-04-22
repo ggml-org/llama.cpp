@@ -221,6 +221,25 @@ fun ModelsManagementScreen(
             is ModelManagementState.Idle -> { /* Idle state, nothing to show */ }
         }
     }
+
+    // TODO-han.yin: UI TO BE IMPLEMENTED
+    val huggingFaceModelsFlow = viewModel.huggingFaceModels
+    LaunchedEffect(Unit) {
+        huggingFaceModelsFlow.collect { models ->
+            val message = models.fold(
+                StringBuilder("Fetched ${models.size} models from HuggingFace")
+            ) { builder, model ->
+                builder.append(model.id).append("\n")
+            }.toString()
+
+            onScaffoldEvent(
+                ScaffoldEvent.ShowSnackbar(
+                    message = message,
+                    duration = SnackbarDuration.Short
+                )
+            )
+        }
+    }
 }
 
 @Composable

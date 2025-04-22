@@ -10,6 +10,7 @@ import com.example.llama.revamp.data.model.ModelInfo
 import com.example.llama.revamp.data.model.ModelSortOrder
 import com.example.llama.revamp.data.model.filterBy
 import com.example.llama.revamp.data.model.sortByOrder
+import com.example.llama.revamp.data.remote.HuggingFaceModel
 import com.example.llama.revamp.data.repository.InsufficientStorageException
 import com.example.llama.revamp.data.repository.ModelRepository
 import com.example.llama.revamp.util.getFileNameFromUri
@@ -19,7 +20,9 @@ import com.example.llama.revamp.viewmodel.ModelManagementState.Importation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -213,8 +216,20 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
-    // TODO-han.yin: Stub for now. Would need to investigate HuggingFace APIs
-    fun importFromHuggingFace() {}
+    // TODO-han.yin: UI TO BE IMPLEMENTED
+    private val _huggingFaceModels = MutableSharedFlow<List<HuggingFaceModel>>()
+    val huggingFaceModels: SharedFlow<List<HuggingFaceModel>> = _huggingFaceModels
+
+    fun importFromHuggingFace() = viewModelScope.launch {
+        modelRepository.searchHuggingFaceModels().let { models ->
+            _huggingFaceModels.emit(models)
+
+            Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
+            models.forEachIndexed { index, model ->
+                Log.d(TAG, "#$index: ${model.id}")
+            }
+        }
+    }
 
     /**
      * First show confirmation instead of starting deletion immediately
