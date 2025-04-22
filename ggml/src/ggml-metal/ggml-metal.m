@@ -473,16 +473,19 @@ enum ggml_metal_kernel_type {
 //
 
 struct ggml_metal_heap {
-    int n_unused; // number of times the heap was unused
+    // number of times the heap was unused
+    int n_unused;
 
-    int64_t n_alloc; // total number of buffer allocations in this heap across all computes
+    // total number of buffer allocations in this heap across all computes
+    int64_t n_alloc;
 
     // current offset in the heap - we reset this after each node in order to reuse the memory
     size_t offs;
 
+    // the currently allocated MTLBuffer objects in this heap
     id<MTLHeap> obj;
 
-    NSMutableArray * bufs; // the currently allocated MTLBuffer objects in this heap
+    NSMutableArray * bufs;
 };
 
 static struct ggml_metal_heap * ggml_metal_heap_init(id<MTLDevice> device, size_t size) {
@@ -586,7 +589,7 @@ static void ggml_metal_mem_pool_free(struct ggml_metal_mem_pool * mem_pool) {
     size_t size_cur = 0;
 
     for (ggml_metal_heap_ptr * ptr in mem_pool->heaps) {
-        GGML_LOG_DEBUG("%s:   heap: %p\n",               __func__, (void *) ptr.data);
+        GGML_LOG_DEBUG("%s:   heap: %p\n",                __func__, (void *) ptr.data);
         GGML_LOG_DEBUG("%s:     n_alloc:  %" PRId64 "\n", __func__, ptr.data->n_alloc);
         GGML_LOG_DEBUG("%s:     n_unused: %d\n",          __func__, ptr.data->n_unused);
         GGML_LOG_DEBUG("%s:     size:     %.2f MiB\n",    __func__, [ptr.data->obj size] / 1024.0 / 1024.0);
