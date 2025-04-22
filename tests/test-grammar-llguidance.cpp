@@ -2,7 +2,6 @@
 #    undef NDEBUG
 #endif
 
-#include "unicode.h"
 #include "sampling.h"
 
 #include <cassert>
