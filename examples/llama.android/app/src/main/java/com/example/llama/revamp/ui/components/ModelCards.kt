@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.example.llama.revamp.data.model.ModelInfo
+import com.example.llama.revamp.util.languageCodeToFlagEmoji
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -333,12 +334,12 @@ fun ModelCardContentLanguagesSections(languages: List<String>) =
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        languages.forEach { language ->
+        languages.mapNotNull { languageCodeToFlagEmoji(it) }.forEach { emoji ->
             AssistChip(
                 onClick = { /* No action */ },
                 label = {
                     Text(
-                        text = language,
+                        text = emoji,
                         style = MaterialTheme.typography.bodySmall,
                         fontStyle = FontStyle.Italic,
                         fontWeight = FontWeight.Light,

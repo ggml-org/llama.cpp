@@ -46,3 +46,62 @@ fun formatContextLength(contextLength: Int): String {
         else -> contextLength.toString()
     }
 }
+
+
+/**
+ * Maps ISO 639-1 language codes into ISO 3166-1 alpha-2 country codes, and then map to Emoji.
+ *
+ */
+fun languageCodeToFlagEmoji(languageCode: String): String? {
+    val countryCode = LANGUAGE_TO_COUNTRY[languageCode.lowercase()] ?: return null
+
+    return countryCodeToFlagEmoji(countryCode)
+}
+
+/**
+ * Formats ISO 3166-1 alpha-2 country code into corresponding Emoji.
+ */
+private fun countryCodeToFlagEmoji(countryCode: String): String? {
+    if (countryCode.length != 2) return null
+
+    // Convert each character to a Regional Indicator Symbol
+    val firstChar = Character.codePointAt(countryCode.uppercase(), 0) - 'A'.code + 0x1F1E6
+    val secondChar = Character.codePointAt(countryCode.uppercase(), 1) - 'A'.code + 0x1F1E6
+
+    return String(Character.toChars(firstChar)) + String(Character.toChars(secondChar))
+}
+
+private val LANGUAGE_TO_COUNTRY by lazy {
+    mapOf(
+        "en" to "US",
+        "de" to "DE",
+        "fr" to "FR",
+        "it" to "IT",
+        "es" to "ES",
+        "pt" to "BR",
+        "hi" to "IN",
+        "th" to "TH",
+        "ja" to "JP",
+        "ko" to "KR",
+        "zh" to "CN",
+        "ru" to "RU",
+        "ar" to "SA",
+        "nl" to "NL",
+        "sv" to "SE",
+        "fi" to "FI",
+        "pl" to "PL",
+        "tr" to "TR",
+        "vi" to "VN",
+        "el" to "GR",
+        "he" to "IL",
+        "id" to "ID",
+        "ms" to "MY",
+        "no" to "NO",
+        "da" to "DK",
+        "cs" to "CZ",
+        "hu" to "HU",
+        "ro" to "RO",
+        "sk" to "SK",
+        "uk" to "UA",
+    )
+}
