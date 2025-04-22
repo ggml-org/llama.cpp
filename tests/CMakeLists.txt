@@ -96,6 +96,8 @@ if (NOT WIN32)
     llama_target_and_test(test-grammar-parser.cpp)
     llama_target_and_test(test-grammar-integration.cpp)
     llama_target_and_test(test-llama-grammar.cpp)
+    llama_target_and_test(test-quantize-stats.cpp)
+    llama_target_and_test(test-gbnf-validator.cpp)
     llama_target_and_test(test-chat.cpp)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")

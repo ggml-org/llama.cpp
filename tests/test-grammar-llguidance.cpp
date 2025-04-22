@@ -84,7 +84,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
 
             fprintf(stderr,
                     "\n NOTE: Debug grammar file generated. To analyze this failure in detail, run the following "
-                    "command:     ./llama-gbnf-validator test-grammar-integration.grammar.gbnf "
+                    "command:     ./test-gbnf-validator test-grammar-integration.grammar.gbnf "
                     "test-grammar-integration.string.txt\n\n");
         } else {
             fprintf(stdout, "✅︎\n");
