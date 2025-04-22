@@ -7,6 +7,11 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.example.llama.revamp.ui.scaffold.bottombar.BenchmarkBottomBar
+import com.example.llama.revamp.ui.scaffold.bottombar.BottomBarConfig
+import com.example.llama.revamp.ui.scaffold.bottombar.ConversationBottomBar
+import com.example.llama.revamp.ui.scaffold.bottombar.ModelSelectionBottomBar
+import com.example.llama.revamp.ui.scaffold.bottombar.ModelsManagementBottomBar
 
 /**
  * Configuration of both [TopBarConfig] and [BottomBarConfig]
