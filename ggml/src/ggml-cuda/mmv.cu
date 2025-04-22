@@ -214,11 +214,13 @@ void ggml_cuda_mul_mat_vec(ggml_backend_cuda_context & ctx, const ggml_tensor * 
     const size_t ts_src1 = ggml_type_size(src1->type);
     const size_t ts_dst  = ggml_type_size(dst->type);
 
+    GGML_ASSERT(!ids || ne12 == 1); // Implementation is only correct for  batch size 1.
     GGML_ASSERT(ne13 == ne3);
 
-    GGML_ASSERT(nb00 == ts_src0);
-    GGML_ASSERT(nb10 == ts_src1);
-    GGML_ASSERT(nb0  == ts_dst);
+    GGML_ASSERT(        nb00       == ts_src0);
+    GGML_ASSERT(        nb10       == ts_src1);
+    GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
+    GGML_ASSERT(        nb0        == ts_dst);
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;

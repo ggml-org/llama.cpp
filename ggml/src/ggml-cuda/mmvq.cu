@@ -154,10 +154,10 @@ static __global__ void mul_mat_vec_q(
     const     int blocks_per_row_x = ncols_x / qk;
     constexpr int blocks_per_iter = vdr * nwarps*warp_size / qi;
 
-    // The following logic for ids != nullptr is only correct if ncols_dst == 1.
+    // The MUL_MAT_ID code path with ids != nullptr is only implemetned for ncols_dst == 1.
     const int channel_dst = blockIdx.y;
-    const int channel_x   = ids ? ids[channel_dst]          : channel_dst / channel_ratio;
-    const int channel_y   = ids ? channel_dst % nchannels_y : channel_dst;
+    const int channel_x   = ncols_dst == 1 && ids ? ids[channel_dst]          : channel_dst / channel_ratio;
+    const int channel_y   = ncols_dst == 1 && ids ? channel_dst % nchannels_y : channel_dst;
     const int sample_dst  = blockIdx.z;
     const int sample_x    = sample_dst / sample_ratio;
     const int sample_y    = sample_dst;
@@ -502,6 +502,8 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(        nb10       == ts_src1);
     GGML_ASSERT(        nb0        == ts_dst);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
+
+    GGML_ASSERT(!ids || ne12 == 1); // Implementation is only correct for  batch size 1.
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
