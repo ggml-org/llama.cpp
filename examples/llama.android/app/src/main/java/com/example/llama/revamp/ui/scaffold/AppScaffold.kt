@@ -12,6 +12,11 @@ import com.example.llama.revamp.ui.scaffold.bottombar.BottomBarConfig
 import com.example.llama.revamp.ui.scaffold.bottombar.ConversationBottomBar
 import com.example.llama.revamp.ui.scaffold.bottombar.ModelSelectionBottomBar
 import com.example.llama.revamp.ui.scaffold.bottombar.ModelsManagementBottomBar
+import com.example.llama.revamp.ui.scaffold.topbar.DefaultTopBar
+import com.example.llama.revamp.ui.scaffold.topbar.NavigationIcon
+import com.example.llama.revamp.ui.scaffold.topbar.PerformanceTopBar
+import com.example.llama.revamp.ui.scaffold.topbar.StorageTopBar
+import com.example.llama.revamp.ui.scaffold.topbar.TopBarConfig
 
 /**
  * Configuration of both [TopBarConfig] and [BottomBarConfig]

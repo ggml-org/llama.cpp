@@ -38,11 +38,11 @@ import com.example.llama.revamp.navigation.NavigationActions
 import com.example.llama.revamp.ui.scaffold.AnimatedNavHost
 import com.example.llama.revamp.ui.scaffold.AppNavigationDrawer
 import com.example.llama.revamp.ui.scaffold.AppScaffold
-import com.example.llama.revamp.ui.scaffold.NavigationIcon
 import com.example.llama.revamp.ui.scaffold.ScaffoldConfig
 import com.example.llama.revamp.ui.scaffold.ScaffoldEvent
-import com.example.llama.revamp.ui.scaffold.TopBarConfig
 import com.example.llama.revamp.ui.scaffold.bottombar.BottomBarConfig
+import com.example.llama.revamp.ui.scaffold.topbar.NavigationIcon
+import com.example.llama.revamp.ui.scaffold.topbar.TopBarConfig
 import com.example.llama.revamp.ui.screens.BenchmarkScreen
 import com.example.llama.revamp.ui.screens.ConversationScreen
 import com.example.llama.revamp.ui.screens.ModelLoadingScreen
