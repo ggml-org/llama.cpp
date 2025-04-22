@@ -132,6 +132,7 @@ endif()
 
 llama_target_and_test(test-log.cpp)
 llama_target_and_test(test-chat-template.cpp)
+llama_target_and_test(test-regex-partial.cpp)
 
 # this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
 if (NOT WIN32)

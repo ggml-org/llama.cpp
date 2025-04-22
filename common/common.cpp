@@ -443,6 +443,25 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     s = std::move(builder);
 }
 
+bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
+    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
+}
+size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
+    if (!str.empty() && !stop.empty()) {
+        const char text_last_char = str.back();
+        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
+            if (stop[char_index] == text_last_char) {
+                const auto current_partial = stop.substr(0, char_index + 1);
+                if (string_ends_with(str, current_partial)) {
+                    return str.size() - char_index - 1;
+                }
+            }
+        }
+    }
+
+    return std::string::npos;
+}
+
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
     return std::regex_replace(s, special_chars, "\\$0");

@@ -1423,7 +1423,7 @@ struct server_slot {
                 pos = text.find(word, from_pos);
             } else {
                 // otherwise, partial stop
-                pos = find_partial_stop_string(word, text);
+                pos = string_find_partial_stop(text, word);
             }
 
             if (pos != std::string::npos && (stop_pos == std::string::npos || pos < stop_pos)) {
