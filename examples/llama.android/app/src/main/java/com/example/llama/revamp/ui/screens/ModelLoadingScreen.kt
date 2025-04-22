@@ -152,6 +152,7 @@ fun ModelLoadingScreen(
             ) {
                 RadioButton(
                     selected = selectedMode == Mode.BENCHMARK,
+                    enabled = !isLoading,
                     onClick = null // handled by parent selectable
                 )
                 Text(
@@ -192,6 +193,7 @@ fun ModelLoadingScreen(
                 ) {
                     RadioButton(
                         selected = selectedMode == Mode.CONVERSATION,
+                        enabled = !isLoading,
                         onClick = null // handled by parent selectable
                     )
                     Text(
