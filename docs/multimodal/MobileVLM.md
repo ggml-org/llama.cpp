@@ -9,15 +9,15 @@ The implementation is based on llava, and is compatible with llava and mobileVLM
 Notice: The overall process of model inference for both **MobileVLM** and **MobileVLM_V2** models is the same, but the process of model conversion is a little different. Therefore, using **MobileVLM-1.7B** as an example, the different conversion step will be shown.
 
 ## Usage
-Build with cmake or run `make llama-llava-cli` to build it.
 
-After building, run: `./llama-llava-cli` to see the usage. For example:
+Build the `llama-mtmd-cli` binary.
+
+After building, run: `./llama-mtmd-cli` to see the usage. For example:
 
 ```sh
-./llama-llava-cli -m MobileVLM-1.7B/ggml-model-q4_k.gguf \
+./llama-mtmd-cli -m MobileVLM-1.7B/ggml-model-q4_k.gguf \
     --mmproj MobileVLM-1.7B/mmproj-model-f16.gguf \
-    --image path/to/an/image.jpg \
-    -p "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nWho is the author of this book? Answer the question using a single word or phrase. ASSISTANT:"
+    --chat-template deepseek
 ```
 
 ## Model conversion
@@ -82,7 +82,7 @@ refer to `android/adb_run.sh`, modify resources' `name` and `path`
 ### case 1
 **input**
 ```sh
-/data/local/tmp/llama-llava-cli \
+/data/local/tmp/llama-mtmd-cli \
     -m /data/local/tmp/ggml-model-q4_k.gguf \
     --mmproj /data/local/tmp/mmproj-model-f16.gguf \
     -t 4 \
@@ -102,7 +102,7 @@ llama_print_timings:       total time =   34731.93 ms
 ### case 2
 **input**
 ```sh
-/data/local/tmp/llama-llava-cli \
+/data/local/tmp/llama-mtmd-cli \
     -m /data/local/tmp/ggml-model-q4_k.gguf \
     --mmproj /data/local/tmp/mmproj-model-f16.gguf \
     -t 4 \
@@ -123,10 +123,10 @@ llama_print_timings:       total time =   34570.79 ms
 
 ## Some result on Android with `Snapdragon 778G` chip
 ### MobileVLM-1.7B case
-#### llava-cli release-b2005
+#### mtmd-cli release-b2005
 **input**
 ```sh
-/data/local/tmp/llama-llava-cli \
+/data/local/tmp/llama-mtmd-cli \
     -m /data/local/tmp/ggml-model-q4_k.gguf \
     --mmproj /data/local/tmp/mmproj-model-f16.gguf \
     -t 4 \
@@ -147,7 +147,7 @@ llama_print_timings: prompt eval time =    8119.49 ms /   191 tokens (   42.51 m
 llama_print_timings:        eval time =    1005.75 ms /    14 runs   (   71.84 ms per token,    13.92 tokens per second)
 llama_print_timings:       total time =   28038.34 ms /   205 tokens
 ```
-#### llava-cli latest-version
+#### mtmd-cli latest-version
 **input**
 
 Just the same as above.
@@ -169,7 +169,7 @@ llama_print_timings:        eval time =   43894.02 ms /    13 runs   ( 3376.46 m
 llama_print_timings:       total time =  865441.76 ms /   204 tokens
 ```
 ### MobileVLM_V2-1.7B case
-#### llava-cli release-2005b
+#### mtmd-cli release-2005b
 **input**
 
 Just the same as above.
@@ -200,7 +200,7 @@ make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 GGML_CUDA_F16=1 -j 32
 ### case 1
 **input**
 ```sh
-./llama-llava-cli \
+./llama-mtmd-cli \
     -m /data/local/tmp/ggml-model-q4_k.gguf \
     --mmproj /data/local/tmp/mmproj-model-f16.gguf \
     --image /data/local/tmp/demo.jpeg \
@@ -224,7 +224,7 @@ llama_print_timings:       total time =    1352.63 ms /   252 tokens
 ### case 2
 **input**
 ```sh
-./llama-llava-cli \
+./llama-mtmd-cli \
     -m /data/local/tmp/ggml-model-q4_k.gguf \
     --mmproj /data/local/tmp/mmproj-model-f16.gguf \
     -p "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nWhat is in the image? ASSISTANT:" \

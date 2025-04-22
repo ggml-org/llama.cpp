@@ -26,11 +26,12 @@ llama-gemma3-cli -hf ggml-org/gemma-3-27b-it-GGUF
 
 ## How to get mmproj.gguf?
 
+Simply to add `--mmproj` in when converting model via `convert_hf_to_gguf.py`:
+
 ```bash
 cd gemma-3-4b-it
-python ../llama.cpp/examples/llava/gemma3_convert_encoder_to_gguf.py .
-
-# output file is mmproj.gguf
+python ../llama.cpp/convert_hf_to_gguf.py --outfile model.gguf --outtype f16 --mmproj .
+# output file: mmproj-model.gguf
 ```
 
 ## How to run it?

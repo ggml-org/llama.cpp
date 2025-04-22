@@ -3,12 +3,12 @@
 Currently this implementation supports [glm-edge-v-2b](https://huggingface.co/THUDM/glm-edge-v-2b) and [glm-edge-v-5b](https://huggingface.co/THUDM/glm-edge-v-5b).
 
 ## Usage
-Build with cmake or run `make llama-llava-cli` to build it.
+Build the `llama-mtmd-cli` binary.
 
-After building, run: `./llama-llava-cli` to see the usage. For example:
+After building, run: `./llama-mtmd-cli` to see the usage. For example:
 
 ```sh
-./llama-llava-cli -m model_path/ggml-model-f16.gguf --mmproj model_path/mmproj-model-f16.gguf --image img_path/image.jpg -p "<|system|>\n system prompt <image><|user|>\n prompt <|assistant|>\n"
+./llama-mtmd-cli -m model_path/ggml-model-f16.gguf --mmproj model_path/mmproj-model-f16.gguf
 ```
 
 **note**: A lower temperature like 0.1 is recommended for better quality. add `--temp 0.1` to the command to do so.

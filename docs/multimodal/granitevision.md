@@ -176,15 +176,11 @@ Note that currently you cannot quantize the visual encoder because granite visio
 
 
 ### 5. Running the Model in Llama cpp
-Build llama cpp normally; you should have a target binary named `llama-llava-cli`, which you can pass two binaries to. As an example, we pass the the llama.cpp banner.
+Build llama cpp normally; you should have a target binary named `llama-mtmd-cli`, which you can pass two binaries to. As an example, we pass the the llama.cpp banner.
 
 ```bash
-$ ./build/bin/llama-llava-cli -m $LLM_GGUF_PATH \
+$ ./build/bin/llama-mtmd-cli -m $LLM_GGUF_PATH \
     --mmproj $VISUAL_GGUF_PATH \
-    --image ./media/llama0-banner.png \
     -c 16384 \
-    -p "<|system|>\nA chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.\n<|user|>\n\<image>\nWhat does the text in this image say?\n<|assistant|>\n" \
     --temp 0
 ```
-
-Sample output: `The text in the image reads "LLAMA C++ Can it run DOOM Llama?"`
