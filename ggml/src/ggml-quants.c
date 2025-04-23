@@ -13348,13 +13348,15 @@ size_t quantize_iq2_xxs(const float * restrict src, void * restrict dst, int64_t
 void quantize_row_iq2_xxs(const float * restrict x, void * restrict vy, int64_t k) {
     assert(k % QK_K == 0);
     block_iq2_xxs * restrict y = vy;
-    quantize_row_iq2_xxs_ref(x, y, k);
-}
-
-void quantize_row_iq2_xxs_ref(const float * restrict x, block_iq2_xxs * restrict y, int64_t k) {
+    // quantize_row_iq2_xxs_ref(x, y, k);
     assert(k % QK_K == 0);
     quantize_iq2_xxs(x, y, 1, k, NULL);
 }
+
+// void quantize_row_iq2_xxs_ref(const float * restrict x, block_iq2_xxs * restrict y, int64_t k) {
+//     assert(k % QK_K == 0);
+//     quantize_iq2_xxs(x, y, 1, k, NULL);
+// }
 
 size_t quantize_iq2_xs(const float * restrict src, void * restrict dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     GGML_ASSERT(n_per_row%QK_K == 0);
@@ -13371,13 +13373,15 @@ size_t quantize_iq2_xs(const float * restrict src, void * restrict dst, int64_t 
 void quantize_row_iq2_xs(const float * restrict x, void * restrict vy, int64_t k) {
     assert(k % QK_K == 0);
     block_iq2_xs * restrict y = vy;
-    quantize_row_iq2_xs_ref(x, y, k);
-}
-
-void quantize_row_iq2_xs_ref(const float * restrict x, block_iq2_xs * restrict y, int64_t k) {
+    // quantize_row_iq2_xs_ref(x, y, k);
     assert(k % QK_K == 0);
     quantize_iq2_xs(x, y, 1, k, NULL);
 }
+
+// void quantize_row_iq2_xs_ref(const float * restrict x, block_iq2_xs * restrict y, int64_t k) {
+//     assert(k % QK_K == 0);
+//     quantize_iq2_xs(x, y, 1, k, NULL);
+// }
 
 //
 // ============================================= 3-bit using D4 lattice
