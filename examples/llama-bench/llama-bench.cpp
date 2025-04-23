@@ -248,7 +248,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
-    /* tensor_buft_overrides*/ {},
+    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{{nullptr,nullptr}} },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
@@ -307,7 +307,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
-    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;... (default:disabled)\n");
+    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;... (default: disabled)\n");
     printf("  -r, --repetitions <n>                     (default: %d)\n", cmd_params_defaults.reps);
     printf("  --prio <0|1|2|3>                          (default: %d)\n", cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 (default: %d)\n", cmd_params_defaults.delay);
@@ -618,18 +618,32 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
             }
             auto override_group_span_len = std::strcspn(value, ",");
-            while (override_group_span_len > 0) {
+            bool last_group = false;
+            do {
+                if (override_group_span_len == 0) {
+                    // Adds an empty override-tensors for an empty span
+                    params.tensor_buft_overrides.push_back({{}});
+                    if (value[override_group_span_len] == '\0') {
+                        value = &value[override_group_span_len];
+                        last_group = true;
+                    } else {
+                        value = &value[override_group_span_len + 1];
+                        override_group_span_len = std::strcspn(value, ",");
+                    }
+                    continue;
+                }
                 // Stamps null terminators into the argv
                 // value for this option to avoid the
                 // memory leak present in the implementation
                 // over in arg.cpp. Acceptable because we
                 // only parse these args once in this program.
                 auto override_group = value;
-                if (value[override_group_span_len] != '\0') {
+                if (value[override_group_span_len] == '\0') {
+                    value = &value[override_group_span_len];
+                    last_group = true;
+                } else {
                     value[override_group_span_len] = '\0';
                     value = &value[override_group_span_len + 1];
-                } else {
-                    value = &value[override_group_span_len];
                 }
                 std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
                 auto override_span_len = std::strcspn(override_group, ";");
@@ -663,9 +677,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 if (invalid_param) {
                     break;
                 }
+                group_tensor_buft_overrides.push_back({nullptr,nullptr});
                 params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
                 override_group_span_len = std::strcspn(value, ",");
-            }
+            } while (!last_group);
         } else if (arg == "-r" || arg == "--repetitions") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -777,13 +792,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     }
     if (params.poll.empty()) {
         params.poll = cmd_params_defaults.poll;
-    }
-
-    // Attach terminators to options that requre them
-    for (auto &tensor_buft_override_list : params.tensor_buft_overrides) {
-        if (!tensor_buft_override_list.empty()) {
-            tensor_buft_override_list.push_back({nullptr, nullptr});
-        }
     }
 
     return params;
@@ -1148,17 +1156,24 @@ struct test {
                 tensor_split_str += "/";
             }
         }
-        for (size_t i = 0; i < tensor_buft_overrides.size()-1; i++) {
+        if (tensor_buft_overrides.size() == 1) {
             // Last element of tensor_buft_overrides is always a null pattern
-            if (tensor_buft_overrides[i].pattern == nullptr) {
-                tensor_buft_overrides_str += "none";
-            } else {
-                tensor_buft_overrides_str += tensor_buft_overrides[i].pattern;
-                tensor_buft_overrides_str += "=";
-                tensor_buft_overrides_str += ggml_backend_buft_name(tensor_buft_overrides[i].buft);
-            }
-            if (i + 2 < tensor_buft_overrides.size()) {
-                tensor_buft_overrides_str += ";";
+            // so if it is only one element long, it must be a null pattern.
+            GGML_ASSERT(tensor_buft_overrides[0].pattern == nullptr);
+            tensor_buft_overrides_str += "none";
+        } else {
+            for (size_t i = 0; i < tensor_buft_overrides.size()-1; i++) {
+                // Last element of tensor_buft_overrides is always a null pattern
+                if (tensor_buft_overrides[i].pattern == nullptr) {
+                    tensor_buft_overrides_str += "none";
+                } else {
+                    tensor_buft_overrides_str += tensor_buft_overrides[i].pattern;
+                    tensor_buft_overrides_str += "=";
+                    tensor_buft_overrides_str += ggml_backend_buft_name(tensor_buft_overrides[i].buft);
+                }
+                if (i + 2 < tensor_buft_overrides.size()) {
+                    tensor_buft_overrides_str += ";";
+                }
             }
         }
         std::vector<std::string> values = { build_commit,
