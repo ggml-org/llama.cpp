@@ -485,6 +485,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_OUTPUT         = auto()
     V_ENC_OUTPUT_NORM    = auto()
     V_ENC_FFN_UP         = auto()
+    V_ENC_FFN_GATE       = auto()
     V_ENC_FFN_DOWN       = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
@@ -501,6 +502,7 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_Q_NORM      = auto() # minicpmv
     V_RESMPL_PROJ        = auto() # minicpmv
     V_RESMPL_QUERY       = auto() # minicpmv
+    V_TOK_EMBD_IMG_BREAK = auto() # pixtral
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -737,6 +739,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_OUTPUT:              "v.blk.{bid}.attn_out",
     MODEL_TENSOR.V_ENC_OUTPUT_NORM:         "v.blk.{bid}.ln2",
     MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
     MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
     MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
     MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
@@ -753,6 +756,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_Q_NORM:           "resampler.ln_q",
     MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
+    MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -771,6 +775,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_OUTPUT,
         MODEL_TENSOR.V_ENC_OUTPUT_NORM,
         MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_GATE,
         MODEL_TENSOR.V_ENC_FFN_DOWN,
         MODEL_TENSOR.V_PRE_NORM,
         MODEL_TENSOR.V_POST_NORM,
@@ -787,6 +792,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_Q_NORM,
         MODEL_TENSOR.V_RESMPL_PROJ,
         MODEL_TENSOR.V_RESMPL_QUERY,
+        MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -2129,6 +2135,7 @@ class GGUFValueType(IntEnum):
 class VisionProjectorType:
     GEMMA3 = "gemma3"
     IDEFICS3 = "idefics3"
+    PIXTRAL = "pixtral"
 
 
 # Items here are (block size, type size)

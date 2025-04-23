@@ -14,6 +14,28 @@ The naming and structure related to multimodal support have evolved, which might
 - [#12849](https://github.com/ggml-org/llama.cpp/pull/12849): `libmtmd` was introduced as a replacement for `llava.cpp`. Its goals include providing a single, unified command-line interface, improving the user/developer experience (UX/DX), and supporting both audio and image inputs.
 - [#13012](https://github.com/ggml-org/llama.cpp/pull/13012): `mtmd-cli` was added, consolidating the various model-specific CLIs into a single tool powered by `libmtmd`.
 
+## Pre-quantized models
+
+These are ready-to-use models, most of them come with `Q4_K_M` quantization by default:
+
+```sh
+# Gemma 3
+llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
+
+# SmolVLM
+llama-mtmd-cli -hf ggml-org/SmolVLM-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM-256M-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM-500M-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-2.2B-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-256M-Video-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-500M-Video-Instruct-GGUF
+
+# Pixtral 12B
+llama-mtmd-cli -hf ggml-org/pixtral-12b-GGUF
+```
+
 ## How it works and what is `mmproj`?
 
 Multimodal support in `llama.cpp` works by encoding images into embeddings using a separate model component, and then feeding these embeddings into the language model.
@@ -45,3 +67,9 @@ Multimodal projector (`mmproj`) files are specific to each model architecture. P
 - [MiniCPM-o 2.6](../../docs/multimodal/minicpmo2.6.md)
 - [IBM Granite Vision](../../docs/multimodal/granitevision.md)
 - [Google Gemma 3](../../docs/multimodal/gemma3.md)
+
+For the following models, you can use `convert_hf_to_gguf.py`with `--mmproj` flag to get the `mmproj` file:
+- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) - Note: 1B variant does not have vision support
+- SmolVLM (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
+- SmolVLM2 (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
+- [Pixtral 12B](https://huggingface.co/mistral-community/pixtral-12b) - only works with `transformers`-compatible checkpoint

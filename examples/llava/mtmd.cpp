@@ -190,6 +190,11 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
         // https://github.com/huggingface/transformers/blob/a42ba80fa520c784c8f11a973ca9034e5f859b79/src/transformers/models/idefics3/processing_idefics3.py#L192-L215
         marker_modified = "<fake_token_around_image><global-img>" + ctx->image_marker + "<fake_token_around_image>";
         string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_PIXTRAL) {
+        // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
+        marker_modified = ctx->image_marker + "[IMG_END]";
+        string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
     }
 
     // llava-1.5, llava-1.6, Yi-VL, Yi-34B, granite: don't need to add prefix and suffix
@@ -219,7 +224,7 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
 
         for (auto & entry : batch_f32.entries) {
             mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-            image_tokens->nx = clip_n_patches(ctx->ctx_clip);
+            image_tokens->nx = clip_n_patches_by_img(ctx->ctx_clip, entry.get());
             image_tokens->ny = 1;
             image_tokens->batch_f32.entries.push_back(std::move(entry));
             image_tokens->id = id;
@@ -313,8 +318,13 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
                 }
 
             } else {
+                size_t n_tokens = 0;
+                for (const auto & entry : batch_f32.entries) {
+                    n_tokens += clip_n_patches_by_img(ctx->ctx_clip, entry.get());
+                }
+
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-                image_tokens->nx = clip_n_patches(ctx->ctx_clip) * batch_f32.entries.size(); // TODO @ngxson : use clip_n_patches_by_image
+                image_tokens->nx = n_tokens;
                 image_tokens->ny = 1; // TODO
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmaps[i_img].id; // optional
@@ -382,7 +392,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
         for (size_t i = 0; i < entries.size(); i++) {
-            int n_tokens_per_image = clip_n_patches(ctx->ctx_clip);
+            int n_tokens_per_image = clip_n_patches_by_img(ctx->ctx_clip, entries[i].get());
             ok = clip_image_encode(
                 ctx->ctx_clip,
                 ctx->n_threads,

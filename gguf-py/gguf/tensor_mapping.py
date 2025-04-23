@@ -914,6 +914,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.patch_embedding",
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
+            "vision_tower.patch_conv", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -926,52 +927,65 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_OUTPUT: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_OUTPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3 (note: name is swapped)
+            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_GATE: (
+            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3 (note: name is swapped)
+            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
+            "vision_tower.ln_pre", # pixtral
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
@@ -1029,6 +1043,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_QUERY: (
             "resampler.query",
+        ),
+
+        MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
+            "v.token_embd.img_break", # for pixtral, this is a generated vector
         ),
     }
 
