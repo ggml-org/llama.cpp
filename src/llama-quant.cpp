@@ -42,8 +42,7 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
             ++next_id;
         }
 
-        std::string name = mapped[blk] == "X" ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
-        return name;
+        return mapped[blk] == "X" ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
     }
 
     return orig_name;
@@ -629,8 +628,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
     if (!prune_list.empty()) {
-        const auto block_count = gguf_get_val_u32(ctx_out.get(), LLM_KV_BLOCK_COUNT) - prune_list.size();
-        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count);
+        uint32_t block_count = 0;
+        ml.get_key(LLM_KV_BLOCK_COUNT, block_count);
+        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count - prune_list.size());
     }
 
     // Remove split metadata
