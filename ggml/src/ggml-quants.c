@@ -707,7 +707,7 @@ void quantize_row_q4_0_ref(const float * restrict x, block_q4_0 * restrict y, in
     }
 }
 
-void quantize_row_q4_0(const float * restrict x, void * restrict y, int64_t k) {
+static void quantize_row_q4_0(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q4_0_ref(x, y, k);
 }
 
@@ -749,7 +749,7 @@ void quantize_row_q4_1_ref(const float * restrict x, block_q4_1 * restrict y, in
     }
 }
 
-void quantize_row_q4_1(const float * restrict x, void * restrict y, int64_t k) {
+static void quantize_row_q4_1(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q4_1_ref(x, y, k);
 }
 
@@ -797,7 +797,7 @@ void quantize_row_q5_0_ref(const float * restrict x, block_q5_0 * restrict y, in
     }
 }
 
-void quantize_row_q5_0(const float * restrict x, void * restrict y, int64_t k) {
+static void quantize_row_q5_0(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q5_0_ref(x, y, k);
 }
 
@@ -845,7 +845,7 @@ void quantize_row_q5_1_ref(const float * restrict x, block_q5_1 * restrict y, in
     }
 }
 
-void quantize_row_q5_1(const float * restrict x, void * restrict y, int64_t k) {
+static void quantize_row_q5_1(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q5_1_ref(x, y, k);
 }
 
@@ -13351,7 +13351,7 @@ void quantize_row_iq2_xxs(const float * restrict x, void * restrict vy, int64_t 
     quantize_row_iq2_xxs_ref(x, y, k);
 }
 
-void quantize_row_iq2_xxs_ref(const float * restrict x, block_iq2_xxs * restrict y, int64_t k) {
+static void quantize_row_iq2_xxs_ref(const float * restrict x, block_iq2_xxs * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     quantize_iq2_xxs(x, y, 1, k, NULL);
 }
@@ -13374,7 +13374,7 @@ void quantize_row_iq2_xs(const float * restrict x, void * restrict vy, int64_t k
     quantize_row_iq2_xs_ref(x, y, k);
 }
 
-void quantize_row_iq2_xs_ref(const float * restrict x, block_iq2_xs * restrict y, int64_t k) {
+static void quantize_row_iq2_xs_ref(const float * restrict x, block_iq2_xs * restrict y, int64_t k) {
     assert(k % QK_K == 0);
     quantize_iq2_xs(x, y, 1, k, NULL);
 }
@@ -14382,7 +14382,7 @@ void quantize_row_iq1_s  (const float * GGML_RESTRICT x, void * GGML_RESTRICT y,
     quantize_row_iq1_s_ref(x, (block_iq1_s *)y, k);
 }
 
-void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, float * the_scale, uint16_t * the_index, int * the_shift,
+static void iq1m_process_1block(const float * xb, const float * weight, int8_t * L, float * the_scale, uint16_t * the_index, int * the_shift,
         float * pairs) {
 
     const int block_size = IQ1M_BLOCK_SIZE;
