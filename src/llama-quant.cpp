@@ -628,6 +628,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
     if (!prune_list.empty()) {
+        gguf_set_val_bool(ctx_out.get(), "general.pruned", true);
         uint32_t block_count = 0;
         ml.get_key(LLM_KV_BLOCK_COUNT, block_count);
         gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count - prune_list.size());
