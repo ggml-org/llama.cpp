@@ -1276,22 +1276,33 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     }
     tensor_map[id] = result;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        result->src[i] = create_node(tensor->src[i], ctx, tensor_ptrs, tensor_map);
-        // Check if recursive call failed
-        if (tensor->src[i] != 0 && result->src[i] == nullptr) {
-            GGML_LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
-                           __func__, i, tensor->src[i], id);
+        // Check if the source ID is 0 before calling create_node recursively
+        if (tensor->src[i] == 0) {
+            result->src[i] = nullptr;
+        } else {
+            result->src[i] = create_node(tensor->src[i], ctx, tensor_ptrs, tensor_map);
+            // If the recursive call failed for a non-zero ID, propagate the error
+            if (result->src[i] == nullptr) {
+                GGML_LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                               __func__, i, tensor->src[i], id);
+                // Must return nullptr to signal failure up the call stack
+                return nullptr;
+            }
+        }
+    }
+
+    // Handle view_src similarly
+    if (tensor->view_src == 0) {
+        result->view_src = nullptr;
+    } else {
+        result->view_src = create_node(tensor->view_src, ctx, tensor_ptrs, tensor_map);
+        // If the recursive call failed for a non-zero ID, propagate the error
+        if (result->view_src == nullptr) {
+            GGML_LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
+                           __func__, tensor->view_src, id);
             // Must return nullptr to signal failure up the call stack
             return nullptr;
         }
-    }
-    result->view_src = create_node(tensor->view_src, ctx, tensor_ptrs, tensor_map);
-    // Check if recursive call failed
-    if (tensor->view_src != 0 && result->view_src == nullptr) {
-        GGML_LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
-                       __func__, tensor->view_src, id);
-        // Must return nullptr to signal failure up the call stack
-        return nullptr;
     }
     result->view_offs = tensor->view_offs;
     return result;
@@ -1391,8 +1402,11 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
         int64_t id;
         memcpy(&id, &nodes_ptr[i], sizeof(id));
         graph->nodes[i] = create_node(id, ctx, tensor_ptrs, tensor_map);
-        // Check if create_node failed (e.g., due to invalid type or missing ID)
-        if (graph->nodes[i] == nullptr) {
+
+        // Check if create_node failed for a *non-zero* ID.
+        // If id was 0, create_node returning nullptr is expected.
+        // If id was non-zero and create_node returned nullptr, it indicates a deserialization error.
+        if (graph->nodes[i] == nullptr && id != 0) {
             GGML_LOG_ERROR("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
             response.result = GGML_STATUS_FAILED;
             // No need to free ctx, ggml_context_ptr handles it.
