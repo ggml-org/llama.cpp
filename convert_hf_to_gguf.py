@@ -5058,14 +5058,19 @@ class ChatGLMModel(Model):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
         try:
+            tokenizer_file = self.dir_model / 'tokenizer.json'
+            if not tokenizer_file.is_file():  
+                raise ValueError("tokenizer.json not found")
+                  
             # for https://huggingface.co/THUDM/glm-4-9b
             special_vocab=gguf.SpecialVocab(
                 self.dir_model, 
                 load_merges=True,
                 n_vocab=vocab_size
             ) 
-            
+        
             self.gguf_writer.add_tokenizer_model("gpt2")
+                
         except Exception as e:
             logger.warning(f'Failed to load special tokens: {e}')
             # for https://huggingface.co/THUDM/glm-4-9b-hf
