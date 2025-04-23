@@ -799,9 +799,6 @@ enum llama_pooling_type llama_context::pooling_type() const {
 }
 
 float * llama_context::get_logits() {
-    // reorder logits for backward compatibility
-    output_reorder();
-
     return logits;
 }
 
@@ -844,9 +841,6 @@ float * llama_context::get_logits_ith(int32_t i) {
 }
 
 float * llama_context::get_embeddings() {
-    // reorder embeddings for backward compatibility
-    output_reorder();
-
     return embd;
 }
 
@@ -1028,7 +1022,7 @@ int llama_context::encode(llama_batch & inp_batch) {
 
     const int64_t n_embd = hparams.n_embd;
 
-    sbatch.from_batch(batch, n_embd, /* simple_split */ true, /* logits_all */ true);
+    llama_sbatch sbatch = llama_sbatch(batch, n_embd, /* simple_split */ true, /* logits_all */ true);
 
     const llama_ubatch ubatch = sbatch.split_simple(n_tokens);
 
@@ -1219,13 +1213,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         n_outputs_all = 1;
     }
 
-    const bool logits_all = n_outputs_all == n_tokens_all;
-
-    const bool is_recurrent = llama_model_is_recurrent(&model);
-
-    sbatch.from_batch(batch, n_embd,
-            /* simple_split */ !is_recurrent,
-            /* logits_all   */ logits_all);
+    llama_sbatch sbatch = kv_self->sbatch_init(batch, /* logits_all */ n_outputs_all == n_tokens_all);
 
     // reserve output buffer
     if (output_reserve(n_outputs_all) < n_outputs_all) {
@@ -1382,18 +1370,52 @@ int llama_context::decode(llama_batch & inp_batch) {
     {
         bool sorted_output = true;
 
-        GGML_ASSERT(sbatch.out_ids.size() == (size_t) n_outputs_all);
+        auto & out_ids = sbatch.out_ids;
+
+        GGML_ASSERT(out_ids.size() == (size_t) n_outputs_all);
 
         for (int64_t i = 0; i < n_outputs_all; ++i) {
-            int64_t out_id = sbatch.out_ids[i];
+            int64_t out_id = out_ids[i];
             output_ids[out_id] = i;
             if (out_id != i) {
                 sorted_output = false;
             }
         }
 
-        if (sorted_output) {
-            sbatch.out_ids.clear();
+        // make the outputs have the same order they had in the user-provided batch
+        // note: this is mostly relevant for recurrent models atm
+        if (!sorted_output) {
+            const uint32_t n_vocab = model.vocab.n_tokens();
+            const uint32_t n_embd  = model.hparams.n_embd;
+
+            GGML_ASSERT((size_t) n_outputs == out_ids.size());
+
+            // TODO: is there something more efficient which also minimizes swaps?
+            // selection sort, to minimize swaps (from https://en.wikipedia.org/wiki/Selection_sort)
+            for (int32_t i = 0; i < n_outputs - 1; ++i) {
+                int32_t j_min = i;
+                for (int32_t j = i + 1; j < n_outputs; ++j) {
+                    if (out_ids[j] < out_ids[j_min]) {
+                        j_min = j;
+                    }
+                }
+                if (j_min == i) { continue; }
+                std::swap(out_ids[i], out_ids[j_min]);
+                if (logits_size > 0) {
+                    for (uint32_t k = 0; k < n_vocab; k++) {
+                        std::swap(logits[i*n_vocab + k], logits[j_min*n_vocab + k]);
+                    }
+                }
+                if (embd_size > 0) {
+                    for (uint32_t k = 0; k < n_embd; k++) {
+                        std::swap(embd[i*n_embd + k], embd[j_min*n_embd + k]);
+                    }
+                }
+            }
+            std::fill(output_ids.begin(), output_ids.end(), -1);
+            for (int32_t i = 0; i < n_outputs; ++i) {
+                output_ids[out_ids[i]] = i;
+            }
         }
     }
 
@@ -1500,44 +1522,6 @@ int32_t llama_context::output_reserve(int32_t n_outputs) {
     this->n_outputs_max = n_outputs_max;
 
     return n_outputs_max;
-}
-
-void llama_context::output_reorder() {
-    auto & out_ids = sbatch.out_ids;
-    if (!out_ids.empty()) {
-        const uint32_t n_vocab = model.vocab.n_tokens();
-        const uint32_t n_embd  = model.hparams.n_embd;
-
-        GGML_ASSERT((size_t) n_outputs == out_ids.size());
-
-        // TODO: is there something more efficient which also minimizes swaps?
-        // selection sort, to minimize swaps (from https://en.wikipedia.org/wiki/Selection_sort)
-        for (int32_t i = 0; i < n_outputs - 1; ++i) {
-            int32_t j_min = i;
-            for (int32_t j = i + 1; j < n_outputs; ++j) {
-                if (out_ids[j] < out_ids[j_min]) {
-                    j_min = j;
-                }
-            }
-            if (j_min == i) { continue; }
-            std::swap(out_ids[i], out_ids[j_min]);
-            if (logits_size > 0) {
-                for (uint32_t k = 0; k < n_vocab; k++) {
-                    std::swap(logits[i*n_vocab + k], logits[j_min*n_vocab + k]);
-                }
-            }
-            if (embd_size > 0) {
-                for (uint32_t k = 0; k < n_embd; k++) {
-                    std::swap(embd[i*n_embd + k], embd[j_min*n_embd + k]);
-                }
-            }
-        }
-        std::fill(output_ids.begin(), output_ids.end(), -1);
-        for (int32_t i = 0; i < n_outputs; ++i) {
-            output_ids[out_ids[i]] = i;
-        }
-        out_ids.clear();
-    }
 }
 
 //
@@ -1979,8 +1963,6 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     // write output ids
     {
         LLAMA_LOG_DEBUG("%s: - writing output ids\n", __func__);
-
-        output_reorder();
 
         const auto n_outputs    = this->n_outputs;
         const auto & output_ids = this->output_ids;

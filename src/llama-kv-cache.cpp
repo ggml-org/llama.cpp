@@ -476,6 +476,12 @@ bool llama_kv_cache_unified::find_slot(
     return true;
 }
 
+llama_sbatch llama_kv_cache_unified::sbatch_init(
+        const llama_batch & batch,
+        bool logits_all) {
+    return llama_sbatch(batch, hparams.n_embd, true, logits_all);
+}
+
 llama_ubatch llama_kv_cache_unified::ubatch_next(
         llama_sbatch & sbatch,
         uint32_t n_ubatch,
@@ -1545,6 +1551,12 @@ bool llama_kv_cache_recurrent::find_slot(
 
     // sanity check
     return n >= n_seqs;
+}
+
+llama_sbatch llama_kv_cache_recurrent::sbatch_init(
+        const llama_batch & batch,
+        bool logits_all) {
+    return llama_sbatch(batch, hparams.n_embd, false, logits_all);
 }
 
 llama_ubatch llama_kv_cache_recurrent::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {

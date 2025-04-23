@@ -45,6 +45,8 @@ struct llama_kv_cache : public llama_memory_i {
 
     virtual bool find_slot(const llama_ubatch & batch) = 0;
 
+    virtual llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) = 0;
+
     // different KV caches require different batch splitting strategies
     virtual llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const = 0;
 
@@ -142,6 +144,8 @@ public:
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
+
+    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
 
     llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 
@@ -268,6 +272,8 @@ public:
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
+
+    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
 
     llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 

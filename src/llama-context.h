@@ -137,10 +137,6 @@ private:
     // Returns max number of outputs for which space was reserved.
     int32_t output_reserve(int32_t n_outputs);
 
-    // make the outputs have the same order they had in the user-provided batch
-    // TODO: maybe remove this
-    void output_reorder();
-
     //
     // graph
     //
@@ -196,7 +192,6 @@ private:
     llama_cparams       cparams;
     llama_adapter_cvec  cvec;
     llama_adapter_loras loras;
-    llama_sbatch        sbatch;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
