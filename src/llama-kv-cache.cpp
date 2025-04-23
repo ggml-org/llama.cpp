@@ -357,8 +357,17 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-void llama_kv_cache_unified::defrag() {
-    do_defrag = true;
+void llama_kv_cache_unified::defrag(float thold) {
+    // - do not defrag small contexts (i.e. < 2048 tokens)
+    // - count the padding towards the number of used tokens
+    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - float(used + padding)/float(n)) : 0.0f;
+
+    // queue defragmentation for next llama_kv_cache_update
+    if (fragmentation > thold) {
+        LLAMA_LOG_DEBUG("%s: fragmentation: %.2f - requesting defrag\n", __func__, fragmentation);
+
+        do_defrag = true;
+    }
 }
 
 void llama_kv_cache_unified::restore() {
@@ -1358,7 +1367,8 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-void llama_kv_cache_recurrent::defrag() {
+void llama_kv_cache_recurrent::defrag(float thold) {
+    GGML_UNUSED(thold);
     LLAMA_LOG_ERROR("%s: not supported\n", __func__);
 }
 

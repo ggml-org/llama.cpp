@@ -1426,19 +1426,8 @@ int llama_context::decode(llama_batch & inp_batch) {
     //synchronize();
 
     // decide if we need to defrag the kv cache
-    if (!llama_model_is_recurrent(&model) && cparams.causal_attn && cparams.defrag_thold > 0.0f) {
-        auto * kv = static_cast<llama_kv_cache_unified *>(kv_self);
-
-        // - do not defrag small contexts (i.e. < 2048 tokens)
-        // - count the padding towards the number of used tokens
-        const float fragmentation = kv->n >= 2048 ? std::max(0.0f, 1.0f - float(kv->used + kv->padding)/float(kv->n)) : 0.0f;
-
-        // queue defragmentation for next llama_kv_cache_update
-        if (fragmentation > cparams.defrag_thold) {
-            LLAMA_LOG_DEBUG("%s: fragmentation: %.2f - requesting defrag\n", __func__, fragmentation);
-
-            kv_self->defrag();
-        }
+    if (cparams.defrag_thold > 0.0f) {
+        kv_self->defrag(cparams.defrag_thold);
     }
 
     // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
@@ -2586,7 +2575,8 @@ void llama_kv_self_defrag(llama_context * ctx) {
         return;
     }
 
-    return kv->defrag();
+    // force defrag
+    return kv->defrag(-1.0f);
 }
 
 // deprecated

@@ -31,6 +31,8 @@ struct llama_kv_cache : public llama_memory_i {
     virtual void restore() = 0; // call if batch processing fails - restores the cache state
     virtual void commit() = 0;  // call after successful batch processing - clears any pending state
 
+    virtual void defrag(float thold) = 0;
+
     virtual int32_t get_n_tokens()   const = 0;
     virtual int32_t get_used_cells() const = 0; // TODO: remove, this is too-specific to the unified cache
 
@@ -124,7 +126,7 @@ public:
     llama_pos get_pos_max() const override;
 
     void clear() override;
-    void defrag() override;
+    void defrag(float thold) override;
 
     void restore() override;
     void commit() override;
@@ -252,7 +254,7 @@ public:
     llama_pos get_pos_max() const override;
 
     void clear() override;
-    void defrag() override;
+    void defrag(float thold) override;
 
     void restore() override;
     void commit() override;
