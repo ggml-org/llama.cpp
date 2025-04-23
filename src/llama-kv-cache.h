@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-io.h"
+#include "llama-graph.h"
 #include "llama-memory.h"
 
 #include "ggml-cpp.h"
@@ -24,12 +25,34 @@ struct llama_kv_cache : public llama_memory_i {
         std::function<ggml_backend_buffer_type_t (int il)> get_buft;
     };
 
+    struct graph_params {
+        const llm_arch arch;
+
+        const llama_cparams & cparams;
+
+        const ggml_backend_sched_t & sched;
+
+        const std::vector<ggml_backend_ptr> & backends;
+
+        int32_t n_max_nodes;
+
+        std::function<ggml_context * ()> get_ctx_compute;
+
+        // function for creating ggml graphs
+        std::function<ggml_cgraph * ()> graph_init;
+
+        // function for computing ggml graphs
+        std::function<void(ggml_cgraph * gf)> graph_compute;
+    };
+
     virtual ~llama_kv_cache() = default;
 
     using llama_memory_i::llama_memory_i;
 
     virtual void restore() = 0; // call if batch processing fails - restores the cache state
-    virtual void commit() = 0;  // call after successful batch processing - clears any pending state
+    virtual void commit()  = 0; // call after successful batch processing - clears any pending state
+
+    virtual bool update(const graph_params & params) = 0;
 
     virtual void defrag(float thold) = 0;
 
@@ -131,6 +154,8 @@ public:
     void restore() override;
     void commit() override;
 
+    bool update(const graph_params & params) override;
+
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
     void seq_keep(llama_seq_id seq_id) override;
@@ -224,6 +249,24 @@ private:
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
+    ggml_tensor * build_rope_shift(
+            const graph_params & params,
+                  ggml_context * ctx,
+                   ggml_tensor * cur,
+                   ggml_tensor * shift,
+                   ggml_tensor * factors,
+                         float   freq_base,
+                         float   freq_scale,
+           ggml_backend_buffer * bbuf) const;
+
+    llm_graph_result_ptr build_graph_shift(
+            const graph_params & params,
+                   ggml_cgraph * gf) const;
+
+    llm_graph_result_ptr build_graph_defrag(
+            const graph_params & params,
+                   ggml_cgraph * gf) const;
+
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
 
@@ -258,6 +301,8 @@ public:
 
     void restore() override;
     void commit() override;
+
+    bool update(const graph_params & params) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;

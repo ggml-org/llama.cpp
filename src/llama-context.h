@@ -159,23 +159,6 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
-    // used by kv_self_update()
-    ggml_tensor * build_rope_shift(
-        ggml_context * ctx0,
-        ggml_tensor * cur,
-        ggml_tensor * shift,
-        ggml_tensor * factors,
-              float   freq_base,
-              float   freq_scale) const;
-
-    llm_graph_result_ptr build_kv_self_shift(
-            ggml_context * ctx0,
-            ggml_cgraph * gf) const;
-
-    llm_graph_result_ptr build_kv_self_defrag(
-            ggml_context * ctx0,
-            ggml_cgraph * gf) const;
-
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
