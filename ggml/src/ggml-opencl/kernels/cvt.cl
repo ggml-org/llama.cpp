@@ -1,39 +1,20 @@
 //------------------------------------------------------------------------------
-// This file is contains additional kernels for data conversion.
+// This file is contains kernels for data conversion.
 // These kernels are used when loading the model, so its performance is less
 // important.
 //------------------------------------------------------------------------------
-#ifdef cl_khr_fp16
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
-#elif defined(cl_amd_fp16)
-#pragma OPENCL EXTENSION cl_amd_fp16 : enable
-#else
-#error "Half precision floating point not supportedby OpenCL implementation on your device."
-#endif
-
-#ifdef cl_khr_subgroups
-#pragma OPENCL EXTENSION cl_khr_subgroups : enable
-#elif defined(cl_intel_subgroups)
-#pragma OPENCL EXTENSION cl_intel_subgroups : enable
-#else
-#error "Subgroup not supported on your device."
-#endif
 
 #ifdef cl_intel_required_subgroup_size
-// Always use subgroup size of 32 on Intel.
 #pragma OPENCL EXTENSION cl_intel_required_subgroup_size : enable
 #define INTEL_GPU 1
 #define REQD_SUBGROUP_SIZE_16 __attribute__((intel_reqd_sub_group_size(16)))
 #define REQD_SUBGROUP_SIZE_32 __attribute__((intel_reqd_sub_group_size(32)))
 #elif defined(cl_qcom_reqd_sub_group_size)
-// Always use subgroups size of 64 on Adreno.
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
-#else
-// TODO: do not know how to choose subgroup size on other GPUs.
-#error "Selecting subgroup size is not supported on your device."
 #endif
 
 #define QK4_0                   32
@@ -66,13 +47,44 @@ struct block_q4_0
 };
 
 //------------------------------------------------------------------------------
-// mul_vec_q_n_f32_flat_noshuffle
-//
-// This variation uses flat arrays (struct of arrays, SOA) representation for
-// quant tensors. It also uses non shuffled bit order for weights.
-//
-// The shuffled version is kept in the original file because moving it here
-// seems to result in worse performance for adreno.
+// kernel_convert_block_q4_0
+// Convert the block_q4_0 format to 2 separate arrays (AOS -> SOA).
+// This kernel does not deshuffle the bits.
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q4_0(
+    global struct block_q4_0 * src0,
+    global uchar * dst_q,
+    global half  * dst_d
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) src0 + get_global_id(0);
+    global uchar * q = (global uchar *) dst_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q4_0(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_q4_0 * dst
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK4_0/2; ++i) {
+        b->qs[i] = q[i];
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q4_0_noshuffle
+// Flatten q4_0 weights and unshuffle the bits
 //------------------------------------------------------------------------------
 
 kernel void kernel_convert_block_q4_0_noshuffle(
