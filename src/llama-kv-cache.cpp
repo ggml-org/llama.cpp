@@ -76,7 +76,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        ggml_backend_buffer_type_t buft = cbs.get_buft(i);
+        ggml_backend_buffer_type_t buft = this->cbs.get_buft(i);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
