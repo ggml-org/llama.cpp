@@ -5054,16 +5054,28 @@ class ChatGLMModel(Model):
                     toktypes.append(gguf.TokenType.NORMAL)
                 tokens.append(token)
  
-        self.gguf_writer.add_tokenizer_model("llama")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-  
-        special_vocab=gguf.SpecialVocab(
-            self.dir_model, 
-            load_merges=False,
-            n_vocab=vocab_size
-        )
+        try:
+            # for https://huggingface.co/THUDM/glm-4-9b
+            special_vocab=gguf.SpecialVocab(
+                self.dir_model, 
+                load_merges=True,
+                n_vocab=vocab_size
+            ) 
+            
+            self.gguf_writer.add_tokenizer_model("gpt2")
+        except Exception as e:
+            logger.warning(f'Failed to load special tokens: {e}')
+            # for https://huggingface.co/THUDM/glm-4-9b-hf
+            special_vocab=gguf.SpecialVocab(
+                self.dir_model, 
+                load_merges=False,
+                n_vocab=vocab_size
+            )
+            self.gguf_writer.add_tokenizer_model("llama")
+
         # only add special tokens when they were not already loaded from config.json
    
         #TODO In llama.cpp, special tokens are mapped one-to-one between a token and a coordinate. However, in reality, a transformer might associate a special token like eos_token_id with multiple tokens.
