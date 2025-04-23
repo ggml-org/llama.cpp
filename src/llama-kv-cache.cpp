@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -542,7 +543,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
 
     res->add_input(std::move(inp));
 
-    return std::move(res);
+    return res;
 }
 
 llm_graph_result_ptr llama_kv_cache_unified::build_graph_defrag(

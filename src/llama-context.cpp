@@ -6,11 +6,9 @@
 #include "llama-model.h"
 #include "llama-kv-cache.h"
 
-#include <cassert>
 #include <cstring>
 #include <stdexcept>
 #include <cinttypes>
-#include <cmath>
 
 //
 // llama_context
