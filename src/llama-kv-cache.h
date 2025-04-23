@@ -101,7 +101,8 @@ public:
                       ggml_type   type_k,
                       ggml_type   type_v,
                            bool   v_trans,
-                       uint32_t   kv_size);
+                       uint32_t   kv_size,
+                       uint32_t   padding);
 
     ~llama_kv_cache_unified() = default;
 
@@ -195,6 +196,9 @@ public:
 
     // computed before each graph build
     uint32_t n = 0;
+
+    // required padding
+    uint32_t padding = 1;
 
     std::vector<llama_kv_cell> cells;
 

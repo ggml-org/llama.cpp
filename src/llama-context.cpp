@@ -1274,24 +1274,10 @@ int llama_context::decode(llama_batch & inp_batch) {
         }
 
         // find KV slot
-        {
-            if (!kv_self->find_slot(ubatch)) {
-                LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
+        if (!kv_self->find_slot(ubatch)) {
+            LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
 
-                return 1;
-            }
-
-            if (!is_recurrent) {
-                auto * kv = static_cast<llama_kv_cache_unified *>(kv_self);
-
-                // a heuristic, to avoid attending the full cache if it is not yet utilized
-                // after enough generations, the benefit from this heuristic disappears
-                // if we start defragmenting the cache, the benefit from this will be more important
-                const uint32_t pad = kv->get_padding(cparams);
-                kv->n = std::min(kv->size, std::max(pad, GGML_PAD(kv->cell_max(), pad)));
-
-                //printf("kv.n = %5d, kv.used = %5d, kv.head = %5d\n", kv->n, kv->used, kv->head);
-            }
+            return 1;
         }
 
         ggml_backend_sched_reset(sched.get());

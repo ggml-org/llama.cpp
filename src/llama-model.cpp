@@ -12859,7 +12859,9 @@ llama_memory_i * llama_model::create_memory(llama_cparams & cparams, const llama
             } break;
         default:
             {
-                cparams.n_ctx = GGML_PAD(cparams.n_ctx, llama_kv_cache_unified::get_padding(cparams));
+                const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
 
                 LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
@@ -12883,7 +12885,8 @@ llama_memory_i * llama_model::create_memory(llama_cparams & cparams, const llama
                         params.type_k,
                         params.type_v,
                         !cparams.flash_attn,
-                        cparams.n_ctx);
+                        cparams.n_ctx,
+                        padding);
             }
     }
 

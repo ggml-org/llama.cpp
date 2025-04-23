@@ -21,14 +21,17 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                   ggml_type   type_k,
                   ggml_type   type_v,
                        bool   v_trans,
-                   uint32_t   kv_size) : hparams(hparams), cbs(std::move(cbs)), v_trans(v_trans) {
+                   uint32_t   kv_size,
+                   uint32_t   padding) : hparams(hparams), cbs(std::move(cbs)), v_trans(v_trans), padding(padding) {
     const int32_t n_layer = hparams.n_layer;
 
     has_shift = false;
     can_shift = true;
 
-    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d\n",
-            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift);
+    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d, padding = %d\n",
+            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift, padding);
+
+    GGML_ASSERT(kv_size % padding == 0 && "kv_size must be a multiple of padding");
 
     head = 0;
     size = kv_size;
@@ -462,6 +465,13 @@ bool llama_kv_cache_unified::find_slot(
     used += n_tokens;
 
     pending.ranges.push_back({head, head + n_tokens});
+
+    // a heuristic, to avoid attending the full cache if it is not yet utilized
+    // after enough generations, the benefit from this heuristic disappears
+    // if we start defragmenting the cache, the benefit from this will be more important
+    n = std::min(size, std::max(padding, GGML_PAD(cell_max(), padding)));
+
+    //printf("n = %5d, used = %5d, head = %5d\n", n, used, head);
 
     return true;
 }
