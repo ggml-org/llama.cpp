@@ -1239,22 +1239,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     int64_t n_outputs_prev = 0;
 
     while (sbatch.n_tokens > 0) {
-        llama_ubatch ubatch = llama_ubatch();
-
-        const auto & n_ubatch = cparams.n_ubatch;
-
-        if (is_recurrent) {
-            if (embd_pooled) {
-                // Pooled embeddings cannot be split across ubatches (yet)
-                ubatch = sbatch.split_seq(cparams.n_ubatch);
-            } else {
-                // recurrent model architectures are easier to implement
-                // with equal-length sequences
-                ubatch = sbatch.split_equal(cparams.n_ubatch);
-            }
-        } else {
-            ubatch = sbatch.split_simple(n_ubatch);
-        }
+        llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
 
         // count the outputs in this u_batch
         {
@@ -1424,7 +1409,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         // - do not defrag small contexts (i.e. < 2048 tokens)
         // - count the padding towards the number of used tokens
-        const float fragmentation = kv->n >= 2048 ? std::max(0.0f, 1.0f - float(kv->used + kv->get_padding(cparams))/float(kv->n)) : 0.0f;
+        const float fragmentation = kv->n >= 2048 ? std::max(0.0f, 1.0f - float(kv->used + kv->padding)/float(kv->n)) : 0.0f;
 
         // queue defragmentation for next llama_kv_cache_update
         if (fragmentation > cparams.defrag_thold) {

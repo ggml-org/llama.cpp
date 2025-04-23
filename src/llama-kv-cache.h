@@ -13,6 +13,7 @@
 struct llama_cparams;
 struct llama_hparams;
 struct llama_ubatch;
+struct llama_sbatch;
 
 struct llama_kv_cache : public llama_memory_i {
     // can be used to query data from the model if needed
@@ -43,6 +44,9 @@ struct llama_kv_cache : public llama_memory_i {
     bool get_can_edit() const override { return get_can_shift(); }
 
     virtual bool find_slot(const llama_ubatch & batch) = 0;
+
+    // different KV caches require different batch splitting strategies
+    virtual llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
     virtual void set_full() = 0;
@@ -138,6 +142,8 @@ public:
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
+
+    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 
     static uint32_t get_padding(const llama_cparams & cparams);
 
@@ -262,6 +268,8 @@ public:
     // Note: On success, it's important that cache.head points
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
+
+    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 
     // find how many cells are currently in use
     uint32_t cell_max() const;

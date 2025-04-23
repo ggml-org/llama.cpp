@@ -476,6 +476,14 @@ bool llama_kv_cache_unified::find_slot(
     return true;
 }
 
+llama_ubatch llama_kv_cache_unified::ubatch_next(
+        llama_sbatch & sbatch,
+        uint32_t n_ubatch,
+        bool embd_pooled) const {
+    GGML_UNUSED(embd_pooled);
+    return sbatch.split_simple(n_ubatch);
+}
+
 uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) {
     // the FA kernels require padding to avoid extra runtime boundary checks
     return cparams.flash_attn ? 256u : 32u;
@@ -1537,6 +1545,15 @@ bool llama_kv_cache_recurrent::find_slot(
 
     // sanity check
     return n >= n_seqs;
+}
+
+llama_ubatch llama_kv_cache_recurrent::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
+    if (embd_pooled) {
+        // Pooled embeddings cannot be split across ubatches (yet)
+        return sbatch.split_seq(n_ubatch);
+    }
+
+    return sbatch.split_equal(n_ubatch);
 }
 
 uint32_t llama_kv_cache_recurrent::cell_max() const {
