@@ -22,6 +22,7 @@
 
 #include "ggml-rpc.h"
 #ifdef _WIN32
+#  define NOMINMAX
 #  define DIRECTORY_SEPARATOR '\\'
 #  include <locale>
 #  include <windows.h>
@@ -37,6 +38,8 @@
 #include <stdio.h>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -150,12 +153,14 @@ struct rpc_server_params {
     int         port        = 50052;
     size_t      backend_mem = 0;
     bool        use_cache   = false;
+    int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h, --help                show this help message and exit\n");
+    fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
     fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
@@ -172,6 +177,15 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 return false;
             }
             params.host = argv[i];
+        } else if (arg == "-t" || arg == "--threads") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.n_threads = std::stoi(argv[i]);
+            if (params.n_threads <= 0) {
+                fprintf(stderr, "error: invalid number of threads: %d\n", params.n_threads);
+                return false;
+            }
         } else if (arg == "-p" || arg == "--port") {
             if (++i >= argc) {
                 return false;
@@ -199,7 +213,7 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
     return true;
 }
 
-static ggml_backend_t create_backend() {
+static ggml_backend_t create_backend(const rpc_server_params & params) {
     ggml_backend_t backend = NULL;
 #ifdef GGML_USE_CUDA
     fprintf(stderr, "%s: using CUDA backend\n", __func__);
@@ -231,6 +245,7 @@ static ggml_backend_t create_backend() {
     if (!backend) {
         fprintf(stderr, "%s: using CPU backend\n", __func__);
         backend = ggml_backend_cpu_init();
+        ggml_backend_cpu_set_n_threads(backend, params.n_threads);
     }
     return backend;
 }
@@ -275,7 +290,7 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "\n");
     }
 
-    ggml_backend_t backend = create_backend();
+    ggml_backend_t backend = create_backend(params);
     if (!backend) {
         fprintf(stderr, "Failed to create backend\n");
         return 1;
