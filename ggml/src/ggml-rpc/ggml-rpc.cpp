@@ -1056,7 +1056,6 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
-            // Replace GGML_ABORT with logging and error return
             GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu) out of buffer bounds [0x%zx, 0x%zx)\n",
                            __func__, in_tensor->data, offset, size, p0, p1);
             return false;
@@ -1134,10 +1133,8 @@ bool rpc_server::set_tensor_hash(const std::vector<uint8_t> & input, rpc_msg_set
         const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
 
         if (in_tensor->data + offset < p0 || in_tensor->data + offset >= p1 || size > (p1 - in_tensor->data - offset)) {
-            // Replace GGML_ABORT with logging and error return
             GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%zu, hash=0x%" PRIx64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
                            __func__, in_tensor->data, offset, size, *hash, p0, p1);
-            response.result = 0;
             return false;
         }
     }
@@ -1203,7 +1200,6 @@ bool rpc_server::get_tensor(const rpc_msg_get_tensor_req & request, std::vector<
         if (request.tensor.data + request.offset < p0 ||
             request.tensor.data + request.offset >= p1 ||
             request.size > (p1 - request.tensor.data - request.offset)) {
-                // Replace GGML_ABORT with logging and error return
                 GGML_LOG_ERROR("[%s] requested tensor region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%" PRIu64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
                                __func__, request.tensor.data, request.offset, request.size, p0, p1);
                 return false;
@@ -1229,7 +1225,6 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
     ggml_tensor * dst = deserialize_tensor(ctx, &request.dst);
     if (src == nullptr || dst == nullptr) {
         GGML_LOG_ERROR("[%s] error deserializing tensors\n", __func__);
-        response.result = 0;
         return false;
     }
 
@@ -1247,7 +1242,6 @@ bool rpc_server::copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_co
                          dst_data + src_size,
                          dst_base,
                          dst_base + dst_buf_sz);
-        response.result = 0;
         return false;
     }
 
@@ -1407,8 +1401,7 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
     }
     ggml_status status = ggml_backend_graph_compute(backend, graph);
     response.result = status;
-    // Return true only if computation succeeded
-    return status == GGML_STATUS_SUCCESS;
+    return true;
 }
 
 rpc_server::~rpc_server() {
