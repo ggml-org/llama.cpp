@@ -13,6 +13,14 @@ mkdir -p $SCRIPT_DIR/output
 PROJ_ROOT="$SCRIPT_DIR/../.."
 cd $PROJ_ROOT
 
+# Check if the first argument is "big", then run test with big models
+# This is useful if we're running the script on a larger machine, so we can test the big models
+RUN_BIG_TESTS=false
+if [ "${1:-}" = "big" ]; then
+    RUN_BIG_TESTS=true
+    echo "Include BIG models..."
+fi
+
 ###############
 
 arr_bin=()
@@ -28,6 +36,12 @@ add_test() {
     arr_tmpl+=("$tmpl")
 }
 
+add_test_big() {
+    if [ "$RUN_BIG_TESTS" = true ]; then
+        add_test "$@"
+    fi
+}
+
 add_test "llama-mtmd-cli"  "ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0"
 add_test "llama-mtmd-cli"  "ggml-org/SmolVLM2-2.2B-Instruct-GGUF:Q4_K_M"
 add_test "llama-mtmd-cli"  "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF:Q8_0"
@@ -41,6 +55,9 @@ add_test "llama-mtmd-cli"  "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K"  # mode
 add_test "llama-mtmd-cli"  "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
 add_test "llama-mtmd-cli"  "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
 add_test "llama-qwen2vl-cli"  "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
+
+# to test the big models, run: ./tests.sh big
+add_test_big "llama-mtmd-cli" "ggml-org/pixtral-12b-GGUF:Q4_K_M"
 
 # these models always give the wrong answer, not sure why
 # add_test "llama-mtmd-cli"  "ggml-org/SmolVLM-Instruct-GGUF:Q4_K_M"

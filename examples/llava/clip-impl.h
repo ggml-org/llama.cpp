@@ -60,6 +60,7 @@
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
 #define TN_ATTN_OUTPUT     "%s.blk.%d.attn_out.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
+#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s"
 #define TN_LN_2            "%s.blk.%d.ln2.%s"
@@ -73,6 +74,7 @@
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
+#define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 
 // mimicpmv
 #define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
@@ -101,6 +103,7 @@ enum projector_type {
     PROJECTOR_TYPE_MERGER,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_IDEFICS3,
+    PROJECTOR_TYPE_PIXTRAL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -113,6 +116,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MERGER,    "qwen2vl_merger"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
+    { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
