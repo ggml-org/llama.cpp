@@ -111,29 +111,6 @@ private:
     llama_kv_cache * kv;
 };
 
-// TODO: create separate cells for unified/recurrent caches
-// TODO: move in the source file
-struct llama_kv_cell {
-    llama_pos pos   = -1;
-    llama_pos delta =  0;
-    int32_t   src   = -1; // used by recurrent state models to copy states
-    int32_t   tail  = -1;
-
-    std::set<llama_seq_id> seq_id;
-
-    bool has_seq_id(const llama_seq_id & id) const {
-        return seq_id.find(id) != seq_id.end();
-    }
-
-    bool is_empty() const {
-        return seq_id.empty();
-    }
-
-    bool is_same_seq(const llama_kv_cell & other) const {
-        return seq_id == other.seq_id;
-    }
-};
-
 //
 // llama_kv_cache_unified
 // ring-buffer of cached KV data
@@ -143,6 +120,25 @@ struct llama_kv_cell {
 // TODO: add notion of max sequences
 class llama_kv_cache_unified : public llama_kv_cache {
 public:
+    struct kv_cell {
+        llama_pos pos   = -1;
+        llama_pos delta =  0;
+
+        std::set<llama_seq_id> seq_id;
+
+        bool has_seq_id(const llama_seq_id & id) const {
+            return seq_id.find(id) != seq_id.end();
+        }
+
+        bool is_empty() const {
+            return seq_id.empty();
+        }
+
+        bool is_same_seq(const kv_cell & other) const {
+            return seq_id == other.seq_id;
+        }
+    };
+
     llama_kv_cache_unified(
             const llama_hparams & hparams,
                       callbacks   cbs,
@@ -251,7 +247,7 @@ public:
     // required padding
     uint32_t padding = 1;
 
-    std::vector<llama_kv_cell> cells;
+    std::vector<kv_cell> cells;
 
     std::vector<ggml_tensor *> k_l; // per layer
     std::vector<ggml_tensor *> v_l;
@@ -294,6 +290,26 @@ private:
 
 class llama_kv_cache_recurrent : public llama_kv_cache {
 public:
+    struct kv_cell {
+        llama_pos pos   = -1;
+        int32_t   src   = -1; // used by recurrent state models to copy states
+        int32_t   tail  = -1;
+
+        std::set<llama_seq_id> seq_id;
+
+        bool has_seq_id(const llama_seq_id & id) const {
+            return seq_id.find(id) != seq_id.end();
+        }
+
+        bool is_empty() const {
+            return seq_id.empty();
+        }
+
+        bool is_same_seq(const kv_cell & other) const {
+            return seq_id == other.seq_id;
+        }
+    };
+
     llama_kv_cache_recurrent(
             const llama_hparams & hparams,
                       callbacks   cbs,
@@ -384,7 +400,7 @@ public:
     // computed before each graph build
     uint32_t n = 0;
 
-    std::vector<llama_kv_cell> cells;
+    std::vector<kv_cell> cells;
 
     std::vector<ggml_tensor *> k_l; // per layer
     std::vector<ggml_tensor *> v_l;
