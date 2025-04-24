@@ -14916,8 +14916,8 @@ size_t quantize_iq4_nl(const float * restrict src, void * restrict dst, int64_t 
 void quantize_row_iq4_nl_ref(const float * restrict x, block_iq4_nl * restrict y, int64_t k) {
     assert(k % QK4_NL == 0);
     // quantize_row_iq4_nl(x, y, k);
-    auto vy = y;
-    
+    void * restrict vy = (void *restrict)y;
+
     GGML_ASSERT(k%QK4_NL == 0);
     int64_t nblock = k/QK4_NL;
     uint8_t L[QK4_NL];
