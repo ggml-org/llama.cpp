@@ -38,6 +38,11 @@
 
 using json = nlohmann::ordered_json;
 
+std::initializer_list<enum llama_example> mmproj_examples = {
+    LLAMA_EXAMPLE_LLAVA,
+    // TODO: add LLAMA_EXAMPLE_SERVER when it's ready
+};
+
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
     this->examples = std::move(examples);
     return *this;
@@ -641,11 +646,16 @@ static struct common_hf_file_res common_get_hf_file(const std::string &, const s
 // utils
 //
 
-static void common_params_handle_model(
+struct handle_model_result {
+    bool found_mmproj = false;
+    common_params_model mmproj;
+};
+
+static handle_model_result common_params_handle_model(
         struct common_params_model & model,
         const std::string & bearer_token,
-        const std::string & model_path_default,
-        bool is_mmproj = false) { // TODO: move is_mmproj to an enum when we have more files?
+        const std::string & model_path_default) {
+    handle_model_result result;
     // handle pre-fill default model path and url based on hf_repo and hf_file
     {
         if (!model.hf_repo.empty()) {
@@ -657,7 +667,12 @@ static void common_params_handle_model(
                         exit(1); // built without CURL, error message already printed
                     }
                     model.hf_repo = auto_detected.repo;
-                    model.hf_file = is_mmproj ? auto_detected.mmprojFile : auto_detected.ggufFile;
+                    model.hf_file = auto_detected.ggufFile;
+                    if (!auto_detected.mmprojFile.empty()) {
+                        result.found_mmproj   = true;
+                        result.mmproj.hf_repo = model.hf_repo;
+                        result.mmproj.hf_file = auto_detected.mmprojFile;
+                    }
                 } else {
                     model.hf_file = model.path;
                 }
@@ -694,6 +709,8 @@ static void common_params_handle_model(
             exit(1);
         }
     }
+
+    return result;
 }
 
 const std::vector<ggml_type> kv_cache_types = {
@@ -827,16 +844,25 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    common_params_handle_model(params.model,             params.hf_token, DEFAULT_MODEL_PATH);
-    common_params_handle_model(params.speculative.model, params.hf_token, "");
-    common_params_handle_model(params.vocoder.model,     params.hf_token, "");
-
-    // allow --mmproj to be set from -hf
-    // assuming that mmproj is always in the same repo as text model
-    if (!params.model.hf_repo.empty() && ctx_arg.ex == LLAMA_EXAMPLE_LLAVA) {
-        params.mmproj.hf_repo = params.model.hf_repo;
+    // handle model and download
+    {
+        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH);
+        if (params.no_mmproj) {
+            params.mmproj = {};
+        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+            // optionally, handle mmproj model when -hf is specified
+            params.mmproj = res.mmproj;
+        }
+        // only download mmproj if the current example is using it
+        for (auto & ex : mmproj_examples) {
+            if (ctx_arg.ex == ex) {
+                common_params_handle_model(params.mmproj,    params.hf_token, "");
+                break;
+            }
+        }
+        common_params_handle_model(params.speculative.model, params.hf_token, "");
+        common_params_handle_model(params.vocoder.model,     params.hf_token, "");
     }
-    common_params_handle_model(params.mmproj,            params.hf_token, "", true);
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -2095,18 +2121,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONT_BATCHING"));
     add_opt(common_arg(
         {"--mmproj"}, "FILE",
-        "path to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        "path to a multimodal projector file. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples(mmproj_examples));
     add_opt(common_arg(
         {"--mmproj-url"}, "URL",
-        "URL to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        "URL to a multimodal projector file. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.url = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples(mmproj_examples));
+    add_opt(common_arg(
+        {"--no-mmproj"},
+        "explicitly disable multimodal projector, useful when using -hf",
+        [](common_params & params) {
+            params.no_mmproj = true;
+        }
+    ).set_examples(mmproj_examples));
     add_opt(common_arg(
         {"--image"}, "FILE",
         "path to an image file. use with multimodal models. Specify multiple times for batching",
@@ -2381,6 +2414,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
         "example: unsloth/phi-4-GGUF:q4_k_m\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {

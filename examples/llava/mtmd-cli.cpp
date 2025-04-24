@@ -261,6 +261,7 @@ int main(int argc, char ** argv) {
 
     if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
+        LOG_ERR("ERR: Missing --mmproj argument\n");
         return 1;
     }
 
