@@ -1472,7 +1472,9 @@ static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
                     return;
                 }
                 rpc_msg_get_alloc_size_rsp response;
-                server.get_alloc_size(request, response);
+                if (!server.get_alloc_size(request, response)) {
+                    return;
+                }
                 if (!send_msg(sockfd, &response, sizeof(response))) {
                     return;
                 }
