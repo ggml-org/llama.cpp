@@ -10,7 +10,7 @@ prompt="A chat between a curious user and an artificial intelligence assistant. 
 # prompt="A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. USER: <image>\nWhat is in the image? ASSISTANT:"
 
 program_dir="build_64/bin"
-binName="llama-llava-cli"
+binName="llama-mtmd-cli"
 n_threads=4
 
 
