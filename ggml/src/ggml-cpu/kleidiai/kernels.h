@@ -4,7 +4,7 @@
 
 #pragma once
 
-enum cpu_feature {
+enum cpu_feature : uint8_t {
     CPU_FEATURE_NONE    = 0,
     CPU_FEATURE_DOTPROD = 1,
     CPU_FEATURE_I8MM    = 2,

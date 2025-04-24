@@ -10,7 +10,7 @@
 struct llama_vocab;
 
 // grammar element type
-enum llama_gretype {
+enum llama_gretype : uint8_t {
     // end of rule definition
     LLAMA_GRETYPE_END            = 0,
 

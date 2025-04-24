@@ -46,7 +46,7 @@ extern "C" {
     // Backend buffer
     //
 
-    enum ggml_backend_buffer_usage {
+    enum GGML_PACKED ggml_backend_buffer_usage {
         GGML_BACKEND_BUFFER_USAGE_ANY = 0,
         GGML_BACKEND_BUFFER_USAGE_WEIGHTS = 1,
         GGML_BACKEND_BUFFER_USAGE_COMPUTE = 2,
@@ -127,7 +127,7 @@ extern "C" {
     // Backend device
     //
 
-    enum ggml_backend_dev_type {
+    enum GGML_PACKED ggml_backend_dev_type {
         // CPU device using system memory
         GGML_BACKEND_DEVICE_TYPE_CPU,
         // GPU device using dedicated memory

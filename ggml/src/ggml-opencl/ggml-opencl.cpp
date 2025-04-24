@@ -51,20 +51,20 @@
 
 bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor);
 
-enum GPU_FAMILY {
+enum GPU_FAMILY : uint8_t {
     ADRENO,
     INTEL,
     UNKNOWN,
 };
 
-enum ADRENO_GPU_GEN {
+enum ADRENO_GPU_GEN : uint8_t {
     ADRENO_UNKNOWN,
     A7X,
     A8X,
     X1E,
 };
 
-enum ADRENO_CL_COMPILER_TYPE {
+enum ADRENO_CL_COMPILER_TYPE : uint8_t {
     E031,
     DX,
 };
@@ -1151,7 +1151,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
         char version[128];
     };
 
-    enum { NPLAT = 16, NDEV = 16 };
+    enum : uint8_t { NPLAT = 16, NDEV = 16 };
 
     struct cl_platform platforms[NPLAT];
     unsigned n_platforms = 0;

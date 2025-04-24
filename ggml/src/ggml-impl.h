@@ -284,7 +284,7 @@ static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct g
 
 // computation graph
 
-enum ggml_cgraph_eval_order {
+enum GGML_PACKED ggml_cgraph_eval_order {
     GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT = 0,
     GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT,
     GGML_CGRAPH_EVAL_ORDER_COUNT

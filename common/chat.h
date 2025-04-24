@@ -35,13 +35,13 @@ struct common_chat_tool {
     std::string parameters;
 };
 
-enum common_chat_tool_choice {
+enum common_chat_tool_choice : uint8_t  {
     COMMON_CHAT_TOOL_CHOICE_AUTO,
     COMMON_CHAT_TOOL_CHOICE_REQUIRED,
     COMMON_CHAT_TOOL_CHOICE_NONE,
 };
 
-enum common_chat_format {
+enum common_chat_format : uint8_t  {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
     COMMON_CHAT_FORMAT_GENERIC,
     COMMON_CHAT_FORMAT_MISTRAL_NEMO,

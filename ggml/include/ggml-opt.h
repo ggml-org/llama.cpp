@@ -27,7 +27,7 @@ extern "C" {
 
     // built-in loss types, i.e. the built-in quantities minimized by the optimizer
     // custom loss types can be defined via mean or sum which simply reduce the outputs for all datapoints to a single value
-    enum ggml_opt_loss_type {
+    enum ggml_opt_loss_type : uint8_t {
         GGML_OPT_LOSS_TYPE_MEAN,
         GGML_OPT_LOSS_TYPE_SUM,
         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY,
@@ -59,7 +59,7 @@ extern "C" {
 
     // ====== Model / Context ======
 
-    enum ggml_opt_build_type {
+    enum ggml_opt_build_type : uint8_t {
         GGML_OPT_BUILD_TYPE_FORWARD,
         GGML_OPT_BUILD_TYPE_GRAD,
         GGML_OPT_BUILD_TYPE_OPT,

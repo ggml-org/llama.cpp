@@ -22,7 +22,7 @@ extern "C" {
     };
 
     // numa strategies
-    enum ggml_numa_strategy {
+    enum GGML_PACKED ggml_numa_strategy {
         GGML_NUMA_STRATEGY_DISABLED   = 0,
         GGML_NUMA_STRATEGY_DISTRIBUTE = 1,
         GGML_NUMA_STRATEGY_ISOLATE    = 2,

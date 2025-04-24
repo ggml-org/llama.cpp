@@ -17,7 +17,7 @@ struct llama_ubatch;
 struct llama_model_loader;
 
 // available models
-enum llm_type {
+enum llm_type : uint8_t {
     LLM_TYPE_UNKNOWN,
     LLM_TYPE_14M,
     LLM_TYPE_17M,

@@ -114,7 +114,7 @@ typedef atomic_int atomic_flag;
 
 #define ATOMIC_FLAG_INIT 0
 
-typedef enum {
+typedef enum : uint8_t {
     memory_order_relaxed,
     memory_order_consume,
     memory_order_acquire,
