@@ -1,5 +1,5 @@
  /*
- * Copyright (c) 2023-2025 The ggml authors
+ * Copyright (c) 2024-2025 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -28,15 +28,15 @@
 extern "C" {
 #endif
 
-#define GGML_HEXAGON_MAX_DEVICES    3
+#define GGML_HEXAGON_MAX_DEVICES    4
 #define GGML_HEXAGON_BACKEND_NAME   "hexagon"
 
 enum HEXAGONBackend {
     HEXAGON_BACKEND_QNNCPU  = 0,
     HEXAGON_BACKEND_QNNGPU  = 1,
     HEXAGON_BACKEND_QNNNPU  = 2,
-    HEXAGON_BACKEND_CDSP    = 2,
-    HEXAGON_BACKEND_GGML    = 3, //"fake" QNN backend for compare performance between HEXAGON backend and ggml backend
+    HEXAGON_BACKEND_CDSP    = 3,
+    HEXAGON_BACKEND_GGML    = 4, //"fake" HEXAGON backend for compare performance between HEXAGON backend and ggml backend
 };
 
 GGML_BACKEND_API ggml_backend_t ggml_backend_hexagon_init(size_t dev_num, const char * qnn_lib_path);
