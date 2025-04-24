@@ -397,7 +397,7 @@ struct llama_model {
 
     // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface
-    llama_memory_i * create_memory(llama_cparams & cparams, const llama_memory_params & params) const;
+    llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams) const;
 
     // TODO: move this to new llm_arch_model_i interface
     llm_graph_result_ptr build_graph(

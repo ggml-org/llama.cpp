@@ -12815,7 +12815,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
-llama_memory_i * llama_model::create_memory(llama_cparams & cparams, const llama_memory_params & params) const {
+llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
     const bool offload = cparams.offload_kqv;
