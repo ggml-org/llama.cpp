@@ -4069,7 +4069,7 @@ struct ggml_tensor * ggml_conv_2d_dw_direct(
         int                   stride1,
         int                   pad0,
         int                   pad1,
-        int                   dilation0,  
+        int                   dilation0,
         int                   dilation1) {
     GGML_ASSERT(a->ne[2] == 1);
     GGML_ASSERT(a->ne[3] == b->ne[2]);
