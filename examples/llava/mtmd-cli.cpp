@@ -40,7 +40,8 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
-        "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n",
+        "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
         argv[0]
     );
 }
@@ -112,10 +113,10 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mtmd_context_params{
-            /* use_gpu */   true,
+            /* use_gpu */   params.mmproj_use_gpu,
             /* timings */   true,
             /* n_threads */ params.cpuparams.n_threads,
-            /* verbosity */ GGML_LOG_LEVEL_INFO,
+            /* verbosity */ params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO,
         }));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
