@@ -1763,12 +1763,16 @@ struct server_response {
             std::unique_lock<std::mutex> lock(mutex_results);
             condition_results.wait(lock, [&]{
                 if (!running) {
-                    SRV_DBG("%s : queue result stop\n", __func__);
-                    std::terminate(); // we cannot return here since the caller is HTTP code
+                    return true;
                 }
                 return !queue_results.empty();
             });
-
+            if (!running) {
+                SRV_DBG("%s : queue result stop\n", __func__);
+                auto res = std::make_unique<server_task_result_error>();
+                res->err_msg = "server stopped";
+                return res;
+            }
             for (size_t i = 0; i < queue_results.size(); i++) {
                 if (id_tasks.find(queue_results[i]->id) != id_tasks.end()) {
                     server_task_result_ptr res = std::move(queue_results[i]);
@@ -1798,7 +1802,9 @@ struct server_response {
             std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
             if (!running) {
                 SRV_DBG("%s : queue result stop\n", __func__);
-                std::terminate(); // we cannot return here since the caller is HTTP code
+                auto res = std::make_unique<server_task_result_error>();
+                res->err_msg = "server stopped";
+                return res;
             }
             if (cr_res == std::cv_status::timeout) {
                 return nullptr;
