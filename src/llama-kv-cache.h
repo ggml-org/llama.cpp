@@ -47,20 +47,36 @@ struct llama_kv_cache : public llama_memory_i {
 
     virtual ~llama_kv_cache() = default;
 
-    using llama_memory_i::llama_memory_i;
+    // call if batch processing fails - restores the cache state
+    virtual void restore() = 0;
 
-    virtual void restore() = 0; // call if batch processing fails - restores the cache state
-    virtual void commit()  = 0; // call after successful batch processing - clears any pending state
+    // call after successful batch processing - clears any pending state
+    virtual void commit()  = 0;
 
+    // process any pending defrag/shift/etc. operations
+    // optionally call once before processing a new batch
     virtual bool update(const graph_params & params) = 0;
 
-    virtual void defrag(float thold) = 0;
+    // schedule a defrag if the fragmentation threshold is exceeded. otherwise, do nothing
+    virtual void defrag_sched(float thold) = 0;
 
+    // simulate full cache, used for allocating worst-case compute buffers
+    virtual void set_full() = 0;
+
+    //
+    // batch processing
+    //
+
+    virtual llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) = 0;
+
+    // different KV caches require different batch splitting strategies
+    virtual llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const = 0;
+
+    virtual bool find_slot(const llama_ubatch & batch) = 0;
+
+    // getters
     virtual int32_t get_n_tokens()   const = 0;
     virtual int32_t get_used_cells() const = 0; // TODO: remove, this is too-specific to the unified cache
-
-    virtual bool get_has_shift() const = 0;
-    virtual bool get_do_defrag() const = 0;
 
     virtual llama_pos get_pos_max() const = 0;
 
@@ -68,22 +84,17 @@ struct llama_kv_cache : public llama_memory_i {
 
     bool get_can_edit() const override { return get_can_shift(); }
 
-    virtual bool find_slot(const llama_ubatch & batch) = 0;
-
-    virtual llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) = 0;
-
-    // different KV caches require different batch splitting strategies
-    virtual llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const = 0;
-
-    // simulate full cache, used for allocating worst-case compute buffers
-    virtual void set_full() = 0;
-
-    virtual size_t size_k_bytes() const = 0;
-    virtual size_t size_v_bytes() const = 0;
+    //
+    // state write/read
+    //
 
     virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const = 0;
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) = 0;
 };
+
+//
+// llama_kv_cache_guard
+//
 
 struct llama_kv_cache_guard {
     llama_kv_cache_guard(llama_kv_cache * kv) : kv(kv) {}
@@ -100,6 +111,8 @@ private:
     llama_kv_cache * kv;
 };
 
+// TODO: create separate cells for unified/recurrent caches
+// TODO: move in the source file
 struct llama_kv_cell {
     llama_pos pos   = -1;
     llama_pos delta =  0;
@@ -121,7 +134,11 @@ struct llama_kv_cell {
     }
 };
 
+//
+// llama_kv_cache_unified
 // ring-buffer of cached KV data
+//
+
 // TODO: pimpl
 // TODO: add notion of max sequences
 class llama_kv_cache_unified : public llama_kv_cache {
@@ -140,16 +157,13 @@ public:
     int32_t get_n_tokens()   const override;
     int32_t get_used_cells() const override;
 
-    bool get_has_shift() const override;
-    bool get_do_defrag() const override;
-
     size_t total_size() const;
 
     // TODO: better data structures to reduce the cost of this operation
     llama_pos get_pos_max() const override;
 
     void clear() override;
-    void defrag(float thold) override;
+    void defrag_sched(float thold) override;
 
     void restore() override;
     void commit() override;
@@ -183,8 +197,8 @@ public:
 
     void set_full() override;
 
-    size_t size_k_bytes() const override;
-    size_t size_v_bytes() const override;
+    size_t size_k_bytes() const;
+    size_t size_v_bytes() const;
 
     // defrag
 
@@ -274,6 +288,10 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
 
+//
+// llama_kv_cache_recurrent
+//
+
 class llama_kv_cache_recurrent : public llama_kv_cache {
 public:
     llama_kv_cache_recurrent(
@@ -288,16 +306,13 @@ public:
     int32_t get_n_tokens()   const override;
     int32_t get_used_cells() const override;
 
-    bool get_has_shift() const override;
-    bool get_do_defrag() const override;
-
     size_t total_size() const;
 
     // TODO: better data structures to reduce the cost of this operation
     llama_pos get_pos_max() const override;
 
     void clear() override;
-    void defrag(float thold) override;
+    void defrag_sched(float thold) override;
 
     void restore() override;
     void commit() override;
@@ -314,6 +329,10 @@ public:
 
     bool get_can_shift() const override;
 
+    // TODO: temporary methods - they are not really const as they do const_cast<>, fix this
+    int32_t s_copy(int i) const;
+    float   s_mask(int i) const;
+
     // find an empty slot of size "n_tokens" in the cache
     // updates the cache head
     // Note: On success, it's important that cache.head points
@@ -329,8 +348,8 @@ public:
 
     void set_full() override;
 
-    size_t size_k_bytes() const override;
-    size_t size_v_bytes() const override;
+    size_t size_k_bytes() const;
+    size_t size_v_bytes() const;
 
     // commit/restore cache
 

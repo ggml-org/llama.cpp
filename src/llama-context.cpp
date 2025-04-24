@@ -1108,7 +1108,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     // decide if we need to defrag the kv cache
     if (cparams.defrag_thold > 0.0f) {
-        kv_self->defrag(cparams.defrag_thold);
+        kv_self->defrag_sched(cparams.defrag_thold);
     }
 
     // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
@@ -2150,7 +2150,7 @@ void llama_kv_cache_seq_cp(
          llama_seq_id   seq_id_dst,
             llama_pos   p0,
             llama_pos   p1) {
-    return llama_kv_self_seq_cp(ctx, seq_id_src, seq_id_dst, p0, p1);
+    llama_kv_self_seq_cp(ctx, seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_kv_self_seq_cp(
@@ -2164,14 +2164,14 @@ void llama_kv_self_seq_cp(
         return;
     }
 
-    return kv->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+    kv->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 // deprecated
 void llama_kv_cache_seq_keep(
         llama_context * ctx,
          llama_seq_id   seq_id) {
-    return llama_kv_self_seq_keep(ctx, seq_id);
+    llama_kv_self_seq_keep(ctx, seq_id);
 }
 
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
@@ -2180,7 +2180,7 @@ void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
         return;
     }
 
-    return kv->seq_keep(seq_id);
+    kv->seq_keep(seq_id);
 }
 
 // deprecated
@@ -2190,7 +2190,7 @@ void llama_kv_cache_seq_add(
             llama_pos   p0,
             llama_pos   p1,
             llama_pos   delta) {
-    return llama_kv_self_seq_add(ctx, seq_id, p0, p1, delta);
+    llama_kv_self_seq_add(ctx, seq_id, p0, p1, delta);
 }
 
 void llama_kv_self_seq_add(
@@ -2204,7 +2204,7 @@ void llama_kv_self_seq_add(
         return;
     }
 
-    return kv->seq_add(seq_id, p0, p1, delta);
+    kv->seq_add(seq_id, p0, p1, delta);
 }
 
 // deprecated
@@ -2214,7 +2214,7 @@ void llama_kv_cache_seq_div(
             llama_pos   p0,
             llama_pos   p1,
                   int   d) {
-    return llama_kv_self_seq_div(ctx, seq_id, p0, p1, d);
+    llama_kv_self_seq_div(ctx, seq_id, p0, p1, d);
 }
 
 void llama_kv_self_seq_div(
@@ -2228,7 +2228,7 @@ void llama_kv_self_seq_div(
         return;
     }
 
-    return kv->seq_div(seq_id, p0, p1, d);
+    kv->seq_div(seq_id, p0, p1, d);
 }
 
 // deprecated
@@ -2247,7 +2247,7 @@ llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 
 // deprecated
 void llama_kv_cache_defrag(llama_context * ctx) {
-    return llama_kv_self_defrag(ctx);
+    llama_kv_self_defrag(ctx);
 }
 
 void llama_kv_self_defrag(llama_context * ctx) {
@@ -2257,7 +2257,7 @@ void llama_kv_self_defrag(llama_context * ctx) {
     }
 
     // force defrag
-    return kv->defrag(-1.0f);
+    kv->defrag_sched(-1.0f);
 }
 
 // deprecated

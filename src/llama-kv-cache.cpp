@@ -130,14 +130,6 @@ int32_t llama_kv_cache_unified::get_used_cells() const {
     return used;
 }
 
-bool llama_kv_cache_unified::get_has_shift() const {
-    return has_shift;
-}
-
-bool llama_kv_cache_unified::get_do_defrag() const {
-    return do_defrag;
-}
-
 size_t llama_kv_cache_unified::total_size() const {
     size_t size = 0;
     for (const auto & buf : bufs) {
@@ -358,10 +350,10 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-void llama_kv_cache_unified::defrag(float thold) {
+void llama_kv_cache_unified::defrag_sched(float thold) {
     // - do not defrag small contexts (i.e. < 2048 tokens)
     // - count the padding towards the number of used tokens
-    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - float(used + padding)/float(n)) : 0.0f;
+    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - (float(used + padding)/n)) : 0.0f;
 
     // queue defragmentation for next llama_kv_cache_update
     if (fragmentation > thold) {
@@ -699,7 +691,7 @@ bool llama_kv_cache_unified::update(const graph_params & params) {
 
     const auto & sched = params.sched;
 
-    if (get_has_shift()) {
+    if (has_shift) {
         if (!get_can_shift()) {
             GGML_ABORT("The current KV cache / model configuration does not support K-shift");
         }
@@ -732,7 +724,7 @@ bool llama_kv_cache_unified::update(const graph_params & params) {
         }
     }
 
-    if (get_do_defrag()) {
+    if (do_defrag) {
         LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
 
         if (defrag_prepare(params.n_max_nodes)) {
@@ -1496,14 +1488,6 @@ int32_t llama_kv_cache_recurrent::get_used_cells() const {
     return used;
 }
 
-bool llama_kv_cache_recurrent::get_has_shift() const {
-    return false;
-}
-
-bool llama_kv_cache_recurrent::get_do_defrag() const {
-    return false;
-}
-
 size_t llama_kv_cache_recurrent::total_size() const {
     size_t size = 0;
     for (const auto & buf : bufs) {
@@ -1716,7 +1700,7 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-void llama_kv_cache_recurrent::defrag(float thold) {
+void llama_kv_cache_recurrent::defrag_sched(float thold) {
     GGML_UNUSED(thold);
     // noop
 }
@@ -1740,6 +1724,46 @@ bool llama_kv_cache_recurrent::update(const graph_params & params) {
 
 bool llama_kv_cache_recurrent::get_can_shift() const {
     return false;
+}
+
+int32_t llama_kv_cache_recurrent::s_copy(int i) const {
+    const uint32_t cell_id = i + head;
+
+    //////////////////////////////////////////////
+    // TODO: this should not mutate the KV cache !
+    llama_kv_cell & kv_cell = const_cast<llama_kv_cell &>(cells[i]);
+
+    // prevent out-of-bound sources
+    if (kv_cell.src < 0 || (uint32_t) kv_cell.src >= size) {
+        kv_cell.src = cell_id;
+    }
+
+    int32_t res = kv_cell.src;
+
+    // TODO: do not mutate the KV cache
+    // ensure copy only happens once
+    if (kv_cell.src != (int32_t) cell_id) {
+        kv_cell.src = cell_id;
+    }
+
+    return res;
+}
+
+float llama_kv_cache_recurrent::s_mask(int i) const {
+    const uint32_t cell_id = i + head;
+
+    //////////////////////////////////////////////
+    // TODO: this should not mutate the KV cache !
+    llama_kv_cell & kv_cell = const_cast<llama_kv_cell &>(cells[i]);
+
+    float res = (float) (kv_cell.src >= 0);
+
+    // only clear once
+    if (kv_cell.src < 0) {
+        kv_cell.src = cell_id;
+    }
+
+    return res;
 }
 
 bool llama_kv_cache_recurrent::find_slot(
