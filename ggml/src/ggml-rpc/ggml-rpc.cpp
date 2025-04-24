@@ -1256,16 +1256,12 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
                                       struct ggml_context * ctx,
                                       const std::unordered_map<uint64_t, const rpc_tensor*> & tensor_ptrs,
                                       std::unordered_map<uint64_t, struct ggml_tensor*> & tensor_map) {
-    if (id == 0) {
-        return nullptr;
-    }
     if (tensor_map.find(id) != tensor_map.end()) {
         return tensor_map[id];
     }
     // Safely find the tensor pointer
     auto it_ptr = tensor_ptrs.find(id);
     if (it_ptr == tensor_ptrs.end()) {
-        GGML_LOG_ERROR("[%s] tensor id %" PRIu64 " not found in provided tensors\n", __func__, id);
         return nullptr;
     }
     const rpc_tensor * tensor = it_ptr->second;
