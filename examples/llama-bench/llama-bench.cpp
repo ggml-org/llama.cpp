@@ -157,6 +157,7 @@ static std::string pair_str(const std::pair<int, int> & p) {
 
 struct cmd_params {
     std::vector<std::string>         model;
+    std::vector<std::string>         lora;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
     std::vector<std::pair<int, int>> n_pg;
@@ -189,6 +190,7 @@ struct cmd_params {
 
 static const cmd_params cmd_params_defaults = {
     /* model                */ { "models/7B/ggml-model-q4_0.gguf" },
+    /* lora                 */ { "none" },
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
     /* n_pg                 */ {},
@@ -225,6 +227,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("options:\n");
     printf("  -h, --help\n");
     printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
+    printf("      --lora <filename>                     (default: %s)\n", join(cmd_params_defaults.lora, ",").c_str());
     printf("  -p, --n-prompt <n>                        (default: %s)\n",
            join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                           (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
@@ -341,6 +344,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<std::string>(argv[i], split_delim);
             params.model.insert(params.model.end(), p.begin(), p.end());
+        } else if (arg == "--lora") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto p = string_split<std::string>(argv[i], split_delim);
+            params.lora.insert(params.lora.end(), p.begin(), p.end());
         } else if (arg == "-p" || arg == "--n-prompt") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -606,6 +616,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.model.empty()) {
         params.model = cmd_params_defaults.model;
     }
+    if (params.lora.empty()) {
+        params.lora = cmd_params_defaults.lora;
+    }
     if (params.n_prompt.empty()) {
         params.n_prompt = cmd_params_defaults.n_prompt;
     }
@@ -672,6 +685,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 
 struct cmd_params_instance {
     std::string        model;
+    std::string        lora;
     int                n_prompt;
     int                n_gen;
     int                n_batch;
@@ -737,7 +751,7 @@ struct cmd_params_instance {
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
-        return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
+        return model == other.model && lora == other.lora && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
                split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
                tensor_split == other.tensor_split;
     }
@@ -764,6 +778,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     // this ordering minimizes the number of times that each model needs to be reloaded
     // clang-format off
     for (const auto & m : params.model)
+    for (const auto & l : params.lora)
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & rpc : params.rpc_servers)
     for (const auto & sm : params.split_mode)
@@ -787,6 +802,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             }
             cmd_params_instance instance = {
                 /* .model        = */ m,
+                /* .lora         = */ l,
                 /* .n_prompt     = */ n_prompt,
                 /* .n_gen        = */ 0,
                 /* .n_batch      = */ nb,
@@ -816,6 +832,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             }
             cmd_params_instance instance = {
                 /* .model        = */ m,
+                /* .lora         = */ l,
                 /* .n_prompt     = */ 0,
                 /* .n_gen        = */ n_gen,
                 /* .n_batch      = */ nb,
@@ -845,6 +862,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             }
             cmd_params_instance instance = {
                 /* .model        = */ m,
+                /* .lora         = */ l,
                 /* .n_prompt     = */ n_pg.first,
                 /* .n_gen        = */ n_pg.second,
                 /* .n_batch      = */ nb,
@@ -879,6 +897,7 @@ struct test {
     const std::string        cpu_info;
     const std::string        gpu_info;
     std::string              model_filename;
+    std::string              lora_filename;
     std::string              model_type;
     uint64_t                 model_size;
     uint64_t                 model_n_params;
@@ -908,6 +927,7 @@ struct test {
         gpu_info(get_gpu_info()) {
 
         model_filename = inst.model;
+        lora_filename = inst.lora;
         char buf[128];
         llama_model_desc(lmodel, buf, sizeof(buf));
         model_type     = buf;
@@ -969,12 +989,12 @@ struct test {
 
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
-            "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
-            "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "use_mmap",
-            "embeddings",   "n_prompt",     "n_gen",          "test_time",  "avg_ns",       "stddev_ns",
-            "avg_ts",       "stddev_ts",
+            "build_commit",  "build_number", "cpu_info",   "gpu_info",       "backends",   "model_filename",
+            "lora_filename", "model_type",   "model_size", "model_n_params", "n_batch",    "n_ubatch",
+            "n_threads",     "cpu_mask",     "cpu_strict", "poll",           "type_k",     "type_v",
+            "n_gpu_layers",  "split_mode",   "main_gpu",   "no_kv_offload",  "flash_attn", "tensor_split",
+            "use_mmap",      "embeddings",   "n_prompt",   "n_gen",          "test_time",  "avg_ns",
+            "stddev_ns", "avg_ts",       "stddev_ts",
         };
         return fields;
     }
@@ -1020,6 +1040,7 @@ struct test {
                                             gpu_info,
                                             get_backend(),
                                             model_filename,
+                                            lora_filename,
                                             model_type,
                                             std::to_string(model_size),
                                             std::to_string(model_n_params),
@@ -1260,6 +1281,9 @@ struct markdown_printer : public printer {
     void print_header(const cmd_params & params) override {
         // select fields to print
         fields.emplace_back("model");
+        if (params.lora.size() > 1 || (!params.lora.empty() && params.lora[0] != "none")) {
+            fields.emplace_back("lora");
+        }
         fields.emplace_back("size");
         fields.emplace_back("params");
         fields.emplace_back("backend");
@@ -1338,6 +1362,8 @@ struct markdown_printer : public printer {
             char        buf[128];
             if (field == "model") {
                 value = t.model_type;
+            } else if (field == "lora") {
+                value = t.lora_filename.empty() || t.lora_filename == "none" ? "N" : "Y";
             } else if (field == "size") {
                 if (t.model_size < 1024 * 1024 * 1024) {
                     snprintf(buf, sizeof(buf), "%.2f MiB", t.model_size / 1024.0 / 1024.0);
@@ -1562,6 +1588,9 @@ int main(int argc, char ** argv) {
             }
 
             lmodel = llama_model_load_from_file(inst.model.c_str(), inst.to_llama_mparams());
+            if (!inst.lora.empty() && inst.lora != "none") {
+                llama_adapter_lora_init(lmodel, inst.lora.c_str());
+            }
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
                 return 1;
