@@ -4996,7 +4996,7 @@ static bool validate_fp16(ggml_fp16_t f, size_t i) {
     }
 
 bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbytes) {
-    if (type < 0 || type >= GGML_TYPE_COUNT) {
+    if (type >= GGML_TYPE_COUNT) {
         fprintf(stderr, "%s: invalid type %d\n", __func__, type);
         return false;
     }

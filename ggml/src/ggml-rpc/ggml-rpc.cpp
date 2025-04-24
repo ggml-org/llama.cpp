@@ -77,7 +77,7 @@ struct rpc_tensor {
 static_assert(sizeof(rpc_tensor) % 8 == 0, "rpc_tensor size must be multiple of 8");
 
 // RPC commands
-enum rpc_cmd {
+enum rpc_cmd : uint8_t {
     RPC_CMD_ALLOC_BUFFER = 0,
     RPC_CMD_GET_ALIGNMENT,
     RPC_CMD_GET_MAX_SIZE,

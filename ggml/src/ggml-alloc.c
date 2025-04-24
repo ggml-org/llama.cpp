@@ -339,10 +339,10 @@ static size_t ggml_dyn_tallocr_max_size(struct ggml_dyn_tallocr * alloc) {
 // graph allocator
 
 struct hash_node {
+    size_t offset; // offset within the buffer
     int n_children;
     int n_views;
     int buffer_id;
-    size_t offset; // offset within the buffer
     bool allocated;
 };
 

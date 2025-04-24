@@ -826,9 +826,9 @@ struct llm_tokenizer_ugm_session {
         }
 
         // initialize score_sum to -FLT_MAX so it will be always lower than sums of token scores
-        std::vector<struct best_tokenization> tokenization_results(input_len + 1, {vocab.token_unk(), 0, -FLT_MAX});
+        std::vector<struct best_tokenization> tokenization_results(input_len + 1, {0, vocab.token_unk(), -FLT_MAX});
         // at the beginning tokenization score is zero
-        tokenization_results[0] = { vocab.token_unk(), 0, 0 };
+        tokenization_results[0] = {  0, vocab.token_unk(), 0 };
 
         for (size_t input_offset = 0; input_offset < input_len;) {
             size_t prefix_offset = input_offset;
@@ -858,7 +858,7 @@ struct llm_tokenizer_ugm_session {
                     const double challenger_score = current_best.score_sum + token_score;
                     struct best_tokenization & current_champ = tokenization_results[prefix_offset];
                     if (challenger_score > current_champ.score_sum) {
-                        struct best_tokenization challenger = { token_id, input_offset, (float) challenger_score };
+                        struct best_tokenization challenger = { input_offset, token_id, (float) challenger_score };
                         current_champ = challenger;
                     }
                 }
@@ -872,7 +872,7 @@ struct llm_tokenizer_ugm_session {
                 prefix_offset = input_offset + n_utf8_code_units;
                 struct best_tokenization & current_champ = tokenization_results[prefix_offset];
                 if (challenger_score > current_champ.score_sum) {
-                    struct best_tokenization challenger = { vocab.token_unk(), input_offset, (float) challenger_score };
+                    struct best_tokenization challenger = { input_offset, vocab.token_unk(), (float) challenger_score };
                     current_champ = challenger;
                 }
             }
@@ -996,8 +996,8 @@ private:
 
     // this structure stores the best tokenization so far at input_offset
     struct best_tokenization {
-        llama_token token_id;
         size_t input_offset;
+        llama_token token_id;
         float score_sum;
     };
 

@@ -451,6 +451,8 @@ struct ggml_threadpool {
     atomic_int GGML_CACHE_ALIGN n_barrier_passed;
     atomic_int GGML_CACHE_ALIGN current_chunk; // currently processing chunk during Mat_Mul, shared between all the threads.
 
+    enum ggml_status ec;
+
     // these are atomic as an annotation for thread-sanitizer
     atomic_bool stop;         // Used for stopping the threadpool altogether
     atomic_bool pause;        // Used for pausing the threadpool or individual threads
@@ -462,8 +464,6 @@ struct ggml_threadpool {
 
     int32_t      prio;        // Scheduling priority
     uint32_t     poll;        // Polling level (0 - no polling)
-
-    enum ggml_status ec;
 };
 
 // Per-thread state
