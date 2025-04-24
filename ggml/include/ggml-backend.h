@@ -46,11 +46,12 @@ extern "C" {
     // Backend buffer
     //
 
-    enum GGML_PACKED ggml_backend_buffer_usage {
+    GGML_PACKED_ENUM ggml_backend_buffer_usage {
         GGML_BACKEND_BUFFER_USAGE_ANY = 0,
         GGML_BACKEND_BUFFER_USAGE_WEIGHTS = 1,
         GGML_BACKEND_BUFFER_USAGE_COMPUTE = 2,
     };
+    GGML_PACKED_ENUM_END
 
     GGML_API const char *                   ggml_backend_buffer_name          (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_free          (ggml_backend_buffer_t buffer);
@@ -127,7 +128,7 @@ extern "C" {
     // Backend device
     //
 
-    enum GGML_PACKED ggml_backend_dev_type {
+    GGML_PACKED_ENUM ggml_backend_dev_type {
         // CPU device using system memory
         GGML_BACKEND_DEVICE_TYPE_CPU,
         // GPU device using dedicated memory
@@ -135,6 +136,7 @@ extern "C" {
         // accelerator devices intended to be used together with the CPU backend (e.g. BLAS or AMX)
         GGML_BACKEND_DEVICE_TYPE_ACCEL
     };
+    GGML_PACKED_ENUM_END
 
     // functionality supported by the device
     struct ggml_backend_dev_caps {

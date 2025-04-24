@@ -114,14 +114,16 @@ typedef atomic_int atomic_flag;
 
 #define ATOMIC_FLAG_INIT 0
 
-typedef enum : uint8_t {
+GGML_PACKED_ENUM _MEMORY_ORDER {
     memory_order_relaxed,
     memory_order_consume,
     memory_order_acquire,
     memory_order_release,
     memory_order_acq_rel,
     memory_order_seq_cst
-} memory_order;
+};
+GGML_PACKED_ENUM_END
+typedef enum _MEMORY_ORDER memory_order;
 
 static void atomic_store(atomic_int * ptr, LONG val) {
     InterlockedExchange(ptr, val);

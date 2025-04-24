@@ -22,7 +22,7 @@ extern "C" {
     };
 
     // numa strategies
-    enum GGML_PACKED ggml_numa_strategy {
+    GGML_PACKED_ENUM ggml_numa_strategy {
         GGML_NUMA_STRATEGY_DISABLED   = 0,
         GGML_NUMA_STRATEGY_DISTRIBUTE = 1,
         GGML_NUMA_STRATEGY_ISOLATE    = 2,
@@ -30,6 +30,7 @@ extern "C" {
         GGML_NUMA_STRATEGY_MIRROR     = 4,
         GGML_NUMA_STRATEGY_COUNT
     };
+    GGML_PACKED_ENUM_END
 
     GGML_BACKEND_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_BACKEND_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node

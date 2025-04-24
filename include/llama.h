@@ -66,7 +66,7 @@ extern "C" {
     typedef int32_t llama_token;
     typedef int32_t llama_seq_id;
 
-    enum GGML_PACKED llama_vocab_type {
+    GGML_PACKED_ENUM llama_vocab_type {
         LLAMA_VOCAB_TYPE_NONE = 0, // For models without vocab
         LLAMA_VOCAB_TYPE_SPM  = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
         LLAMA_VOCAB_TYPE_BPE  = 2, // GPT-2 tokenizer based on byte-level BPE
@@ -74,9 +74,10 @@ extern "C" {
         LLAMA_VOCAB_TYPE_UGM  = 4, // T5 tokenizer based on Unigram
         LLAMA_VOCAB_TYPE_RWKV = 5, // RWKV tokenizer based on greedy tokenization
     };
+    GGML_PACKED_ENUM_END
 
     // pre-tokenization types
-    enum GGML_PACKED llama_vocab_pre_type {
+    GGML_PACKED_ENUM llama_vocab_pre_type {
         LLAMA_VOCAB_PRE_TYPE_DEFAULT        = 0,
         LLAMA_VOCAB_PRE_TYPE_LLAMA3         = 1,
         LLAMA_VOCAB_PRE_TYPE_DEEPSEEK_LLM   = 2,
@@ -112,16 +113,18 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_rope_type {
+    GGML_PACKED_ENUM llama_rope_type {
         LLAMA_ROPE_TYPE_NONE   = -1,
         LLAMA_ROPE_TYPE_NORM   = 0,
         LLAMA_ROPE_TYPE_NEOX   = GGML_ROPE_TYPE_NEOX,
         LLAMA_ROPE_TYPE_MROPE  = GGML_ROPE_TYPE_MROPE,
         LLAMA_ROPE_TYPE_VISION = GGML_ROPE_TYPE_VISION,
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_token_type { //TODO: remove, required until per token attributes are available from GGUF file
+    GGML_PACKED_ENUM llama_token_type { //TODO: remove, required until per token attributes are available from GGUF file
         LLAMA_TOKEN_TYPE_UNDEFINED    = 0,
         LLAMA_TOKEN_TYPE_NORMAL       = 1,
         LLAMA_TOKEN_TYPE_UNKNOWN      = 2,
@@ -130,8 +133,9 @@ extern "C" {
         LLAMA_TOKEN_TYPE_UNUSED       = 5,
         LLAMA_TOKEN_TYPE_BYTE         = 6,
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_token_attr {
+    GGML_PACKED_ENUM llama_token_attr {
         LLAMA_TOKEN_ATTR_UNDEFINED    = 0,
         LLAMA_TOKEN_ATTR_UNKNOWN      = 1 << 0,
         LLAMA_TOKEN_ATTR_UNUSED       = 1 << 1,
@@ -144,9 +148,10 @@ extern "C" {
         LLAMA_TOKEN_ATTR_RSTRIP       = 1 << 8,
         LLAMA_TOKEN_ATTR_SINGLE_WORD  = 1 << 9,
     };
+    GGML_PACKED_ENUM_END
 
     // model file types
-    enum GGML_PACKED llama_ftype {
+    GGML_PACKED_ENUM llama_ftype {
         LLAMA_FTYPE_ALL_F32              = 0,
         LLAMA_FTYPE_MOSTLY_F16           = 1,  // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q4_0          = 2,  // except 1d tensors
@@ -188,8 +193,9 @@ extern "C" {
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_rope_scaling_type {
+    GGML_PACKED_ENUM llama_rope_scaling_type {
         LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED = -1,
         LLAMA_ROPE_SCALING_TYPE_NONE        = 0,
         LLAMA_ROPE_SCALING_TYPE_LINEAR      = 1,
@@ -197,8 +203,9 @@ extern "C" {
         LLAMA_ROPE_SCALING_TYPE_LONGROPE    = 3,
         LLAMA_ROPE_SCALING_TYPE_MAX_VALUE   = LLAMA_ROPE_SCALING_TYPE_LONGROPE,
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_pooling_type {
+    GGML_PACKED_ENUM llama_pooling_type {
         LLAMA_POOLING_TYPE_UNSPECIFIED = -1,
         LLAMA_POOLING_TYPE_NONE = 0,
         LLAMA_POOLING_TYPE_MEAN = 1,
@@ -206,18 +213,21 @@ extern "C" {
         LLAMA_POOLING_TYPE_LAST = 3,
         LLAMA_POOLING_TYPE_RANK = 4, // used by reranking models to attach the classification head to the graph
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_attention_type {
+    GGML_PACKED_ENUM llama_attention_type {
         LLAMA_ATTENTION_TYPE_UNSPECIFIED = -1,
         LLAMA_ATTENTION_TYPE_CAUSAL      = 0,
         LLAMA_ATTENTION_TYPE_NON_CAUSAL  = 1,
     };
+    GGML_PACKED_ENUM_END
 
-    enum GGML_PACKED llama_split_mode {
+    GGML_PACKED_ENUM llama_split_mode {
         LLAMA_SPLIT_MODE_NONE  = 0, // single GPU
         LLAMA_SPLIT_MODE_LAYER = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ROW   = 2, // split layers and KV across GPUs, use tensor parallelism if supported
     };
+    GGML_PACKED_ENUM_END
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
@@ -261,12 +271,13 @@ extern "C" {
         int8_t       *  logits; // TODO: rename this to "output"
     } llama_batch;
 
-    enum GGML_PACKED llama_model_kv_override_type {
+    GGML_PACKED_ENUM llama_model_kv_override_type {
         LLAMA_KV_OVERRIDE_TYPE_INT,
         LLAMA_KV_OVERRIDE_TYPE_FLOAT,
         LLAMA_KV_OVERRIDE_TYPE_BOOL,
         LLAMA_KV_OVERRIDE_TYPE_STR,
     };
+    GGML_PACKED_ENUM_END
 
     struct llama_model_kv_override {
         enum llama_model_kv_override_type tag;

@@ -50,7 +50,7 @@ extern "C" {
 #endif
 
     // types that can be stored as GGUF KV data
-    enum GGML_PACKED gguf_type {
+    GGML_PACKED_ENUM gguf_type {
         GGUF_TYPE_UINT8   = 0,
         GGUF_TYPE_INT8    = 1,
         GGUF_TYPE_UINT16  = 2,
@@ -66,6 +66,7 @@ extern "C" {
         GGUF_TYPE_FLOAT64 = 12,
         GGUF_TYPE_COUNT,       // marks the end of the enum
     };
+    GGML_PACKED_ENUM_END
 
     struct gguf_context;
 
