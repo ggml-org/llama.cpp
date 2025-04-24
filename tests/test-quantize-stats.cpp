@@ -1,7 +1,8 @@
 #include "ggml.h"
 #include "llama.h"
-#include "llama-model.h"
 #include "common.h"
+
+#include "../src/llama-model.h"
 
 #include <algorithm>
 #include <cassert>

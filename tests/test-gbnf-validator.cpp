@@ -1,5 +1,5 @@
-#include "unicode.h"
-#include "llama-grammar.h"
+#include "../src/unicode.h"
+#include "../src/llama-grammar.h"
 
 #include <cstdio>
 #include <cstdlib>
