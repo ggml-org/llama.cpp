@@ -1485,6 +1485,8 @@ void llama_kv_cache_recurrent::clear() {
 }
 
 bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    uint32_t new_head = size;
+
     if (p0 < 0) {
         p0 = 0;
     }
@@ -1516,6 +1518,34 @@ bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_p
         if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
             return false;
         }
+    }
+
+    for (uint32_t i = 0; i < size; ++i) {
+        if (cells[i].pos >= p0 && cells[i].pos < p1) {
+            if (seq_id < 0) {
+                cells[i].seq_id.clear();
+            } else if (cells[i].has_seq_id(seq_id)) {
+                cells[i].seq_id.erase(seq_id);
+            } else {
+                continue;
+            }
+            if (cells[i].is_empty()) {
+                // keep count of the number of used cells
+                if (cells[i].pos >= 0) {
+                    used--;
+                }
+                cells[i].pos = -1;
+                cells[i].src = -1;
+                if (new_head == size) {
+                    new_head = i;
+                }
+            }
+        }
+    }
+
+    // If we freed up a slot, set head to it so searching can start there.
+    if (new_head != size && new_head < head) {
+        head = new_head;
     }
 
     return true;
