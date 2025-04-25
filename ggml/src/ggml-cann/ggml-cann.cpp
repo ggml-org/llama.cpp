@@ -93,6 +93,18 @@ int32_t ggml_cann_get_device() {
 }
 
 /**
+ * @brief Convert the value obtained from getenv to a lowercase std::string.
+ *
+ * @param env_var C-style string(char*)
+ * @return A string of type std::stringD.
+ */
+static std::string to_lower_case(const char* env_var){
+    std::string mem_pool_type(env_var ? env_var : "");
+    std::transform(mem_pool_type.begin(), mem_pool_type.end(), mem_pool_type.begin(), ::tolower);
+    return mem_pool_type;
+}
+
+/**
  * @brief Initialize the CANN device information.
  *
  * This function initializes the CANN device information by obtaining the
@@ -731,8 +743,7 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
 std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(
     int device) {
     const char* env_var = getenv("GGML_CANN_MEM_POOL");
-    std::string mem_pool_type(env_var ? env_var : "");
-    std::transform(mem_pool_type.begin(), mem_pool_type.end(), mem_pool_type.begin(), ::tolower);
+    std::string mem_pool_type = to_lower_case(env_var);
 
     if (mem_pool_type == "prio") {
         GGML_LOG_INFO("%s: device %d use buffer pool with priority queue\n", __func__, device);
