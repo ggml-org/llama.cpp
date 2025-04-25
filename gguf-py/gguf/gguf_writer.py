@@ -931,6 +931,53 @@ class GGUFWriter:
     def add_eom_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOM_ID, id)
 
+    # for vision models
+
+    def add_vision_projection_dim(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PROJECTION_DIM, value)
+
+    def add_vision_has_vision_encoder(self, value: bool) -> None:
+        self.add_bool(Keys.ClipVision.HAS_VISION_ENCODER, value)
+
+    def add_vision_patch_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.PATCH_SIZE, value)
+
+    def add_vision_embedding_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.EMBEDDING_LENGTH, value)
+
+    def add_vision_feed_forward_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.FEED_FORWARD_LENGTH, value)
+
+    def add_vision_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.BLOCK_COUNT, value)
+
+    def add_vision_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
+
+    def add_vision_projector_type(self, value: str) -> None:
+        self.add_string(Keys.ClipVision.PROJECTOR_TYPE, value)
+
+    def add_vision_attention_layernorm_eps(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
+
+    def add_vision_image_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.IMAGE_SIZE, value)
+
+    def add_vision_image_mean(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.ClipVision.IMAGE_MEAN, values)
+
+    def add_vision_image_std(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.ClipVision.IMAGE_STD, values)
+
+    def add_vision_use_gelu(self, value: bool) -> None:
+        self.add_bool(Keys.ClipVision.USE_GELU, value)
+
+    def add_vision_use_silu(self, value: bool) -> None:
+        self.add_bool(Keys.ClipVision.USE_SILU, value)
+
+    def add_vision_projector_scale_factor(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Projector.SCALE_FACTOR, value)
+
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''
         if not skip_pack_prefix:

@@ -4,7 +4,7 @@
 
 #include "json-schema-to-grammar.h"
 
-#include "llama-grammar.h"
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 #include <fstream>
