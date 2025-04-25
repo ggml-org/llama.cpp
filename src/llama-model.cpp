@@ -4674,7 +4674,7 @@ struct llm_build_llama : public llm_graph_context {
                         LLM_NORM_RMS, il);
                 cb(cur, "ffn_norm", il);
 
-                cur = build_moe_ffn(cur,
+                ggml_tensor * moe_out = build_moe_ffn(cur,
                         model.layers[il].ffn_gate_inp,
                         model.layers[il].ffn_up_exps,
                         model.layers[il].ffn_gate_exps,
@@ -4685,7 +4685,7 @@ struct llm_build_llama : public llm_graph_context {
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                         il);
-                cb(cur, "ffn_moe_out", il);
+                cb(moe_out, "ffn_moe_out", il);
 
                 // For Granite MoE Shared
                 if (model.arch == LLM_ARCH_GRANITE_MOE_SHARED) {
@@ -4697,8 +4697,10 @@ struct llm_build_llama : public llm_graph_context {
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                     cb(ffn_shexp, "ffn_shexp", il);
 
-                    cur = ggml_add(ctx0, cur, ffn_shexp);
+                    cur = ggml_add(ctx0, moe_out, ffn_shexp);
                     cb(cur, "ffn_out", il);
+                } else {
+                    cur = moe_out;
                 }
             }
 
