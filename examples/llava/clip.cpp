@@ -244,8 +244,6 @@ struct clip_vision_model {
     //GLMV-Edge projection
     struct ggml_tensor * mm_model_adapter_conv_w = nullptr;
     struct ggml_tensor * mm_model_adapter_conv_b = nullptr;
-    struct ggml_tensor * boi_w = nullptr;
-    struct ggml_tensor * eoi_w = nullptr;
 
     // MobileVLM projection
     struct ggml_tensor * mm_model_mlp_1_w = nullptr;
@@ -1697,8 +1695,6 @@ struct clip_model_loader {
                     vision_model.mm_model_mlp_1_w = get_tensor(string_format(TN_GLM_ADAPTER_D_H_2_4H,"weight"));
                     vision_model.mm_model_mlp_2_w = get_tensor(string_format(TN_GLM_ADAPTER_GATE,"weight"));
                     vision_model.mm_model_mlp_3_w = get_tensor(string_format(TN_GLM_ADAPTER_D_4H_2_H,"weight"));
-                    vision_model.boi_w = get_tensor(TN_GLM_BOI_W);
-                    vision_model.eoi_w = get_tensor(TN_GLM_EOI_W);
                 } break;
             case PROJECTOR_TYPE_MERGER:
                 {
@@ -2593,8 +2589,7 @@ void clip_free(clip_ctx * ctx) {
 }
 
 size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
-    int extra_tokens = ctx->has_glm_projector ? 2 : 0;
-    return (clip_n_patches(ctx) + extra_tokens) * clip_n_mmproj_embd(ctx) * sizeof(float);
+    return clip_n_patches(ctx) * clip_n_mmproj_embd(ctx) * sizeof(float);
 }
 
 size_t clip_embd_nbytes_by_img(const struct clip_ctx * ctx, int img_h, int img_w) {
@@ -2790,9 +2785,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
     if (ctx->has_glm_projector) {
         GGML_ASSERT(batch_size == 1);
-        ggml_tensor * boi = ctx->vision_model.boi_w;
-        ggml_backend_tensor_get(boi,vec,0,ggml_nbytes(boi));
-        vec = (float*)(vec+ggml_nelements(boi)); //offset for boi
     }
 
     // build the inference graph
@@ -3000,13 +2992,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // copy the embeddings to the location passed by the user
     ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
-
-    if (ctx->has_glm_projector) {
-        //eoi
-        ggml_tensor * eoi = ctx->vision_model.eoi_w;
-        int offset = ggml_nelements(embeddings);
-        ggml_backend_tensor_get(eoi, vec+offset, 0, ggml_nbytes(eoi));
-    }
 
     return true;
 }

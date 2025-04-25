@@ -90,8 +90,6 @@
 #define TN_GLM_ADAPTER_D_H_2_4H "adapter.linear.dense_h_to_4h.%s"
 #define TN_GLM_ADAPTER_GATE     "adapter.linear.gate.%s"
 #define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
-#define TN_GLM_BOI_W            "adapter.boi"
-#define TN_GLM_EOI_W            "adapter.eoi"
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,
