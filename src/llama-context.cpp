@@ -702,6 +702,8 @@ int llama_context::encode(llama_batch & inp_batch) {
         t_compute_start_us = ggml_time_us();
     }
 
+    embd_seq.clear();
+
     n_queued_tokens += n_tokens;
 
     const int64_t n_embd = hparams.n_embd;
@@ -842,13 +844,13 @@ int llama_context::encode(llama_batch & inp_batch) {
 }
 
 int llama_context::decode(llama_batch & inp_batch) {
-    if (inp_batch.n_tokens == 0) {
-        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
-        return -1;
-    }
-
     if (!memory) {
         LLAMA_LOG_WARN("%s: cannot decode batches with this context\n", __func__);
+        return encode(inp_batch);
+    }
+
+    if (inp_batch.n_tokens == 0) {
+        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
 
