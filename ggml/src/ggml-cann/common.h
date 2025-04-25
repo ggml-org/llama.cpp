@@ -37,6 +37,7 @@
 #include <thread>
 #include <unistd.h>
 #include <functional>
+#include <set>
 
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
@@ -102,6 +103,8 @@ const ggml_cann_device_info& ggml_cann_info();
 
 void ggml_cann_set_device(int32_t device);
 int32_t ggml_cann_get_device();
+
+static std::string to_lower_case(const char* env_var);
 
 /**
  * @brief Abstract base class for memory pools used by CANN.
@@ -354,7 +357,10 @@ struct ggml_backend_cann_context {
         : device(device), name("CANN" + std::to_string(device)), task_queue(1024, device) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
-        async_mode = (getenv("GGML_CANN_ASYNC_MODE") != nullptr);
+
+        std::string value = to_lower_case(getenv("GGML_CANN_ASYNC_MODE"));
+        std::set<std::string> valid_values = {"on", "1", "yes", "enable"};
+        async_mode = valid_values.find(value) != valid_values.end();
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
     }
