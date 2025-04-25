@@ -49,7 +49,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
         }
     } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
         // decoder-only model
-        if (llama_decode(ctx, batch) < 0) {
+        if (llama_encode(ctx, batch) < 0) {
             LOG_ERR("%s : failed to decode\n", __func__);
         }
     }

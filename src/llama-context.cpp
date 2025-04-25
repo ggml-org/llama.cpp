@@ -253,7 +253,7 @@ llama_context::llama_context(
     }
 
     // reserve worst-case graph
-    if (!hparams.vocab_only) {
+    if (!hparams.vocab_only && memory) {
         const uint32_t n_seqs = 1; // TODO: worst-case number of sequences
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -763,12 +763,12 @@ int llama_context::encode(llama_batch & inp_batch) {
         ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
         GGML_ASSERT(backend_embd != nullptr);
 
-        GGML_ASSERT(embd != nullptr);
-
         switch (cparams.pooling_type) {
             case LLAMA_POOLING_TYPE_NONE:
                 {
                     // extract token embeddings
+                    GGML_ASSERT(embd != nullptr);
+
                     GGML_ASSERT(n_tokens*n_embd <= (int64_t) embd_size);
                     ggml_backend_tensor_get_async(backend_embd, t_embd, embd, 0, n_tokens*n_embd*sizeof(float));
                 } break;
@@ -837,6 +837,11 @@ int llama_context::encode(llama_batch & inp_batch) {
 int llama_context::decode(llama_batch & inp_batch) {
     if (inp_batch.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
+        return -1;
+    }
+
+    if (!memory) {
+        LLAMA_LOG_WARN("%s: cannot decode batches with this context\n", __func__);
         return -1;
     }
 
