@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-threading.h"
+#include "ggml-cpu.h"
 #include "ggml.h"
 
 // FIXME: required here for quantization functions
@@ -40,13 +41,6 @@
 #include <unistd.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
-#endif
-
-#if defined(__x86_64__)
-#include <immintrin.h>
-#if defined(_MSC_VER)
-#  include <intrin.h>
-#endif
 #endif
 
 #if defined(_WIN32)
@@ -389,185 +383,19 @@ void ggml_fp16_to_fp32_row(const ggml_fp16_t * x, float * y, int64_t n) {
     }
 }
 
-#if defined(__x86_64__)
-
-#if defined(_MSC_VER)
-#include <intrin.h>
-static void cpuid(int leaf, int subleaf, int *eax, int *ebx, int *ecx, int *edx) {
-    int regs[4];
-    __cpuidex(regs, leaf, subleaf);
-    *eax = regs[0];
-    *ebx = regs[1];
-    *ecx = regs[2];
-    *edx = regs[3];
-}
-#elif defined(__GNUC__) || defined(__clang__)
-static void cpuid(int leaf, int subleaf, int *eax, int *ebx, int *ecx, int *edx) {
-    __asm__ volatile (
-        "cpuid"
-        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
-        : "a"(leaf), "c"(subleaf)
-    );
-}
-#else
-  #error Unsupported compiler
-#endif
-
-static bool x86_64_supports_f16c(void) {
-    int eax, ebx, ecx, edx;
-    cpuid(1, 0, &eax, &ebx, &ecx, &edx);
-    return (ecx & (1 << 29)) != 0;
-}
-
-static bool x86_64_supports_avx2(void) {
-    int eax, ebx, ecx, edx;
-    cpuid(0, 0, &eax, &ebx, &ecx, &edx);
-    if (eax < 7)
-        return 0;
-    cpuid(7, 0, &eax, &ebx, &ecx, &edx);
-    return (ebx & (1 << 5)) != 0;
-}
-
-static bool x86_64_supports_avx512f(void) {
-    int eax, ebx, ecx, edx;
-    cpuid(0, 0, &eax, &ebx, &ecx, &edx);
-    if (eax < 7) return 0;
-    cpuid(7, 0, &eax, &ebx, &ecx, &edx);
-    return (ebx & (1 << 16)) != 0;
-}
-
-static struct ggml_type_traits type_traits[GGML_TYPE_COUNT];
-
-static inline void ggml_fp32_to_fp16_generic(const float * x, ggml_fp16_t * y, int64_t n) {
-    for (int64_t i = 0; i < n; i++) {
+void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
+    int i = 0;
+    for (; i < n; ++i) {
         y[i] = GGML_FP32_TO_FP16(x[i]);
     }
 }
 
-static inline void __attribute__((target("f16c"))) ggml_fp32_to_fp16_row_f16c(const float * x, ggml_fp16_t * y, int64_t n) {
-    int64_t i = 0;
-    for (; i + 7 < n; i += 8) {
-        __m256 x_vec = _mm256_loadu_ps(x + i);
-        __m128i y_vec = _mm256_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
-        _mm_storeu_si128((__m128i *)(y + i), y_vec);
-    }
-    for (; i + 3 < n; i += 4) {
-        __m128 x_vec = _mm_loadu_ps(x + i);
-        __m128i y_vec = _mm_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
-        _mm_storel_epi64((__m128i *)(y + i), y_vec);
-    }
-    ggml_fp32_to_fp16_generic(x + i, y + i, n - i);
-}
-
-static inline void __attribute__((target("avx512f"))) ggml_fp32_to_fp16_row_avx512f(const float * x, ggml_fp16_t * y, int64_t n) {
-    int64_t i = 0;
-    for (; i + 15 < n; i += 16) {
-        __m512 x_vec = _mm512_loadu_ps(x + i);
-        __m256i y_vec = _mm512_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
-        _mm256_storeu_si256((__m256i *)(y + i), y_vec);
-    }
-    ggml_fp32_to_fp16_row_f16c(x + i, y + i, n - i);
-}
-
-void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
-static ggml_from_float_t from_float_ref = NULL;
-    if (from_float_ref != NULL) {
-        from_float_ref(x, y, n);
-        return;
-    }
-
-    bool has_avx512f = x86_64_supports_avx512f();
-    bool has_f16c = x86_64_supports_f16c();
-    if (has_avx512f && has_f16c) {
-        // use AVX512F
-        from_float_ref = (ggml_from_float_t)ggml_fp32_to_fp16_row_avx512f;
-    } else if (has_f16c) {
-        // use F16C
-        from_float_ref = (ggml_from_float_t)ggml_fp32_to_fp16_row_f16c;
-    } else {
-        // fallback to generic implementation
-        from_float_ref = (ggml_from_float_t)ggml_fp32_to_fp16_generic;
-    }
-    type_traits[GGML_TYPE_F16].from_float_ref = from_float_ref;
-    from_float_ref(x, y, n);
-}
-
-#else
-void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
-    for (int64_t i = 0; i < n; i++) {
-        y[i] = GGML_FP32_TO_FP16(x[i]);
-    }
-}
-
-#endif
-
-#if defined(__x86_64__)
-
-
-static inline void ggml_bf16_to_fp32_generic(const ggml_bf16_t * x, float * y, int64_t n) {
-    for (int64_t i = 0; i < n; i++) {
+void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
+    int i = 0;
+    for (; i < n; ++i) {
         y[i] = GGML_BF16_TO_FP32(x[i]);
     }
 }
-
-static inline void __attribute__((target("avx2"))) ggml_bf16_to_fp32_row_avx2(const ggml_bf16_t * x, float * y, int64_t n) {
-    int64_t i = 0;
-    for (; i + 7 < n; i += 8) {
-        _mm256_storeu_ps(y + i,
-                        _mm256_castsi256_ps(
-                            _mm256_slli_epi32(
-                                _mm256_cvtepu16_epi32(
-                                    _mm_loadu_si128(
-                                        (const __m128i *)(x + i))),
-                                16)));
-    }
-    ggml_bf16_to_fp32_generic(x + i, y + i, n - i);
-}
-
-static inline void __attribute__((target("avx512f"))) ggml_bf16_to_fp32_row_avx512f(const ggml_bf16_t * x, float * y, int64_t n) {
-    int64_t i = 0;
-    for (; i + 15 < n; i += 16) {
-        _mm512_storeu_ps(y + i,
-                        _mm512_castsi512_ps(
-                            _mm512_slli_epi32(
-                                _mm512_cvtepu16_epi32(
-                                    _mm256_loadu_si256(
-                                        (const __m256i *)(x + i))),
-                                16)));
-    }
-    ggml_bf16_to_fp32_row_avx2(x + i, y + i, n - i);
-}
-
-void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
-    static ggml_to_float_t to_float = NULL;
-    if (to_float != NULL) {
-        to_float(x, y, n);
-        return;
-    }
-    bool has_avx512f = x86_64_supports_avx512f();
-    bool has_avx2 = x86_64_supports_avx2();
-    if (has_avx512f) {
-        // use AVX512F
-        to_float = (ggml_to_float_t)ggml_bf16_to_fp32_row_avx512f;
-    } else if (has_avx2) {
-        // use AVX2
-        to_float = (ggml_to_float_t)ggml_bf16_to_fp32_row_avx2;
-    } else {
-        // fallback to generic implementation
-        to_float = (ggml_to_float_t)ggml_bf16_to_fp32_generic;
-    }
-    type_traits[GGML_TYPE_BF16].to_float = to_float;
-    to_float(x, y, n);
-}
-
-#else
-
-void ggml_bf16_to_fp32_row(const ggml_bf16_t * x, float * y, int64_t n) {
-    for (int64_t i = 0; i < n; i++) {
-        y[i] = GGML_BF16_TO_FP32(x[i]);
-    }
-}
-#endif
 
 void ggml_fp32_to_bf16_row_ref(const float * x, ggml_bf16_t * y, int64_t n) {
     for (int i = 0; i < n; i++) {
@@ -700,7 +528,7 @@ static void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const fl
 static void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * GGML_RESTRICT x, size_t bx, ggml_fp16_t * GGML_RESTRICT y, size_t by, int nrc);
 static void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc);
 
-static struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
+static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I8] = {
         .type_name                = "i8",
         .blck_size                = 1,
