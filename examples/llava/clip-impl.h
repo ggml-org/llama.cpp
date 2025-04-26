@@ -17,22 +17,15 @@
 #define KEY_FTYPE               "general.file_type"
 #define KEY_NAME                "general.name"
 #define KEY_DESCRIPTION         "general.description"
-#define KEY_HAS_TEXT_ENC        "clip.has_text_encoder"
-#define KEY_HAS_VIS_ENC         "clip.has_vision_encoder"
-#define KEY_HAS_LLAVA_PROJ      "clip.has_llava_projector"
-#define KEY_HAS_MINICPMV_PROJ   "clip.has_minicpmv_projector"
-#define KEY_HAS_GLM_PROJ        "clip.has_glm_projector"
 #define KEY_MINICPMV_VERSION    "clip.minicpmv_version"
-#define KEY_HAS_QWEN2VL_MERGER  "clip.has_qwen2vl_merger"
 #define KEY_USE_GELU            "clip.use_gelu"
 #define KEY_USE_SILU            "clip.use_silu"
-#define KEY_N_EMBD              "clip.%s.embedding_length"
-#define KEY_N_FF                "clip.%s.feed_forward_length"
-#define KEY_N_BLOCK             "clip.%s.block_count"
-#define KEY_N_HEAD              "clip.%s.attention.head_count"
-#define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
-#define KEY_PROJ_DIM            "clip.%s.projection_dim"
-#define KEY_TOKENS              "tokenizer.ggml.tokens"
+#define KEY_N_EMBD              "clip.vision.embedding_length"
+#define KEY_N_FF                "clip.vision.feed_forward_length"
+#define KEY_N_BLOCK             "clip.vision.block_count"
+#define KEY_N_HEAD              "clip.vision.attention.head_count"
+#define KEY_LAYER_NORM_EPS      "clip.vision.attention.layer_norm_epsilon"
+#define KEY_PROJ_DIM            "clip.vision.projection_dim"
 #define KEY_IMAGE_SIZE          "clip.vision.image_size"
 #define KEY_PATCH_SIZE          "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN          "clip.vision.image_mean"
@@ -96,9 +89,9 @@ enum projector_type {
     PROJECTOR_TYPE_MLP_NORM,
     PROJECTOR_TYPE_LDP,
     PROJECTOR_TYPE_LDPV2,
-    PROJECTOR_TYPE_RESAMPLER,
+    PROJECTOR_TYPE_MINICPMV,
     PROJECTOR_TYPE_GLM_EDGE,
-    PROJECTOR_TYPE_MERGER,
+    PROJECTOR_TYPE_QWEN2VL,
     PROJECTOR_TYPE_GEMMA3,
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
@@ -109,9 +102,9 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MLP,       "mlp" },
     { PROJECTOR_TYPE_LDP,       "ldp" },
     { PROJECTOR_TYPE_LDPV2,     "ldpv2"},
-    { PROJECTOR_TYPE_RESAMPLER, "resampler"},
+    { PROJECTOR_TYPE_MINICPMV,  "resampler"},
     { PROJECTOR_TYPE_GLM_EDGE,  "adapter"},
-    { PROJECTOR_TYPE_MERGER,    "qwen2vl_merger"},
+    { PROJECTOR_TYPE_QWEN2VL,   "qwen2vl_merger"},
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
