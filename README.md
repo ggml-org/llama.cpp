@@ -228,6 +228,22 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 
 </details>
 
+## Quickstart
+
+CPU inference:
+
+1. Download package for your OS on [releases page](https://github.com/ggml-org/llama.cpp/releases)
+1. Download a GGUF file for your favorite model (for example: https://huggingface.co/bartowski/google_gemma-3-1b-it-qat-GGUF/blob/main/google_gemma-3-1b-it-qat-Q4_0.gguf)
+1. Run: `llama-run google_gemma-3-1b-it-qat-Q4_0.gguf`
+
+CUDA on Windows:
+
+1. To run CUDA inference, you need to download both binary and CUDA runtime package, for example:
+  * llama-b5192-bin-win-cuda-cu12.4-x64.zip
+  * cudart-llama-bin-win-cu12.4-x64.zip
+1. Unpack both into same directory
+1. Run with `ngl` flag: `llama-run -ngl 999 google_gemma-3-1b-it-qat-Q4_0.gguf`
+
 ## Supported backends
 
 | Backend | Target devices |
