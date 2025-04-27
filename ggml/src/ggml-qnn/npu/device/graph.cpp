@@ -8,24 +8,23 @@
 
 namespace hexagon {
 
+graph::graph() noexcept {
+    DEVICE_LOG_DEBUG("graph(%p) created\n", (void *) this);
+}
+
 graph::~graph() noexcept {
-    if (_tensors) {
-        delete[] _tensors;
-    }
+    _tensors.reset();
+    DEVICE_LOG_DEBUG("graph(%p) destroyed\n", (void *) this);
 }
 
 void graph::set_tensor(const npu_device_tensor_handle_t * tensors, int tensor_count) {
-    if (_tensor_count > 0) {
-        delete[] _tensors;
-    }
-
     if (tensor_count <= 0) {
-        _tensors      = nullptr;
+        _tensors.reset();
         _tensor_count = 0;
         return;
     }
 
-    _tensors = new (std::nothrow) tensor *[tensor_count];
+    _tensors = std::make_unique<tensor *[]>(size_t(tensor_count));
     for (int i = 0; i < tensor_count; ++i) {
         auto * tensor_obj = reinterpret_cast<tensor *>(tensors[i]);
         _tensors[i]       = tensor_obj;
@@ -37,31 +36,43 @@ void graph::set_tensor(const npu_device_tensor_handle_t * tensors, int tensor_co
     DEVICE_LOG_DEBUG("graph(%p) tensor count: %zu\n", (void *) this, _tensor_count);
 }
 
-bool graph::compute() {
+bool graph::compute(default_thread_pool * thread_pool) {
     if (!_tensors || !_tensor_count) {
         DEVICE_LOG_DEBUG("graph(%p) no tensors to compute\n", (void *) this);
         return true;  // return success if no tensors to compute
     }
 
     DEVICE_LOG_DEBUG("graph(%p) compute\n", (void *) this);
+    thread_pool->sync_execute(reinterpret_cast<default_thread_pool::task_type>(&graph::thread_pool_task), this);
+
+    for (size_t i = 0; i < _tensor_count; ++i) {
+        auto * dst = _tensors[i];
+        dst->flush();  // TODO: optimize this
+    }
+
+    return true;
+}
+
+void graph::thread_pool_task(default_thread_pool * pool, size_t thread_idx, size_t thread_count, graph * graph) {
+    NPU_UNUSED(pool);
+    graph->compute_impl(thread_idx, thread_count);
+}
+
+void graph::compute_impl(size_t thread_idx, size_t thread_count) {
     for (size_t i = 0; i < _tensor_count; ++i) {
         auto * dst  = _tensors[i];
         auto   op   = dst->get_op();
         auto * func = get_compute_func(op);
         if (!func) {
             DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d not supported\n", (void *) this, i, op);
-            return false;
+            return;
         }
 
-        if (!func(dst)) {
+        if (!func(dst, thread_idx, thread_count)) {
             DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d compute failed\n", (void *) this, i, op);
-            return false;
+            return;
         }
-
-        dst->flush();  // TODO: optimize this
     }
-
-    return true;
 }
 
 }  // namespace hexagon

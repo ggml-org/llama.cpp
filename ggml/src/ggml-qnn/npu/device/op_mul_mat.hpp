@@ -20,7 +20,7 @@ inline bool is_addr_aligned(void * addr) {
     return unaligned_bytes(addr) == 0;
 }
 
-bool mul_mat_f32(tensor * out);
+bool mul_mat_f32(tensor * out, size_t tidx, size_t tcnt);
 bool is_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1,
                           const npu_device_tensor_spec & dst, npu_device_tensor_op op);
 

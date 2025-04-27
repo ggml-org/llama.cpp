@@ -5,11 +5,9 @@ option(GGML_QNN_ENABLE_HEXAGON_BACKEND "ggml-qnn: Enable Hexagon custom package"
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     find_library(LOG_LIB log)
-    set(QNN_LINK_LIBRARIES ${LOG_LIB})
-    set(QNN_DEFAULT_LIB_SEARCH_PATH "/data/local/tmp/" CACHE STRING "customized library search path for QNN backend")
-    add_compile_options(-g -O0)
+    set(COMMON_LINK_LIBRARIES ${LOG_LIB})
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    set(QNN_DEFAULT_LIB_SEARCH_PATH "" CACHE STRING "customized library search path for QNN backend")
+    message("Building for Linux or Windows")
 else()
     message(FATAL_ERROR "QNN now only available on Android, Windows and Linux")
 endif()
@@ -29,33 +27,15 @@ message("CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 message("CMAKE_CXX_FLAGS_RELEASE: ${CMAKE_CXX_FLAGS_RELEASE}")
 message("QNN_SDK_PATH: ${GGML_QNN_SDK_PATH}")
 
-file(GLOB QNN_SOURCES "${CMAKE_CURRENT_LIST_DIR}/qnn/*.cpp")
-file(GLOB COMMON_SOURCES "${CMAKE_CURRENT_LIST_DIR}/*.cpp")
+message("GGML_QNN: ${GGML_QNN}")
+message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING: ${GGML_QNN_ENABLE_PERFORMANCE_TRACKING}")
+message("GGML_QNN_ENABLE_HEXAGON_BACKEND: ${GGML_QNN_ENABLE_HEXAGON_BACKEND}")
+message("GGML_HEXAGON_NPU_ONLY: ${GGML_HEXAGON_NPU_ONLY}")
+
 ggml_add_backend_library(ggml-qnn
-    ${QNN_SOURCES}
-    ${COMMON_SOURCES}
+    ../../include/ggml-qnn.h
 )
-
-target_include_directories(ggml-qnn PRIVATE
-    ${GGML_QNN_SDK_PATH}/include/QNN
-    ${CMAKE_CURRENT_LIST_DIR}/qnn
-    ${CMAKE_CURRENT_LIST_DIR}
-)
-target_link_libraries(ggml-qnn PRIVATE ${QNN_LINK_LIBRARIES})
-
-if(NOT "${QNN_DEFAULT_LIB_SEARCH_PATH}" STREQUAL "")
-    string(REGEX REPLACE "/$" "" QNN_DEFAULT_LIB_SEARCH_PATH "${QNN_DEFAULT_LIB_SEARCH_PATH}")
-endif()
-
-message("GGML_QNN_DEFAULT_LIB_SEARCH_PATH: ${QNN_DEFAULT_LIB_SEARCH_PATH}")
-target_compile_definitions(ggml-qnn PRIVATE GGML_QNN_DEFAULT_LIB_SEARCH_PATH="${QNN_DEFAULT_LIB_SEARCH_PATH}")
-
-if(GGML_QNN_ENABLE_CPU_BACKEND)
-    message("GGML_QNN_ENABLE_CPU_BACKEND is enabled")
-    target_compile_definitions(ggml-qnn PRIVATE GGML_QNN_ENABLE_CPU_BACKEND)
-else()
-    message("GGML_QNN_ENABLE_CPU_BACKEND is disabled")
-endif()
+target_link_libraries(ggml-qnn PRIVATE ${COMMON_LINK_LIBRARIES})
 
 if(GGML_QNN_ENABLE_PERFORMANCE_TRACKING)
     message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING is enabled")
@@ -72,6 +52,8 @@ if(GGML_HEXAGON_NPU_ONLY)
     set(GGML_QNN_ENABLE_HEXAGON_BACKEND ON)
 else()
     message("GGML_HEXAGON_NPU_ONLY is disabled")
+    add_subdirectory(qnn)
+    target_link_libraries(ggml-qnn PRIVATE qnn-backend)
 endif()
 
 if(GGML_QNN_ENABLE_HEXAGON_BACKEND)

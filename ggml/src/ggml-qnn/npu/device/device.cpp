@@ -3,6 +3,7 @@
 #include <HAP_compute_res.h>
 #include <hexagon_types.h>
 
+#include <memory>
 #include <new>
 
 #include "graph.hpp"
@@ -10,15 +11,30 @@
 #include "op_impl.hpp"
 #include "remote.h"
 #include "tensor.hpp"
+#include "thread_pool.hpp"
 #include "util.hpp"
-
-#define NPU_UNUSED(x) (void) (x)
 
 namespace {
 
 struct npu_device_context {
-    int unused = 0;
-    // TODO: should we add tensor context here?
+    std::unique_ptr<hexagon::default_thread_pool> thread_pool;
+
+    bool init_thread_pool() {
+        if (thread_pool) {
+            DEVICE_LOG_DEBUG("Thread pool already initialized");
+            return true;
+        }
+
+        auto pool = std::make_unique<hexagon::default_thread_pool>();
+        if (!pool) {
+            DEVICE_LOG_ERROR("Failed to create thread pool");
+            return false;
+        }
+
+        thread_pool = std::move(pool);
+        DEVICE_LOG_DEBUG("Thread pool initialized");
+        return true;
+    }
 };
 
 inline hexagon::tensor * tensor_from_handle(npu_device_graph_handle_t h) {
@@ -37,6 +53,10 @@ inline npu_device_tensor_handle_t graph_to_handle(hexagon::graph * graph) {
     return reinterpret_cast<npu_device_tensor_handle_t>(graph);
 }
 
+inline npu_device_context * device_context_from_handle(remote_handle64 h) {
+    return reinterpret_cast<npu_device_context *>(h);
+}
+
 }  // namespace
 
 int npu_device_open(const char * uri, remote_handle64 * h) {
@@ -47,12 +67,18 @@ int npu_device_open(const char * uri, remote_handle64 * h) {
         return AEE_ENOMEMORY;
     }
 
+    if (!context->init_thread_pool()) {
+        DEVICE_LOG_ERROR("Failed to initialize thread pool");
+        delete context;
+        return AEE_EFAILED;
+    }
+
     *h = reinterpret_cast<remote_handle64>(context);
     return AEE_SUCCESS;
 }
 
 int npu_device_close(remote_handle64 h) {
-    auto * context = reinterpret_cast<npu_device_context *>(h);
+    auto * context = device_context_from_handle(h);
     if (!context) {
         DEVICE_LOG_ERROR("Invalid npu_device_context handle");
         return AEE_EINVHANDLE;
@@ -149,13 +175,19 @@ AEEResult npu_device_graph_set_tensor(remote_handle64 _h, npu_device_graph_handl
 }
 
 AEEResult npu_device_graph_compute(remote_handle64 _h, npu_device_graph_handle_t graph_handle) {
-    NPU_UNUSED(_h);
-    auto * graph = graph_from_handle(graph_handle);
-    if (!graph) {
+    auto dev_ctx = device_context_from_handle(_h);
+    if (!dev_ctx) {
+        DEVICE_LOG_DEBUG("Invalid npu_device_context handle");
         return AEE_EINVHANDLE;
     }
 
-    if (!graph->compute()) {
+    auto * graph = graph_from_handle(graph_handle);
+    if (!graph) {
+        DEVICE_LOG_ERROR("Invalid graph handle");
+        return AEE_EINVHANDLE;
+    }
+
+    if (!graph->compute(dev_ctx->thread_pool.get())) {
         return AEE_EFAILED;
     }
 
