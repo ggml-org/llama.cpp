@@ -1718,7 +1718,8 @@ struct clip_model_loader {
 
                 if (ctx_clip.proj_type == PROJECTOR_TYPE_MINICPMV
                         || ctx_clip.proj_type == PROJECTOR_TYPE_GLM_EDGE
-                        || ctx_clip.proj_type == PROJECTOR_TYPE_QWEN2VL) {
+                        || ctx_clip.proj_type == PROJECTOR_TYPE_QWEN2VL
+                        || ctx_clip.proj_type == PROJECTOR_TYPE_QWEN25VL) {
                     n_layer += 1;
                 }
 
@@ -2744,7 +2745,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         }
         return true;
     }
-    else if (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL) {
+    else if (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type == PROJECTOR_TYPE_QWEN25VL) {
         clip_image_u8 resized;
         auto patch_size = clip_get_patch_size(ctx) * 2;
         int nx = ceil((float)img->nx / patch_size) * patch_size;
@@ -3139,7 +3140,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     else {
         // non-minicpmv models
 
-        if (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL) {
+        if (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type == PROJECTOR_TYPE_QWEN25VL) {
             // pw * ph = number of tokens output by ViT after apply patch merger
             // ipw * ipw = number of vision token been processed inside ViT
             const int merge_ratio = 2;
@@ -3279,7 +3280,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
-    if (use_window_attn && ctx->proj_type == PROJECTOR_TYPE_QWEN25VL) {
+    if (use_window_attn && (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type == PROJECTOR_TYPE_QWEN25VL)) {
         struct ggml_tensor * window_idx = ggml_graph_get_tensor(gf, "window_idx");
         struct ggml_tensor * inv_window_idx = ggml_graph_get_tensor(gf, "inv_window_idx");
         struct ggml_tensor * window_mask = ggml_graph_get_tensor(gf, "window_mask");
