@@ -1351,7 +1351,6 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph
         // If id was non-zero and create_node returned nullptr, it indicates a deserialization error.
         if (graph->nodes[i] == nullptr && id != 0) {
             GGML_LOG_ERROR("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
-            response.result = GGML_STATUS_FAILED;
             return false;
         }
     }
