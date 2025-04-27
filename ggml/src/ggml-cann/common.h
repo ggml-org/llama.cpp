@@ -359,10 +359,10 @@ struct ggml_backend_cann_context {
         description = aclrtGetSocName();
 
         std::string value = to_lower_case(getenv("GGML_CANN_ASYNC_MODE"));
-        std::set<std::string> valid_values = {"on", "1", "yes", "enable"};
+        std::set<std::string> valid_values = {"on", "1", "yes", "y", "enable"};
         async_mode = valid_values.find(value) != valid_values.end();
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
-            device, async_mode ? "ON" : "OFF");
+            device, async_mode ? "ON" : "OFF");git 
     }
 
     /**
