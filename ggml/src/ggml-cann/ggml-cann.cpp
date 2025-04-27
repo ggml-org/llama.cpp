@@ -96,7 +96,7 @@ int32_t ggml_cann_get_device() {
  * @brief Convert the value obtained from getenv to a lowercase std::string.
  *
  * @param env_var C-style string(char*)
- * @return A string of type std::stringD.
+ * @return A string of type std::string.
  */
 static std::string to_lower_case(const char* env_var){
     std::string mem_pool_type(env_var ? env_var : "");
