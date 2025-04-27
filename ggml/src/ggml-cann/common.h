@@ -362,7 +362,7 @@ struct ggml_backend_cann_context {
         std::set<std::string> valid_values = {"on", "1", "yes", "y", "enable"};
         async_mode = valid_values.find(value) != valid_values.end();
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
-            device, async_mode ? "ON" : "OFF");git 
+            device, async_mode ? "ON" : "OFF");
     }
 
     /**
