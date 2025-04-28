@@ -2,9 +2,10 @@
 #undef NDEBUG
 #endif
 
-#include "unicode.h"
-#include "llama-grammar.h"
 #include "json-schema-to-grammar.h"
+
+#include "../src/unicode.h"
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 #include <string>

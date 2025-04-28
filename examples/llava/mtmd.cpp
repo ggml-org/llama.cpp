@@ -176,12 +176,29 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
 
     std::string prompt_modified(text.text);
     std::string marker_modified(ctx->image_marker);
+    projector_type proj_type = clip_get_projector_type(ctx->ctx_clip);
+
     // a bit hacky here, but works for now
     // for some models, we need to add prefix and suffix to the image embeddings
     if (clip_is_gemma3(ctx->ctx_clip)) {
         // gemma 3
         // <start_of_image> ... (image embeddings) ... <end_of_image>
         marker_modified = "<start_of_image>" + ctx->image_marker + "<end_of_image>";
+        string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_GLM_EDGE) {
+        // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
+        marker_modified = "<|begin_of_image|>" + ctx->image_marker + "<|end_of_image|>";
+        string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_IDEFICS3) {
+        // https://github.com/huggingface/transformers/blob/a42ba80fa520c784c8f11a973ca9034e5f859b79/src/transformers/models/idefics3/processing_idefics3.py#L192-L215
+        marker_modified = "<fake_token_around_image><global-img>" + ctx->image_marker + "<fake_token_around_image>";
+        string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_PIXTRAL) {
+        // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
+        marker_modified = ctx->image_marker + "[IMG_END]";
         string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
     }
 
@@ -212,7 +229,7 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
 
         for (auto & entry : batch_f32.entries) {
             mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-            image_tokens->nx = clip_n_patches(ctx->ctx_clip);
+            image_tokens->nx = clip_n_patches_by_img(ctx->ctx_clip, entry.get());
             image_tokens->ny = 1;
             image_tokens->batch_f32.entries.push_back(std::move(entry));
             image_tokens->id = id;
@@ -306,8 +323,13 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
                 }
 
             } else {
+                size_t n_tokens = 0;
+                for (const auto & entry : batch_f32.entries) {
+                    n_tokens += clip_n_patches_by_img(ctx->ctx_clip, entry.get());
+                }
+
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
-                image_tokens->nx = clip_n_patches(ctx->ctx_clip) * batch_f32.entries.size(); // TODO @ngxson : use clip_n_patches_by_image
+                image_tokens->nx = n_tokens;
                 image_tokens->ny = 1; // TODO
                 image_tokens->batch_f32 = std::move(batch_f32);
                 image_tokens->id = bitmaps[i_img].id; // optional
@@ -375,7 +397,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         // TODO @ngxson : llava does not support batched encoding ; this should be fixed inside clip_image_batch_encode()
         const auto & entries = image_tokens->batch_f32.entries;
         for (size_t i = 0; i < entries.size(); i++) {
-            int n_tokens_per_image = clip_n_patches(ctx->ctx_clip);
+            int n_tokens_per_image = clip_n_patches_by_img(ctx->ctx_clip, entries[i].get());
             ok = clip_image_encode(
                 ctx->ctx_clip,
                 ctx->n_threads,
