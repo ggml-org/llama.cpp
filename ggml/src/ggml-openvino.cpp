@@ -53,8 +53,7 @@ static ggml_backend_buffer_type_t ggml_backend_openvino_get_default_buffer_type(
 
 static enum ggml_status
 ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph *cgraph) {
-  int end_node = cgraph->n_nodes - 1;
-  openvino_frontend_compute(backend, cgraph, 0, end_node);
+    openvino_frontend_compute(backend, cgraph);
 
     ov::Core core;
 
