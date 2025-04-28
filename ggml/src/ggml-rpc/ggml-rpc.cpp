@@ -983,7 +983,7 @@ bool rpc_server::buffer_clear(const rpc_msg_buffer_clear_req & request) {
 
 ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
     // Validate tensor type before using it
-    if (tensor->type < 0 || tensor->type >= GGML_TYPE_COUNT) {
+    if (tensor->type >= GGML_TYPE_COUNT) {
         GGML_LOG_ERROR("[%s] invalid tensor type received: %u\n", __func__, tensor->type);
         return nullptr;
     }
