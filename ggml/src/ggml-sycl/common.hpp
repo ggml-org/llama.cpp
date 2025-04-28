@@ -42,7 +42,7 @@ void ggml_sycl_host_free(void* ptr);
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
-extern int g_ggml_sycl_disable_mmvq;
+extern int g_ggml_sycl_prioritize_dmmv;
 
 #define GGML_SYCL_DEBUG(...)        \
   do {                              \
@@ -286,11 +286,25 @@ struct ggml_tensor_extra_gpu {
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
-inline optimize_feature check_gpu_optimize_feature(syclex::architecture &/*arch*/) {
+inline optimize_feature check_gpu_optimize_feature(syclex::architecture &arch) {
     optimize_feature opt;
 
-    // TODO: Romain change to Intel vendor?
-    opt.reorder = true;
+    opt.reorder =
+        (arch == syclex::architecture::intel_gpu_dg1 ||
+         arch == syclex::architecture::intel_gpu_acm_g10 ||
+         arch == syclex::architecture::intel_gpu_acm_g11 ||
+         arch == syclex::architecture::intel_gpu_acm_g12 ||
+         arch == syclex::architecture::intel_gpu_pvc ||
+         arch == syclex::architecture::intel_gpu_pvc_vg ||
+         arch == syclex::architecture::intel_gpu_mtl_u ||
+         arch == syclex::architecture::intel_gpu_mtl_s ||
+         arch == syclex::architecture::intel_gpu_mtl_h ||
+         arch == syclex::architecture::intel_gpu_arl_u ||
+         arch == syclex::architecture::intel_gpu_arl_s ||
+         arch == syclex::architecture::intel_gpu_arl_h ||
+         arch == syclex::architecture::intel_gpu_bmg_g21 ||
+         arch == syclex::architecture::intel_gpu_lnl_m
+        );
 
     return opt;
 }
@@ -485,5 +499,4 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
-
 #endif // GGML_SYCL_COMMON_HPP
