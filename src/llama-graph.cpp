@@ -907,15 +907,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
-    ggml_tensor * tmp = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-    cb(tmp, "ffn_moe_up", il);
+    ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+    cb(up, "ffn_moe_up", il);
 
     ggml_tensor * experts = nullptr;
     if (gate_exps) {
         cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(cur, "ffn_moe_gate", il);
     } else {
-        cur = tmp;
+        cur = up;
     }
 
     switch (type_op) {
@@ -934,7 +934,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     if (gate_exps) {
-        cur = ggml_mul(ctx0, cur, tmp); // [n_ff, n_expert_used, n_tokens]
+        cur = ggml_mul(ctx0, cur, up); // [n_ff, n_expert_used, n_tokens]
         cb(cur, "ffn_moe_gate_par", il);
     }
 
