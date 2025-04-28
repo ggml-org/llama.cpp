@@ -30,12 +30,13 @@ struct clip_image_size {
     int height;
 };
 
+struct clip_image_f32;
 struct clip_image_u8_batch;
 struct clip_image_f32_batch;
 
 struct clip_context_params {
     bool use_gpu;
-    ggml_log_level verbosity;
+    enum ggml_log_level verbosity;
 };
 
 // deprecated, use clip_init
@@ -84,7 +85,7 @@ CLIP_API void clip_image_f32_batch_free(struct clip_image_f32_batch * batch);
 CLIP_API size_t clip_image_f32_batch_n_images(const struct clip_image_f32_batch * batch); // equivalent to batch->size()
 CLIP_API size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->nx
 CLIP_API size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
-CLIP_API clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
+CLIP_API struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
 
 /**
  * Build image from pixels decoded by other libraries instead of stb_image.h for better performance.
@@ -112,8 +113,6 @@ CLIP_API bool clip_is_glm(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_qwen2vl(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_llava(const struct clip_ctx * ctx);
 CLIP_API bool clip_is_gemma3(const struct clip_ctx * ctx);
-
-CLIP_API int get_deepest_feature_layer(const struct clip_ctx * ctx);
 
 CLIP_API bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
 

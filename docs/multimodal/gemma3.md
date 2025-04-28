@@ -11,26 +11,27 @@ You can use pre-quantized model from [ggml-org](https://huggingface.co/ggml-org)
 ```bash
 # build
 cmake -B build
-cmake --build build --target llama-gemma3-cli
+cmake --build build --target llama-mtmd-cli
 
 # alternatively, install from brew (MacOS)
 brew install llama.cpp
 
 # run it
-llama-gemma3-cli -hf ggml-org/gemma-3-4b-it-GGUF
-llama-gemma3-cli -hf ggml-org/gemma-3-12b-it-GGUF
-llama-gemma3-cli -hf ggml-org/gemma-3-27b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
 
 # note: 1B model does not support vision
 ```
 
 ## How to get mmproj.gguf?
 
+Simply to add `--mmproj` in when converting model via `convert_hf_to_gguf.py`:
+
 ```bash
 cd gemma-3-4b-it
-python ../llama.cpp/examples/llava/gemma3_convert_encoder_to_gguf.py .
-
-# output file is mmproj.gguf
+python ../llama.cpp/convert_hf_to_gguf.py --outfile model.gguf --outtype f16 --mmproj .
+# output file: mmproj-model.gguf
 ```
 
 ## How to run it?
@@ -43,8 +44,8 @@ What you need:
 ```bash
 # build
 cmake -B build
-cmake --build build --target llama-gemma3-cli
+cmake --build build --target llama-mtmd-cli
 
 # run it
-./build/bin/llama-gemma3-cli -m {text_model}.gguf --mmproj mmproj.gguf --image your_image.jpg
+./build/bin/llama-mtmd-cli -m {text_model}.gguf --mmproj mmproj.gguf --image your_image.jpg
 ```

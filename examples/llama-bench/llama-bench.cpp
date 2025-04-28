@@ -36,6 +36,46 @@ static uint64_t get_time_ns() {
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
 }
 
+static bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
+    if (a.pattern != b.pattern) {
+        // cString comparison that may be null
+        if (a.pattern == nullptr || b.pattern == nullptr) {
+            return false;
+        }
+        if (strcmp(a.pattern, b.pattern) != 0) {
+            return false;
+        }
+    }
+    if (a.buft != b.buft) {
+        return false;
+    }
+    return true;
+}
+
+static bool vec_tensor_buft_override_equal(const std::vector<llama_model_tensor_buft_override>& a, const std::vector<llama_model_tensor_buft_override>& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); i++) {
+        if (!tensor_buft_override_equal(a[i], b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool vec_vec_tensor_buft_override_equal(const std::vector<std::vector<llama_model_tensor_buft_override>>& a, const std::vector<std::vector<llama_model_tensor_buft_override>>& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); i++) {
+        if (!vec_tensor_buft_override_equal(a[i], b[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 template <class T> static std::string join(const std::vector<T> & values, const std::string & delim) {
     std::ostringstream str;
     for (size_t i = 0; i < values.size(); i++) {
@@ -175,6 +215,7 @@ struct cmd_params {
     std::vector<bool>                no_kv_offload;
     std::vector<bool>                flash_attn;
     std::vector<std::vector<float>>  tensor_split;
+    std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     ggml_numa_strategy               numa;
@@ -207,6 +248,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
+    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{{nullptr,nullptr}} },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
@@ -265,6 +307,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
+    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;... (default: disabled)\n");
     printf("  -r, --repetitions <n>                     (default: %d)\n", cmd_params_defaults.reps);
     printf("  --prio <0|1|2|3>                          (default: %d)\n", cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 (default: %d)\n", cmd_params_defaults.delay);
@@ -557,6 +600,87 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 params.tensor_split.push_back(tensor_split);
             }
+        } else if (arg == "-ot" || arg == "--override-tensor") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            auto value = argv[i];
+            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+            if (buft_list.empty()) {
+                // enumerate all the devices and add their buffer types to the list
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    auto * buft = ggml_backend_dev_buffer_type(dev);
+                    if (buft) {
+                        buft_list[ggml_backend_buft_name(buft)] = buft;
+                    }
+                }
+            }
+            auto override_group_span_len = std::strcspn(value, ",");
+            bool last_group = false;
+            do {
+                if (override_group_span_len == 0) {
+                    // Adds an empty override-tensors for an empty span
+                    params.tensor_buft_overrides.push_back({{}});
+                    if (value[override_group_span_len] == '\0') {
+                        value = &value[override_group_span_len];
+                        last_group = true;
+                    } else {
+                        value = &value[override_group_span_len + 1];
+                        override_group_span_len = std::strcspn(value, ",");
+                    }
+                    continue;
+                }
+                // Stamps null terminators into the argv
+                // value for this option to avoid the
+                // memory leak present in the implementation
+                // over in arg.cpp. Acceptable because we
+                // only parse these args once in this program.
+                auto override_group = value;
+                if (value[override_group_span_len] == '\0') {
+                    value = &value[override_group_span_len];
+                    last_group = true;
+                } else {
+                    value[override_group_span_len] = '\0';
+                    value = &value[override_group_span_len + 1];
+                }
+                std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
+                auto override_span_len = std::strcspn(override_group, ";");
+                while (override_span_len > 0) {
+                    auto override = override_group;
+                    if (override_group[override_span_len] != '\0') {
+                        override_group[override_span_len] = '\0';
+                        override_group = &override_group[override_span_len + 1];
+                    } else {
+                        override_group = &override_group[override_span_len];
+                    }
+                    auto tensor_name_span_len = std::strcspn(override, "=");
+                    if (tensor_name_span_len >= override_span_len) {
+                        invalid_param = true;
+                        break;
+                    }
+                    override[tensor_name_span_len] = '\0';
+                    auto tensor_name = override;
+                    auto buffer_type = &override[tensor_name_span_len + 1];
+                    if (buft_list.find(buffer_type) == buft_list.end()) {
+                        printf("Available buffer types:\n");
+                        for (const auto & it : buft_list) {
+                            printf("  %s\n", ggml_backend_buft_name(it.second));
+                        }
+                        invalid_param = true;
+                        break;
+                    }
+                    group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type)});
+                    override_span_len = std::strcspn(override_group, ";");
+                }
+                if (invalid_param) {
+                    break;
+                }
+                group_tensor_buft_overrides.push_back({nullptr,nullptr});
+                params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
+                override_group_span_len = std::strcspn(value, ",");
+            } while (!last_group);
         } else if (arg == "-r" || arg == "--repetitions") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -648,6 +772,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.tensor_split.empty()) {
         params.tensor_split = cmd_params_defaults.tensor_split;
     }
+    if (params.tensor_buft_overrides.empty()) {
+        params.tensor_buft_overrides = cmd_params_defaults.tensor_buft_overrides;
+    }
     if (params.use_mmap.empty()) {
         params.use_mmap = cmd_params_defaults.use_mmap;
     }
@@ -689,6 +816,7 @@ struct cmd_params_instance {
     bool               no_kv_offload;
     bool               flash_attn;
     std::vector<float> tensor_split;
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               use_mmap;
     bool               embeddings;
 
@@ -733,13 +861,20 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap     = use_mmap;
 
+        if (tensor_buft_overrides.empty()) {
+            mparams.tensor_buft_overrides = nullptr;
+        } else {
+            GGML_ASSERT(tensor_buft_overrides.back().pattern == nullptr && "Tensor buffer overrides not terminated with empty pattern");
+            mparams.tensor_buft_overrides = tensor_buft_overrides.data();
+        }
+
         return mparams;
     }
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && rpc_servers_str == other.rpc_servers_str &&
                split_mode == other.split_mode && main_gpu == other.main_gpu && use_mmap == other.use_mmap &&
-               tensor_split == other.tensor_split;
+               tensor_split == other.tensor_split && vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
     llama_context_params to_llama_cparams() const {
@@ -769,6 +904,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & sm : params.split_mode)
     for (const auto & mg : params.main_gpu)
     for (const auto & ts : params.tensor_split)
+    for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & mmp : params.use_mmap)
     for (const auto & embd : params.embeddings)
     for (const auto & nb : params.n_batch)
@@ -804,6 +940,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
+                /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
             };
@@ -833,6 +970,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
+                /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
             };
@@ -862,6 +1000,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .no_kv_offload= */ nkvo,
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
+                /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
             };
@@ -896,6 +1035,7 @@ struct test {
     bool                     no_kv_offload;
     bool                     flash_attn;
     std::vector<float>       tensor_split;
+    std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     use_mmap;
     bool                     embeddings;
     int                      n_prompt;
@@ -927,6 +1067,7 @@ struct test {
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
         tensor_split   = inst.tensor_split;
+        tensor_buft_overrides = inst.tensor_buft_overrides;
         use_mmap       = inst.use_mmap;
         embeddings     = inst.embeddings;
         n_prompt       = inst.n_prompt;
@@ -972,9 +1113,9 @@ struct test {
             "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
             "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
-            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "use_mmap",
-            "embeddings",   "n_prompt",     "n_gen",          "test_time",  "avg_ns",       "stddev_ns",
-            "avg_ts",       "stddev_ts",
+            "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
+            "use_mmap",     "embeddings",   "n_prompt",       "n_gen",      "test_time",    "avg_ns",
+            "stddev_ns",    "avg_ts",       "stddev_ts",
         };
         return fields;
     }
@@ -1000,6 +1141,7 @@ struct test {
 
     std::vector<std::string> get_values() const {
         std::string tensor_split_str;
+        std::string tensor_buft_overrides_str;
         int         max_nonzero = 0;
         for (size_t i = 0; i < llama_max_devices(); i++) {
             if (tensor_split[i] > 0) {
@@ -1012,6 +1154,26 @@ struct test {
             tensor_split_str += buf;
             if (i < max_nonzero) {
                 tensor_split_str += "/";
+            }
+        }
+        if (tensor_buft_overrides.size() == 1) {
+            // Last element of tensor_buft_overrides is always a null pattern
+            // so if it is only one element long, it must be a null pattern.
+            GGML_ASSERT(tensor_buft_overrides[0].pattern == nullptr);
+            tensor_buft_overrides_str += "none";
+        } else {
+            for (size_t i = 0; i < tensor_buft_overrides.size()-1; i++) {
+                // Last element of tensor_buft_overrides is always a null pattern
+                if (tensor_buft_overrides[i].pattern == nullptr) {
+                    tensor_buft_overrides_str += "none";
+                } else {
+                    tensor_buft_overrides_str += tensor_buft_overrides[i].pattern;
+                    tensor_buft_overrides_str += "=";
+                    tensor_buft_overrides_str += ggml_backend_buft_name(tensor_buft_overrides[i].buft);
+                }
+                if (i + 2 < tensor_buft_overrides.size()) {
+                    tensor_buft_overrides_str += ";";
+                }
             }
         }
         std::vector<std::string> values = { build_commit,
@@ -1037,6 +1199,7 @@ struct test {
                                             std::to_string(no_kv_offload),
                                             std::to_string(flash_attn),
                                             tensor_split_str,
+                                            tensor_buft_overrides_str,
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
                                             std::to_string(n_prompt),
@@ -1254,6 +1417,9 @@ struct markdown_printer : public printer {
         if (field == "tensor_split") {
             return "ts";
         }
+        if (field == "tensor_buft_overrides") {
+            return "ot";
+        }
         return field;
     }
 
@@ -1306,6 +1472,9 @@ struct markdown_printer : public printer {
         }
         if (params.tensor_split.size() > 1 || params.tensor_split != cmd_params_defaults.tensor_split) {
             fields.emplace_back("tensor_split");
+        }
+        if (params.tensor_buft_overrides.size() > 1 || !vec_vec_tensor_buft_override_equal(params.tensor_buft_overrides, cmd_params_defaults.tensor_buft_overrides)) {
+            fields.emplace_back("tensor_buft_overrides");
         }
         if (params.use_mmap.size() > 1 || params.use_mmap != cmd_params_defaults.use_mmap) {
             fields.emplace_back("use_mmap");

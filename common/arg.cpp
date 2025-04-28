@@ -38,6 +38,11 @@
 
 using json = nlohmann::ordered_json;
 
+std::initializer_list<enum llama_example> mmproj_examples = {
+    LLAMA_EXAMPLE_LLAVA,
+    // TODO: add LLAMA_EXAMPLE_SERVER when it's ready
+};
+
 common_arg & common_arg::set_examples(std::initializer_list<enum llama_example> examples) {
     this->examples = std::move(examples);
     return *this;
@@ -156,6 +161,10 @@ struct common_hf_file_res {
 };
 
 #ifdef LLAMA_USE_CURL
+
+bool common_has_curl() {
+    return true;
+}
 
 #ifdef __linux__
 #include <linux/limits.h>
@@ -522,6 +531,50 @@ static bool common_download_model(
     return true;
 }
 
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params) {
+    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
+    curl_slist_ptr http_headers;
+    std::vector<char> res_buffer;
+
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
+    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
+        auto data_vec = static_cast<std::vector<char> *>(data);
+        data_vec->insert(data_vec->end(), (char *)ptr, (char *)ptr + size * nmemb);
+        return size * nmemb;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_buffer);
+#if defined(_WIN32)
+    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
+#endif
+    if (params.timeout > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, params.timeout);
+    }
+    if (params.max_size > 0) {
+        curl_easy_setopt(curl.get(), CURLOPT_MAXFILESIZE, params.max_size);
+    }
+    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
+    for (const auto & header : params.headers) {
+        http_headers.ptr = curl_slist_append(http_headers.ptr, header.c_str());
+    }
+    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+
+    CURLcode res = curl_easy_perform(curl.get());
+
+    if (res != CURLE_OK) {
+        std::string error_msg = curl_easy_strerror(res);
+        throw std::runtime_error("error: cannot make GET request: " + error_msg);
+    }
+
+    long res_code;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
+
+    return { res_code, std::move(res_buffer) };
+}
+
 /**
  * Allow getting the HF file from the HF repo with tag (like ollama), for example:
  * - bartowski/Llama-3.2-3B-Instruct-GGUF:q4
@@ -541,45 +594,26 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
         throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
     }
 
-    // fetch model info from Hugging Face Hub API
-    curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
-    curl_slist_ptr http_headers;
-    std::string res_str;
+    std::string url = get_model_endpoint() + "v2/" + hf_repo + "/manifests/" + tag;
 
-    std::string model_endpoint = get_model_endpoint();
-
-    std::string url = model_endpoint + "v2/" + hf_repo + "/manifests/" + tag;
-    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L);
-    typedef size_t(*CURLOPT_WRITEFUNCTION_PTR)(void * ptr, size_t size, size_t nmemb, void * data);
-    auto write_callback = [](void * ptr, size_t size, size_t nmemb, void * data) -> size_t {
-        static_cast<std::string *>(data)->append((char * ) ptr, size * nmemb);
-        return size * nmemb;
-    };
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
-    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &res_str);
-#if defined(_WIN32)
-    curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
-#endif
+    // headers
+    std::vector<std::string> headers;
+    headers.push_back("Accept: application/json");
     if (!bearer_token.empty()) {
-        std::string auth_header = "Authorization: Bearer " + bearer_token;
-        http_headers.ptr = curl_slist_append(http_headers.ptr, auth_header.c_str());
+        headers.push_back("Authorization: Bearer " + bearer_token);
     }
     // Important: the User-Agent must be "llama-cpp" to get the "ggufFile" field in the response
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "User-Agent: llama-cpp");
-    http_headers.ptr = curl_slist_append(http_headers.ptr, "Accept: application/json");
-    curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, http_headers.ptr);
+    // User-Agent header is already set in common_remote_get_content, no need to set it here
 
-    CURLcode res = curl_easy_perform(curl.get());
+    // make the request
+    common_remote_params params;
+    params.headers = headers;
+    auto res = common_remote_get_content(url, params);
+    long res_code = res.first;
+    std::string res_str(res.second.data(), res.second.size());
+    std::string ggufFile;
+    std::string mmprojFile;
 
-    if (res != CURLE_OK) {
-        throw std::runtime_error("error: cannot make GET request to HF API");
-    }
-
-    long res_code;
-    std::string ggufFile   = "";
-    std::string mmprojFile = "";
-    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &res_code);
     if (res_code == 200) {
         // extract ggufFile.rfilename in json, using regex
         {
@@ -613,6 +647,10 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
 
 #else
 
+bool common_has_curl() {
+    return false;
+}
+
 static bool common_download_file_single(const std::string &, const std::string &, const std::string &) {
     LOG_ERR("error: built without CURL, cannot download model from internet\n");
     return false;
@@ -635,17 +673,30 @@ static struct common_hf_file_res common_get_hf_file(const std::string &, const s
     return {};
 }
 
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params &) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download model from the internet");
+    }
+
+    return {};
+}
+
 #endif // LLAMA_USE_CURL
 
 //
 // utils
 //
 
-static void common_params_handle_model(
+struct handle_model_result {
+    bool found_mmproj = false;
+    common_params_model mmproj;
+};
+
+static handle_model_result common_params_handle_model(
         struct common_params_model & model,
         const std::string & bearer_token,
-        const std::string & model_path_default,
-        bool is_mmproj = false) { // TODO: move is_mmproj to an enum when we have more files?
+        const std::string & model_path_default) {
+    handle_model_result result;
     // handle pre-fill default model path and url based on hf_repo and hf_file
     {
         if (!model.hf_repo.empty()) {
@@ -657,7 +708,12 @@ static void common_params_handle_model(
                         exit(1); // built without CURL, error message already printed
                     }
                     model.hf_repo = auto_detected.repo;
-                    model.hf_file = is_mmproj ? auto_detected.mmprojFile : auto_detected.ggufFile;
+                    model.hf_file = auto_detected.ggufFile;
+                    if (!auto_detected.mmprojFile.empty()) {
+                        result.found_mmproj   = true;
+                        result.mmproj.hf_repo = model.hf_repo;
+                        result.mmproj.hf_file = auto_detected.mmprojFile;
+                    }
                 } else {
                     model.hf_file = model.path;
                 }
@@ -694,6 +750,8 @@ static void common_params_handle_model(
             exit(1);
         }
     }
+
+    return result;
 }
 
 const std::vector<ggml_type> kv_cache_types = {
@@ -827,16 +885,25 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
-    common_params_handle_model(params.model,             params.hf_token, DEFAULT_MODEL_PATH);
-    common_params_handle_model(params.speculative.model, params.hf_token, "");
-    common_params_handle_model(params.vocoder.model,     params.hf_token, "");
-
-    // allow --mmproj to be set from -hf
-    // assuming that mmproj is always in the same repo as text model
-    if (!params.model.hf_repo.empty() && ctx_arg.ex == LLAMA_EXAMPLE_LLAVA) {
-        params.mmproj.hf_repo = params.model.hf_repo;
+    // handle model and download
+    {
+        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH);
+        if (params.no_mmproj) {
+            params.mmproj = {};
+        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+            // optionally, handle mmproj model when -hf is specified
+            params.mmproj = res.mmproj;
+        }
+        // only download mmproj if the current example is using it
+        for (auto & ex : mmproj_examples) {
+            if (ctx_arg.ex == ex) {
+                common_params_handle_model(params.mmproj,    params.hf_token, "");
+                break;
+            }
+        }
+        common_params_handle_model(params.speculative.model, params.hf_token, "");
+        common_params_handle_model(params.vocoder.model,     params.hf_token, "");
     }
-    common_params_handle_model(params.mmproj,            params.hf_token, "", true);
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -968,7 +1035,6 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-embedding",
         "llama-eval-callback",
         "llama-export-lora",
-        "llama-gbnf-validator",
         "llama-gen-docs",
         "llama-gguf",
         "llama-gguf-hash",
@@ -976,20 +1042,18 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-gritlm",
         "llama-imatrix",
         "llama-infill",
-        "llama-llava-cli",
+        "llama-mtmd-cli",
         "llama-llava-clip-quantize-cli",
         "llama-lookahead",
         "llama-lookup",
         "llama-lookup-create",
         "llama-lookup-merge",
         "llama-lookup-stats",
-        "llama-minicpmv-cli",
         "llama-parallel",
         "llama-passkey",
         "llama-perplexity",
         "llama-q8dot",
         "llama-quantize",
-        "llama-quantize-stats",
         "llama-qwen2vl-cli",
         "llama-retrieval",
         "llama-run",
@@ -2096,18 +2160,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONT_BATCHING"));
     add_opt(common_arg(
         {"--mmproj"}, "FILE",
-        "path to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        "path to a multimodal projector file. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.path = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples(mmproj_examples));
     add_opt(common_arg(
         {"--mmproj-url"}, "URL",
-        "URL to a multimodal projector file for LLaVA. see examples/llava/README.md",
+        "URL to a multimodal projector file. see examples/llava/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.url = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_LLAVA}));
+    ).set_examples(mmproj_examples));
+    add_opt(common_arg(
+        {"--no-mmproj"},
+        "explicitly disable multimodal projector, useful when using -hf",
+        [](common_params & params) {
+            params.no_mmproj = true;
+        }
+    ).set_examples(mmproj_examples));
+    add_opt(common_arg(
+        {"--no-mmproj-offload"},
+        "do not offload multimodal projector to GPU",
+        [](common_params & params) {
+            params.mmproj_use_gpu = false;
+        }
+    ).set_examples(mmproj_examples));
     add_opt(common_arg(
         {"--image"}, "FILE",
         "path to an image file. use with multimodal models. Specify multiple times for batching",
@@ -2382,6 +2460,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-hf", "-hfr", "--hf-repo"}, "<user>/<model>[:quant]",
         "Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
         "example: unsloth/phi-4-GGUF:q4_k_m\n"
         "(default: unused)",
         [](common_params & params, const std::string & value) {
@@ -2726,7 +2805,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.chat_template = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LLAVA}).set_env("LLAMA_ARG_CHAT_TEMPLATE"));
     add_opt(common_arg(
         {"--chat-template-file"}, "JINJA_TEMPLATE_FILE",
         string_format(

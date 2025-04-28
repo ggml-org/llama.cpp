@@ -1,158 +1,75 @@
-# LLaVA
+# Multimodal Support in llama.cpp
 
-Currently this implementation supports [llava-v1.5](https://huggingface.co/liuhaotian/llava-v1.5-7b) variants,
-as well as llava-1.6 [llava-v1.6](https://huggingface.co/collections/liuhaotian/llava-16-65b9e40155f60fd046a5ccf2) variants.
+This directory provides multimodal capabilities for `llama.cpp`. Initially intended as a showcase for running LLaVA models, its scope has expanded significantly over time to include various other vision-capable models. As a result, LLaVA is no longer the only multimodal architecture supported.
 
-The pre-converted [7b](https://huggingface.co/mys/ggml_llava-v1.5-7b)
-and [13b](https://huggingface.co/mys/ggml_llava-v1.5-13b)
-models are available.
-For llava-1.6 a variety of prepared gguf models are available as well [7b-34b](https://huggingface.co/cmp-nct/llava-1.6-gguf)
+> [!IMPORTANT]
+>
+> Multimodal support can be viewed as a sub-project within `llama.cpp`. It is under **very heavy development**, and **breaking changes are expected**.
 
-After API is confirmed, more models will be supported / uploaded.
+The naming and structure related to multimodal support have evolved, which might cause some confusion. Here's a brief timeline to clarify:
 
-## Usage
-Build with cmake or run `make llama-llava-cli` to build it.
+- [#3436](https://github.com/ggml-org/llama.cpp/pull/3436): Initial support for LLaVA 1.5 was added, introducing `llava.cpp` and `clip.cpp`. The `llava-cli` binary was created for model interaction.
+- [#4954](https://github.com/ggml-org/llama.cpp/pull/4954): Support for MobileVLM was added, becoming the second vision model supported. This built upon the existing `llava.cpp`, `clip.cpp`, and `llava-cli` infrastructure.
+- **Expansion & Fragmentation:** Many new models were subsequently added (e.g., [#7599](https://github.com/ggml-org/llama.cpp/pull/7599), [#10361](https://github.com/ggml-org/llama.cpp/pull/10361), [#12344](https://github.com/ggml-org/llama.cpp/pull/12344), and others). However, `llava-cli` lacked support for the increasingly complex chat templates required by these models. This led to the creation of model-specific binaries like `qwen2vl-cli`, `minicpmv-cli`, and `gemma3-cli`. While functional, this proliferation of command-line tools became confusing for users.
+- [#12849](https://github.com/ggml-org/llama.cpp/pull/12849): `libmtmd` was introduced as a replacement for `llava.cpp`. Its goals include providing a single, unified command-line interface, improving the user/developer experience (UX/DX), and supporting both audio and image inputs.
+- [#13012](https://github.com/ggml-org/llama.cpp/pull/13012): `mtmd-cli` was added, consolidating the various model-specific CLIs into a single tool powered by `libmtmd`.
 
-After building, run: `./llama-llava-cli` to see the usage. For example:
+## Pre-quantized models
 
-```sh
-./llama-llava-cli -m ../llava-v1.5-7b/ggml-model-f16.gguf --mmproj ../llava-v1.5-7b/mmproj-model-f16.gguf --image path/to/an/image.jpg
-```
-
-**note**: A lower temperature like 0.1 is recommended for better quality. add `--temp 0.1` to the command to do so.
-**note**: For GPU offloading ensure to use the `-ngl` flag just like usual
-
-## LLaVA 1.5
-
-1. Clone a LLaVA and a CLIP model ([available options](https://github.com/haotian-liu/LLaVA/blob/main/docs/MODEL_ZOO.md)). For example:
+These are ready-to-use models, most of them come with `Q4_K_M` quantization by default:
 
 ```sh
-git clone https://huggingface.co/liuhaotian/llava-v1.5-7b
+# Gemma 3
+llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
 
-git clone https://huggingface.co/openai/clip-vit-large-patch14-336
+# SmolVLM
+llama-mtmd-cli -hf ggml-org/SmolVLM-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM-256M-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM-500M-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-2.2B-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-256M-Video-Instruct-GGUF
+llama-mtmd-cli -hf ggml-org/SmolVLM2-500M-Video-Instruct-GGUF
+
+# Pixtral 12B
+llama-mtmd-cli -hf ggml-org/pixtral-12b-GGUF
 ```
 
-2. Install the required Python packages:
+## How it works and what is `mmproj`?
 
-```sh
-pip install -r examples/llava/requirements.txt
-```
+Multimodal support in `llama.cpp` works by encoding images into embeddings using a separate model component, and then feeding these embeddings into the language model.
 
-3. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
+This approach keeps the multimodal components distinct from the core `libllama` library. Separating these allows for faster, independent development cycles. While many modern vision models are based on Vision Transformers (ViTs), their specific pre-processing and projection steps can vary significantly. Integrating this diverse complexity directly into `libllama` is currently challenging.
 
-```sh
-python ./examples/llava/llava_surgery.py -m ../llava-v1.5-7b
-```
+Consequently, running a multimodal model typically requires two GGUF files:
+1.  The standard language model file.
+2.  A corresponding **multimodal projector (`mmproj`)** file, which handles the image encoding and projection.
 
-4. Use `convert_image_encoder_to_gguf.py` to convert the LLaVA image encoder to GGUF:
+## What is `libmtmd`?
 
-```sh
-python ./examples/llava/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
-```
+As outlined in the history, `libmtmd` is the modern library designed to replace the original `llava.cpp` implementation for handling multimodal inputs.
 
-5. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
+Built upon `clip.cpp` (similar to `llava.cpp`), `libmtmd` offers several advantages:
+- **Unified Interface:** Aims to consolidate interaction for various multimodal models.
+- **Improved UX/DX:** Features a more intuitive API, inspired by the `Processor` class in the Hugging Face `transformers` library.
+- **Flexibility:** Designed to support multiple input types (text, audio, images) while respecting the wide variety of chat templates used by different models.
 
-```sh
-python ./examples/convert_legacy_llama.py ../llava-v1.5-7b --skip-unknown
-```
+## How to obtain `mmproj`
 
-Now both the LLaMA part and the image encoder are in the `llava-v1.5-7b` directory.
+Multimodal projector (`mmproj`) files are specific to each model architecture. Please refer to the relevant guide for instructions on how to obtain or create them:
 
-## LLaVA 1.6 gguf conversion
-1) First clone a LLaVA 1.6 model:
-```console
-git clone https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b
-```
+- [LLaVA](../../docs/multimodal/llava.md)
+- [MobileVLM](../../docs/multimodal/MobileVLM.md)
+- [GLM-Edge](../../docs/multimodal/glmedge.md)
+- [MiniCPM-V 2.5](../../docs/multimodal/minicpmv2.5.md)
+- [MiniCPM-V 2.6](../../docs/multimodal/minicpmv2.6.md)
+- [MiniCPM-o 2.6](../../docs/multimodal/minicpmo2.6.md)
+- [IBM Granite Vision](../../docs/multimodal/granitevision.md)
+- [Google Gemma 3](../../docs/multimodal/gemma3.md)
 
-2) Install the required Python packages:
-
-```sh
-pip install -r examples/llava/requirements.txt
-```
-
-3) Use `llava_surgery_v2.py` which also supports llava-1.5 variants pytorch as well as safetensor models:
-```console
-python examples/llava/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
-```
-- you will find a llava.projector and a llava.clip file in your model directory
-
-4) Copy the llava.clip file into a subdirectory (like vit), rename it to pytorch_model.bin and add a fitting vit configuration to the directory:
-```console
-mkdir vit
-cp ../llava-v1.6-vicuna-7b/llava.clip vit/pytorch_model.bin
-cp ../llava-v1.6-vicuna-7b/llava.projector vit/
-curl -s -q https://huggingface.co/cmp-nct/llava-1.6-gguf/raw/main/config_vit.json -o vit/config.json
-```
-
-5) Create the visual gguf model:
-```console
-python ./examples/llava/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
-```
-- This is similar to llava-1.5, the difference is that we tell the encoder that we are working with the pure vision model part of CLIP
-
-6) Then convert the model to gguf format:
-```console
-python ./examples/convert_legacy_llama.py ../llava-v1.6-vicuna-7b/ --skip-unknown
-```
-
-7) And finally we can run the llava cli using the 1.6 model version:
-```console
-./llama-llava-cli -m ../llava-v1.6-vicuna-7b/ggml-model-f16.gguf --mmproj vit/mmproj-model-f16.gguf --image some-image.jpg -c 4096
-```
-
-**note** llava-1.6 needs more context than llava-1.5, at least 3000 is needed (just run it at -c 4096)
-
-**note** llava-1.6 greatly benefits from batched prompt processing (defaults work)
-
-**note** if the language model in step `6)` is incompatible with the legacy conversion script, the easiest way handle the LLM model conversion is to load the model in transformers, and export only the LLM from the llava next model.
-
-```python
-import os
-import transformers
-
-model_path = ...
-llm_export_path = ...
-
-tokenizer = transformers.AutoTokenizer.from_pretrained(model_path)
-model = transformers.AutoModelForImageTextToText.from_pretrained(model_path)
-
-tokenizer.save_pretrained(llm_export_path)
-model.language_model.save_pretrained(llm_export_path)
-```
-
-Then, you can convert the LLM using the `convert_hf_to_gguf.py` script, which handles more LLM architectures.
-
-## llava-cli templating and llava-1.6 prompting
-
-llava-1.5 models all use the same vicuna prompt, here you can just add your image question like `-p "Provide a full description."`
-For llava-1.5 models which are not vicuna (mistral and Yi) you need to adapt system prompt as well as user prompt, for this purpose llava-cli has a basic templating system:
-
-**For Mistral and using llava-cli binary:**
-Add this: `-p "<image>\nUSER:\nProvide a full description.\nASSISTANT:\n"`
-The mistral template for llava-1.6 seems to be no system print and a USER/ASSISTANT role
-
-**For the 34B this should work:**
-Add this: `-e -p <|im_start|>system\nAnswer the questions.<|im_end|><|im_start|>user\n<image>\nProvide a full description.<|im_end|><|im_start|>assistant\n`
-
-
-## How to know if you are running in llava-1.5 or llava-1.6 mode
-
-When running llava-cli you will see a visual information right before the prompt is being processed:
-
-**Llava-1.5:**
-`encode_image_with_clip: image embedding created: 576 tokens`
-
-**Llava-1.6 (anything above 576):**
-`encode_image_with_clip: image embedding created: 2880 tokens`
-
-
-Alternatively just pay notice to how many "tokens" have been used for your prompt, it will also show 1000+ tokens for llava-1.6
-
-
-
-
-## TODO
-
-- [x] Support non-CPU backend for the image encoding part.
-- [ ] Support different sampling methods.
-- [ ] Support more model variants.
+For the following models, you can use `convert_hf_to_gguf.py`with `--mmproj` flag to get the `mmproj` file:
+- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) - Note: 1B variant does not have vision support
+- SmolVLM (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
+- SmolVLM2 (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
+- [Pixtral 12B](https://huggingface.co/mistral-community/pixtral-12b) - only works with `transformers`-compatible checkpoint

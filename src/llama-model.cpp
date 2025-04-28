@@ -10050,7 +10050,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
         // See https://github.com/ggerganov/llama.cpp/discussions/7416 for detailed explanation.
         const float mscale = attn_factor * (1.0f + hparams.rope_yarn_log_mul * logf(1.0f / freq_scale));
         const float kq_scale = 1.0f*mscale*mscale/sqrtf(float(n_embd_head_k));
-        const float attn_factor_scaled = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
+        const float attn_factor = 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale));
 
         ggml_tensor * cur;
         ggml_tensor * inpL;
@@ -10127,13 +10127,13 @@ struct llm_build_deepseek2 : public llm_graph_context {
 
                 q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                        ext_factor, attn_factor, beta_fast, beta_slow
                 );
                 cb(q_pe, "q_pe", il);
 
                 k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor_scaled, beta_fast, beta_slow
+                        ext_factor, attn_factor, beta_fast, beta_slow
                 );
                 cb(k_pe, "k_pe", il);
 
@@ -10149,6 +10149,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
 
                     // {n_embd_head_qk_nope, kv_lora_rank, n_head} x {n_embd_head_qk_nope, n_tokens, n_head}
                     ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, model.layers[il].wk_b, q_nope);
+                    ggml_mul_mat_set_prec(q_nope_absorbed, GGML_PREC_F32);
                     cb(q_nope_absorbed, "q_nope_absorbed", il);
 
                     // {kv_lora_rank, n_head, n_tokens}
