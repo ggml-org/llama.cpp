@@ -2847,6 +2847,24 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
     return false;
 }
 
+inline bool ggml_sycl_supports_reorder_dequantize(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -2884,7 +2902,7 @@ static void reorder_qw(char *data_device, const int ncols, const int nrows,
     GGML_ASSERT((size % sizeof(block_q4_0) == 0));
     GGML_ASSERT((offset % sizeof(block_q4_0) == 0));
     int offset_blks = offset / sizeof(block_q4_0);
-    auto qs_ptr = (uint8_t*)data_device + offset_blks * QK4_0 / 2;;
+    auto qs_ptr = (uint8_t*)data_device + offset_blks * QK4_0 / 2;
     auto d_ptr = (sycl::half*)(qs_ptr + ncols * nrows / 2) + offset_blks;
 
     stream->parallel_for(
@@ -2912,17 +2930,19 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     reorder_qw(data_device, ncols, nrows, size, 0, stream);
 }
 
+static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
+    return !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
+            ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
+            dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
+            dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
+}
+
 /*
 * This function could be called when the OP (mul_mat) function support reorder optimizition.
 */
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1,
     ggml_tensor * dst) {
-    if (!g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
-        ctx->opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
-        dst->op == GGML_OP_MUL_MAT &&    //limit to some supported cases of Q4_0, to do for more cases.
-        src0->type == GGML_TYPE_Q4_0 &&
-        src1->ne[2]==1 && src1->ne[3]==1) {
-
+    if (should_reorder_tensor(*ctx, dst)) {
         ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
         if (!extra) return; //only happen in CI/UT permute case.
 
@@ -2975,20 +2995,15 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
-    const bool reorder = static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra) &&
-                         static_cast<ggml_tensor_extra_gpu *>(dst->src[0]->extra)->optimized_feature.reorder;
 
     // mmvq path is faster in the CUDA backend.
     if (!g_ggml_sycl_disable_mmvq && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
         // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
         // is enabled takes precedence over DMMV, the current if-else implementation
         // requires disabling DMMV if both conditions are met
-        || (reorder && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
+        || (should_reorder_tensor(ctx, dst) && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
-
-    // TODO: Romain
-    printf("\n\n ** mul_mat use_dequantize_mul_mat_vec=%d use_mul_mat_vec_q=%d use_mul_mat_q=%d reorder=%d split=%d m=%ld n=%ld k=%ld batch0=%ld batch1=%ld\n", use_dequantize_mul_mat_vec, use_mul_mat_vec_q, use_mul_mat_q, reorder, split, src0->ne[1], src1->ne[1], src0->ne[0], src0->ne[3], src1->ne[3]);
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
         // TODO: Refactor and cleanup of mul mat dispatching.
@@ -3008,19 +3023,24 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
     } else if (use_dequantize_mul_mat_vec) {
         constexpr bool convert_src1_to_q8_1 = false;
-        opt_for_reorder(&ctx, src0, src1, dst); //the OP function in this branch support reorder.
+        if (ggml_sycl_supports_reorder_dmmv(src0->type)) {
+            opt_for_reorder(&ctx, src0, src1, dst);
+        }
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec, convert_src1_to_q8_1);
-        // save_tensor_txt("1/dst_1.txt", (float*) dst->data, src0->ne[1], sizeof(float), ctx.stream());
     } else if (use_mul_mat_vec_q) {
         constexpr bool convert_src1_to_q8_1 = true;
-        opt_for_reorder(&ctx, src0, src1, dst); //the OP function in this branch support reorder.
+        if (ggml_sycl_supports_reorder_mmvq(src0->type)) {
+            opt_for_reorder(&ctx, src0, src1, dst);
+        }
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, convert_src1_to_q8_1);
     } else if (use_mul_mat_q) {
         constexpr bool convert_src1_to_q8_1 = true;
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, convert_src1_to_q8_1);
     } else {
         constexpr bool convert_src1_to_q8_1 = false;
-        opt_for_reorder(&ctx, src0, src1, dst); //the OP function in this branch support reorder.
+        if (ggml_sycl_supports_reorder_dequantize(src0->type)) {
+            opt_for_reorder(&ctx, src0, src1, dst); //the OP function in this branch support reorder.
+        }
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, convert_src1_to_q8_1);
     }
     GGML_SYCL_DEBUG("call %s done\n", __func__);
