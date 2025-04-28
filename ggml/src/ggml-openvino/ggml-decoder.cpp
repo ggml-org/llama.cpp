@@ -12,6 +12,8 @@
 #include <openvino/core/node.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
+#include <string>
+#include <unordered_map>
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
@@ -20,34 +22,16 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
     : m_cgraph(cgraph),
       m_node(node),
       m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
+    static std::unordered_map<std::string, std::shared_ptr<ov::Node>> model_weights;
     if (m_node) {
-        set_input_output(m_node);
+        set_input_output(m_node, model_weights);
     } else {
-        // std::map<void*, std::vector<std::string>> address_map;
-        // for (int node_n = start_index; node_n <= end_index; node_n++) {
-        //     auto node = cgraph->nodes[node_n];
-        //     if (node->data) {
-        //         auto it = address_map.find(node->data);
-        //         if (it == address_map.end()) {
-        //             address_map[node->data] = std::vector<std::string>();
-        //         }
-        //         address_map[node->data].push_back(node->name);
-        //     }
-        // }
-        // for (const auto& pair : address_map) {
-        //     std::cout << "Address: " << pair.first << " -> ";
-        //     for (const auto& name : pair.second) {
-        //         std::cout << name << " ;";
-        //     }
-        //     std::cout << std::endl;
-        // }
-
         for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
             auto* cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
-            // Init model input and output
-            set_input_output(cur_node);
+            set_input_output(cur_node, model_weights);
         }
+        m_model_weights = model_weights;
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
             dump_cgraph(m_cgraph);
         }
@@ -56,7 +40,8 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
 
 // Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
 // 2. constructing a decoder for a node.
-void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
+void GgmlOvDecoder::set_input_output(ggml_tensor* node,
+                                     std::unordered_map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
     std::string node_name;
     if (node->op == GGML_OP_CPY) {
         // CPY updates the input tensor in place. For later ov op that uses the
@@ -87,7 +72,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
 
             if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                 bool weight_as_input = getenv("GGML_OPENVINO_WEIGHT_AS_INPUT");
-                auto& weights_map = weight_as_input ? m_model_inputs : m_model_weights;
+                auto& weights_map = weight_as_input ? m_model_inputs : model_weights;
                 if (weights_map.find(src_name) != weights_map.end()) {
                     continue;
                 }
@@ -261,6 +246,28 @@ void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph) {
 
     file.close();
 }
+
+void print_tensor_address_map(const struct ggml_cgraph* cgraph) {
+    std::map<void*, std::vector<std::string>> address_map;
+    for (int node_n = 0; node_n <= cgraph->n_nodes; node_n++) {
+        auto* node = cgraph->nodes[node_n];
+        if (node->data) {
+            auto it = address_map.find(node->data);
+            if (it == address_map.end()) {
+                address_map[node->data] = std::vector<std::string>();
+            }
+            address_map[node->data].push_back(node->name);
+        }
+    }
+    for (const auto& pair : address_map) {
+        std::cout << "Address: " << pair.first << std::endl;
+        for (const auto& name : pair.second) {
+            std::cout << name << " ; ";
+        }
+        std::cout << std::endl << std::endl;
+    }
+}
+
 std::vector<size_t> GgmlOvDecoder::get_shape(const ggml_tensor* tensor) {
     std::vector<size_t> shape;
     for (int i = GGML_MAX_DIMS - 2; i >= 0; --i) {

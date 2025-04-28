@@ -87,7 +87,7 @@ public:
     }
 
 private:
-    void set_input_output(ggml_tensor* node);
+    void set_input_output(ggml_tensor* node, std::unordered_map<std::string, std::shared_ptr<ov::Node>>& model_weights);
     static void dump_cgraph(const struct ggml_cgraph* cgraph);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
