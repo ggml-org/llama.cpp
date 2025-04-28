@@ -673,8 +673,12 @@ static struct common_hf_file_res common_get_hf_file(const std::string &, const s
     return {};
 }
 
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string &, const common_remote_params &) {
-    throw std::runtime_error("error: built without CURL, cannot download model from the internet");
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params &) {
+    if (!url.empty()) {
+        throw std::runtime_error("error: built without CURL, cannot download model from the internet");
+    }
+
+    return {};
 }
 
 #endif // LLAMA_USE_CURL
