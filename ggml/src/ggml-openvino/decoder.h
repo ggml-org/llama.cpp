@@ -1,19 +1,14 @@
 #pragma once
 
+#include <unordered_map>
+
 #include "openvino/core/node.hpp"
 #include "openvino/frontend/decoder.hpp"
-#include "openvino/op/parameter.hpp"
 
 namespace ov {
 namespace frontend {
 namespace ggml {
 
-// 定义 tensor_info 结构体
-struct tensor_info {
-
-    std::vector<int> shape;
-    std::vector<int> stride;
-};
 // TODO: Directly include from openvino
 class GgmlDecoder : public DecoderBase {
 public:
@@ -35,10 +30,6 @@ public:
     virtual std::string& get_input_name(size_t index) const = 0;
 
     virtual std::vector<std::string> get_input_names() const = 0;
-
-    virtual std::string& get_op_node_name(const std::string& name, const int index = -1) = 0;
-
-    // virtual const struct tensor_info get_node_op_info(const std::string& name) const = 0;
 
     virtual PartialShape get_output_shape(const std::string& name) const = 0;
 
@@ -64,14 +55,11 @@ public:
 
     virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const = 0;
 
-    // virtual const std::vector<size_t>& outputs() const = 0;
-
-    // virtual size_t output(size_t index) const = 0;
-
     virtual bool check_if_continuous() const = 0;
 
-    virtual const std::vector<std::shared_ptr<ov::op::v0::Parameter>>&  get_params() const = 0;
-
+    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const = 0;
+    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const = 0;
+    virtual const std::vector<std::string>& get_model_output_names() const = 0;
 };
 
 }  // namespace ggml

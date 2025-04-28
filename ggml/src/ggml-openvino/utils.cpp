@@ -1,49 +1,22 @@
 #include "utils.h"
-#include "ggml-backend-impl.h"
-#include "ggml-impl.h"
-#include "ggml.h"
+
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
-#include <fstream>
 #include <openvino/core/graph_util.hpp>
+#include <openvino/core/type/float16.hpp>
 #include <openvino/frontend/manager.hpp>
 #include <openvino/openvino.hpp>
 
-using ov::frontend::ggml::GgmlDecoder;
+#include "ggml-impl.h"
+#include "ggml.h"
 
-std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index) {
-    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, start_index, end_index);
-}
-
-std::vector<std::pair<std::string, ov::Tensor>> get_ggml_graph_input_tensors(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
-    std::vector<std::pair<std::string, ov::Tensor>> input_tensors;
-    auto input_names = ggml_decoder->get_input_names();
-    size_t op_iter = 0;
-    for (size_t inp = 0; inp < input_names.size(); ++inp) {
-        auto name = input_names[inp];
-        std::string op_node_name = ggml_decoder->get_op_node_name(name, op_iter++);
-        // auto node_op_name = ggml_decoder->get_node_op_name(name);
-        auto input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
-        #ifdef GGML_OPENVINO_DEBUG
-            printf("Subgraph input %d: %g\n", inp, *(double*)(input_data));
-        #endif
-        ov::Tensor input_tensor;
-        ov::Shape input_shape = ggml_decoder->get_input_shape(name).to_shape();
-
-        std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
-        input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
-
-        // input_tensors[name] = input_tensor;
-        input_tensors.emplace_back(name, input_tensor);
-    }
-    // std::cout << "input_names.size(): " << input_names.size() << std::endl;
-    return input_tensors;
+std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph) {
+    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph);
 }
 
 ov::Tensor get_ggml_graph_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, std::string& name) {
-    auto input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
-    #ifdef GGML_OPENVINO_DEBUG
-        printf("Subgraph input %s: %g\n", name.c_str(), *(double*)(input_data));
-    #endif
+    auto* input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
     ov::Tensor input_tensor;
     ov::Shape input_shape = ggml_decoder->get_input_shape(name).to_shape();
     std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
@@ -53,18 +26,15 @@ ov::Tensor get_ggml_graph_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decod
 
 std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
     std::map<std::string, void*> output_tensors;
-    auto output_names = ggml_decoder->get_output_names();
+    auto output_names = ggml_decoder->get_model_output_names();
     for (size_t inp = 0; inp < output_names.size(); ++inp) {
         auto name = output_names[inp];
-        auto output_data = ggml_decoder->get_output_ggml_tensor(name)->data;
-        #ifdef GGML_OPENVINO_DEBUG
-            printf("Output %d: %g\n", inp, *(double*)(output_data));
-        #endif
+        const auto* tensor = ggml_decoder->get_output_ggml_tensor(name);
+        auto* output_data = tensor->view_src ? tensor->view_src->data : tensor->data;
         output_tensors[name] = output_data;
     }
     return output_tensors;
 }
-
 
 static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     ov::frontend::FrontEnd::Ptr front_end = nullptr;
@@ -78,10 +48,9 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     return front_end;
 }
 
-enum ggml_status openvino_frontend_compute(ggml_backend_t backend,
-                                           struct ggml_cgraph *cgraph,
-                                           const int32_t start_index,
-                                           const int32_t end_index) {
+enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
+    auto start_time = ggml_time_us();
+
     static ov::Core core;
 
     // auto devices = core.get_available_devices();
@@ -89,65 +58,102 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend,
     if (!front_end) {
         GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
         return GGML_STATUS_FAILED;
-    } else {
-        #ifdef GGML_OPENVINO_DEBUG
-            GGML_LOG_INFO("GGML FrontEnd is initialized \n");
-        #endif
     }
 
-    auto ggml_decoder = get_ggml_decoder(cgraph, start_index, end_index);
+    auto ggml_decoder = get_ggml_decoder(cgraph);
     std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
-    // Load GraphIterator -> InputModel
     ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
     if (!input_model) {
         GGML_LOG_ERROR("Input Model is not loaded \n");
         return GGML_STATUS_FAILED;
-    } else {
-        #ifdef GGML_OPENVINO_DEBUG
-            GGML_LOG_INFO("Input Model loaded \n");
-        #endif
     }
 
-    // Convert InputModel -> ov::Model
     std::shared_ptr<ov::Model> model = front_end->convert(input_model);
+    auto conversion_end_time = ggml_time_us();
 
-    if (getenv("OPENVINO_DUMP_GRAPH")) {
-      char timestamped_filename[64];
-      auto timestamp = (long long)ggml_time_us();
-      snprintf(timestamped_filename, sizeof(timestamped_filename),
-               "model_%lld.xml", timestamp);
-      ov::serialize(model, timestamped_filename);
+    if (getenv("GGML_OPENVINO_DUMP_IR")) {
+        char timestamped_filename[64];
+        auto timestamp = (long long)ggml_time_us();
+        snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
+        ov::serialize(model, timestamped_filename);
     }
 
     if (!model) {
         GGML_LOG_ERROR("Model is not converted \n");
-    } else {
-        #ifdef GGML_OPENVINO_DEBUG
-            GGML_LOG_INFO("Model converted \n");
-        #endif
     }
 
-    ov::CompiledModel compiled_model = core.compile_model(model);
+    ov::CompiledModel compiled_model =
+        core.compile_model(model, "CPU", ov::device::properties("CPU", ov::cache_dir("/tmp/ov_cache")));
+    auto compile_end_time = ggml_time_us();
+
     ov::InferRequest infer_request = compiled_model.create_infer_request();
+    auto infer_request_start_time = ggml_time_us();
 
     auto input_names = ggml_decoder->get_input_names();
-    auto input_tensors = get_ggml_graph_input_tensors(ggml_decoder);
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
-        infer_request.set_input_tensor(i, get_ggml_graph_input_tensor(ggml_decoder, param_name));
+        auto input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
+
+        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+            std::cout << "Input name: " << param_name << ", Input shape: " << input_tensor.get_shape()
+                      << ", Address: " << input_tensor.data() << std::endl;
+            switch (input_tensor.get_element_type()) {
+            case ov::element::f32:
+                std::cout << *(float*)(input_tensor.data()) << std::endl;
+                break;
+            case ov::element::f16:
+                std::cout << ov::float16::from_bits(*(uint16_t*)(input_tensor.data())) << std::endl;
+                break;
+            case ov::element::i32:
+                std::cout << *(int32_t*)(input_tensor.data()) << std::endl;
+                break;
+            case ov::element::i64:
+                std::cout << *(int64_t*)(input_tensor.data()) << std::endl;
+                break;
+            default:
+                break;
+            }
+        }
+        infer_request.set_input_tensor(i, input_tensor);
     }
+    auto input_end_time = ggml_time_us();
 
     infer_request.infer();
+    auto infer_end_time = ggml_time_us();
 
-    auto output_names = ggml_decoder->get_output_names();
+    auto output_names = ggml_decoder->get_model_output_names();
     auto output_tensors = get_ggml_graph_output_dst(ggml_decoder);
     for (size_t i = 0; i < output_names.size(); i++) {
         auto output_tensor = infer_request.get_output_tensor(i);
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
-        #ifdef GGML_OPENVINO_DEBUG
-            printf("Output %s after: %g\n", output_names[i].c_str(), *(double*)(output_tensor.data()));
-        #endif
+
+        if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
+            std::cout << "Output name: " << output_names[i] << ", Output shape: " << output_tensor.get_shape()
+                      << ", Address: " << output_tensors[output_names[i]] << std::endl;
+            switch (output_tensor.get_element_type()) {
+            case ov::element::f32:
+                std::cout << *(float*)(output_tensors[output_names[i]]) << std::endl;
+                break;
+            case ov::element::f16:
+                std::cout << ov::float16::from_bits(*(uint16_t*)(output_tensors[output_names[i]])) << std::endl;
+                break;
+            default:
+                break;
+            }
+        }
+    }
+    auto end_time = ggml_time_us();
+
+    if (getenv("GGML_OPENVINO_PROFILING")) {
+        GGML_LOG_INFO("GGML OpenVINO Backend: \n");
+        GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - start_time) / 1000);
+        GGML_LOG_INFO("  - Graph compile Time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+        GGML_LOG_INFO("  - Graph InferRequest created Time: %ld ms \n",
+                      (infer_request_start_time - compile_end_time) / 1000);
+        GGML_LOG_INFO("  - Graph Input Time: %ld ms \n", (input_end_time - infer_request_start_time) / 1000);
+        GGML_LOG_INFO("  - Graph Inference Time: %ld ms \n", (infer_end_time - input_end_time) / 1000);
+        GGML_LOG_INFO("  - Graph Output Time: %ld ms \n", (end_time - infer_end_time) / 1000);
     }
 
     return GGML_STATUS_SUCCESS;

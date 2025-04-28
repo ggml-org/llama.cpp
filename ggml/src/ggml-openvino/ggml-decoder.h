@@ -1,14 +1,17 @@
 #pragma once
 
+#include <memory>
+#include <unordered_map>
+#include <vector>
+
 #include "decoder.h"
 #include "ggml.h"
-#include "openvino/op/parameter.hpp"
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
     using ov::frontend::ggml::GgmlDecoder::GgmlDecoder;
 
-    GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph, const int32_t start_index=0, const int32_t end_index=0);
+    GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph);
 
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
@@ -73,12 +76,23 @@ public:
         return m_continuous;
     }
 
-    std::string& get_op_node_name(const std::string& key_name, const int index) override;
-
-    virtual const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& get_params() const override;
+    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const override {
+        return m_model_inputs;
+    }
+    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const override {
+        return m_model_weights;
+    }
+    virtual const std::vector<std::string>& get_model_output_names() const override {
+        return m_model_output_names;
+    }
 
 private:
-    void set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs);
+    void set_input_output(ggml_tensor* node);
+    static void dump_cgraph(const struct ggml_cgraph* cgraph);
+    static std::vector<size_t> get_shape(const ggml_tensor* tensor);
+    static std::vector<size_t> get_stride(const ggml_tensor* tensor);
+    static ov::element::Type get_ov_type(const ggml_tensor* tensor);
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
 
     struct ggml_cgraph * m_cgraph;
     std::map<std::string, ggml_tensor *> m_inputs;
@@ -86,12 +100,12 @@ private:
     std::map<std::string, ggml_tensor *> m_outputs;
     std::vector<std::string> m_output_names;
     ggml_tensor* m_node;
-    std::vector<ggml_tensor *> m_nodes;
-    std::vector<std::shared_ptr<GgmlOvDecoder>> m_decoders;
+    std::vector<ggml_tensor*> m_nodes;
     std::string m_op_name;
     mutable std::string m_name;
     bool m_continuous;
-    std::vector<std::shared_ptr<ov::op::v0::Parameter>> m_params;
     std::vector<std::pair<std::string, std::string>> m_op_node_name;
+    std::unordered_map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
+    std::unordered_map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
+    std::vector<std::string> m_model_output_names;
 };
-

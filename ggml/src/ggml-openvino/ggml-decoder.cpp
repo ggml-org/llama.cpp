@@ -1,11 +1,62 @@
 #include "ggml-decoder.h"
-#include <ggml.h>
-#include <ggml-impl.h>
-#include <ggml-cpu-impl.h>
-#include <iomanip>
-#include <fstream>
 
-void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, ggml_tensor *>& inputs, std::map<std::string, ggml_tensor *>& outputs) {
+#include <ggml-impl.h>
+#include <ggml.h>
+
+#include <cassert>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/core/type/float16.hpp>
+#include <openvino/op/constant.hpp>
+
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
+
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph)
+    : m_cgraph(cgraph),
+      m_node(node),
+      m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
+    if (m_node) {
+        set_input_output(m_node);
+    } else {
+        // std::map<void*, std::vector<std::string>> address_map;
+        // for (int node_n = start_index; node_n <= end_index; node_n++) {
+        //     auto node = cgraph->nodes[node_n];
+        //     if (node->data) {
+        //         auto it = address_map.find(node->data);
+        //         if (it == address_map.end()) {
+        //             address_map[node->data] = std::vector<std::string>();
+        //         }
+        //         address_map[node->data].push_back(node->name);
+        //     }
+        // }
+        // for (const auto& pair : address_map) {
+        //     std::cout << "Address: " << pair.first << " -> ";
+        //     for (const auto& name : pair.second) {
+        //         std::cout << name << " ;";
+        //     }
+        //     std::cout << std::endl;
+        // }
+
+        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
+            auto* cur_node = m_cgraph->nodes[node_n];
+            m_nodes.push_back(cur_node);
+            // Init model input and output
+            set_input_output(cur_node);
+        }
+        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+            dump_cgraph(m_cgraph);
+        }
+    }
+}
+
+// Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
+// 2. constructing a decoder for a node.
+void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
     std::string node_name;
     if (node->op == GGML_OP_CPY) {
         // CPY updates the input tensor in place. For later ov op that uses the
@@ -17,51 +68,130 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, std::map<std::string, gg
         node_name = std::string(node->name);
     }
 
-    std::string src0_name = std::string(node->src[0]->name);
-    inputs[src0_name] = node->src[0];
-    outputs[node_name] = node;
-    m_input_names.push_back(src0_name);
-    m_op_node_name.emplace_back(src0_name, ggml_op_name(node->op));
-    if (node->op == GGML_OP_CPY && node->view_src) {
-        m_output_names.push_back(node->view_src->name);
-    } else {
-        m_output_names.push_back(node_name);
+    m_output_names.push_back(node_name);
+    m_outputs[node_name] = node;
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        auto* src = node->src[i];
+        if (src == nullptr) {
+            continue;
+        }
+        std::string src_name = std::string(src->name);
+        m_input_names.push_back(src_name);
+        m_inputs[src_name] = src;
+        m_op_node_name.emplace_back(src_name, ggml_op_name(node->op));
+
+        // If called for the whole graph, create constant nodes for weights and param nodes for inputs
+        if (!m_node && !src->view_src) {
+            ggml_backend_buffer* buffer = src->buffer;
+
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                bool weight_as_input = getenv("GGML_OPENVINO_WEIGHT_AS_INPUT");
+                auto& weights_map = weight_as_input ? m_model_inputs : m_model_weights;
+                if (weights_map.find(src_name) != weights_map.end()) {
+                    continue;
+                }
+
+                std::shared_ptr<ov::Node> weight_node =
+                    weight_as_input
+                        ? std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), ov::Shape{get_shape(src)})
+                        : create_weight_node(src);
+                weight_node->set_friendly_name(src_name);
+                weights_map[src_name] = weight_node;
+
+            } else if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
+                // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
+                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
+                    assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
+                }
+                if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
+                    continue;
+                }
+                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), ov::Shape{get_shape(src)});
+                param_node->set_friendly_name(src_name);
+                m_model_inputs[src_name] = param_node;
+            }
+        }
     }
 
-    if (node->src[1]) {
-        std::string src1_name = std::string(node->src[1]->name);
-        inputs[src1_name] = node->src[1];
-        m_input_names.push_back(src1_name);
-        m_op_node_name.emplace_back(src1_name, ggml_op_name(node->op));
-    }
-    if (node->src[2]) {
-        std::string src2_name = std::string(node->src[2]->name);
-        inputs[src2_name] = node->src[2];
-        m_input_names.push_back(src2_name);
-        m_op_node_name.emplace_back(src2_name, ggml_op_name(node->op));
+    if (!m_node) {
+        // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
+        if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
+            std::string(node->name).find("result") == 0) {
+            auto name = node->view_src ? std::string(node->view_src->name) : std::string(node->name);
+            if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
+                assert(name.find("cache_k") == 0 || name.find("cache_v") == 0);
+            }
+            auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), name);
+            if (it == m_model_output_names.end()) {
+                m_model_output_names.push_back(name);
+            }
+        }
     }
 
-    switch (node->op) {
-    case GGML_OP_CONT: {
-        // Currently only two cases, either the input comes from a VIEW which is subtensor or from a PERMUTE
-        m_continuous = ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src);
-        break;
-    }
-    case GGML_OP_CPY: {
-        m_continuous = ggml_is_contiguous(node);
-        break;
-    }
-    case GGML_OP_MUL_MAT: {
-        m_continuous = node->src[0]->view_src == nullptr;
-      break;
-    }
-    default:
-        break;
+    if (m_node) {
+        switch (node->op) {
+        case GGML_OP_CONT: {
+            // Currently only two cases, either the input comes from a VIEW which is subtensor or from a PERMUTE
+            m_continuous = ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src);
+            break;
+        }
+        case GGML_OP_CPY: {
+            m_continuous = ggml_is_contiguous(node);
+            break;
+        }
+        case GGML_OP_MUL_MAT: {
+            m_continuous = node->src[0]->view_src == nullptr;
+            break;
+        }
+        default:
+            break;
+        }
     }
 }
 
-void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
-    std::ofstream file("01_nodes.txt");
+std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
+    std::shared_ptr<ov::Node> weight_node;
+    auto node_type = get_ov_type(tensor);
+    auto node_shape = get_shape(tensor);
+    auto ne_total = ggml_nelements(tensor);
+    switch (tensor->type) {
+    case GGML_TYPE_I32: {
+        const auto* ptr = reinterpret_cast<const int32_t*>(tensor->data);
+        std::vector<int32_t> data(ptr, ptr + ne_total);
+        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
+        break;
+    }
+    case GGML_TYPE_I64: {
+        const auto* ptr = reinterpret_cast<const int64_t*>(tensor->data);
+        std::vector<int64_t> data(ptr, ptr + ne_total);
+        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
+        break;
+    }
+    case GGML_TYPE_F32: {
+        const auto* ptr = reinterpret_cast<const float*>(tensor->data);
+        std::vector<float> data(ptr, ptr + ne_total);
+        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
+        break;
+    }
+    case GGML_TYPE_F16: {
+        const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
+        std::vector<ov::float16> data_f16;
+        data_f16.reserve(ne_total);
+        for (int i = 0; i < ne_total; ++i) {
+            data_f16.push_back(ov::float16::from_bits(ptr[i]));
+        }
+        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_f16);
+        break;
+    }
+    default:
+        throw std::invalid_argument("Unsupported tensor type");
+    }
+    return weight_node;
+}
+
+void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph) {
+    std::ofstream file("cgraph.txt");
     if (!file.is_open()) {
         std::cerr << "Failed to open file" << std::endl;
         return;
@@ -160,88 +290,53 @@ void ggml_graph_op_print(const struct ggml_cgraph * cgraph) {
 
     file.close();
 }
-
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor * node, struct ggml_cgraph * cgraph, const int32_t start_index, const int32_t end_index)
-                            :m_cgraph(cgraph),
-                             m_node(node),
-                             m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
-    m_inputs.clear();
-    m_outputs.clear();
-    m_input_names.clear();
-    m_output_names.clear();
-    m_params.clear();
-    m_op_node_name.clear();
-    m_decoders.clear();
-
-    if (m_node) {
-        set_input_output(m_node, m_inputs, m_outputs);
-    } else {
-        // for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
-        for (int node_n = start_index; node_n <= end_index; node_n++) {
-            auto cur_node = m_cgraph->nodes[node_n];
-            m_nodes.push_back(cur_node);
-            // Init model input and output
-            set_input_output(cur_node, m_inputs, m_outputs);
-        }
-        if (getenv("GGML_OPENVINO_DEBUG")) {
-          ggml_graph_op_print(m_cgraph);
-        }
+std::vector<size_t> GgmlOvDecoder::get_shape(const ggml_tensor* tensor) {
+    std::vector<size_t> shape;
+    for (int i = GGML_MAX_DIMS - 2; i >= 0; --i) {
+        shape.push_back(static_cast<size_t>(tensor->ne[i]));
     }
+    return shape;
+}
+
+std::vector<size_t> GgmlOvDecoder::get_stride(const ggml_tensor* tensor) {
+    std::vector<size_t> stride;
+    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
+        stride.push_back(static_cast<size_t>(tensor->nb[i]));
+    }
+    return stride;
+}
+
+ov::element::Type GgmlOvDecoder::get_ov_type(const ggml_tensor* tensor) {
+    ov::element::Type type = ov::element::dynamic;
+    switch (tensor->type) {
+    case GGML_TYPE_F32:
+        type = ov::element::f32;
+        break;
+    case GGML_TYPE_F16:
+        type = ov::element::f16;
+        break;
+    case GGML_TYPE_I64:
+        type = ov::element::i64;
+        break;
+    case GGML_TYPE_I32:
+        type = ov::element::i32;
+        break;
+    default:
+        break;
+    }
+    return type;
 }
 
 ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
-    ov::PartialShape input_shape;
-    // Use input_node->ne
-    ggml_tensor * node = m_inputs.at(name);
-    std::vector<size_t> shape;
-
-    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
-        if (node->ne[i] == 0) {
-            return input_shape;
-        }
-        shape.push_back(static_cast<size_t>(node->ne[i]));
-    }
-    input_shape = ov::PartialShape(shape);
-    return input_shape;
+    return ov::PartialShape(get_shape(m_inputs.at(name)));
 }
 
 std::vector<size_t> GgmlOvDecoder::get_input_stride(const std::string& name) const {
-    std::vector<size_t> stride;
-    ggml_tensor * node = m_inputs.at(name);
-    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
-        stride.push_back(static_cast<size_t>(node->nb[i]));
-    }
-    return stride;
-}
-
-std::vector<size_t> GgmlOvDecoder::get_output_stride(const std::string& name) const {
-    std::vector<size_t> stride;
-    ggml_tensor * node = m_outputs.at(name);
-    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
-        stride.push_back(static_cast<size_t>(node->nb[i]));
-    }
-    return stride;
+    return get_stride(m_inputs.at(name));
 }
 
 ov::element::Type GgmlOvDecoder::get_input_type(const std::string& name) const {
-    ov::element::Type type = ov::element::dynamic;
-    switch (m_inputs.at(name)->type) {
-        case GGML_TYPE_F32:
-            type = ov::element::f32;
-            break;
-        case GGML_TYPE_F16:
-            type = ov::element::f16;
-            break;
-        case GGML_TYPE_I64:
-            type = ov::element::i64;
-            break;
-        case GGML_TYPE_I32:
-            type = ov::element::i32;
-            break;
-        default:
-            break;
-    }
-    return type;
+    return get_ov_type(m_inputs.at(name));
 }
 
 size_t GgmlOvDecoder::get_input_size() const {
@@ -257,69 +352,16 @@ std::vector<std::string> GgmlOvDecoder::get_input_names() const {
     return m_input_names;
 }
 
-std::string& GgmlOvDecoder::get_op_node_name(const std::string& key_name, const int index) {
-    if (index == -1) {
-        for (size_t i = 0; i < m_op_node_name.size(); ++i) {
-            if (m_op_node_name[i].first == key_name) {
-                return m_op_node_name[i].second;
-            }
-        }
-    } else {
-        return m_op_node_name[index].second;
-    }
-
-    static std::string empty_string = "";
-    return empty_string; // empty string
-}
-
-const std::vector<std::shared_ptr<ov::op::v0::Parameter>>& GgmlOvDecoder::get_params() const {
-    return m_params;
+std::vector<size_t> GgmlOvDecoder::get_output_stride(const std::string& name) const {
+    return get_stride(m_outputs.at(name));
 }
 
 ov::PartialShape GgmlOvDecoder::get_output_shape(const std::string& name) const {
-    ov::PartialShape output_shape;
-    ggml_tensor * node = m_outputs.at(name);
-    std::vector<size_t> shape;
-
-    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
-        if (node->ne[i] == 0 ) {
-            // empty if any dimension has no elements
-            return output_shape;
-        }
-        shape.push_back(static_cast<size_t>(node->ne[i]));
-    }
-    output_shape = ov::PartialShape(shape);
-    return output_shape;
+    return ov::PartialShape(get_shape(m_outputs.at(name)));
 }
 
 ov::element::Type GgmlOvDecoder::get_output_type(const std::string& name) const {
-    // TODO: Change to Output
-    ov::element::Type type = ov::element::dynamic;
-    switch (m_outputs.at(name)->type) {
-        case GGML_TYPE_F32:
-            type = ov::element::f32;
-            break;
-        case GGML_TYPE_F16:
-            type = ov::element::f16;
-            break;
-        case GGML_TYPE_I64:
-            type = ov::element::i64;
-            break;
-        case GGML_TYPE_I32:
-            type = ov::element::i32;
-            break;
-        default:
-            break;
-    }
-    return type;
-}
-
-int32_t* GgmlOvDecoder::get_input_op_params(const std::string& name) const{
-    return m_inputs.at(name)->op_params;
-}
-
-int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const{
-    return m_outputs.at(name)->op_params;
+    return get_ov_type(m_outputs.at(name));
 }
 
 std::string& GgmlOvDecoder::get_output_name(size_t index) const {
@@ -335,10 +377,17 @@ const std::string& GgmlOvDecoder::get_op_name() const {
     return m_op_name;
 }
 
+int32_t* GgmlOvDecoder::get_input_op_params(const std::string& name) const {
+    return m_inputs.at(name)->op_params;
+}
+
+int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const {
+    return m_outputs.at(name)->op_params;
+}
+
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
     for (const auto& node : m_nodes) {
         auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph);
-        // m_decoders.push_back(decoder);
         node_visitor(decoder);
     }
 }
