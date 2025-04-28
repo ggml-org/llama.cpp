@@ -52,7 +52,7 @@ endif()
 
 set(TARGET common)
 
-add_library(${TARGET} STATIC
+add_library(${TARGET}
     arg.cpp
     arg.h
     base64.hpp
