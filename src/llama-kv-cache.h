@@ -7,6 +7,7 @@
 
 #include "ggml-cpp.h"
 
+#include <map>
 #include <set>
 #include <vector>
 
@@ -90,35 +91,19 @@ private:
 // TODO: add notion of max sequences
 class llama_kv_cache_unified : public llama_kv_cache {
 public:
-    struct kv_cell {
-        llama_pos pos   = -1;
-        llama_pos delta =  0;
-
-        std::set<llama_seq_id> seq_id;
-
-        bool has_seq_id(const llama_seq_id & id) const {
-            return seq_id.find(id) != seq_id.end();
-        }
-
-        bool is_empty() const {
-            return seq_id.empty();
-        }
-
-        bool is_same_seq(const kv_cell & other) const {
-            return seq_id == other.seq_id;
-        }
-    };
-
     static uint32_t get_padding(const llama_cparams & cparams);
 
+    using layer_filter_cb = std::function<bool(int32_t il)>;
+
     llama_kv_cache_unified(
-            const llama_model & model,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                         bool   v_trans,
-                         bool   offload,
-                     uint32_t   kv_size,
-                     uint32_t   padding);
+            const llama_model &  model,
+              layer_filter_cb && filter,
+                    ggml_type    type_k,
+                    ggml_type    type_v,
+                         bool    v_trans,
+                         bool    offload,
+                     uint32_t    kv_size,
+                     uint32_t    padding);
 
     ~llama_kv_cache_unified() = default;
 
@@ -130,7 +115,7 @@ public:
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
-    void seq_keep(llama_seq_id seq_id) override;
+    void seq_keep(llama_seq_id seq_id)                                                          override;
     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
 
@@ -169,7 +154,69 @@ public:
     // state write/load
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+
+    //
+    // llama_kv_cache_unified specific API
+    //
+
+    uint32_t get_n() const;
+
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
+
+    void set_input_kq_mask    (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_kq_mask_swa(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+
+    void set_input_k_shift    (ggml_tensor * dst) const;
+    void set_input_pos_bucket (ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+private:
+    const llama_model & model;
+    const llama_hparams & hparams;
+
+    // commit/restore cache
+    struct slot_range {
+        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
+        uint32_t c1 = 0;
+    };
+
+    struct kv_cell {
+        llama_pos pos   = -1;
+        llama_pos delta =  0;
+
+        std::set<llama_seq_id> seq_id;
+
+        bool has_seq_id(const llama_seq_id & id) const {
+            return seq_id.find(id) != seq_id.end();
+        }
+
+        bool is_empty() const {
+            return seq_id.empty();
+        }
+
+        bool is_same_seq(const kv_cell & other) const {
+            return seq_id == other.seq_id;
+        }
+    };
+
+    struct kv_layer {
+        // layer index in the model
+        // note: can be different from the layer index in the KV cache
+        uint32_t il;
+
+        ggml_tensor * k;
+        ggml_tensor * v;
+    };
+
+    bool has_shift = false;
+    bool do_defrag = false;
+
+    bool v_trans   = true;  // the value tensor is transposed
+    bool can_shift = false;
 
     uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
     uint32_t size = 0; // total number of cells, shared across all sequences
@@ -177,21 +224,6 @@ public:
 
     // computed before each graph build
     uint32_t n = 0;
-
-    std::vector<kv_cell> cells;
-
-    std::vector<ggml_tensor *> k_l; // per layer
-    std::vector<ggml_tensor *> v_l;
-
-private:
-    const llama_model & model;
-    const llama_hparams & hparams;
-
-    bool has_shift = false;
-    bool do_defrag = false;
-
-    bool v_trans   = true;  // the value tensor is transposed
-    bool can_shift = false;
 
     // required padding
     uint32_t padding = 1;
@@ -202,6 +234,17 @@ private:
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
+    std::vector<kv_cell>  cells;
+    std::vector<kv_layer> layers;
+
+    // model layer id -> KV cache layer id
+    std::map<int32_t, int32_t> map_layer_ids;
+
+    // pending cell updates that are not yet committed
+    struct {
+        std::vector<slot_range> ranges;
+    } pending;
+
     // defrag
     struct {
         std::vector<uint32_t> ids;
@@ -209,17 +252,6 @@ private:
 
     // return true if cells have been moved
     bool defrag_prepare(int32_t n_max_nodes);
-
-    // commit/restore cache
-    struct slot_range {
-        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
-        uint32_t c1 = 0;
-    };
-
-    // pending cell updates that are not yet committed
-    struct {
-        std::vector<slot_range> ranges;
-    } pending;
 
     // find how many cells are currently in use
     uint32_t cell_max() const;
@@ -253,6 +285,14 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+};
+
+//
+// llama_kv_cache_unified_swa
+//
+
+class llama_kv_cache_unified_swa : public llama_kv_cache {
+public:
 };
 
 //
