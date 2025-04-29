@@ -2,6 +2,26 @@
   "version": 4,
   "configurePresets": [
     {
+        "name": "ReleaseOV",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build/${presetName}",
+        "installDir": "${sourceDir}/build/install/${presetName}",
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release",
+            "GGML_OPENVINO": true,
+            "OpenVINO_DIR": "$env{OPENVINO_LLAMA_PATH}/build/Release"
+        }
+    },
+    {
+        "name": "ReleaseCPU",
+        "generator": "Ninja",
+        "binaryDir": "${sourceDir}/build/${presetName}",
+        "installDir": "${sourceDir}/build/install/${presetName}",
+        "cacheVariables": {
+            "CMAKE_BUILD_TYPE": "Release"
+        }
+    },
+    {
         "name":  "base",
         "hidden": true,
         "generator":   "Ninja",
