@@ -4,7 +4,7 @@
 
 #include "json-schema-to-grammar.h"
 
-#include "llama-grammar.h"
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 #include <fstream>
@@ -593,6 +593,22 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         R"""(
             boolean ::= ("true" | "false") space
             root ::= "[" space boolean ("," space boolean)+ "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "maxItems 0",
+        R"""({
+            "items": {
+                "type": "boolean"
+            },
+            "maxItems": 0
+        })""",
+        R"""(
+            boolean ::= ("true" | "false") space
+            root ::= "[" space  "]" space
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });

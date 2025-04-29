@@ -27,6 +27,15 @@ file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
+if (WIN32)
+    # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
+    if( ${CMAKE_GENERATOR} MATCHES "Visual Studio" AND NOT (${CMAKE_GENERATOR_TOOLSET} MATCHES "Intel C"))
+        set_target_properties(ggml-sycl PROPERTIES VS_PLATFORM_TOOLSET "Intel C++ Compiler 2025")
+        set(CMAKE_CXX_COMPILER "icx")
+        set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
+    endif()
+endif()
+
 find_package(IntelSYCL)
 if (IntelSYCL_FOUND)
     # Use oneAPI CMake when possible

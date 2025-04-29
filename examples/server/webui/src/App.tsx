@@ -28,7 +28,7 @@ function AppLayout() {
     <>
       <Sidebar />
       <div
-        className="drawer-content grow flex flex-col h-screen w-screen mx-auto px-4 overflow-auto"
+        className="drawer-content grow flex flex-col h-screen w-screen mx-auto px-4 overflow-auto bg-base-100"
         id="main-scroll"
       >
         <Header />

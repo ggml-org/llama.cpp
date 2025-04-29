@@ -43,6 +43,10 @@ struct llama_hparams {
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
 
+    // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
+    uint32_t n_embd_head_k_mla = 0;
+    uint32_t n_embd_head_v_mla = 0;
+
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
@@ -62,6 +66,7 @@ struct llama_hparams {
     float    expert_weights_scale = 0.0;
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
+    uint32_t moe_every_n_layers   = 0;
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -111,6 +116,14 @@ struct llama_hparams {
     bool causal_attn   = true;
     bool use_alibi     = false;
     bool attn_soft_cap = false;
+
+    uint32_t n_moe_layer_step        = 0;
+    bool     use_kq_norm             = true;
+    uint32_t n_attn_chunk            = 0;
+    // values below seems to be fixed on llama4
+    uint32_t n_no_rope_layer_step    = 4;
+    uint32_t n_attn_temp_floor_scale = 8192;
+    float    f_attn_temp_scale       = 0.1;
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141

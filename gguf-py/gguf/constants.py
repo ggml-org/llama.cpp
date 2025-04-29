@@ -104,6 +104,7 @@ class Keys:
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
+        MOE_EVERY_N_LAYERS                = "{arch}.moe_every_n_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
@@ -116,6 +117,7 @@ class Keys:
         RESIDUAL_SCALE                    = "{arch}.residual_scale"
         EMBEDDING_SCALE                   = "{arch}.embedding_scale"
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
+        INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -138,6 +140,8 @@ class Keys:
         REL_BUCKETS_COUNT            = "{arch}.attention.relative_buckets_count"
         SLIDING_WINDOW               = "{arch}.attention.sliding_window"
         SCALE                        = "{arch}.attention.scale"
+        KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
+        VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
 
     class Rope:
         DIMENSION_COUNT         = "{arch}.rope.dimension_count"
@@ -215,18 +219,43 @@ class Keys:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
 
+    class ClipVision:
+        PROJECTOR_TYPE      = "clip.projector_type"
+        HAS_VISION_ENCODER  = "clip.has_vision_encoder"
+        HAS_LLAVA_PROJECTOR = "clip.has_llava_projector"
+        IMAGE_SIZE          = "clip.vision.image_size"
+        PATCH_SIZE          = "clip.vision.patch_size"
+        EMBEDDING_LENGTH    = "clip.vision.embedding_length"
+        FEED_FORWARD_LENGTH = "clip.vision.feed_forward_length"
+        PROJECTION_DIM      = "clip.vision.projection_dim"
+        BLOCK_COUNT         = "clip.vision.block_count"
+        IMAGE_MEAN          = "clip.vision.image_mean"
+        IMAGE_STD           = "clip.vision.image_std"
+        USE_GELU            = "clip.use_gelu"
+        USE_SILU            = "clip.use_silu"
+
+        class Attention:
+            HEAD_COUNT      = "clip.vision.attention.head_count"
+            LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
+
+        class Projector:
+            SCALE_FACTOR    = "clip.vision.projector.scale_factor"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
 
 
 class GGUFType:
-    MODEL   = "model"
-    ADAPTER = "adapter"
+    MODEL       = "model"
+    ADAPTER     = "adapter"
+    CLIP_VISION = "clip-vision"
 
 
 class MODEL_ARCH(IntEnum):
+    CLIP_VISION      = auto() # dummy arch for clip.cpp
     LLAMA            = auto()
+    LLAMA4           = auto()
     DECI             = auto()
     FALCON           = auto()
     BAICHUAN         = auto()
@@ -239,6 +268,7 @@ class MODEL_ARCH(IntEnum):
     REFACT           = auto()
     BERT             = auto()
     NOMIC_BERT       = auto()
+    NOMIC_BERT_MOE   = auto()
     JINA_BERT_V2     = auto()
     BLOOM            = auto()
     STABLELM         = auto()
@@ -246,6 +276,8 @@ class MODEL_ARCH(IntEnum):
     QWEN2            = auto()
     QWEN2MOE         = auto()
     QWEN2VL          = auto()
+    QWEN3            = auto()
+    QWEN3MOE         = auto()
     PHI2             = auto()
     PHI3             = auto()
     PHIMOE           = auto()
@@ -276,6 +308,7 @@ class MODEL_ARCH(IntEnum):
     DEEPSEEK         = auto()
     DEEPSEEK2        = auto()
     CHATGLM          = auto()
+    GLM4             = auto()
     BITNET           = auto()
     T5               = auto()
     T5ENCODER        = auto()
@@ -288,6 +321,16 @@ class MODEL_ARCH(IntEnum):
     WAVTOKENIZER_DEC = auto()
     PLM              = auto()
     BAILINGMOE       = auto()
+
+
+class VISION_PROJECTOR_TYPE(IntEnum):
+    MLP       = auto()
+    LDP       = auto()
+    LDPV2     = auto()
+    RESAMPLER = auto()
+    GLM_EDGE  = auto()
+    MERGER    = auto()
+    GEMMA3    = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -377,6 +420,8 @@ class MODEL_TENSOR(IntEnum):
     ATTN_Q_B             = auto()
     ATTN_KV_A_MQA        = auto()
     ATTN_KV_B            = auto()
+    ATTN_K_B             = auto()
+    ATTN_V_B             = auto()
     ATTN_Q_A_NORM        = auto()
     ATTN_KV_A_NORM       = auto()
     FFN_SUB_NORM         = auto()
@@ -427,10 +472,45 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    # vision
+    V_MMPROJ             = auto()
+    V_MMPROJ_FC          = auto()
+    V_MMPROJ_MLP         = auto()
+    V_MMPROJ_PEG         = auto()
+    V_ENC_EMBD_CLS       = auto()
+    V_ENC_EMBD_PATCH     = auto()
+    V_ENC_EMBD_POS       = auto()
+    V_ENC_ATTN_Q         = auto()
+    V_ENC_ATTN_K         = auto()
+    V_ENC_ATTN_V         = auto()
+    V_ENC_INPUT_NORM     = auto()
+    V_ENC_OUTPUT         = auto()
+    V_ENC_OUTPUT_NORM    = auto()
+    V_ENC_FFN_UP         = auto()
+    V_ENC_FFN_GATE       = auto()
+    V_ENC_FFN_DOWN       = auto()
+    V_PRE_NORM           = auto()
+    V_POST_NORM          = auto()
+    V_MM_INP_PROJ        = auto() # gemma3
+    V_MM_SOFT_EMB_NORM   = auto() # gemma3
+    V_RESMPL_POS_EMBD_K  = auto() # minicpmv
+    V_RESMPL_ATTN_Q      = auto() # minicpmv
+    V_RESMPL_ATTN_K      = auto() # minicpmv
+    V_RESMPL_ATTN_V      = auto() # minicpmv
+    V_RESMPL_ATTN_OUT    = auto() # minicpmv
+    V_RESMPL_KV          = auto() # minicpmv
+    V_RESMPL_KV_NORM     = auto() # minicpmv
+    V_RESMPL_POST_NORM   = auto() # minicpmv
+    V_RESMPL_Q_NORM      = auto() # minicpmv
+    V_RESMPL_PROJ        = auto() # minicpmv
+    V_RESMPL_QUERY       = auto() # minicpmv
+    V_TOK_EMBD_IMG_BREAK = auto() # pixtral
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.CLIP_VISION:      "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:            "llama",
+    MODEL_ARCH.LLAMA4:           "llama4",
     MODEL_ARCH.DECI:             "deci",
     MODEL_ARCH.FALCON:           "falcon",
     MODEL_ARCH.BAICHUAN:         "baichuan",
@@ -443,6 +523,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.REFACT:           "refact",
     MODEL_ARCH.BERT:             "bert",
     MODEL_ARCH.NOMIC_BERT:       "nomic-bert",
+    MODEL_ARCH.NOMIC_BERT_MOE:   "nomic-bert-moe",
     MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
     MODEL_ARCH.BLOOM:            "bloom",
     MODEL_ARCH.STABLELM:         "stablelm",
@@ -450,6 +531,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2:            "qwen2",
     MODEL_ARCH.QWEN2MOE:         "qwen2moe",
     MODEL_ARCH.QWEN2VL:          "qwen2vl",
+    MODEL_ARCH.QWEN3:            "qwen3",
+    MODEL_ARCH.QWEN3MOE:         "qwen3moe",
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
     MODEL_ARCH.PHIMOE:           "phimoe",
@@ -480,6 +563,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DEEPSEEK:         "deepseek",
     MODEL_ARCH.DEEPSEEK2:        "deepseek2",
     MODEL_ARCH.CHATGLM:          "chatglm",
+    MODEL_ARCH.GLM4:             "glm4",
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
     MODEL_ARCH.T5ENCODER:        "t5encoder",
@@ -492,6 +576,16 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
     MODEL_ARCH.BAILINGMOE:       "bailingmoe",
+}
+
+VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
+    VISION_PROJECTOR_TYPE.MLP:       "mlp",
+    VISION_PROJECTOR_TYPE.LDP:       "ldp",
+    VISION_PROJECTOR_TYPE.LDPV2:     "ldpv2",
+    VISION_PROJECTOR_TYPE.RESAMPLER: "resampler",
+    VISION_PROJECTOR_TYPE.GLM_EDGE:  "adapter",
+    VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
+    VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
@@ -581,6 +675,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_Q_B:                  "blk.{bid}.attn_q_b",
     MODEL_TENSOR.ATTN_KV_A_MQA:             "blk.{bid}.attn_kv_a_mqa",
     MODEL_TENSOR.ATTN_KV_B:                 "blk.{bid}.attn_kv_b",
+    MODEL_TENSOR.ATTN_K_B:                  "blk.{bid}.attn_k_b",
+    MODEL_TENSOR.ATTN_V_B:                  "blk.{bid}.attn_v_b",
     MODEL_TENSOR.ATTN_Q_A_NORM:             "blk.{bid}.attn_q_a_norm",
     MODEL_TENSOR.ATTN_KV_A_NORM:            "blk.{bid}.attn_kv_a_norm",
     MODEL_TENSOR.ATTN_SUB_NORM:             "blk.{bid}.attn_sub_norm",
@@ -631,9 +727,76 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    # vision
+    MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
+    MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
+    MODEL_TENSOR.V_MMPROJ_MLP:              "mm.model.mlp.{bid}",
+    MODEL_TENSOR.V_MMPROJ_PEG:              "mm.model.peg.{bid}",
+    MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
+    MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
+    MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
+    MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
+    MODEL_TENSOR.V_ENC_ATTN_K:              "v.blk.{bid}.attn_k",
+    MODEL_TENSOR.V_ENC_ATTN_V:              "v.blk.{bid}.attn_v",
+    MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.blk.{bid}.ln1",
+    MODEL_TENSOR.V_ENC_OUTPUT:              "v.blk.{bid}.attn_out",
+    MODEL_TENSOR.V_ENC_OUTPUT_NORM:         "v.blk.{bid}.ln2",
+    MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
+    MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
+    MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
+    MODEL_TENSOR.V_MM_INP_PROJ:             "mm.input_projection",
+    MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",
+    MODEL_TENSOR.V_RESMPL_POS_EMBD_K:       "resampler.pos_embd_k",
+    MODEL_TENSOR.V_RESMPL_ATTN_Q:           "resampler.attn.q",
+    MODEL_TENSOR.V_RESMPL_ATTN_K:           "resampler.attn.k",
+    MODEL_TENSOR.V_RESMPL_ATTN_V:           "resampler.attn.v",
+    MODEL_TENSOR.V_RESMPL_ATTN_OUT:         "resampler.attn.out",
+    MODEL_TENSOR.V_RESMPL_KV:               "resampler.kv",
+    MODEL_TENSOR.V_RESMPL_KV_NORM:          "resampler.ln_kv",
+    MODEL_TENSOR.V_RESMPL_POST_NORM:        "resampler.ln_post",
+    MODEL_TENSOR.V_RESMPL_Q_NORM:           "resampler.ln_q",
+    MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
+    MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
+    MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+    MODEL_ARCH.CLIP_VISION: [
+        MODEL_TENSOR.V_MMPROJ,
+        MODEL_TENSOR.V_MMPROJ_FC,
+        MODEL_TENSOR.V_MMPROJ_MLP,
+        MODEL_TENSOR.V_MMPROJ_PEG,
+        MODEL_TENSOR.V_ENC_EMBD_CLS,
+        MODEL_TENSOR.V_ENC_EMBD_PATCH,
+        MODEL_TENSOR.V_ENC_EMBD_POS,
+        MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_V,
+        MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_OUTPUT,
+        MODEL_TENSOR.V_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.V_ENC_FFN_UP,
+        MODEL_TENSOR.V_ENC_FFN_GATE,
+        MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_PRE_NORM,
+        MODEL_TENSOR.V_POST_NORM,
+        MODEL_TENSOR.V_MM_INP_PROJ,
+        MODEL_TENSOR.V_MM_SOFT_EMB_NORM,
+        MODEL_TENSOR.V_RESMPL_POS_EMBD_K,
+        MODEL_TENSOR.V_RESMPL_ATTN_Q,
+        MODEL_TENSOR.V_RESMPL_ATTN_K,
+        MODEL_TENSOR.V_RESMPL_ATTN_V,
+        MODEL_TENSOR.V_RESMPL_ATTN_OUT,
+        MODEL_TENSOR.V_RESMPL_KV,
+        MODEL_TENSOR.V_RESMPL_KV_NORM,
+        MODEL_TENSOR.V_RESMPL_POST_NORM,
+        MODEL_TENSOR.V_RESMPL_Q_NORM,
+        MODEL_TENSOR.V_RESMPL_PROJ,
+        MODEL_TENSOR.V_RESMPL_QUERY,
+        MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
+    ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -653,6 +816,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.LLAMA4: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_ROT_EMBD,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.DECI: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -775,6 +961,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
+    MODEL_ARCH.NOMIC_BERT_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_TYPES,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.LAYER_OUT_NORM,
     ],
     MODEL_ARCH.JINA_BERT_V2: [
@@ -926,6 +1128,40 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.QWEN3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.QWEN3MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -1451,6 +1687,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_Q_B,
         MODEL_TENSOR.ATTN_KV_A_MQA,
         MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
         MODEL_TENSOR.ATTN_Q_A_NORM,
         MODEL_TENSOR.ATTN_KV_A_NORM,
         MODEL_TENSOR.ATTN_OUT,
@@ -1496,6 +1734,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.GLM4 : [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.BITNET: [
         MODEL_TENSOR.ATTN_Q,
@@ -1894,6 +2149,12 @@ class GGUFValueType(IntEnum):
         # TODO: need help with 64-bit types in Python
         else:
             raise ValueError(f"Unknown type: {type(val)}")
+
+
+class VisionProjectorType:
+    GEMMA3 = "gemma3"
+    IDEFICS3 = "idefics3"
+    PIXTRAL = "pixtral"
 
 
 # Items here are (block size, type size)
