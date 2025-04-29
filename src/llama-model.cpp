@@ -43,11 +43,13 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_770M:          return "770M";
         case LLM_TYPE_780M:          return "780M";
         case LLM_TYPE_0_5B:          return "0.5B";
+        case LLM_TYPE_0_6B:          return "0.6B";
         case LLM_TYPE_1B:            return "1B";
         case LLM_TYPE_1_3B:          return "1.3B";
         case LLM_TYPE_1_4B:          return "1.4B";
         case LLM_TYPE_1_5B:          return "1.5B";
         case LLM_TYPE_1_6B:          return "1.6B";
+        case LLM_TYPE_1_7B:          return "1.7B";
         case LLM_TYPE_1_8B:          return "1.8B";
         case LLM_TYPE_2B:            return "2B";
         case LLM_TYPE_2_8B:          return "2.8B";
@@ -66,6 +68,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_15B:           return "15B";
         case LLM_TYPE_16B:           return "16B";
         case LLM_TYPE_20B:           return "20B";
+        case LLM_TYPE_27B:           return "27B";
         case LLM_TYPE_30B:           return "30B";
         case LLM_TYPE_32B:           return "32B";
         case LLM_TYPE_34B:           return "34B";
@@ -74,6 +77,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_65B:           return "65B";
         case LLM_TYPE_70B:           return "70B";
         case LLM_TYPE_236B:          return "236B";
+        case LLM_TYPE_290B:          return "290B";
         case LLM_TYPE_314B:          return "314B";
         case LLM_TYPE_671B:          return "671B";
         case LLM_TYPE_SMALL:         return "0.1B";
@@ -88,12 +92,8 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_16x3_8B:       return "16x3.8B";
         case LLM_TYPE_10B_128x3_66B: return "10B+128x3.66B";
         case LLM_TYPE_57B_A14B:      return "57B.A14B";
-        case LLM_TYPE_27B:           return "27B";
-        case LLM_TYPE_290B:          return "290B";
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
-        case LLM_TYPE_0_6B:          return "0.6B";
-        case LLM_TYPE_1_7B:          return "1.7B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
         default:                     return "?B";
