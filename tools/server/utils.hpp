@@ -768,6 +768,11 @@ static json oaicompat_chat_params_parse(
 
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+        if(inputs.chat_template_kwargs.find("enable_thinking") != inputs.chat_template_kwargs.end()) {
+            throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
+        }
+
         inputs.add_generation_prompt = true;
     }
 
