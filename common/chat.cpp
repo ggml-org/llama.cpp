@@ -140,6 +140,7 @@ struct templates_params {
     bool add_generation_prompt = true;
     bool enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+    json extra_context;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -1691,7 +1692,7 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    data.prompt = apply(tmpl, inputs.messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt);
+    data.prompt = apply(tmpl, inputs.messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt,inputs.extra_context);
     data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     data.grammar_lazy = false;
     if (!inputs.json_schema.is_null()) {
@@ -1722,6 +1723,12 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.enable_thinking = inputs.enable_thinking;
     params.grammar = inputs.grammar;
     params.now = inputs.now;
+
+    for(auto el: inputs.chat_template_kwargs)
+    {
+        params.extra_context[el.first] = json::parse(el.second);
+    }
+
     if (!inputs.json_schema.empty()) {
         params.json_schema = json::parse(inputs.json_schema);
     }
