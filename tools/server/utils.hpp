@@ -757,6 +757,12 @@ static json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
     inputs.extract_reasoning     = opt.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+
+    auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
+    for (const auto & item : chat_template_kwargs_object.items()) {
+        inputs.chat_template_kwargs[item.key()] = item.value().dump();
+    }
+
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
         throw std::runtime_error("Cannot use custom grammar constraints with tools.");
     }
