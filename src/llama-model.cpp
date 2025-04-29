@@ -92,6 +92,10 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_290B:          return "290B";
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
+        case LLM_TYPE_0_6B:          return "0.6B";
+        case LLM_TYPE_1_7B:          return "1.7B";
+        case LLM_TYPE_30B_A3B:       return "30B.A3B";
+        case LLM_TYPE_235B_A22B:     return "235B.A22B";
         default:                     return "?B";
     }
 }
@@ -793,6 +797,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
+                    case 28: type = hparams.n_embd == 1024 ? LLM_TYPE_0_6B : LLM_TYPE_1_7B; break;
+                    case 36: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_8B; break;
+                    case 40: type = LLM_TYPE_14B; break;
+                    case 64: type = LLM_TYPE_32B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -802,6 +810,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 switch (hparams.n_layer) {
+                    case 48: type = LLM_TYPE_30B_A3B; break;
+                    case 94: type = LLM_TYPE_235B_A22B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;

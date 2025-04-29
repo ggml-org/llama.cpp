@@ -88,6 +88,10 @@ enum llm_type {
     LLM_TYPE_290B,
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
+    LLM_TYPE_0_6B,
+    LLM_TYPE_1_7B,
+    LLM_TYPE_30B_A3B,
+    LLM_TYPE_235B_A22B,
 };
 
 struct llama_layer_posnet {
