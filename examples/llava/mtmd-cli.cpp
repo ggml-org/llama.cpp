@@ -136,39 +136,6 @@ struct mtmd_cli_context {
     }
 };
 
-struct decode_embd_batch {
-    std::vector<llama_pos>      pos;
-    std::vector<int32_t>        n_seq_id;
-    std::vector<llama_seq_id>   seq_id_0;
-    std::vector<llama_seq_id *> seq_ids;
-    std::vector<int8_t>         logits;
-    llama_batch batch;
-    decode_embd_batch(float * embd, int32_t n_tokens, llama_pos pos_0, llama_seq_id seq_id) {
-        pos     .resize(n_tokens);
-        n_seq_id.resize(n_tokens);
-        seq_ids .resize(n_tokens + 1);
-        logits  .resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_id_0[0] = seq_id;
-        seq_ids [n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ embd,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
-        for (int i = 0; i < n_tokens; i++) {
-            batch.pos     [i] = pos_0 + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
-        }
-    }
-};
-
 static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int n_predict) {
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
@@ -243,7 +210,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vect
         return 1;
     }
 
-    ctx.n_past += mtmd_helper_get_n_tokens(chunks);
+    ctx.n_past += mtmd_helper_get_n_pos(chunks);
 
     return 0;
 }
@@ -371,6 +338,7 @@ int main(int argc, char ** argv) {
         }
     }
     if (g_is_interrupted) LOG("\nInterrupted by user\n");
+    LOG("\n\n");
     llama_perf_context_print(ctx.lctx);
     return g_is_interrupted ? 130 : 0;
 }

@@ -27,6 +27,8 @@
 #include <cassert>
 #include <cmath>
 
+// THIS FILE IS ONLY USED FOR TESTING THE QWEN2VL MODEL
+// IT IS NOT A PRODUCTION CODE
 
 static bool qwen2vl_eval_image_embed(llama_context * ctx_llama, const struct llava_image_embed * image_embed,
                                      int n_batch, int * n_past, int * st_pos_id, struct clip_image_size * image_size) {
@@ -92,20 +94,12 @@ static bool qwen2vl_eval_image_embed(llama_context * ctx_llama, const struct lla
 
 static bool eval_tokens(struct llama_context * ctx_llama, std::vector<llama_token> tokens, int n_batch, int * n_past, int * st_pos_id) {
     int N = (int) tokens.size();
-    std::vector<llama_pos> pos;
     for (int i = 0; i < N; i += n_batch) {
         int n_eval = (int) tokens.size() - i;
         if (n_eval > n_batch) {
             n_eval = n_batch;
         }
         auto batch = llama_batch_get_one(&tokens[i], n_eval);
-        // TODO: add mrope pos ids somewhere else
-        pos.resize(batch.n_tokens * 4);
-        std::fill(pos.begin(), pos.end(), 0);
-        for (int j = 0; j < batch.n_tokens * 3; j ++) {
-            pos[j] = *st_pos_id + (j % batch.n_tokens);
-        }
-        batch.pos = pos.data();
 
         if (llama_decode(ctx_llama, batch)) {
             LOG_ERR("%s : failed to eval. token %d/%d (batch size %d, n_past %d)\n", __func__, i, N, n_batch, *n_past);
