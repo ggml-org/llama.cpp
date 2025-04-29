@@ -37,7 +37,6 @@ std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDec
 }
 
 static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
-    ov::frontend::FrontEnd::Ptr front_end = nullptr;
     auto fem = ov::frontend::FrontEndManager();
     std::string fe_so_path;
 #ifdef GGML_OV_FRONTEND
@@ -52,6 +51,10 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     auto start_time = ggml_time_us();
 
     static ov::Core core;
+    auto* cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
+    if (cache_dir) {
+        core.set_property(ov::cache_dir(cache_dir));
+    }
 
     // auto devices = core.get_available_devices();
     static auto front_end = get_ggml_frontend();
@@ -82,8 +85,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         GGML_LOG_ERROR("Model is not converted \n");
     }
 
-    ov::CompiledModel compiled_model =
-        core.compile_model(model, "CPU", ov::device::properties("CPU", ov::cache_dir("/tmp/ov_cache")));
+    ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
     auto compile_end_time = ggml_time_us();
 
     ov::InferRequest infer_request = compiled_model.create_infer_request();
