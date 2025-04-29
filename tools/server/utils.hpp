@@ -748,6 +748,11 @@ static json oaicompat_chat_params_parse(
         llama_params["parse_tool_calls"] = true;
     }
 
+    auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
+    for (const auto & item : chat_template_kwargs_object.items()) {
+        inputs.chat_template_kwargs[item.key()] = item.value().dump();
+    }
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
