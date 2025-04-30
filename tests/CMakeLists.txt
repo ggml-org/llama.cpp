@@ -114,7 +114,10 @@ if (NOT WIN32)
         target_include_directories(test-json-schema-to-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../examples/server)
     endif()
 
-    llama_build(test-quantize-stats.cpp)
+    if (NOT GGML_BACKEND_DL)
+        llama_build(test-quantize-stats.cpp)
+    endif()
+
     llama_build(test-gbnf-validator.cpp)
 
     # build test-tokenizer-1-bpe target once and add many tests
