@@ -2,8 +2,6 @@
 #include "gguf.h"
 #include "clip.h"
 
-#include "clip.h"
-
 #include <climits>
 #include <cstdarg>
 #include <string>
