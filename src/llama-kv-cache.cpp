@@ -86,7 +86,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
-        if (!offload) {
+        if (offload) {
             auto * dev = model.dev_layer(i);
             buft = ggml_backend_dev_buffer_type(dev);
 
@@ -1445,7 +1445,7 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
-        if (!offload) {
+        if (offload) {
             auto * dev = model.dev_layer(i);
             buft = ggml_backend_dev_buffer_type(dev);
 
