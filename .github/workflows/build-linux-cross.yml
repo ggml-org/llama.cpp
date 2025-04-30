@@ -13,6 +13,12 @@ jobs:
         run: |
           sudo dpkg --add-architecture riscv64
 
+          # Backup original sources
+          sudo cp /etc/apt/sources.list /etc/apt/sources.list.backup
+
+          # Completely replace the sources configuration to handle all architectures properly
+          sudo rm -f /etc/apt/sources.list.d/*.list
+
           # Create a new sources.list with explicit architecture handling
           cat << EOF | sudo tee /etc/apt/sources.list
           # Standard repositories for amd64 only
@@ -30,7 +36,11 @@ jobs:
           deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main restricted universe multiverse
           EOF
 
+          # Clean and update the apt cache
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
           sudo apt-get update
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
