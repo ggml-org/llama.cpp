@@ -1103,7 +1103,7 @@ class VisionModel(ModelBase):
 
         # preprocessor config
         self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
-        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_mean"])
+        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
 
     def write_vocab(self):
         raise ValueError("VisionModel does not support vocab writing")
