@@ -22,13 +22,13 @@ uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) {
 }
 
 llama_kv_cache_unified::llama_kv_cache_unified(
-        const llama_hparams & hparams,
-                  callbacks   cbs,
-                  ggml_type   type_k,
-                  ggml_type   type_v,
-                       bool   v_trans,
-                   uint32_t   kv_size,
-                   uint32_t   padding) : cbs(std::move(cbs)), hparams(hparams), v_trans(v_trans), padding(padding) {
+        const llama_model & model,
+                ggml_type   type_k,
+                ggml_type   type_v,
+                     bool   v_trans,
+                     bool   offload,
+                 uint32_t   kv_size,
+                 uint32_t   padding) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding) {
     const int32_t n_layer = hparams.n_layer;
 
     has_shift = false;
@@ -81,7 +81,18 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        ggml_backend_buffer_type_t buft = this->cbs.get_buft(i);
+        const char * dev_name = "CPU";
+
+        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+
+        if (!offload) {
+            auto * dev = model.dev_layer(i);
+            buft = ggml_backend_dev_buffer_type(dev);
+
+            dev_name = ggml_backend_dev_name(dev);
+        }
+
+        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", i, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -588,7 +599,6 @@ ggml_tensor * llama_kv_cache_unified::build_rope_shift(
                      float   freq_base,
                      float   freq_scale,
        ggml_backend_buffer * bbuf) const {
-    const auto & arch     = params.arch;
     const auto & cparams  = params.cparams;
     const auto & backends = params.backends;
     const auto & sched    = params.sched;
@@ -604,7 +614,7 @@ ggml_tensor * llama_kv_cache_unified::build_rope_shift(
 
     // See llm_build_deepseek2() for why attn_factor has to be scaled for YaRN RoPE to work correctly.
     // See https://github.com/ggerganov/llama.cpp/discussions/7416 for detailed explanation.
-    const float yarn_attn_factor = arch == LLM_ARCH_DEEPSEEK2 ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale)) : cparams.yarn_attn_factor;
+    const float yarn_attn_factor = model.arch == LLM_ARCH_DEEPSEEK2 ? 1.0f / (1.0f + 0.1f * logf(1.0f / freq_scale)) : cparams.yarn_attn_factor;
 
     ggml_tensor * tmp;
 
@@ -697,7 +707,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
         const float freq_base_l  = is_swa ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
         const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
 
-        ggml_tensor * rope_factors = cbs.get_rope_factors(n_ctx_per_seq, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
         ggml_tensor * k =
             ggml_view_3d(ctx, k_l[il],
@@ -1377,11 +1387,11 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t cell
 //
 
 llama_kv_cache_recurrent::llama_kv_cache_recurrent(
-        const llama_hparams & hparams,
-                  callbacks   cbs,
-                  ggml_type   type_k,
-                  ggml_type   type_v,
-                   uint32_t   kv_size) : cbs(std::move(cbs)), hparams(hparams) {
+        const llama_model & model,
+                ggml_type   type_k,
+                ggml_type   type_v,
+                     bool   offload,
+                 uint32_t   kv_size) : hparams(model.hparams) {
     const int32_t n_layer = hparams.n_layer;
 
     LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d\n",
@@ -1429,7 +1439,18 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
-        ggml_backend_buffer_type_t buft = this->cbs.get_buft(i);
+        const char * dev_name = "CPU";
+
+        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+
+        if (!offload) {
+            auto * dev = model.dev_layer(i);
+            buft = ggml_backend_dev_buffer_type(dev);
+
+            dev_name = ggml_backend_dev_name(dev);
+        }
+
+        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", i, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {

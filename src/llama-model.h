@@ -395,6 +395,8 @@ struct llama_model {
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 
+    ggml_tensor * get_rope_factors(uint32_t n_ctx_per_seq, int il) const;
+
     // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface
     llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams) const;

@@ -4445,6 +4445,19 @@ const ggml_tensor * llama_model::get_tensor(const char * name) const {
     return it->second;
 }
 
+ggml_tensor * llama_model::get_rope_factors(uint32_t n_ctx_per_seq, int il) const {
+    // choose long/short freq factors based on the context size
+    if (layers[il].rope_freqs != nullptr) {
+        return layers[il].rope_freqs;
+    }
+
+    if (n_ctx_per_seq > hparams.n_ctx_orig_yarn) {
+        return layers[il].rope_long;
+    }
+
+    return layers[il].rope_short;
+}
+
 struct llm_build_llama : public llm_graph_context {
     llm_build_llama(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -4485,7 +4498,7 @@ struct llm_build_llama : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -4710,7 +4723,7 @@ struct llm_build_deci : public llm_graph_context {
             } else if (n_head > 0) {
                 // self-attention
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -7192,7 +7205,7 @@ struct llm_build_phi3 : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for 128k context
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 ggml_tensor* attn_norm_output = build_norm(inpL,
                         model.layers[il].attn_norm,
@@ -7944,7 +7957,7 @@ struct llm_build_minicpm3 : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
-            ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
             // norm
             cur = build_norm(inpL,
@@ -9012,7 +9025,7 @@ struct llm_build_cohere2 : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for 128k context
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -9950,7 +9963,7 @@ struct llm_build_deepseek : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -11314,7 +11327,7 @@ struct llm_build_exaone : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -12695,7 +12708,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
             // self-attention
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+                ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
 
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
@@ -12818,28 +12831,6 @@ struct llm_build_bailingmoe : public llm_graph_context {
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
-    const bool offload = cparams.offload_kqv;
-
-    auto get_buft = [this, offload](int il) {
-        const char * dev_name = "CPU";
-
-        ggml_backend_buffer_type_t buft;
-        if (offload) {
-            auto * dev = dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
-        } else {
-            buft = ggml_backend_cpu_buffer_type();
-        }
-
-        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", il, dev_name);
-
-        return buft;
-    };
-
-    LLAMA_LOG_DEBUG("%s: n_ctx = %u\n", __func__, cparams.n_ctx);
-
     switch (arch) {
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_RWKV6:
@@ -12848,13 +12839,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_ARWKV7:
             {
                 res = new llama_kv_cache_recurrent(
-                        hparams,
-                        {
-                            /*.get_rope_factors =*/ nullptr,
-                            /*.get_buft         =*/ get_buft,
-                        },
+                        *this,
                         GGML_TYPE_F32,
                         GGML_TYPE_F32,
+                        cparams.offload_kqv,
                         std::max((uint32_t) 1, cparams.n_seq_max));
             } break;
         default:
@@ -12866,25 +12854,11 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
                 res = new llama_kv_cache_unified(
-                        hparams,
-                        {
-                            /*.get_rope_factors =*/ [this](uint32_t n_ctx_per_seq, int il) {
-                                // choose long/short freq factors based on the context size
-                                if (layers[il].rope_freqs != nullptr) {
-                                    return layers[il].rope_freqs;
-                                }
-
-                                if (n_ctx_per_seq > hparams.n_ctx_orig_yarn) {
-                                    return layers[il].rope_long;
-                                }
-
-                                return layers[il].rope_short;
-                            },
-                            /*.get_buft         =*/ get_buft,
-                        },
+                        *this,
                         params.type_k,
                         params.type_v,
                         !cparams.flash_attn,
+                        cparams.offload_kqv,
                         cparams.n_ctx,
                         padding);
             }

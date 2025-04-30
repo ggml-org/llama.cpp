@@ -440,7 +440,6 @@ void llama_context::kv_self_update() {
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
     need_reserve = kv_self->update({
-        /*.arch            =*/ model.arch,
         /*.cparams         =*/ cparams,
         /*.sched           =*/ sched.get(),
         /*.backends        =*/ backends,

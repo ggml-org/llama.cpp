@@ -15,19 +15,10 @@ struct llama_cparams;
 struct llama_hparams;
 struct llama_ubatch;
 struct llama_sbatch;
+struct llama_model;
 
 struct llama_kv_cache : public llama_memory_i {
-    // can be used to query data from the model if needed
-    struct callbacks {
-        std::function<ggml_tensor * (uint32_t n_ctx_per_seq, int il)> get_rope_factors;
-
-        // get the buffer type of layer il, can be used to offload KV cache layers to a different device
-        std::function<ggml_backend_buffer_type_t (int il)> get_buft;
-    };
-
     struct graph_params {
-        const llm_arch arch;
-
         const llama_cparams & cparams;
 
         const ggml_backend_sched_t & sched;
@@ -139,13 +130,13 @@ public:
     static uint32_t get_padding(const llama_cparams & cparams);
 
     llama_kv_cache_unified(
-            const llama_hparams & hparams,
-                      callbacks   cbs,
-                      ggml_type   type_k,
-                      ggml_type   type_v,
-                           bool   v_trans,
-                       uint32_t   kv_size,
-                       uint32_t   padding);
+            const llama_model & model,
+                    ggml_type   type_k,
+                    ggml_type   type_v,
+                         bool   v_trans,
+                         bool   offload,
+                     uint32_t   kv_size,
+                     uint32_t   padding);
 
     ~llama_kv_cache_unified() = default;
 
@@ -208,14 +199,13 @@ public:
     // computed before each graph build
     uint32_t n = 0;
 
-    callbacks cbs;
-
     std::vector<kv_cell> cells;
 
     std::vector<ggml_tensor *> k_l; // per layer
     std::vector<ggml_tensor *> v_l;
 
 private:
+    const llama_model & model;
     const llama_hparams & hparams;
 
     bool has_shift = false;
@@ -312,11 +302,11 @@ public:
     };
 
     llama_kv_cache_recurrent(
-            const llama_hparams & hparams,
-                      callbacks   cbs,
-                      ggml_type   type_k,
-                      ggml_type   type_v,
-                       uint32_t   kv_size);
+            const llama_model & model,
+                    ggml_type   type_k,
+                    ggml_type   type_v,
+                         bool   offload,
+                     uint32_t   kv_size);
 
     ~llama_kv_cache_recurrent() = default;
 
@@ -370,8 +360,6 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
 
-    callbacks cbs;
-
     // Note: The value of head isn't only used to optimize searching
     // for a free KV slot. llama_decode_impl also uses it, so it
     // cannot be freely changed after a slot has been allocated.
@@ -388,6 +376,7 @@ public:
     std::vector<ggml_tensor *> v_l;
 
 private:
+    //const llama_model & model;
     const llama_hparams & hparams;
 
     // commit/restore cache
