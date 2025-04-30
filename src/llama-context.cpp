@@ -408,10 +408,6 @@ ggml_context * llama_context::get_ctx_compute() const {
     return ctx_compute.get();
 }
 
-const std::vector<ggml_backend_ptr> & llama_context::get_backends() const {
-    return backends;
-}
-
 uint32_t llama_context::n_ctx() const {
     return cparams.n_ctx;
 }

@@ -34,9 +34,6 @@ struct llama_context {
 
     ggml_context * get_ctx_compute() const;
 
-    // TODO: this method might be possible to avoid (seach for TAG_BACKENDS)
-    const std::vector<ggml_backend_ptr> & get_backends() const;
-
     uint32_t n_ctx()         const;
     uint32_t n_ctx_per_seq() const;
     uint32_t n_batch()       const;
