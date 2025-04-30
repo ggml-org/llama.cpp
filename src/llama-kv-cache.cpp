@@ -93,7 +93,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
             dev_name = ggml_backend_dev_name(dev);
         }
 
-        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", i, dev_name);
+        LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, i, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -992,9 +992,9 @@ bool llama_kv_cache_unified::defrag_prepare(int32_t n_max_nodes) {
         return false;
     }
 
-    LLAMA_LOG_DEBUG("(tmp log) KV defrag cell moves: %u\n", n_moves);
+    LLAMA_LOG_DEBUG("%s: (tmp log) KV defrag cell moves: %u\n", __func__, n_moves);
 
-    LLAMA_LOG_DEBUG("expected gf nodes: %u\n", 6*n_moves*n_layer);
+    LLAMA_LOG_DEBUG("%s: expected gf nodes: %u\n", __func__, 6*n_moves*n_layer);
 
     return true;
 }
@@ -1438,7 +1438,7 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
             dev_name = ggml_backend_dev_name(dev);
         }
 
-        LLAMA_LOG_DEBUG("layer %3d: dev = %s\n", i, dev_name);
+        LLAMA_LOG_DEBUG("%s, layer %3d: dev = %s\n", __func__, i, dev_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
