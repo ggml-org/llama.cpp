@@ -215,7 +215,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
     },
     [GGML_TYPE_F16] = {
-        .from_float               = (ggml_from_float_t) ggml_fp32_to_fp16_row,
+        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp16,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f16,
         .vec_dot_type             = GGML_TYPE_F16,
         .nrows                    = 1,
@@ -356,7 +356,7 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q8_K,
     },
     [GGML_TYPE_BF16] = {
-        .from_float               = (ggml_from_float_t) ggml_fp32_to_bf16_row,
+        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_bf16,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_bf16,
         .vec_dot_type             = GGML_TYPE_BF16,
         .nrows                    = 1,
@@ -1932,6 +1932,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_im2col_back_f32(params, tensor);
             } break;
+        case GGML_OP_CONV_2D_DW:
+            {
+                ggml_compute_forward_conv_2d_dw(params, tensor);
+            } break;
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
                 ggml_compute_forward_conv_transpose_2d(params, tensor);
@@ -2027,41 +2031,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_rwkv_wkv7(params, tensor);
             } break;
-        case GGML_OP_MAP_UNARY:
-            {
-                ggml_unary_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_unary(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_BINARY:
-            {
-                ggml_binary_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_binary(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM1_F32:
-            {
-                ggml_custom1_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom1_f32(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM2_F32:
-            {
-                ggml_custom2_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom2_f32(params, tensor, fun);
-            }
-            break;
-        case GGML_OP_MAP_CUSTOM3_F32:
-            {
-                ggml_custom3_op_f32_t fun;
-                memcpy(&fun, tensor->op_params, sizeof(fun));
-                ggml_compute_forward_map_custom3_f32(params, tensor, fun);
-            }
-            break;
         case GGML_OP_MAP_CUSTOM1:
             {
                 ggml_compute_forward_map_custom1(params, tensor);
@@ -2075,6 +2044,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_MAP_CUSTOM3:
             {
                 ggml_compute_forward_map_custom3(params, tensor);
+            }
+            break;
+        case GGML_OP_CUSTOM:
+            {
+                ggml_compute_forward_custom(params, tensor);
             }
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
@@ -2298,6 +2272,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_BACK:
+        case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
             {
@@ -2328,11 +2303,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:
         case GGML_OP_GET_REL_POS:
-        case GGML_OP_MAP_UNARY:
-        case GGML_OP_MAP_BINARY:
-        case GGML_OP_MAP_CUSTOM1_F32:
-        case GGML_OP_MAP_CUSTOM2_F32:
-        case GGML_OP_MAP_CUSTOM3_F32:
             {
                 n_tasks = 1;
             } break;
@@ -2359,6 +2329,16 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_MAP_CUSTOM3:
             {
                 struct ggml_map_custom3_op_params p;
+                memcpy(&p, node->op_params, sizeof(p));
+                if (p.n_tasks == GGML_N_TASKS_MAX) {
+                    n_tasks = n_threads;
+                } else {
+                    n_tasks = MIN(p.n_tasks, n_threads);
+                }
+            } break;
+        case GGML_OP_CUSTOM:
+            {
+                struct ggml_custom_op_params p;
                 memcpy(&p, node->op_params, sizeof(p));
                 if (p.n_tasks == GGML_N_TASKS_MAX) {
                     n_tasks = n_threads;
@@ -3186,6 +3166,93 @@ enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct g
     return ggml_graph_compute(cgraph, &cplan);
 }
 
+void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
+    int64_t i = 0;
+#if defined(__F16C__)
+#if defined(__AVX512F__)
+    for (; i + 15 < n; i += 16) {
+        __m512 x_vec = _mm512_loadu_ps(x + i);
+        __m256i y_vec = _mm512_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
+        _mm256_storeu_si256((__m256i *)(y + i), y_vec);
+    }
+#endif
+    for (; i + 7 < n; i += 8) {
+        __m256 x_vec = _mm256_loadu_ps(x + i);
+        __m128i y_vec = _mm256_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
+        _mm_storeu_si128((__m128i *)(y + i), y_vec);
+    }
+    for (; i + 3 < n; i += 4) {
+        __m128 x_vec = _mm_loadu_ps(x + i);
+        __m128i y_vec = _mm_cvtps_ph(x_vec, _MM_FROUND_TO_NEAREST_INT);
+        _mm_storel_epi64((__m128i *)(y + i), y_vec);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = GGML_FP32_TO_FP16(x[i]);
+    }
+}
+
+void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
+    int64_t i = 0;
+#if defined(__F16C__)
+#if defined(__AVX512F__)
+    for (; i + 15 < n; i += 16) {
+        __m256i x_vec = _mm256_loadu_si256((const __m256i *)(x + i));
+        __m512 y_vec = _mm512_cvtph_ps(x_vec);
+        _mm512_storeu_ps(y + i, y_vec);
+    }
+#endif
+    for (; i + 7 < n; i += 8) {
+        __m128i x_vec = _mm_loadu_si128((const __m128i *)(x + i));
+        __m256 y_vec = _mm256_cvtph_ps(x_vec);
+        _mm256_storeu_ps(y + i, y_vec);
+    }
+    for (; i + 3 < n; i += 4) {
+        __m128i x_vec = _mm_loadl_epi64((const __m128i *)(x + i));
+        __m128 y_vec = _mm_cvtph_ps(x_vec);
+        _mm_storeu_ps(y + i, y_vec);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = GGML_FP16_TO_FP32(x[i]);
+    }
+}
+
+void ggml_cpu_fp32_to_bf16(const float * x, ggml_bf16_t * y, int64_t n) {
+    int64_t i = 0;
+    for (; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(x[i]);
+    }
+}
+
+void ggml_cpu_bf16_to_fp32(const ggml_bf16_t * x, float * y, int64_t n) {
+    int64_t i = 0;
+#if defined(__AVX2__)
+#if defined(__AVX512F__)
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i,
+                        _mm512_castsi512_ps(
+                            _mm512_slli_epi32(
+                                _mm512_cvtepu16_epi32(
+                                    _mm256_loadu_si256(
+                                        (const __m256i *)(x + i))),
+                                16)));
+    }
+#endif
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i,
+                        _mm256_castsi256_ps(
+                            _mm256_slli_epi32(
+                                _mm256_cvtepu16_epi32(
+                                    _mm_loadu_si128(
+                                        (const __m128i *)(x + i))),
+                                16)));
+    }
+#endif
+    for (; i < n; i++) {
+        y[i] = GGML_BF16_TO_FP32(x[i]);
+    }
+}
 
 int ggml_cpu_has_avx(void) {
 #if defined(__AVX__)

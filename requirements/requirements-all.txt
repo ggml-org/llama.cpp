@@ -11,3 +11,5 @@
 -r ./requirements-convert_legacy_llama.txt
 -r ./requirements-convert_llama_ggml_to_gguf.txt
 -r ./requirements-tool_bench.txt
+
+-r ./requirements-gguf_editor_gui.txt

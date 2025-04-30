@@ -22,6 +22,7 @@
 
 #include "ggml-rpc.h"
 #ifdef _WIN32
+#  define NOMINMAX
 #  define DIRECTORY_SEPARATOR '\\'
 #  include <locale>
 #  include <windows.h>
@@ -37,6 +38,8 @@
 #include <stdio.h>
 #include <vector>
 #include <filesystem>
+#include <algorithm>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -126,7 +129,7 @@ static std::string fs_get_cache_directory() {
     if (getenv("LLAMA_CACHE")) {
         cache_directory = std::getenv("LLAMA_CACHE");
     } else {
-#ifdef __linux__
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX)
         if (std::getenv("XDG_CACHE_HOME")) {
             cache_directory = std::getenv("XDG_CACHE_HOME");
         } else {
@@ -136,7 +139,9 @@ static std::string fs_get_cache_directory() {
         cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
 #elif defined(_WIN32)
         cache_directory = std::getenv("LOCALAPPDATA");
-#endif // __linux__
+#else
+#  error Unknown architecture
+#endif
         cache_directory = ensure_trailing_slash(cache_directory);
         cache_directory += "llama.cpp";
     }
@@ -148,12 +153,14 @@ struct rpc_server_params {
     int         port        = 50052;
     size_t      backend_mem = 0;
     bool        use_cache   = false;
+    int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h, --help                show this help message and exit\n");
+    fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
     fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
@@ -170,6 +177,15 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 return false;
             }
             params.host = argv[i];
+        } else if (arg == "-t" || arg == "--threads") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.n_threads = std::stoi(argv[i]);
+            if (params.n_threads <= 0) {
+                fprintf(stderr, "error: invalid number of threads: %d\n", params.n_threads);
+                return false;
+            }
         } else if (arg == "-p" || arg == "--port") {
             if (++i >= argc) {
                 return false;
@@ -197,7 +213,7 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
     return true;
 }
 
-static ggml_backend_t create_backend() {
+static ggml_backend_t create_backend(const rpc_server_params & params) {
     ggml_backend_t backend = NULL;
 #ifdef GGML_USE_CUDA
     fprintf(stderr, "%s: using CUDA backend\n", __func__);
@@ -229,6 +245,7 @@ static ggml_backend_t create_backend() {
     if (!backend) {
         fprintf(stderr, "%s: using CPU backend\n", __func__);
         backend = ggml_backend_cpu_init();
+        ggml_backend_cpu_set_n_threads(backend, params.n_threads);
     }
     return backend;
 }
@@ -273,7 +290,7 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "\n");
     }
 
-    ggml_backend_t backend = create_backend();
+    ggml_backend_t backend = create_backend(params);
     if (!backend) {
         fprintf(stderr, "Failed to create backend\n");
         return 1;
@@ -287,15 +304,19 @@ int main(int argc, char * argv[]) {
         get_backend_memory(&free_mem, &total_mem);
     }
     const char * cache_dir = nullptr;
-    std::string cache_dir_str = fs_get_cache_directory() + "rpc/";
+    std::string cache_dir_str;
     if (params.use_cache) {
+        cache_dir_str = fs_get_cache_directory() + "rpc/";
         if (!fs_create_directory_with_parents(cache_dir_str)) {
             fprintf(stderr, "Failed to create cache directory: %s\n", cache_dir_str.c_str());
             return 1;
         }
         cache_dir = cache_dir_str.c_str();
     }
-    printf("Starting RPC server\n");
+    printf("Starting RPC server v%d.%d.%d\n",
+           RPC_PROTO_MAJOR_VERSION,
+           RPC_PROTO_MINOR_VERSION,
+           RPC_PROTO_PATCH_VERSION);
     printf("  endpoint       : %s\n", endpoint.c_str());
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));
