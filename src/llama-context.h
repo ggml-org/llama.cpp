@@ -30,10 +30,11 @@ struct llama_context {
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 
-    const ggml_backend_sched_ptr & get_sched() const;
+    ggml_backend_sched_t get_sched() const;
 
-    const ggml_context_ptr & get_ctx_compute() const;
+    ggml_context * get_ctx_compute() const;
 
+    // TODO: this method might be possible to avoid (seach for TAG_BACKENDS)
     const std::vector<ggml_backend_ptr> & get_backends() const;
 
     uint32_t n_ctx()         const;

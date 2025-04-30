@@ -400,12 +400,12 @@ const llama_cparams & llama_context::get_cparams() const {
     return cparams;
 }
 
-const ggml_backend_sched_ptr & llama_context::get_sched() const {
-    return sched;
+ggml_backend_sched_t llama_context::get_sched() const {
+    return sched.get();
 }
 
-const ggml_context_ptr & llama_context::get_ctx_compute() const {
-    return ctx_compute;
+ggml_context * llama_context::get_ctx_compute() const {
+    return ctx_compute.get();
 }
 
 const std::vector<ggml_backend_ptr> & llama_context::get_backends() const {

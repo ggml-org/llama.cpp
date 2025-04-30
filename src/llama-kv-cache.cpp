@@ -371,7 +371,7 @@ void llama_kv_cache_unified::commit() {
 bool llama_kv_cache_unified::update(llama_context & lctx) {
     bool need_reserve = false;
 
-    const auto & sched = lctx.get_sched();
+    auto * sched = lctx.get_sched();
 
     if (has_shift) {
         if (!get_can_shift()) {
@@ -382,13 +382,13 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
 
         // apply K-shift if needed
         if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
-            ggml_backend_sched_reset(sched.get());
+            ggml_backend_sched_reset(sched);
 
             auto * gf = lctx.graph_init();
 
             auto res = build_graph_shift(lctx, gf);
 
-            ggml_backend_sched_alloc_graph(sched.get(), gf);
+            ggml_backend_sched_alloc_graph(sched, gf);
 
             res->set_inputs(nullptr);
 
@@ -410,13 +410,13 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
         LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
 
         if (defrag_prepare(lctx.graph_max_nodes())) {
-            ggml_backend_sched_reset(sched.get());
+            ggml_backend_sched_reset(sched);
 
             auto * gf = lctx.graph_init();
 
             auto res = build_graph_defrag(lctx, gf);
 
-            ggml_backend_sched_alloc_graph(sched.get(), gf);
+            ggml_backend_sched_alloc_graph(sched, gf);
 
             res->set_inputs(nullptr);
 
@@ -602,7 +602,8 @@ ggml_tensor * llama_kv_cache_unified::build_rope_shift(
   ggml_backend_buffer * bbuf) const {
     const auto & cparams  = lctx.get_cparams();
     const auto & backends = lctx.get_backends();
-    const auto & sched    = lctx.get_sched();
+
+    auto * sched = lctx.get_sched();
 
     const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
 
@@ -623,12 +624,12 @@ ggml_tensor * llama_kv_cache_unified::build_rope_shift(
         // dequantize to f32 -> RoPE -> quantize back
         tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
 
-        // TODO: can we simplify/avoid this?
+        // TODO: can we simplify/avoid this? [TAG_BACKENDS]
         if (bbuf) {
             for (const auto & backend : backends) {
                 // Figure out which backend KV cache belongs to
                 if (ggml_backend_supports_buft(backend.get(), ggml_backend_buffer_get_type(bbuf))) {
-                    ggml_backend_sched_set_tensor_backend(sched.get(), tmp, backend.get());
+                    ggml_backend_sched_set_tensor_backend(sched, tmp, backend.get());
                     break;
                 }
             }
@@ -680,7 +681,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
         ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
-    auto * ctx = lctx.get_ctx_compute().get();
+    auto * ctx = lctx.get_ctx_compute();
 
     const auto & cparams = lctx.get_cparams();
 
@@ -733,7 +734,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_defrag(
           ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
-    auto * ctx = lctx.get_ctx_compute().get();
+    auto * ctx = lctx.get_ctx_compute();
 
     const auto & ids = defrag_info.ids;
 
