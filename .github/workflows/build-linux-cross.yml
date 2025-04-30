@@ -29,7 +29,6 @@ jobs:
           deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse
           deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main restricted universe multiverse
           EOF
-          fi
 
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
