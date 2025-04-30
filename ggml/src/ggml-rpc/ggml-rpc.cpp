@@ -518,6 +518,11 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     result.view_src = reinterpret_cast<uint64_t>(tensor->view_src);
     result.view_offs = tensor->view_offs;
     result.data = reinterpret_cast<uint64_t>(tensor->data);
+
+    // Avoid sending uninitialized data over the wire
+    memset(result.name, 0, sizeof(result.name));
+    memset(result.padding, 0, sizeof(result.padding));
+
     snprintf(result.name, GGML_MAX_NAME, "%s", tensor->name);
     return result;
 }
