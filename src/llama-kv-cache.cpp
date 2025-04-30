@@ -386,7 +386,7 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
 
             auto * gf = lctx.graph_init();
 
-            auto res = build_graph_shift(lctx, gf);
+            auto res = build_graph_shift(lctx.get_cparams(), lctx.get_ctx_compute(), gf);
 
             ggml_backend_sched_alloc_graph(sched, gf);
 
@@ -414,7 +414,7 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
 
             auto * gf = lctx.graph_init();
 
-            auto res = build_graph_defrag(lctx, gf);
+            auto res = build_graph_defrag(lctx.get_cparams(), lctx.get_ctx_compute(), gf);
 
             ggml_backend_sched_alloc_graph(sched, gf);
 
@@ -592,15 +592,13 @@ size_t llama_kv_cache_unified::size_v_bytes() const {
 }
 
 ggml_tensor * llama_kv_cache_unified::build_rope_shift(
-        llama_context & lctx,
-         ggml_context * ctx,
-          ggml_tensor * cur,
-          ggml_tensor * shift,
-          ggml_tensor * factors,
-                float   freq_base,
-                float   freq_scale) const {
-    const auto & cparams  = lctx.get_cparams();
-
+        const llama_cparams & cparams,
+               ggml_context * ctx,
+                ggml_tensor * cur,
+                ggml_tensor * shift,
+                ggml_tensor * factors,
+                      float   freq_base,
+                      float   freq_scale) const {
     const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
 
     const auto & yarn_ext_factor = cparams.yarn_ext_factor;
@@ -662,13 +660,10 @@ void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
 }
 
 llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
-        llama_context & lctx,
-        ggml_cgraph * gf) const {
+        const llama_cparams & cparams,
+               ggml_context * ctx,
+                ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
-
-    auto * ctx = lctx.get_ctx_compute();
-
-    const auto & cparams = lctx.get_cparams();
 
     const auto & n_layer = hparams.n_layer;
 
@@ -704,7 +699,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
                 ggml_row_size(k_l[il]->type, n_embd_k_gqa),
                 0);
 
-        ggml_tensor * cur = build_rope_shift(lctx, ctx, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l);
+        ggml_tensor * cur = build_rope_shift(cparams, ctx, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l);
 
         ggml_build_forward_expand(gf, cur);
     }
@@ -715,15 +710,12 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
 }
 
 llm_graph_result_ptr llama_kv_cache_unified::build_graph_defrag(
-        llama_context & lctx,
-          ggml_cgraph * gf) const {
+        const llama_cparams & cparams,
+               ggml_context * ctx,
+                ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
-    auto * ctx = lctx.get_ctx_compute();
-
     const auto & ids = defrag_info.ids;
-
-    const auto & cparams = lctx.get_cparams();
 
 #if 0
     // CPU defrag

@@ -233,21 +233,23 @@ private:
     size_t size_v_bytes() const;
 
     ggml_tensor * build_rope_shift(
-            llama_context & lctx,
-             ggml_context * ctx,
-              ggml_tensor * cur,
-              ggml_tensor * shift,
-              ggml_tensor * factors,
-                    float   freq_base,
-                    float   freq_scale) const;
+            const llama_cparams & cparams,
+                   ggml_context * ctx,
+                    ggml_tensor * cur,
+                    ggml_tensor * shift,
+                    ggml_tensor * factors,
+                          float   freq_base,
+                          float   freq_scale) const;
 
     llm_graph_result_ptr build_graph_shift(
-            llama_context & lctx,
-              ggml_cgraph * gf) const;
+            const llama_cparams & cparams,
+                   ggml_context * ctx,
+                    ggml_cgraph * gf) const;
 
     llm_graph_result_ptr build_graph_defrag(
-            llama_context & lctx,
-              ggml_cgraph * gf) const;
+            const llama_cparams & cparams,
+                   ggml_context * ctx,
+                    ggml_cgraph * gf) const;
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
