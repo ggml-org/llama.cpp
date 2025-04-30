@@ -504,7 +504,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -3523,8 +3523,13 @@ class NomicBertModel(BertModel):
         if self._tokenizer_is_xlmroberta:
             self._xlmroberta_tokenizer_init()
 
-        # the HF config claims n_ctx=8192, but it uses RoPE scaling
-        self.hparams["n_ctx"] = 2048
+        npos, mtp = self.hparams["n_positions"], self.hparams.get("max_trained_positions", 2048)
+        if npos == 8192 and mtp == 2048:
+            self.hparams["n_positions"] = 2048  # nomic-embed-text v1 and v1.5 are trained for 2048 tokens.
+        elif npos == 2048 and mtp == 2048:
+            self.hparams["n_positions"] = 512   # nomic-embed-text-v2-moe is trained for 512 tokens.
+        else:
+            raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
 
         assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
 
