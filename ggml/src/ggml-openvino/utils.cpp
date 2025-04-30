@@ -135,10 +135,12 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
                       << ", Address: " << output_tensors[output_names[i]] << std::endl;
             switch (output_tensor.get_element_type()) {
             case ov::element::f32:
-                std::cout << *(float*)(output_tensors[output_names[i]]) << std::endl;
+                std::cout << *(float*)(output_tensor.data()) << std::endl;
+                std::cout << checksum(output_tensor.data(), output_tensor.get_byte_size()) << std::endl;
                 break;
             case ov::element::f16:
-                std::cout << ov::float16::from_bits(*(uint16_t*)(output_tensors[output_names[i]])) << std::endl;
+                std::cout << ov::float16::from_bits(*(uint16_t*)(output_tensor.data())) << std::endl;
+                std::cout << checksum(output_tensor.data(), output_tensor.get_byte_size()) << std::endl;
                 break;
             default:
                 break;
@@ -160,4 +162,13 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     return GGML_STATUS_SUCCESS;
     GGML_UNUSED(backend);
+}
+
+size_t checksum(const void* data, size_t size) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    size_t sum = 0;
+    for (size_t i = 0; i < size; ++i) {
+        sum += bytes[i];
+    }
+    return sum;
 }

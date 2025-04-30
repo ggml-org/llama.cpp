@@ -1,7 +1,7 @@
 #pragma once
 
+#include <map>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 #include "decoder.h"
@@ -76,10 +76,10 @@ public:
         return m_continuous;
     }
 
-    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const override {
+    virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const override {
         return m_model_inputs;
     }
-    virtual const std::unordered_map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const override {
+    virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const override {
         return m_model_weights;
     }
     virtual const std::vector<std::string>& get_model_output_names() const override {
@@ -87,7 +87,7 @@ public:
     }
 
 private:
-    void set_input_output(ggml_tensor* node, std::unordered_map<std::string, std::shared_ptr<ov::Node>>& model_weights);
+    void set_input_output(ggml_tensor* node, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
     static void dump_cgraph(const struct ggml_cgraph* cgraph);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
@@ -105,7 +105,9 @@ private:
     mutable std::string m_name;
     bool m_continuous;
     std::vector<std::pair<std::string, std::string>> m_op_node_name;
-    std::unordered_map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
-    std::unordered_map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
+    std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
+    std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
 };
+
+void print_tensor_address_map(const struct ggml_cgraph* cgraph);

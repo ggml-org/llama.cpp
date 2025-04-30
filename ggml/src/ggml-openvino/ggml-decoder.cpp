@@ -8,12 +8,14 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
+#include <ostream>
+#include <set>
 #include <string>
-#include <unordered_map>
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
@@ -22,16 +24,24 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
     : m_cgraph(cgraph),
       m_node(node),
       m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
-    static std::unordered_map<std::string, std::shared_ptr<ov::Node>> model_weights;
+    static std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
+
     if (m_node) {
         set_input_output(m_node, model_weights);
     } else {
+        static bool printed = false;
+        if (!printed && getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
+            print_tensor_address_map(m_cgraph);
+            printed = true;
+        }
+
         for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
             auto* cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
             set_input_output(cur_node, model_weights);
         }
         m_model_weights = model_weights;
+
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
             dump_cgraph(m_cgraph);
         }
@@ -41,7 +51,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
 // Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
 // 2. constructing a decoder for a node.
 void GgmlOvDecoder::set_input_output(ggml_tensor* node,
-                                     std::unordered_map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
+                                     std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
     std::string node_name;
     if (node->op == GGML_OP_CPY) {
         // CPY updates the input tensor in place. For later ov op that uses the
@@ -100,9 +110,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
     }
 
     if (!m_node) {
+        static std::set<std::string> debug_output_names = {};
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
         if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
-            std::string(node->name).find("result") == 0) {
+            std::string(node->name).find("result") == 0 || debug_output_names.count(node->name)) {
             auto name = node->view_src ? std::string(node->view_src->name) : std::string(node->name);
             if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                 assert(name.find("cache_k") == 0 || name.find("cache_v") == 0);
@@ -249,7 +260,7 @@ void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph) {
 
 void print_tensor_address_map(const struct ggml_cgraph* cgraph) {
     std::map<void*, std::vector<std::string>> address_map;
-    for (int node_n = 0; node_n <= cgraph->n_nodes; node_n++) {
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto* node = cgraph->nodes[node_n];
         if (node->data) {
             auto it = address_map.find(node->data);
