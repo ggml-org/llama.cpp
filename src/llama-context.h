@@ -27,7 +27,14 @@ struct llama_context {
 
     void synchronize();
 
-    const llama_model & get_model() const;
+    const llama_model   & get_model()   const;
+    const llama_cparams & get_cparams() const;
+
+    const ggml_backend_sched_ptr & get_sched() const;
+
+    const ggml_context_ptr & get_ctx_compute() const;
+
+    const std::vector<ggml_backend_ptr> & get_backends() const;
 
     uint32_t n_ctx()         const;
     uint32_t n_ctx_per_seq() const;
@@ -141,21 +148,23 @@ private:
     // graph
     //
 
+public:
     int32_t graph_max_nodes() const;
 
     // zero-out inputs and create the ctx_compute for the compute graph
     ggml_cgraph * graph_init();
 
+    // returns the result of ggml_backend_sched_graph_compute_async execution
+    ggml_status graph_compute(
+            ggml_cgraph * gf,
+                   bool   batched);
+
+private:
     llm_graph_result_ptr graph_build(
             ggml_context * ctx,
              ggml_cgraph * gf,
       const llama_ubatch & ubatch,
           llm_graph_type   gtype);
-
-    // returns the result of ggml_backend_sched_graph_compute_async execution
-    ggml_status graph_compute(
-            ggml_cgraph * gf,
-                   bool   batched);
 
     llm_graph_cb graph_get_cb() const;
 

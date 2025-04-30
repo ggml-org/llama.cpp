@@ -396,6 +396,22 @@ const llama_model & llama_context::get_model() const {
     return model;
 }
 
+const llama_cparams & llama_context::get_cparams() const {
+    return cparams;
+}
+
+const ggml_backend_sched_ptr & llama_context::get_sched() const {
+    return sched;
+}
+
+const ggml_context_ptr & llama_context::get_ctx_compute() const {
+    return ctx_compute;
+}
+
+const std::vector<ggml_backend_ptr> & llama_context::get_backends() const {
+    return backends;
+}
+
 uint32_t llama_context::n_ctx() const {
     return cparams.n_ctx;
 }
@@ -439,15 +455,7 @@ void llama_context::kv_self_update() {
 
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
-    need_reserve = kv_self->update({
-        /*.cparams         =*/ cparams,
-        /*.sched           =*/ sched.get(),
-        /*.backends        =*/ backends,
-        /*.n_max_nodes     =*/ graph_max_nodes(),
-        /*.get_ctx_compute =*/ [this]() { return ctx_compute.get(); },
-        /*.graph_init      =*/ [this]() { return graph_init(); },
-        /*.graph_compute   =*/ [this](ggml_cgraph * gf) { graph_compute(gf, false); },
-    });
+    need_reserve = kv_self->update(*this);
 
     // reserve a worst case graph if needed
     if (need_reserve) {

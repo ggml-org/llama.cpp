@@ -4,6 +4,7 @@
 #include "llama-batch.h"
 #include "llama-cparams.h"
 #include "llama-model.h"
+#include "llama-context.h"
 
 #include <algorithm>
 #include <cassert>
@@ -367,10 +368,10 @@ void llama_kv_cache_unified::commit() {
     pending.ranges.clear();
 }
 
-bool llama_kv_cache_unified::update(const graph_params & params) {
+bool llama_kv_cache_unified::update(llama_context & lctx) {
     bool need_reserve = false;
 
-    const auto & sched = params.sched;
+    const auto & sched = lctx.get_sched();
 
     if (has_shift) {
         if (!get_can_shift()) {
@@ -381,17 +382,17 @@ bool llama_kv_cache_unified::update(const graph_params & params) {
 
         // apply K-shift if needed
         if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
-            ggml_backend_sched_reset(sched);
+            ggml_backend_sched_reset(sched.get());
 
-            auto * gf = params.graph_init();
+            auto * gf = lctx.graph_init();
 
-            auto res = build_graph_shift(params, gf);
+            auto res = build_graph_shift(lctx, gf);
 
-            ggml_backend_sched_alloc_graph(sched, gf);
+            ggml_backend_sched_alloc_graph(sched.get(), gf);
 
             res->set_inputs(nullptr);
 
-            params.graph_compute(gf);
+            lctx.graph_compute(gf, false);
 
             need_reserve = true;
         }
@@ -408,18 +409,18 @@ bool llama_kv_cache_unified::update(const graph_params & params) {
     if (do_defrag) {
         LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
 
-        if (defrag_prepare(params.n_max_nodes)) {
-            ggml_backend_sched_reset(sched);
+        if (defrag_prepare(lctx.graph_max_nodes())) {
+            ggml_backend_sched_reset(sched.get());
 
-            auto * gf = params.graph_init();
+            auto * gf = lctx.graph_init();
 
-            auto res = build_graph_defrag(params, gf);
+            auto res = build_graph_defrag(lctx, gf);
 
-            ggml_backend_sched_alloc_graph(sched, gf);
+            ggml_backend_sched_alloc_graph(sched.get(), gf);
 
             res->set_inputs(nullptr);
 
-            params.graph_compute(gf);
+            lctx.graph_compute(gf, false);
 
             need_reserve = true;
         }
@@ -591,17 +592,17 @@ size_t llama_kv_cache_unified::size_v_bytes() const {
 }
 
 ggml_tensor * llama_kv_cache_unified::build_rope_shift(
-        const graph_params & params,
-              ggml_context * ctx,
-               ggml_tensor * cur,
-               ggml_tensor * shift,
-               ggml_tensor * factors,
-                     float   freq_base,
-                     float   freq_scale,
-       ggml_backend_buffer * bbuf) const {
-    const auto & cparams  = params.cparams;
-    const auto & backends = params.backends;
-    const auto & sched    = params.sched;
+        llama_context & lctx,
+         ggml_context * ctx,
+          ggml_tensor * cur,
+          ggml_tensor * shift,
+          ggml_tensor * factors,
+                float   freq_base,
+                float   freq_scale,
+  ggml_backend_buffer * bbuf) const {
+    const auto & cparams  = lctx.get_cparams();
+    const auto & backends = lctx.get_backends();
+    const auto & sched    = lctx.get_sched();
 
     const auto & n_ctx_orig = cparams.n_ctx_orig_yarn;
 
@@ -622,11 +623,12 @@ ggml_tensor * llama_kv_cache_unified::build_rope_shift(
         // dequantize to f32 -> RoPE -> quantize back
         tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
 
+        // TODO: can we simplify/avoid this?
         if (bbuf) {
             for (const auto & backend : backends) {
                 // Figure out which backend KV cache belongs to
                 if (ggml_backend_supports_buft(backend.get(), ggml_backend_buffer_get_type(bbuf))) {
-                    ggml_backend_sched_set_tensor_backend(sched, tmp, backend.get());
+                    ggml_backend_sched_set_tensor_backend(sched.get(), tmp, backend.get());
                     break;
                 }
             }
@@ -674,13 +676,13 @@ void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
 }
 
 llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
-            const graph_params & params,
-                   ggml_cgraph * gf) const {
+        llama_context & lctx,
+        ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
-    auto * ctx = params.get_ctx_compute();
+    auto * ctx = lctx.get_ctx_compute().get();
 
-    const auto & cparams = params.cparams;
+    const auto & cparams = lctx.get_cparams();
 
     const auto & n_layer = hparams.n_layer;
 
@@ -716,7 +718,7 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
                 ggml_row_size(k_l[il]->type, n_embd_k_gqa),
                 0);
 
-        ggml_tensor * cur = build_rope_shift(params, ctx, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l, k_l[il]->buffer);
+        ggml_tensor * cur = build_rope_shift(lctx, ctx, k, inp->k_shift, rope_factors, freq_base_l, freq_scale_l, k_l[il]->buffer);
 
         ggml_build_forward_expand(gf, cur);
     }
@@ -727,15 +729,15 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
 }
 
 llm_graph_result_ptr llama_kv_cache_unified::build_graph_defrag(
-            const graph_params & params,
-                   ggml_cgraph * gf) const {
+        llama_context & lctx,
+          ggml_cgraph * gf) const {
     auto res = std::make_unique<llm_graph_result>();
 
-    auto * ctx = params.get_ctx_compute();
+    auto * ctx = lctx.get_ctx_compute().get();
 
     const auto & ids = defrag_info.ids;
 
-    const auto & cparams = params.cparams;
+    const auto & cparams = lctx.get_cparams();
 
 #if 0
     // CPU defrag
@@ -1725,8 +1727,8 @@ void llama_kv_cache_recurrent::commit() {
     pending.ranges.clear();
 }
 
-bool llama_kv_cache_recurrent::update(const graph_params & params) {
-    GGML_UNUSED(params);
+bool llama_kv_cache_recurrent::update(llama_context & lctx) {
+    GGML_UNUSED(lctx);
     return false;
 }
 
