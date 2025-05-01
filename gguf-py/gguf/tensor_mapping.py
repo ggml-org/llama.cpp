@@ -1001,6 +1001,10 @@ class TensorNameMap:
             "multi_modal_projector.mm_input_projection",
         ),
 
+        MODEL_TENSOR.V_MM_INP_NORM: (
+            "multi_modal_projector.norm",
+        ),
+
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
             "multi_modal_projector.mm_soft_emb_norm",
         ),
@@ -1051,6 +1055,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
             "v.token_embd.img_break", # for pixtral, this is a generated vector
+        ),
+
+        MODEL_TENSOR.V_MM_PATCH_MERGER: (
+            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
         ),
     }
 

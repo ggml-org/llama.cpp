@@ -94,6 +94,7 @@ struct mtmd_cli_context {
             LOG_ERR("Model does not have chat template.\n");
             LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
             LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
+            LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
             exit(1);
         }
 
