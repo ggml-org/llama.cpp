@@ -324,9 +324,9 @@ int main(int argc, char ** argv) {
                 std::string image = line.substr(7);
                 if (ctx.load_image(image)) {
                     LOG("Image %s loaded\n", image.c_str());
+                    content += "<__image__>";
                 }
                 // else, error is already printed by libmtmd
-                content += "<__image__>";
                 continue;
             } else {
                 content += line;
