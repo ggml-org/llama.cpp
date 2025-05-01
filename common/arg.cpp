@@ -2787,7 +2787,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cache-reuse"}, "N",
         string_format(
             "min chunk size to attempt reusing from the cache via KV shifting (default: %d)\n"
-            "[(card)](https://raw.githubusercontent.com/ggml-org/media/refs/heads/master/cards/llama.cpp-feature-cache-reuse.png)", params.n_cache_reuse
+            "[(card)](https://ggml.ai/f0.png)", params.n_cache_reuse
         ),
         [](common_params & params, int value) {
             params.n_cache_reuse = value;
