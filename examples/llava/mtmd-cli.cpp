@@ -316,7 +316,7 @@ int main(int argc, char ** argv) {
                 continue;
             }
             g_is_generating = true;
-            if (line.find("/image") == 0) {
+            if (line == "/image" || line.find("/image ") == 0) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing image filename\n");
                     continue;
