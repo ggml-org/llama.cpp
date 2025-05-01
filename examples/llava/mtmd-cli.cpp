@@ -151,7 +151,7 @@ static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int 
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating || g_is_interrupted) {
-            printf("\n");
+            LOG("\n");
             break;
         }
 
@@ -160,15 +160,15 @@ static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int 
         common_sampler_accept(smpl, token_id, true);
 
         if (llama_vocab_is_eog(ctx.vocab, token_id) || ctx.check_antiprompt(generated_tokens)) {
-            printf("\n");
+            LOG("\n");
             break; // end of generation
         }
 
-        printf("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
+        LOG("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
         fflush(stdout);
 
         if (g_is_interrupted) {
-            printf("\n");
+            LOG("\n");
             break;
         }
 
@@ -214,7 +214,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_
 
     ctx.n_past += mtmd_helper_get_n_pos(chunks);
 
-    printf("\n");
+    LOG("\n");
 
     return 0;
 }
@@ -238,7 +238,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_cli_context ctx(params);
-    printf("%s: %s\n", __func__, params.model.path.c_str());
+    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 
