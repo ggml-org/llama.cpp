@@ -41,7 +41,7 @@ export function trim_repeat_garbage_at_end(sIn, maxSubL=10, maxMatchLenThreshold
         let refS = sIn.substring(sIn.length-subL, sIn.length);
         for(i=sIn.length; i > 0; i -= subL) {
             let curS = sIn.substring(i-subL, i);
-            if (refS != curS) {
+            if (refS !== curS) {
                 let curMatchLen = rCnt[subL]*subL;
                 if (maxMatchLen < curMatchLen) {
                     maxMatchLen = curMatchLen;
@@ -53,7 +53,7 @@ export function trim_repeat_garbage_at_end(sIn, maxSubL=10, maxMatchLenThreshold
         }
     }
     console.debug("DBUG:DU:TrimRepeatGarbage:", rCnt);
-    if ((iMML == -1) || (maxMatchLen < maxMatchLenThreshold)) {
+    if ((iMML === -1) || (maxMatchLen < maxMatchLenThreshold)) {
         return {trimmed: false, data: sIn};
     }
     console.debug("DBUG:TrimRepeatGarbage:TrimmedCharLen:", maxMatchLen);
@@ -71,6 +71,7 @@ export function trim_repeat_garbage_at_end(sIn, maxSubL=10, maxMatchLenThreshold
  * @param {string} sIn
  * @param {number} maxSubL
  * @param {number | undefined} [maxMatchLenThreshold]
+ * @param {number | undefined} [skipMax]
  */
 export function trim_repeat_garbage_at_end_loop(sIn, maxSubL, maxMatchLenThreshold, skipMax=16) {
     let sCur = sIn;
@@ -78,8 +79,8 @@ export function trim_repeat_garbage_at_end_loop(sIn, maxSubL, maxMatchLenThresho
     let iTry = 0;
     while(true) {
         let got = trim_repeat_garbage_at_end(sCur, maxSubL, maxMatchLenThreshold);
-        if (got.trimmed != true) {
-            if (iTry == 0) {
+        if (got.trimmed !== true) {
+            if (iTry === 0) {
                 sSaved = got.data;
             }
             iTry += 1;
@@ -221,7 +222,8 @@ export class NewLines {
     add_append(sLines) {
         let aLines = sLines.split("\n");
         let lCnt = 0;
-        for(let line of aLines) {
+        for(let aline of aLines) {
+            let line = aline;
             lCnt += 1;
             // Add back newline removed if any during split
             if (lCnt < aLines.length) {
@@ -232,9 +234,9 @@ export class NewLines {
                 }
             }
             // Append if required
-            if (lCnt == 1) {
+            if (lCnt === 1) {
                 let lastLine = this.lines[this.lines.length-1];
-                if (lastLine != undefined) {
+                if (lastLine !== undefined) {
                     if (!lastLine.endsWith("\n")) {
                         this.lines[this.lines.length-1] += line;
                         continue;
@@ -254,10 +256,10 @@ export class NewLines {
      */
     shift(bFullWithNewLineOnly=true) {
         let line = this.lines[0];
-        if (line == undefined) {
+        if (line === undefined) {
             return undefined;
         }
-        if ((line[line.length-1] != "\n") && bFullWithNewLineOnly){
+        if ((line[line.length-1] !== "\n") && bFullWithNewLineOnly){
             return undefined;
         }
         return this.lines.shift();
