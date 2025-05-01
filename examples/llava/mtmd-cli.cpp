@@ -214,6 +214,8 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_
 
     ctx.n_past += mtmd_helper_get_n_pos(chunks);
 
+    printf("\n");
+
     return 0;
 }
 
