@@ -11,7 +11,6 @@ import json
 import os
 import re
 import sys
-from abc import ABC, abstractmethod
 from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
@@ -52,7 +51,7 @@ class ModelType(IntEnum):
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
 
 
-class ModelBase(ABC):
+class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
         ModelType.VISION: {},
@@ -136,11 +135,6 @@ class ModelBase(ABC):
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
-
-    @property
-    @abstractmethod
-    def model_type(self):
-        raise NotImplementedError
 
     @classmethod
     def add_prefix_to_filename(cls, path: Path, prefix: str) -> Path:
