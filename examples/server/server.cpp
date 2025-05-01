@@ -1355,6 +1355,8 @@ struct server_slot {
 
         if (params.n_predict != -1) {
             n_remaining = params.n_predict - n_decoded;
+        } else if (global_params.n_predict == -2) {
+            n_remaining = n_ctx - n_past;
         } else if (global_params.n_predict != -1) {
             n_remaining = global_params.n_predict - n_decoded;
         }
