@@ -169,6 +169,29 @@ Results were calculated with LLaMA 3 8b BF16 as `--kl-divergence-base` and LLaMA
 | RMS Δp                         |          0.150 ± 0.001 % |
 | Same top p                     |         99.739 ± 0.013 % |
 
+## LLaMA 3.1 BF16 Scoreboard
+
+| Revision | b3472            |
+|:---------|:-------------------|
+| Backend  | CUDA               |
+| CPU      | AMD Epyc 7R13      |
+| GPU      | 1x NVIDIA L4       |
+
+| Quantization | imatrix | PPL                 | 
+|--------------|---------|---------------------|
+| bf16         | None    | 6.4006 +/- 0.03938  |
+| fp16         | None    | 6.4016 +/- 0.03939  |
+| q8_0         | None    | 6.4070 +/- 0.03941  | 
+| q6_K         | None    | 6.4231 +/- 0.03957  | 
+| q5_K_M       | None    | 6.4623 +/- 0.03987  |
+| q5_K_S       | None    | 6.5161 +/- 0.04028  | 
+| q4_K_M       | None    | 6.5837 +/- 0.04068  | 
+| q4_K_S       | None    | 6.6751 +/- 0.04125  | 
+| q3_K_L       | None    | 6.9458 +/- 0.04329  | 
+| q3_K_M       | None    | 7.0488 +/- 0.04384  | 
+| q3_K_S       | None    | 7.8823 +/- 0.04920  | 
+| q2_K         | None    | 9.7262 +/- 0.06393  | 
+
 ## Old Numbers
 
 <details>
