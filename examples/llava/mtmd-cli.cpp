@@ -308,7 +308,7 @@ int main(int argc, char ** argv) {
             }
             g_is_generating = true;
             if (line.find("/image") == 0) {
-                std::string image = line.substr(7);
+                std::string image = (line.size()>=7) ? line.substr(7) : "";
                 images_fname.push_back(string_strip(image));
                 content += "<__image__>";
                 continue;
