@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+from abc import ABC, abstractmethod
 from enum import IntEnum
 from pathlib import Path
 from hashlib import sha256
@@ -51,7 +52,7 @@ class ModelType(IntEnum):
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
 
 
-class ModelBase:
+class ModelBase(ABC):
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
         ModelType.VISION: {},
@@ -81,25 +82,11 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
-    def __init__(
-        self,
-        dir_model          : Path,
-        ftype              : gguf.LlamaFileType,
-        fname_out          : Path,
-        hf_arch            : str,
-        *,
-        is_big_endian      : bool                  = False,
-        use_temp_file      : bool                  = False,
-        eager              : bool                  = False,
-        metadata_override  : Path | None           = None,
-        model_name         : str | None            = None,
-        split_max_tensors  : int                   = 0,
-        split_max_size     : int                   = 0,
-        dry_run            : bool                  = False,
-        small_first_shard  : bool                  = False,
-        hparams            : dict[str, Any] | None = None,
-        remote_hf_model_id : str | None            = None,
-    ):
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
+                 use_temp_file: bool = False, eager: bool = False,
+                 metadata_override: Path | None = None, model_name: str | None = None,
+                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is VisionModel:
@@ -108,7 +95,6 @@ class ModelBase:
         self.dir_model = dir_model
         self.ftype = ftype
         self.fname_out = fname_out
-        self.hf_arch = hf_arch
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
@@ -150,6 +136,11 @@ class ModelBase:
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+
+    @property
+    @abstractmethod
+    def model_type(self):
+        raise NotImplementedError
 
     @classmethod
     def add_prefix_to_filename(cls, path: Path, prefix: str) -> Path:
@@ -468,8 +459,11 @@ class ModelBase:
 
 
 class TextModel(ModelBase):
+    model_type = ModelType.TEXT
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.hf_arch = get_model_architecture(self.hparams, self.model_type)
 
         if "text_config" in self.hparams:
             # move the text_config to the root level
@@ -1116,8 +1110,8 @@ class TextModel(ModelBase):
 
 
 class VisionModel(ModelBase):
+    model_type = ModelType.VISION
     model_arch = gguf.MODEL_ARCH.CLIP_VISION
-    n_text_embd = 0
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
@@ -3558,7 +3552,7 @@ class RobertaModel(BertModel):
 class NomicBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
-    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, hf_arch: str, **kwargs: Any):
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model)
@@ -3566,7 +3560,7 @@ class NomicBertModel(BertModel):
         self.is_moe = bool(hparams.get("moe_every_n_layers"))
         self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE if self.is_moe else gguf.MODEL_ARCH.NOMIC_BERT
 
-        super().__init__(dir_model, ftype, fname_out, hf_arch, hparams=hparams, **kwargs)
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
 
         self._tokenizer_is_xlmroberta = self._is_tokenizer_xlmroberta()
         if self._tokenizer_is_xlmroberta:
@@ -5902,8 +5896,7 @@ def split_str_to_n_bytes(split_str: str) -> int:
     return n
 
 
-def get_model_architecture(dir_model: Path, model_type: ModelType, hparams: Any = None) -> str:
-    hparams = ModelBase.load_hparams(dir_model) if hparams is None else hparams
+def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
     text_config = hparams.get("text_config", {})
     vision_config = hparams.get("vision_config", {})
     arch = hparams["architectures"][0]
@@ -5974,7 +5967,8 @@ def main() -> None:
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
         model_type = ModelType.VISION if args.mmproj else ModelType.TEXT
-        model_architecture = get_model_architecture(dir_model, model_type)
+        hparams = ModelBase.load_hparams(dir_model)
+        model_architecture = get_model_architecture(hparams, model_type)
         logger.info(f"Model architecture: {model_architecture}")
         try:
             model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
@@ -5982,7 +5976,7 @@ def main() -> None:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
 
-        model_instance = model_class(dir_model, output_type, fname_out, model_architecture,
+        model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,
