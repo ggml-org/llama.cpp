@@ -40,6 +40,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_335M:          return "335M";
         case LLM_TYPE_410M:          return "410M";
         case LLM_TYPE_450M:          return "450M";
+        case LLM_TYPE_475M:          return "475M";
         case LLM_TYPE_770M:          return "770M";
         case LLM_TYPE_780M:          return "780M";
         case LLM_TYPE_0_5B:          return "0.5B";
@@ -707,7 +708,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_MOE_EVERY_N_LAYERS,         hparams.moe_every_n_layers, 0);
 
                 if (hparams.n_layer == 12 && hparams.n_embd == 768) {
-                    type = LLM_TYPE_137M;
+                    if (arch == LLM_ARCH_NOMIC_BERT) {
+                        type = LLM_TYPE_137M;
+                    } else if (arch == LLM_ARCH_NOMIC_BERT_MOE && hparams.moe_every_n_layers == 2) {
+                        type = LLM_TYPE_475M;
+                    }
                 }
             } break;
         case LLM_ARCH_BLOOM:

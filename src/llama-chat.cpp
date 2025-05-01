@@ -454,7 +454,7 @@ int32_t llm_chat_apply_template(
             ss << "<|" << role << "|>" << "\n" << message->content;
         }
         if (add_ass) {
-            ss << "<|assistant|>";
+            ss << "<|assistant|>\n";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_MINICPM) {
         // MiniCPM-3B-OpenHermes-2.5-v2-GGUF
