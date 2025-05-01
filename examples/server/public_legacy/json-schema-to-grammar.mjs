@@ -2,6 +2,9 @@
 const SPACE_RULE = '| " " | "\\n"{1,2} [ \\t]{0,20}';
 
 function _buildRepetition(itemRule, minItems, maxItems, opts={}) {
+  if (maxItems == 0) {
+    return '';
+  }
   if (minItems === 0 && maxItems === 1) {
     return `${itemRule}?`;
   }

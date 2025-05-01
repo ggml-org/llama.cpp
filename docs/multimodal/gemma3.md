@@ -11,15 +11,15 @@ You can use pre-quantized model from [ggml-org](https://huggingface.co/ggml-org)
 ```bash
 # build
 cmake -B build
-cmake --build build --target llama-gemma3-cli
+cmake --build build --target llama-mtmd-cli
 
 # alternatively, install from brew (MacOS)
 brew install llama.cpp
 
 # run it
-llama-gemma3-cli -hf ggml-org/gemma-3-4b-it-GGUF
-llama-gemma3-cli -hf ggml-org/gemma-3-12b-it-GGUF
-llama-gemma3-cli -hf ggml-org/gemma-3-27b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-4b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-12b-it-GGUF
+llama-mtmd-cli -hf ggml-org/gemma-3-27b-it-GGUF
 
 # note: 1B model does not support vision
 ```
@@ -44,8 +44,8 @@ What you need:
 ```bash
 # build
 cmake -B build
-cmake --build build --target llama-gemma3-cli
+cmake --build build --target llama-mtmd-cli
 
 # run it
-./build/bin/llama-gemma3-cli -m {text_model}.gguf --mmproj mmproj.gguf --image your_image.jpg
+./build/bin/llama-mtmd-cli -m {text_model}.gguf --mmproj mmproj.gguf --image your_image.jpg
 ```

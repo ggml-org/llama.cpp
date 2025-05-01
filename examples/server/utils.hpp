@@ -642,8 +642,30 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("Cannot use custom grammar constraints with tools.");
     }
 
+    // if the assistant message appears at the end of list, we do not add end-of-turn token
+    // for ex. this can be useful to modify the reasoning process in reasoning models
+    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant";
+    common_chat_msg last_message;
+    if (prefill_assistant_message) {
+        last_message = inputs.messages.back();
+        inputs.messages.pop_back();
+
+        /* sanity check, max one assistant message at the end of the list */
+        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
+            throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+
+        inputs.extract_reasoning = false;
+        inputs.add_generation_prompt = true;
+    }
+
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(tmpls, inputs);
+
+    /* Append assistant prefilled message */
+    if (prefill_assistant_message) {
+         chat_params.prompt += last_message.content;
+    }
 
     llama_params["chat_format"]      = static_cast<int>(chat_params.format);
     llama_params["prompt"]           = chat_params.prompt;

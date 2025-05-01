@@ -482,7 +482,7 @@ float16_t dequantFuncIQ2_XXS(const in decodeBufIQ2_XXS bl, const in uint blockCo
     const uint ib8 = (idx & 0x18) >> 3;  // 0..3
     const uint iqs = 8 * ib32 + ib8;
 
-    const uint8_t qs = bl.block.qs[iqs];
+    const uint qs = bl.block.qs[iqs];
     const uint signscale = pack32(u16vec2(bl16.block.qs[4*ib32+2], bl16.block.qs[4*ib32+3]));
 
     const float dscale = float(bl.block.d) * 0.25 * (0.5 + float(signscale >> 28));

@@ -112,7 +112,7 @@ You can use GBNF grammars:
 
 - In [llama-server](../examples/server)'s completion endpoints, passed as the `grammar` body field
 - In [llama-cli](../examples/main), passed as the `--grammar` & `--grammar-file` flags
-- With [llama-gbnf-validator](../examples/gbnf-validator) tool, to test them against strings.
+- With [test-gbnf-validator](../tests/test-gbnf-validator.cpp), to test them against strings.
 
 ## JSON Schemas → GBNF
 

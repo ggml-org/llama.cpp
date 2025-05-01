@@ -10,6 +10,9 @@ from typing import Any, List, Optional, Set, Tuple, Union
 
 def _build_repetition(item_rule, min_items, max_items, separator_rule=None):
 
+    if max_items == 0:
+        return ""
+
     if min_items == 0 and max_items == 1:
         return f'{item_rule}?'
 

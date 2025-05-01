@@ -102,6 +102,7 @@ MTMD_API size_t      mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * im
 MTMD_API size_t      mtmd_image_tokens_get_nx(const mtmd_image_tokens * image_tokens);
 MTMD_API size_t      mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens);
 MTMD_API std::string mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens);
+MTMD_API llama_pos   mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens); // number of temporal positions (always 1 for M-RoPE, n_tokens otherwise)
 MTMD_API void        mtmd_image_tokens_free(mtmd_image_tokens * image_tokens);
 
 // returns 0 on success
@@ -114,14 +115,20 @@ MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
 // whether we need to set non-causal mask before llama_decode
 MTMD_API bool mtmd_decode_use_non_causal(mtmd_context * ctx);
 
+// whether the current model use M-RoPE for llama_decode
+MTMD_API bool mtmd_decode_use_mrope(mtmd_context * ctx);
+
 
 
 //
 // helper functions (can be implemented based on other functions)
 //
 
-// helper to count the total number of tokens from a list of chunks, useful to keep track of n_past
+// helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(mtmd_input_chunks & chunks);
+
+// helper to count the total position of tokens from a list of chunks, useful to keep track of n_past
+MTMD_API llama_pos mtmd_helper_get_n_pos(mtmd_input_chunks & chunks);
 
 // helper function that automatically:
 // 1. run llama_decode() on text chunks

@@ -290,6 +290,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "language_model.model.layers.{bid}.feed_forward.router", # llama4
+            "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -322,6 +323,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
+            "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe
             "model.layers.{bid}.mlp.c_fc",                            # starcoder2
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
@@ -337,6 +339,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
             "language_model.model.layers.{bid}.feed_forward.experts.up_proj", # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -418,6 +421,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
             "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
             "language_model.model.layers.{bid}.feed_forward.experts.down_proj", # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -914,6 +918,7 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.patch_embedding",
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
+            "vision_tower.patch_conv", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -926,52 +931,65 @@ class TensorNameMap:
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_OUTPUT: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_OUTPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
+            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc1",
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3 (note: name is swapped)
+            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral
+        ),
+
+        MODEL_TENSOR.V_ENC_FFN_GATE: (
+            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_ENC_FFN_DOWN: (
             "vision_tower.vision_model.encoder.layers.{bid}.mlp.fc2",
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3 (note: name is swapped)
+            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
+            "vision_tower.ln_pre", # pixtral
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
@@ -981,6 +999,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
             "multi_modal_projector.mm_input_projection",
+        ),
+
+        MODEL_TENSOR.V_MM_INP_NORM: (
+            "multi_modal_projector.norm",
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1029,6 +1051,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_QUERY: (
             "resampler.query",
+        ),
+
+        MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
+            "v.token_embd.img_break", # for pixtral, this is a generated vector
+        ),
+
+        MODEL_TENSOR.V_MM_PATCH_MERGER: (
+            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
         ),
     }
 

@@ -11,8 +11,9 @@
 #include <string>
 
 #include "chat.h"
-#include "llama-grammar.h"
-#include "unicode.h"
+
+#include "../src/unicode.h"
+#include "../src/llama-grammar.h"
 
 using json = nlohmann::ordered_json;
 

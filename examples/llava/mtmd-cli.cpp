@@ -24,7 +24,9 @@
 #include <signal.h>
 #endif
 
-static bool g_is_generating = false;
+// volatile, because of signal being an interrupt
+static volatile bool g_is_generating = false;
+static volatile bool g_is_interrupted = false;
 
 /**
  * Please note that this is NOT a production-ready stuff.
@@ -38,7 +40,8 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
-        "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n",
+        "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
         argv[0]
     );
 }
@@ -50,8 +53,10 @@ static void sigint_handler(int signo) {
             g_is_generating = false;
         } else {
             console::cleanup();
-            LOG("\nInterrupted by user\n");
-            _exit(130);
+            if (g_is_interrupted) {
+                _exit(1);
+            }
+            g_is_interrupted = true;
         }
     }
 }
@@ -89,6 +94,7 @@ struct mtmd_cli_context {
             LOG_ERR("Model does not have chat template.\n");
             LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
             LOG_ERR("  For MobileVLM models, use '--chat-template deepseek'\n");
+            LOG_ERR("  For Mistral Small 3.1, use '--chat-template mistral-v7'\n");
             exit(1);
         }
 
@@ -108,10 +114,10 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mtmd_context_params{
-            /* use_gpu */   true,
+            /* use_gpu */   params.mmproj_use_gpu,
             /* timings */   true,
             /* n_threads */ params.cpuparams.n_threads,
-            /* verbosity */ GGML_LOG_LEVEL_INFO,
+            /* verbosity */ params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO,
         }));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
@@ -131,43 +137,10 @@ struct mtmd_cli_context {
     }
 };
 
-struct decode_embd_batch {
-    std::vector<llama_pos>      pos;
-    std::vector<int32_t>        n_seq_id;
-    std::vector<llama_seq_id>   seq_id_0;
-    std::vector<llama_seq_id *> seq_ids;
-    std::vector<int8_t>         logits;
-    llama_batch batch;
-    decode_embd_batch(float * embd, int32_t n_tokens, llama_pos pos_0, llama_seq_id seq_id) {
-        pos     .resize(n_tokens);
-        n_seq_id.resize(n_tokens);
-        seq_ids .resize(n_tokens + 1);
-        logits  .resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_id_0[0] = seq_id;
-        seq_ids [n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ embd,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
-        for (int i = 0; i < n_tokens; i++) {
-            batch.pos     [i] = pos_0 + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
-        }
-    }
-};
-
 static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int n_predict) {
     llama_tokens generated_tokens;
     for (int i = 0; i < n_predict; i++) {
-        if (i > n_predict || !g_is_generating) {
+        if (i > n_predict || !g_is_generating || g_is_interrupted) {
             printf("\n");
             break;
         }
@@ -183,6 +156,11 @@ static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int 
 
         printf("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
         fflush(stdout);
+
+        if (g_is_interrupted) {
+            printf("\n");
+            break;
+        }
 
         // eval the token
         common_batch_clear(ctx.batch);
@@ -219,6 +197,9 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vect
     text.add_special   = add_bos;
     text.parse_special = true;
     mtmd_input_chunks chunks;
+
+    if (g_is_interrupted) return 0;
+
     int32_t res = mtmd_tokenize(ctx.ctx_vision.get(), chunks, text, bitmaps);
     if (res != 0) {
         LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
@@ -230,7 +211,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vect
         return 1;
     }
 
-    ctx.n_past += mtmd_helper_get_n_tokens(chunks);
+    ctx.n_past += mtmd_helper_get_n_pos(chunks);
 
     return 0;
 }
@@ -249,6 +230,7 @@ int main(int argc, char ** argv) {
 
     if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
+        LOG_ERR("ERR: Missing --mmproj argument\n");
         return 1;
     }
 
@@ -276,6 +258,8 @@ int main(int argc, char ** argv) {
 #endif
     }
 
+    if (g_is_interrupted) return 130;
+
     if (is_single_turn) {
         g_is_generating = true;
         if (params.prompt.find("<__image__>") == std::string::npos) {
@@ -287,7 +271,7 @@ int main(int argc, char ** argv) {
         if (eval_message(ctx, msg, params.image, true)) {
             return 1;
         }
-        if (generate_response(ctx, smpl, n_predict)) {
+        if (!g_is_interrupted && generate_response(ctx, smpl, n_predict)) {
             return 1;
         }
 
@@ -302,12 +286,13 @@ int main(int argc, char ** argv) {
         std::vector<std::string> images_fname;
         std::string content;
 
-        while (true) {
+        while (!g_is_interrupted) {
             g_is_generating = false;
             LOG("\n> ");
             console::set_display(console::user_input);
             std::string line;
             console::readline(line, false);
+            if (g_is_interrupted) break;
             console::set_display(console::reset);
             line = string_strip(line);
             if (line.empty()) {
@@ -335,6 +320,7 @@ int main(int argc, char ** argv) {
             msg.role = "user";
             msg.content = content;
             int ret = eval_message(ctx, msg, images_fname, is_first_msg);
+            if (g_is_interrupted) break;
             if (ret == 2) {
                 // non-fatal error
                 images_fname.clear();
@@ -352,6 +338,8 @@ int main(int argc, char ** argv) {
             is_first_msg = false;
         }
     }
+    if (g_is_interrupted) LOG("\nInterrupted by user\n");
+    LOG("\n\n");
     llama_perf_context_print(ctx.lctx);
-    return 0;
+    return g_is_interrupted ? 130 : 0;
 }

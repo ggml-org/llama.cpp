@@ -28,6 +28,7 @@ options:
   -p, --n-prompt <n>                        (default: 512)
   -n, --n-gen <n>                           (default: 128)
   -pg <pp,tg>                               (default: )
+  -d, --n-depth <n>                         (default: 0)
   -b, --batch-size <n>                      (default: 2048)
   -ub, --ubatch-size <n>                    (default: 512)
   -ctk, --cache-type-k <t>                  (default: f16)
@@ -65,6 +66,8 @@ llama-bench can perform three types of tests:
 With the exception of `-r`, `-o` and `-v`, all options can be specified multiple times to run multiple tests. Each pp and tg test is run with all combinations of the specified options. To specify multiple values for an option, the values can be separated by commas (e.g. `-n 16,32`), or the option can be specified multiple times (e.g. `-n 16 -n 32`).
 
 Each test is repeated the number of times given by `-r`, and the results are averaged. The results are given in average tokens per second (t/s) and standard deviation. Some output formats (e.g. json) also include the individual results of each repetition.
+
+Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
 
 For a description of the other options, see the [main example](../main/README.md).
 
@@ -148,6 +151,19 @@ $ ./llama-bench -ngl 10,20,30,31,32,33,34,35
 | llama 7B mostly Q4_0           |   3.56 GiB |     6.74 B | CUDA       |  35 | pp 512     |   2400.01 ± 7.72 |
 | llama 7B mostly Q4_0           |   3.56 GiB |     6.74 B | CUDA       |  35 | tg 128     |    131.66 ± 0.49 |
 
+### Different prefilled context
+
+```
+$ ./llama-bench -d 0,512
+```
+
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CUDA       |  99 |           pp512 |      7340.20 ± 23.45 |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CUDA       |  99 |           tg128 |        120.60 ± 0.59 |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CUDA       |  99 |    pp512 @ d512 |      6425.91 ± 18.88 |
+| qwen2 7B Q4_K - Medium         |   4.36 GiB |     7.62 B | CUDA       |  99 |    tg128 @ d512 |        116.71 ± 0.60 |
+
 ## Output formats
 
 By default, llama-bench outputs the results in markdown format. The results can be output in other formats by using the `-o` option.
@@ -170,9 +186,9 @@ $ ./llama-bench -o csv
 ```
 
 ```csv
-build_commit,build_number,cuda,metal,gpu_blas,blas,cpu_info,gpu_info,model_filename,model_type,model_size,model_n_params,n_batch,n_threads,f16_kv,n_gpu_layers,main_gpu,mul_mat_q,tensor_split,n_prompt,n_gen,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts
-"3469684","1275","1","0","0","1","1","13th Gen Intel(R) Core(TM) i9-13900K","NVIDIA GeForce RTX 3090 Ti","models/7B/ggml-model-q4_0.gguf","llama 7B mostly Q4_0","3825065984","6738415616","512","16","1","99","0","1","0.00","512","0","2023-09-23T12:09:01Z","212155977","732372","2413.341687","8.305961"
-"3469684","1275","1","0","0","1","1","13th Gen Intel(R) Core(TM) i9-13900K","NVIDIA GeForce RTX 3090 Ti","models/7B/ggml-model-q4_0.gguf","llama 7B mostly Q4_0","3825065984","6738415616","512","16","1","99","0","1","0.00","0","128","2023-09-23T12:09:02Z","969320879","2728399","132.052051","0.371342"
+build_commit,build_number,cpu_info,gpu_info,backends,model_filename,model_type,model_size,model_n_params,n_batch,n_ubatch,n_threads,cpu_mask,cpu_strict,poll,type_k,type_v,n_gpu_layers,split_mode,main_gpu,no_kv_offload,flash_attn,tensor_split,use_mmap,embeddings,n_prompt,n_gen,n_depth,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts
+"8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","1","0","512","0","0","2025-04-24T11:57:09Z","70285660","982040","7285.676949","100.064434"
+"8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","99","layer","0","0","0","0.00","1","0","0","128","0","2025-04-24T11:57:10Z","1067431600","3834831","119.915244","0.430617"
 ```
 
 ### JSON
@@ -184,64 +200,78 @@ $ ./llama-bench -o json
 ```json
 [
   {
-    "build_commit": "3469684",
-    "build_number": 1275,
-    "cuda": true,
-    "metal": false,
-    "gpu_blas": true,
-    "blas": true,
-    "cpu_info": "13th Gen Intel(R) Core(TM) i9-13900K",
-    "gpu_info": "NVIDIA GeForce RTX 3090 Ti",
-    "model_filename": "models/7B/ggml-model-q4_0.gguf",
-    "model_type": "llama 7B mostly Q4_0",
-    "model_size": 3825065984,
-    "model_n_params": 6738415616,
-    "n_batch": 512,
-    "n_threads": 16,
-    "f16_kv": true,
+    "build_commit": "8cf427ff",
+    "build_number": 5163,
+    "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "gpu_info": "NVIDIA GeForce RTX 4080",
+    "backends": "CUDA",
+    "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "model_type": "qwen2 7B Q4_K - Medium",
+    "model_size": 4677120000,
+    "model_n_params": 7615616512,
+    "n_batch": 2048,
+    "n_ubatch": 512,
+    "n_threads": 8,
+    "cpu_mask": "0x0",
+    "cpu_strict": false,
+    "poll": 50,
+    "type_k": "f16",
+    "type_v": "f16",
     "n_gpu_layers": 99,
+    "split_mode": "layer",
     "main_gpu": 0,
-    "mul_mat_q": true,
+    "no_kv_offload": false,
+    "flash_attn": false,
     "tensor_split": "0.00",
+    "use_mmap": true,
+    "embeddings": false,
     "n_prompt": 512,
     "n_gen": 0,
-    "test_time": "2023-09-23T12:09:57Z",
-    "avg_ns": 212365953,
-    "stddev_ns": 985423,
-    "avg_ts": 2410.974041,
-    "stddev_ts": 11.163766,
-    "samples_ns": [ 213837238, 211635853, 212328053, 211329715, 212698907 ],
-    "samples_ts": [ 2394.34, 2419.25, 2411.36, 2422.75, 2407.16 ]
+    "n_depth": 0,
+    "test_time": "2025-04-24T11:58:50Z",
+    "avg_ns": 72135640,
+    "stddev_ns": 1453752,
+    "avg_ts": 7100.002165,
+    "stddev_ts": 140.341520,
+    "samples_ns": [ 74601900, 71632900, 71745200, 71952700, 70745500 ],
+    "samples_ts": [ 6863.1, 7147.55, 7136.37, 7115.79, 7237.21 ]
   },
   {
-    "build_commit": "3469684",
-    "build_number": 1275,
-    "cuda": true,
-    "metal": false,
-    "gpu_blas": true,
-    "blas": true,
-    "cpu_info": "13th Gen Intel(R) Core(TM) i9-13900K",
-    "gpu_info": "NVIDIA GeForce RTX 3090 Ti",
-    "model_filename": "models/7B/ggml-model-q4_0.gguf",
-    "model_type": "llama 7B mostly Q4_0",
-    "model_size": 3825065984,
-    "model_n_params": 6738415616,
-    "n_batch": 512,
-    "n_threads": 16,
-    "f16_kv": true,
+    "build_commit": "8cf427ff",
+    "build_number": 5163,
+    "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor",
+    "gpu_info": "NVIDIA GeForce RTX 4080",
+    "backends": "CUDA",
+    "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+    "model_type": "qwen2 7B Q4_K - Medium",
+    "model_size": 4677120000,
+    "model_n_params": 7615616512,
+    "n_batch": 2048,
+    "n_ubatch": 512,
+    "n_threads": 8,
+    "cpu_mask": "0x0",
+    "cpu_strict": false,
+    "poll": 50,
+    "type_k": "f16",
+    "type_v": "f16",
     "n_gpu_layers": 99,
+    "split_mode": "layer",
     "main_gpu": 0,
-    "mul_mat_q": true,
+    "no_kv_offload": false,
+    "flash_attn": false,
     "tensor_split": "0.00",
+    "use_mmap": true,
+    "embeddings": false,
     "n_prompt": 0,
     "n_gen": 128,
-    "test_time": "2023-09-23T12:09:59Z",
-    "avg_ns": 977425219,
-    "stddev_ns": 9268593,
-    "avg_ts": 130.965708,
-    "stddev_ts": 1.238924,
-    "samples_ns": [ 984472709, 974901233, 989474741, 970729355, 967548060 ],
-    "samples_ts": [ 130.019, 131.295, 129.362, 131.86, 132.293 ]
+    "n_depth": 0,
+    "test_time": "2025-04-24T11:58:51Z",
+    "avg_ns": 1076767880,
+    "stddev_ns": 9449585,
+    "avg_ts": 118.881588,
+    "stddev_ts": 1.041811,
+    "samples_ns": [ 1075361300, 1065089400, 1071761200, 1081934900, 1089692600 ],
+    "samples_ts": [ 119.03, 120.178, 119.43, 118.307, 117.464 ]
   }
 ]
 ```
@@ -254,8 +284,8 @@ $ ./llama-bench -o jsonl
 ```
 
 ```json lines
-{"build_commit":"3469684","build_number":1275,"cuda":true,"metal":false,"gpu_blas":true,"blas":true,"cpu_info":"13th Gen Intel(R) Core(TM) i9-13900K","gpu_info":"NVIDIA GeForce RTX 3090 Ti","model_filename":"models/7B/ggml-model-q4_0.gguf","model_type":"llama 7B mostly Q4_0","model_size":3825065984,"model_n_params":6738415616,"n_batch":512,"n_threads":16,"f16_kv":true,"n_gpu_layers":99,"main_gpu":0,"mul_mat_q":true,"tensor_split":"0.00","n_prompt":512,"n_gen":0,"test_time":"2023-09-23T12:09:57Z","avg_ns":212365953,"stddev_ns":985423,"avg_ts":2410.974041,"stddev_ts":11.163766,"samples_ns":[213837238,211635853,212328053,211329715,212698907],"samples_ts":[2394.34,2419.25,2411.36,2422.75,2407.16]}
-{"build_commit":"3469684","build_number":1275,"cuda":true,"metal":false,"gpu_blas":true,"blas":true,"cpu_info":"13th Gen Intel(R) Core(TM) i9-13900K","gpu_info":"NVIDIA GeForce RTX 3090 Ti","model_filename":"models/7B/ggml-model-q4_0.gguf","model_type":"llama 7B mostly Q4_0","model_size":3825065984,"model_n_params":6738415616,"n_batch":512,"n_threads":16,"f16_kv":true,"n_gpu_layers":99,"main_gpu":0,"mul_mat_q":true,"tensor_split":"0.00","n_prompt":0,"n_gen":128,"test_time":"2023-09-23T12:09:59Z","avg_ns":977425219,"stddev_ns":9268593,"avg_ts":130.965708,"stddev_ts":1.238924,"samples_ns":[984472709,974901233,989474741,970729355,967548060],"samples_ts":[130.019,131.295,129.362,131.86,132.293]}
+{"build_commit": "8cf427ff", "build_number": 5163, "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor", "gpu_info": "NVIDIA GeForce RTX 4080", "backends": "CUDA", "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf", "model_type": "qwen2 7B Q4_K - Medium", "model_size": 4677120000, "model_n_params": 7615616512, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "use_mmap": true, "embeddings": false, "n_prompt": 512, "n_gen": 0, "n_depth": 0, "test_time": "2025-04-24T11:59:33Z", "avg_ns": 70497220, "stddev_ns": 883196, "avg_ts": 7263.609157, "stddev_ts": 90.940578, "samples_ns": [ 71551000, 71222800, 70364100, 69439100, 69909100 ],"samples_ts": [ 7155.74, 7188.71, 7276.44, 7373.37, 7323.8 ]}
+{"build_commit": "8cf427ff", "build_number": 5163, "cpu_info": "AMD Ryzen 7 7800X3D 8-Core Processor", "gpu_info": "NVIDIA GeForce RTX 4080", "backends": "CUDA", "model_filename": "models/Qwen2.5-7B-Instruct-Q4_K_M.gguf", "model_type": "qwen2 7B Q4_K - Medium", "model_size": 4677120000, "model_n_params": 7615616512, "n_batch": 2048, "n_ubatch": 512, "n_threads": 8, "cpu_mask": "0x0", "cpu_strict": false, "poll": 50, "type_k": "f16", "type_v": "f16", "n_gpu_layers": 99, "split_mode": "layer", "main_gpu": 0, "no_kv_offload": false, "flash_attn": false, "tensor_split": "0.00", "use_mmap": true, "embeddings": false, "n_prompt": 0, "n_gen": 128, "n_depth": 0, "test_time": "2025-04-24T11:59:33Z", "avg_ns": 1068078400, "stddev_ns": 6279455, "avg_ts": 119.844681, "stddev_ts": 0.699739, "samples_ns": [ 1066331700, 1064864900, 1079042600, 1063328400, 1066824400 ],"samples_ts": [ 120.038, 120.203, 118.624, 120.377, 119.982 ]}
 ```
 
 
@@ -271,25 +301,32 @@ $ ./llama-bench -o sql
 CREATE TABLE IF NOT EXISTS test (
   build_commit TEXT,
   build_number INTEGER,
-  cuda INTEGER,
-  metal INTEGER,
-  gpu_blas INTEGER,
-  blas INTEGER,
   cpu_info TEXT,
   gpu_info TEXT,
+  backends TEXT,
   model_filename TEXT,
   model_type TEXT,
   model_size INTEGER,
   model_n_params INTEGER,
   n_batch INTEGER,
+  n_ubatch INTEGER,
   n_threads INTEGER,
-  f16_kv INTEGER,
+  cpu_mask TEXT,
+  cpu_strict INTEGER,
+  poll INTEGER,
+  type_k TEXT,
+  type_v TEXT,
   n_gpu_layers INTEGER,
+  split_mode TEXT,
   main_gpu INTEGER,
-  mul_mat_q INTEGER,
+  no_kv_offload INTEGER,
+  flash_attn INTEGER,
   tensor_split TEXT,
+  use_mmap INTEGER,
+  embeddings INTEGER,
   n_prompt INTEGER,
   n_gen INTEGER,
+  n_depth INTEGER,
   test_time TEXT,
   avg_ns INTEGER,
   stddev_ns INTEGER,
@@ -297,6 +334,6 @@ CREATE TABLE IF NOT EXISTS test (
   stddev_ts REAL
 );
 
-INSERT INTO test (build_commit, build_number, cuda, metal, gpu_blas, blas, cpu_info, gpu_info, model_filename, model_type, model_size, model_n_params, n_batch, n_threads, f16_kv, n_gpu_layers, main_gpu, mul_mat_q, tensor_split, n_prompt, n_gen, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('3469684', '1275', '1', '0', '0', '1', '1', '13th Gen Intel(R) Core(TM) i9-13900K', 'NVIDIA GeForce RTX 3090 Ti', 'models/7B/ggml-model-q4_0.gguf', 'llama 7B mostly Q4_0', '3825065984', '6738415616', '512', '16', '1', '99', '0', '1', '0.00', '512', '0', '2023-09-23T12:10:30Z', '212693772', '743623', '2407.240204', '8.409634');
-INSERT INTO test (build_commit, build_number, cuda, metal, gpu_blas, blas, cpu_info, gpu_info, model_filename, model_type, model_size, model_n_params, n_batch, n_threads, f16_kv, n_gpu_layers, main_gpu, mul_mat_q, tensor_split, n_prompt, n_gen, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('3469684', '1275', '1', '0', '0', '1', '1', '13th Gen Intel(R) Core(TM) i9-13900K', 'NVIDIA GeForce RTX 3090 Ti', 'models/7B/ggml-model-q4_0.gguf', 'llama 7B mostly Q4_0', '3825065984', '6738415616', '512', '16', '1', '99', '0', '1', '0.00', '0', '128', '2023-09-23T12:10:31Z', '977925003', '4037361', '130.891159', '0.537692');
+INSERT INTO test (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, use_mmap, embeddings, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('8cf427ff', '5163', 'AMD Ryzen 7 7800X3D 8-Core Processor', 'NVIDIA GeForce RTX 4080', 'CUDA', 'models/Qwen2.5-7B-Instruct-Q4_K_M.gguf', 'qwen2 7B Q4_K - Medium', '4677120000', '7615616512', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', '1', '0', '512', '0', '0', '2025-04-24T12:00:08Z', '69905000', '519516', '7324.546977', '54.032613');
+INSERT INTO test (build_commit, build_number, cpu_info, gpu_info, backends, model_filename, model_type, model_size, model_n_params, n_batch, n_ubatch, n_threads, cpu_mask, cpu_strict, poll, type_k, type_v, n_gpu_layers, split_mode, main_gpu, no_kv_offload, flash_attn, tensor_split, use_mmap, embeddings, n_prompt, n_gen, n_depth, test_time, avg_ns, stddev_ns, avg_ts, stddev_ts) VALUES ('8cf427ff', '5163', 'AMD Ryzen 7 7800X3D 8-Core Processor', 'NVIDIA GeForce RTX 4080', 'CUDA', 'models/Qwen2.5-7B-Instruct-Q4_K_M.gguf', 'qwen2 7B Q4_K - Medium', '4677120000', '7615616512', '2048', '512', '8', '0x0', '0', '50', 'f16', 'f16', '99', 'layer', '0', '0', '0', '0.00', '1', '0', '0', '128', '0', '2025-04-24T12:00:09Z', '1063608780', '4464130', '120.346696', '0.504647');
 ```

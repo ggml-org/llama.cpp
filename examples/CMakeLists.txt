@@ -21,11 +21,6 @@ else()
     add_subdirectory(embedding)
     add_subdirectory(eval-callback)
 
-    if (NOT WIN32)
-        # disabled on Windows because it uses internal functions not exported with LLAMA_API
-        add_subdirectory(gbnf-validator)
-    endif()
-
     add_subdirectory(gguf-hash)
     add_subdirectory(gguf-split)
     add_subdirectory(gguf)
@@ -58,10 +53,6 @@ else()
         add_subdirectory(convert-llama2c-to-ggml)
         add_subdirectory(cvector-generator)
         add_subdirectory(export-lora)
-        if (NOT WIN32)
-            # disabled on Windows because it uses internal functions not exported with LLAMA_API
-            add_subdirectory(quantize-stats)
-        endif()
         add_subdirectory(llava)
         if (GGML_RPC)
             add_subdirectory(rpc)
