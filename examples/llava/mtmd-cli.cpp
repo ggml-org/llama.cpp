@@ -72,6 +72,8 @@ struct mtmd_cli_context {
     llama_batch         batch;
     int                 n_batch;
 
+    std::vector<mtmd_bitmap> bitmaps;
+
     // note: we know that gemma3 template is "linear", meaning each turn is completely separated to another
     // so here we don't need to keep track of chat history
     common_chat_templates_ptr tmpls;
@@ -134,6 +136,15 @@ struct mtmd_cli_context {
             antiprompt_tokens.begin()
         );
     }
+
+    bool load_image(const std::string & fname) {
+        mtmd_bitmap bitmap;
+        if (mtmd_helper_bitmap_init_from_file(fname.c_str(), bitmap)) {
+            return false;
+        }
+        bitmaps.push_back(std::move(bitmap));
+        return true;
+    }
 };
 
 static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int n_predict) {
@@ -172,24 +183,13 @@ static int generate_response(mtmd_cli_context & ctx, common_sampler * smpl, int 
     return 0;
 }
 
-static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vector<std::string> & images_fname, bool add_bos = false) {
-    std::vector<mtmd_bitmap> bitmaps;
-
+static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_bos = false) {
     common_chat_templates_inputs tmpl_inputs;
     tmpl_inputs.messages = {msg};
     tmpl_inputs.add_generation_prompt = true;
     tmpl_inputs.use_jinja = false; // jinja is buggy here
     auto formatted_chat = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
-
-    for (auto & fname : images_fname) {
-        mtmd_bitmap bitmap;
-        if (mtmd_helper_bitmap_init_from_file(fname.c_str(), bitmap)) {
-            LOG_ERR("Unable to load image %s\n", fname.c_str());
-            return 2; // image not found
-        }
-        bitmaps.push_back(std::move(bitmap));
-    }
 
     mtmd_input_text text;
     text.text          = formatted_chat.prompt;
@@ -199,11 +199,13 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, std::vect
 
     if (g_is_interrupted) return 0;
 
-    int32_t res = mtmd_tokenize(ctx.ctx_vision.get(), chunks, text, bitmaps);
+    int32_t res = mtmd_tokenize(ctx.ctx_vision.get(), chunks, text, ctx.bitmaps);
     if (res != 0) {
         LOG_ERR("Unable to tokenize prompt, res = %d\n", res);
         return 1;
     }
+
+    ctx.bitmaps.clear();
 
     if (mtmd_helper_eval(ctx.ctx_vision.get(), ctx.lctx, chunks, ctx.n_past, 0, ctx.n_batch)) {
         LOG_ERR("Unable to eval prompt\n");
@@ -267,7 +269,12 @@ int main(int argc, char ** argv) {
         common_chat_msg msg;
         msg.role = "user";
         msg.content = params.prompt;
-        if (eval_message(ctx, msg, params.image, true)) {
+        for (const auto & image : params.image) {
+            if (!ctx.load_image(image)) {
+                return 1; // error is already printed by libmtmd
+            }
+        }
+        if (eval_message(ctx, msg, true)) {
             return 1;
         }
         if (!g_is_interrupted && generate_response(ctx, smpl, n_predict)) {
@@ -282,7 +289,6 @@ int main(int argc, char ** argv) {
         LOG("\n");
 
         bool is_first_msg = true;
-        std::vector<std::string> images_fname;
         std::string content;
 
         while (!g_is_interrupted) {
@@ -313,7 +319,10 @@ int main(int argc, char ** argv) {
                     continue;
                 }
                 std::string image = line.substr(7);
-                images_fname.push_back(string_strip(image));
+                if (ctx.load_image(image)) {
+                    LOG("Image %s loaded\n", image.c_str());
+                }
+                // else, error is already printed by libmtmd
                 content += "<__image__>";
                 continue;
             } else {
@@ -322,21 +331,14 @@ int main(int argc, char ** argv) {
             common_chat_msg msg;
             msg.role = "user";
             msg.content = content;
-            int ret = eval_message(ctx, msg, images_fname, is_first_msg);
-            if (g_is_interrupted) break;
-            if (ret == 2) {
-                // non-fatal error
-                images_fname.clear();
-                content.clear();
-                continue;
-            }
+            int ret = eval_message(ctx, msg, is_first_msg);
             if (ret) {
                 return 1;
             }
+            if (g_is_interrupted) break;
             if (generate_response(ctx, smpl, n_predict)) {
                 return 1;
             }
-            images_fname.clear();
             content.clear();
             is_first_msg = false;
         }
