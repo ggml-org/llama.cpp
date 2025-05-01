@@ -87,6 +87,7 @@ void common_log_set_timestamps(struct common_log * log,       bool   timestamps)
         } \
     } while (0)
 
+#define LOGTOKEN(...)        LOG_TMPL(GGML_LOG_LEVEL_NONE, -1,        __VA_ARGS__)
 #define LOG(...)             LOG_TMPL(GGML_LOG_LEVEL_NONE, 0,         __VA_ARGS__)
 #define LOGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_NONE, verbosity, __VA_ARGS__)
 

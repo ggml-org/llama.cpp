@@ -2967,7 +2967,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
-        "Set the verbosity threshold. Messages with a higher verbosity will be ignored.",
+        "Set the verbosity threshold. Messages with a higher verbosity will be ignored. (-lv -1 for token only, no EOS nor EOG message)",
         [](common_params & params, int value) {
             params.verbosity = value;
             common_log_set_verbosity_thold(value);
