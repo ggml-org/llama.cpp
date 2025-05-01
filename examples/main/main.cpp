@@ -15,7 +15,6 @@
 #include <string>
 #include <vector>
 
-
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
 #include <unistd.h>

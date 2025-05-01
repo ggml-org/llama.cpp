@@ -52,9 +52,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Riscv
         run: |
           sudo dpkg --add-architecture riscv64
@@ -101,9 +98,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Arm64
         run: |
           sudo dpkg --add-architecture arm64
