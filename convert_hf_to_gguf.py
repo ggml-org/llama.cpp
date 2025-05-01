@@ -81,11 +81,25 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
-    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
-                 use_temp_file: bool = False, eager: bool = False,
-                 metadata_override: Path | None = None, model_name: str | None = None,
-                 split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
+    def __init__(
+        self,
+        dir_model          : Path,
+        ftype              : gguf.LlamaFileType,
+        fname_out          : Path,
+        hf_arch            : str,
+        *,
+        is_big_endian      : bool                  = False,
+        use_temp_file      : bool                  = False,
+        eager              : bool                  = False,
+        metadata_override  : Path | None           = None,
+        model_name         : str | None            = None,
+        split_max_tensors  : int                   = 0,
+        split_max_size     : int                   = 0,
+        dry_run            : bool                  = False,
+        small_first_shard  : bool                  = False,
+        hparams            : dict[str, Any] | None = None,
+        remote_hf_model_id : str | None            = None,
+    ):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is VisionModel:
@@ -94,6 +108,7 @@ class ModelBase:
         self.dir_model = dir_model
         self.ftype = ftype
         self.fname_out = fname_out
+        self.hf_arch = hf_arch
         self.is_big_endian = is_big_endian
         self.endianess = gguf.GGUFEndian.BIG if is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = use_temp_file
@@ -1072,6 +1087,32 @@ class TextModel(ModelBase):
             self.gguf_writer.add_add_bos_token(field.parts[-1].tolist()[0])
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
+
+    def _try_set_pooling_type(self) -> None:
+        # get pooling path
+        pooling_path = None
+        module_path = self.dir_model / "modules.json"
+        if module_path.is_file():
+            with open(module_path, encoding="utf-8") as f:
+                modules = json.load(f)
+            for mod in modules:
+                if mod["type"] == "sentence_transformers.models.Pooling":
+                    pooling_path = mod["path"]
+                    break
+
+        # get pooling type
+        if pooling_path is not None:
+            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
+                pooling = json.load(f)
+            if pooling["pooling_mode_mean_tokens"]:
+                pooling_type = gguf.PoolingType.MEAN
+            elif pooling["pooling_mode_cls_token"]:
+                pooling_type = gguf.PoolingType.CLS
+            elif pooling["pooling_mode_lasttoken"]:
+                pooling_type = gguf.PoolingType.LAST
+            else:
+                raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
+            self.gguf_writer.add_pooling_type(pooling_type)
 
 
 class VisionModel(ModelBase):
@@ -2538,7 +2579,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2ForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -2550,11 +2591,17 @@ class Qwen2Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self._try_set_pooling_type()
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
             if self.hparams["rope_scaling"].get("type") == "yarn":
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.hf_arch == "Qwen2Model":
+            name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -3316,29 +3363,7 @@ class BertModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_causal_attention(False)
-
-        # get pooling path
-        pooling_path = None
-        module_path = self.dir_model / "modules.json"
-        if module_path.is_file():
-            with open(module_path, encoding="utf-8") as f:
-                modules = json.load(f)
-            for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
-                    pooling_path = mod["path"]
-                    break
-
-        # get pooling type
-        if pooling_path is not None:
-            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
-                pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
-                pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
-                pooling_type = gguf.PoolingType.CLS
-            else:
-                raise NotImplementedError("Only MEAN and CLS pooling types supported")
-            self.gguf_writer.add_pooling_type(pooling_type)
+        self._try_set_pooling_type()
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -3533,7 +3558,7 @@ class RobertaModel(BertModel):
 class NomicBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
-    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, hf_arch: str, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model)
@@ -3541,7 +3566,7 @@ class NomicBertModel(BertModel):
         self.is_moe = bool(hparams.get("moe_every_n_layers"))
         self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE if self.is_moe else gguf.MODEL_ARCH.NOMIC_BERT
 
-        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
+        super().__init__(dir_model, ftype, fname_out, hf_arch, hparams=hparams, **kwargs)
 
         self._tokenizer_is_xlmroberta = self._is_tokenizer_xlmroberta()
         if self._tokenizer_is_xlmroberta:
@@ -5957,7 +5982,7 @@ def main() -> None:
             logger.error(f"Model {model_architecture} is not supported")
             sys.exit(1)
 
-        model_instance = model_class(dir_model, output_type, fname_out,
+        model_instance = model_class(dir_model, output_type, fname_out, model_architecture,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
                                      eager=args.no_lazy,
                                      metadata_override=args.metadata, model_name=args.model_name,
