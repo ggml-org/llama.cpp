@@ -2561,7 +2561,7 @@ struct llava_uhd {
 
         // no pinpoints, dynamically calculate the grid size (e.g. minicpmv)
 
-        auto best_size    = get_best_resize(original_size, slice_size, patch_size, has_slices);
+        auto best_size    = get_best_resize(original_size, slice_size, patch_size, !has_slices);
         res.overview_size = best_size;
 
         if (!has_slices) {
