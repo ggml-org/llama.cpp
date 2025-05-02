@@ -590,7 +590,7 @@ int32_t mtmd_helper_eval(mtmd_context * ctx,
             }
 
         } else if (chunk.type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            GGML_ASSERT(!is_last && "logits for last image chunk is not yet support");
+            GGML_ASSERT(!is_last && "logits for last image chunk is not yet supported");
             GGML_ASSERT(chunk.tokens_image != nullptr);
             int64_t t0 = ggml_time_ms();
             if (ctx->print_timings) {
