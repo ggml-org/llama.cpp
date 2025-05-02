@@ -513,7 +513,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
         ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT, hparams.n_rot, false);
 
-        if (arch == LLM_ARCH_LLAMA || arch == LLM_ARCH_DECI || arch == LLM_ARCH_FALCON) {
+        if (arch == LLM_ARCH_LLAMA
+            || arch == LLM_ARCH_LLAMA_CSM
+            || arch == LLM_ARCH_DECI
+            || arch == LLM_ARCH_FALCON
+        ) {
             if (hparams.n_rot != hparams.n_embd_head_k) {
                 throw std::runtime_error(format("invalid n_rot: %u, expected %u", hparams.n_rot, hparams.n_embd_head_k));
             }
@@ -531,6 +535,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     // arch-specific KVs
     switch (arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_LLAMA_CSM:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
@@ -1755,6 +1760,48 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
                     }
                 } break;
+            case LLM_ARCH_LLAMA_CSM:
+                {
+                    // TODO: maybe store these in gguf metadata
+                    int64_t csm_audio_cbook_size = 2051; // audio codebook size
+                    int64_t csm_audio_tokens     = 32;   // equal to number of audio tokens for Mimi
+                    //int64_t csm_n_audio_vocab    = csm_audio_cbook_size*csm_acoustic_tokens;
+
+                    csm_output_cbook = create_tensor(tn(LLM_TENSOR_CSM_CBOOK_OUTPUT, "weight"), {n_embd, csm_audio_cbook_size}, TENSOR_NOT_REQUIRED);
+
+                    bool is_backbone = csm_output_cbook != nullptr;
+
+                    csm_output_audio = is_backbone ? nullptr
+                        : create_tensor(tn(LLM_TENSOR_CSM_AUDIO_OUTPUT, "weight"), {n_embd, csm_audio_cbook_size, csm_audio_tokens+1}, 0);
+
+                    tok_embd = is_backbone
+                        ? create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,     "weight"), {n_embd, n_vocab}, 0)
+                        : create_tensor(tn(LLM_TENSOR_CSM_AUDIO_EMBD, "weight"), {n_embd*2, n_vocab}, 0);
+
+                    csm_proj = is_backbone
+                        ? create_tensor(tn(LLM_TENSOR_CSM_PROJ,       "weight"), {n_embd, n_embd/2}, 0)
+                        : create_tensor(tn(LLM_TENSOR_CSM_PROJ,       "weight"), {n_embd*2, n_embd}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    // output tensor is either audio or code depends on backbone / decoder
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
             case LLM_ARCH_LLAMA4:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -1782,6 +1829,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
 
                         layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
 
@@ -4667,12 +4717,198 @@ struct llm_build_llama : public llm_graph_context {
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
 
-        // lm_head
+        // lm_head (normal case)
         cur = build_lora_mm(model.output, cur);
 
         // For Granite architecture
         if (hparams.f_logit_scale) {
             cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
+        }
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
+// llama used by Sesame CSM
+struct llm_build_llama_csm : public llm_graph_context {
+    llm_build_llama_csm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+        bool is_backbone = model.csm_output_cbook;
+        bool is_decoder = !is_backbone;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // hacky way to get the audio embedding from user code (used in prompt processing)
+        // this will be triggered during warmup
+        if (is_decoder && n_tokens == 2) {
+            ggml_tensor * tmp = ggml_cast(ctx0, model.tok_embd, GGML_TYPE_F32);
+            cb(tmp, "audio_embd.weight", -1);
+            ggml_build_forward_expand(gf, tmp);
+        }
+
+        ggml_tensor * input_embd = inpL;
+
+        // inp_pos - contains the positions
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        if (is_decoder && inpL->ne[0] != hparams.n_embd) {
+            inpL = build_lora_mm(model.csm_proj, inpL);
+        }
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
+        const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention
+            {
+                // rope freq factors for llama3; may return nullptr for llama2 and other models
+                ggml_tensor * rope_factors = static_cast<const llama_kv_cache_unified *>(memory)->cbs.get_rope_factors(n_ctx_per_seq, il);
+
+                // compute Q and K and RoPE them
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(inp_attn, gf,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+            }
+
+            if (il == n_layer - 1) {
+                // skip computing output for unused tokens
+                ggml_tensor * inp_out_ids = build_inp_out_ids();
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            // For Granite architecture
+            if (hparams.f_residual_scale) {
+                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward network
+            if (model.layers[il].ffn_gate_inp == nullptr) {
+
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
+                        model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
+            }
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "ffn_out", il);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        if (model.csm_output_cbook) {
+            // Sesame csm backbone
+            // hack: because n_cbook < n_vocab, we use the first logits for the output
+            int64_t n_vocab = model.tok_embd->ne[1];
+            int64_t n_codes = model.csm_output_cbook->ne[1];
+            ggml_tensor * last_h = cur;
+            cur = build_lora_mm(model.csm_output_cbook, cur);
+            cur = ggml_pad(ctx0, cur, n_vocab - n_codes, 0, 0, 0);
+
+            // project to csm decoder dim
+            last_h = build_lora_mm(model.csm_proj, last_h);
+            cb(last_h, "output_csm_proj", -1); // use callback to retrieve the result
+            ggml_build_forward_expand(gf, last_h);
+
+        } else if (model.csm_output_audio && ggml_nelements(cur)) {
+            // Sesame csm decoder
+            // hack: because n_audio < n_vocab, we use the first logits for the output
+            cur = build_lora_mm_id(model.csm_output_audio, cur, inp_pos);
+            int64_t n_vocab = model.tok_embd->ne[1];
+            int64_t n_codes = cur->ne[0];
+            cur = ggml_pad(ctx0, cur, n_vocab - n_codes, cur->ne[1], 0, 0);
+
+            // also get audio embeddings, which will be passed back to backbone to keep track of generation progress
+            if (ubatch.token) {
+                cb(input_embd, "output_audio_embd", -1);
+                ggml_build_forward_expand(gf, input_embd);
+            }
+
+        } else {
+            // otherwise, dummy output
         }
 
         cb(cur, "result_output", -1);
@@ -12882,6 +13118,10 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_llama>(*this, params, gf);
             } break;
+        case LLM_ARCH_LLAMA_CSM:
+            {
+                llm = std::make_unique<llm_build_llama_csm>(*this, params, gf);
+            } break;
         case LLM_ARCH_DECI:
             {
                 llm = std::make_unique<llm_build_deci>(*this, params, gf);
@@ -13238,6 +13478,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_LLAMA_CSM:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_DECI:
         case LLM_ARCH_BAICHUAN:

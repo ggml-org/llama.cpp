@@ -107,6 +107,7 @@ examples/server/*.gz.hpp
 !examples/*/*/*.kts
 !examples/sycl/*.bat
 !examples/sycl/*.sh
+/*.wav
 
 # Server Web UI temporary files
 node_modules

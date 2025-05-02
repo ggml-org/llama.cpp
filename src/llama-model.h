@@ -347,6 +347,11 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
+    // sesame csm
+    struct ggml_tensor * csm_output_cbook = nullptr; // backbone output codebook
+    struct ggml_tensor * csm_output_audio = nullptr; // audio decoder output
+    struct ggml_tensor * csm_proj         = nullptr; // to convert backbone dim to decoder dim
+
     std::vector<llama_layer> layers;
 
     llama_model_params params;
