@@ -45,7 +45,7 @@ $ popd
 This model file is PyTorch checkpoint (.ckpt) and we first need to convert it to
 huggingface format:
 ```console
-(venv) python examples/tts/convert_pt_to_hf.py \
+(venv) python tools/tts/convert_pt_to_hf.py \
     models/WavTokenizer-large-speech-75token/wavtokenizer_large_speech_320_24k.ckpt
 ...
 Model has been successfully converted and saved to models/WavTokenizer-large-speech-75token/model.safetensors
@@ -105,7 +105,7 @@ $ source venv/bin/activate
 
 And then run the python script using:
 ```conole
-(venv) python ./examples/tts/tts-outetts.py http://localhost:8020 http://localhost:8021 "Hello world"
+(venv) python ./tools/tts/tts-outetts.py http://localhost:8020 http://localhost:8021 "Hello world"
 spectrogram generated: n_codes: 90, n_embd: 1282
 converting to audio ...
 audio generated: 28800 samples

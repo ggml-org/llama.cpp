@@ -232,7 +232,7 @@ To build or to run the dev server (with hot reload):
 
 ```sh
 # make sure you have nodejs installed
-cd examples/server/webui
+cd tools/server/webui
 npm i
 
 # to run the dev server
@@ -242,7 +242,7 @@ npm run dev
 npm run build
 ```
 After `public/index.html.gz` has been generated we need to generate the c++
-headers (like build/examples/server/index.html.gz.hpp) that will be included
+headers (like build/tools/server/index.html.gz.hpp) that will be included
 by server.cpp. This is done by building `llama-server` as described in the
 [build](#build) section above.
 
@@ -1228,12 +1228,12 @@ Apart from error types supported by OAI, we also have custom types that are spec
 
 ### Legacy completion web UI
 
-A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./examples/server/public_legacy`
+A new chat-based UI has replaced the old completion-based since [this PR](https://github.com/ggml-org/llama.cpp/pull/10175). If you want to use the old completion, start the server with `--path ./tools/server/public_legacy`
 
 For example:
 
 ```sh
-./llama-server -m my_model.gguf -c 8192 --path ./examples/server/public_legacy
+./llama-server -m my_model.gguf -c 8192 --path ./tools/server/public_legacy
 ```
 
 ### Extending or building alternative Web Front End

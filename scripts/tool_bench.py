@@ -2,7 +2,7 @@
 '''
     Simplistic tool call benchmarks for llama-server and ollama.
 
-    Essentially runs the tests at server/examples/server/tests/unit/test_tool_call.py N times, at different temperatures and on different backends (current llama-server, baseline llama-server and ollama),
+    Essentially runs the tests at server/tools/server/tests/unit/test_tool_call.py N times, at different temperatures and on different backends (current llama-server, baseline llama-server and ollama),
     and plots the results of multiple runs (from same .jsonl file or multiple ones) as a success rate heatmap.
 
     Simple usage example:

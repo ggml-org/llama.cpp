@@ -242,7 +242,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [Vulkan](docs/build.md#vulkan) | GPU |
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/examples/rpc) | All |
+| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 
 ## Building the project
 
@@ -276,9 +276,9 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 - Use the [GGUF-editor space](https://huggingface.co/spaces/CISCai/gguf-editor) to edit GGUF meta data in the browser (more info: https://github.com/ggml-org/llama.cpp/discussions/9268)
 - Use the [Inference Endpoints](https://ui.endpoints.huggingface.co/) to directly host `llama.cpp` in the cloud (more info: https://github.com/ggml-org/llama.cpp/discussions/9669)
 
-To learn more about model quantization, [read this documentation](examples/quantize/README.md)
+To learn more about model quantization, [read this documentation](tools/quantize/README.md)
 
-## [`llama-cli`](examples/main)
+## [`llama-cli`](tools/main)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
 
@@ -341,7 +341,7 @@ To learn more about model quantization, [read this documentation](examples/quant
     </details>
 
 
-## [`llama-server`](examples/server)
+## [`llama-server`](tools/server)
 
 #### A lightweight, [OpenAI API](https://github.com/openai/openai-openapi) compatible, HTTP server for serving LLMs.
 
@@ -411,7 +411,7 @@ To learn more about model quantization, [read this documentation](examples/quant
     </details>
 
 
-## [`llama-perplexity`](examples/perplexity)
+## [`llama-perplexity`](tools/perplexity)
 
 #### A tool for measuring the perplexity [^1][^2] (and other quality metrics) of a model over a given text.
 
@@ -436,10 +436,10 @@ To learn more about model quantization, [read this documentation](examples/quant
 
     </details>
 
-[^1]: [examples/perplexity/README.md](./examples/perplexity/README.md)
+[^1]: [tools/perplexity/README.md](./tools/perplexity/README.md)
 [^2]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
 
-## [`llama-bench`](examples/llama-bench)
+## [`llama-bench`](tools/llama-bench)
 
 #### Benchmark the performance of the inference for various parameters.
 
@@ -460,7 +460,7 @@ To learn more about model quantization, [read this documentation](examples/quant
 
     </details>
 
-## [`llama-run`](examples/run)
+## [`llama-run`](tools/run)
 
 #### A comprehensive example for running `llama.cpp` models. Useful for inferencing. Used with RamaLama [^3].
 
@@ -504,8 +504,8 @@ To learn more about model quantization, [read this documentation](examples/quant
 
 ## Other documentation
 
-- [main (cli)](examples/main/README.md)
-- [server](examples/server/README.md)
+- [main (cli)](tools/main/README.md)
+- [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
 #### Development documentation

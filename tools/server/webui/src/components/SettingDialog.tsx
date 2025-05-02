@@ -196,7 +196,7 @@ const SETTING_SECTIONS: SettingSection[] = [
         label: (
           <>
             Custom JSON config (For more info, refer to{' '}
-            <OpenInNewTab href="https://github.com/ggerganov/llama.cpp/blob/master/examples/server/README.md">
+            <OpenInNewTab href="https://github.com/ggerganov/llama.cpp/blob/master/tools/server/README.md">
               server documentation
             </OpenInNewTab>
             )

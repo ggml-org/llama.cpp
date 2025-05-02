@@ -7,7 +7,7 @@ by Humans for All.
 
 To run from the build dir
 
-bin/llama-server -m path/model.gguf --path ../examples/server/public_simplechat
+bin/llama-server -m path/model.gguf --path ../tools/server/public_simplechat
 
 Continue reading for the details.
 
@@ -51,17 +51,17 @@ One could run this web frontend directly using server itself or if anyone is thi
 frontend to configure the server over http(s) or so, then run this web frontend using something like python's
 http module.
 
-### running using examples/server
+### running using tools/server
 
-./llama-server -m path/model.gguf --path examples/server/public_simplechat [--port PORT]
+./llama-server -m path/model.gguf --path tools/server/public_simplechat [--port PORT]
 
 ### running using python3's server module
 
-first run examples/server
+first run tools/server
 * ./llama-server -m path/model.gguf
 
-next run this web front end in examples/server/public_simplechat
-* cd ../examples/server/public_simplechat
+next run this web front end in tools/server/public_simplechat
+* cd ../tools/server/public_simplechat
 * python3 -m http.server PORT
 
 ### using the front end
@@ -248,7 +248,7 @@ Set max_tokens to 1024, so that a relatively large previous reponse doesnt eat u
 available wrt next query-response. However dont forget that the server when started should
 also be started with a model context size of 1k or more, to be on safe side.
 
-  The /completions endpoint of examples/server doesnt take max_tokens, instead it takes the
+  The /completions endpoint of tools/server doesnt take max_tokens, instead it takes the
   internal n_predict, for now add the same here on the client side, maybe later add max_tokens
   to /completions endpoint handling code on server side.
 

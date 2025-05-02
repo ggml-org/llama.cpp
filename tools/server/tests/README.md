@@ -60,7 +60,7 @@ To run a single test:
 Hint: You can compile and run test in single command, useful for local developement:
 
 ```shell
-cmake --build build -j --target llama-server && ./examples/server/tests/tests.sh
+cmake --build build -j --target llama-server && ./tools/server/tests/tests.sh
 ```
 
 To see all available arguments, please refer to [pytest documentation](https://docs.pytest.org/en/stable/how-to/usage.html)

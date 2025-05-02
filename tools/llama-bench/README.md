@@ -1,4 +1,4 @@
-# llama.cpp/examples/llama-bench
+# llama.cpp/tools/llama-bench
 
 Performance testing tool for llama.cpp.
 

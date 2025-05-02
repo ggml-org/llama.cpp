@@ -340,7 +340,7 @@ struct common_params {
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
-    // multimodal models (see examples/llava)
+    // multimodal models (see tools/llava)
     struct common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
@@ -414,8 +414,8 @@ struct common_params {
     int n_pca_batch = 100;
     int n_pca_iterations = 1000;
     dimre_method cvector_dimre_method = DIMRE_METHOD_PCA;
-    std::string cvector_positive_file = "examples/cvector-generator/positive.txt";
-    std::string cvector_negative_file = "examples/cvector-generator/negative.txt";
+    std::string cvector_positive_file = "tools/cvector-generator/positive.txt";
+    std::string cvector_negative_file = "tools/cvector-generator/negative.txt";
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
