@@ -13226,7 +13226,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DECI:
         case LLM_ARCH_BAICHUAN:
         case LLM_ARCH_STARCODER:
-        case LLM_ARCH_PLAMO:
         case LLM_ARCH_ORION:
         case LLM_ARCH_INTERNLM2:
         case LLM_ARCH_MINICPM:
@@ -13265,6 +13264,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
+        case LLM_ARCH_PLAMO:
         case LLM_ARCH_GEMMA:
         case LLM_ARCH_GEMMA2:
         case LLM_ARCH_GEMMA3:
