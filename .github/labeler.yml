@@ -45,7 +45,9 @@ build:
             - CMakePresets.json
 examples:
     - changed-files:
-        - any-glob-to-any-file: examples/**
+        - any-glob-to-any-file:
+            - examples/**
+            - tools/**
 devops:
     - changed-files:
         - any-glob-to-any-file:

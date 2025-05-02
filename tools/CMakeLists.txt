@@ -10,7 +10,7 @@ find_package(Threads REQUIRED)
 
 llama_add_compile_flags()
 
-# examples
+# tools
 
 if (EMSCRIPTEN)
 else()
