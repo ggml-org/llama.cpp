@@ -633,6 +633,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -669,6 +670,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=tvOS \
@@ -699,6 +701,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=visionOS \
@@ -739,6 +742,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
@@ -1417,6 +1421,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
