@@ -4772,7 +4772,9 @@ struct llm_build_deci : public llm_graph_context {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
-            if (n_head == 0 && n_ff == 0) continue;
+            if (n_head == 0 && n_ff == 0) {
+                continue;
+            }
 
             // For Granite architecture
             if (hparams.f_residual_scale) {
