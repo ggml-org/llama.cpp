@@ -175,3 +175,4 @@ virtgpu_ioctl_get_caps(struct virtgpu *gpu,
                        size_t capset_size);
 static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
 static void virtgpu_init_renderer_info(struct virtgpu *gpu);
+static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem);

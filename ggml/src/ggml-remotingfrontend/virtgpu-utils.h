@@ -3,6 +3,9 @@
 #include <cstdint>
 #include <cassert>
 #include <cstddef>
+#include <ctime>
+#include <cerrno>
+#include <atomic>
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -48,3 +51,12 @@ struct util_sparse_array {
 void *util_sparse_array_get(struct util_sparse_array *arr, uint64_t idx);
 void util_sparse_array_init(struct util_sparse_array *arr,
 			    size_t elem_size, size_t node_size);
+
+inline void
+os_time_sleep(int64_t usecs)
+{
+   struct timespec time;
+   time.tv_sec = usecs / 1000000;
+   time.tv_nsec = (usecs % 1000000) * 1000;
+   while (clock_nanosleep(CLOCK_MONOTONIC, 0, &time, &time) == EINTR);
+}

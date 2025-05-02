@@ -72,6 +72,8 @@ create_virtgpu() {
     INFO("Created shm at %p", shmem);
   }
 
+  virtgpu_submit(gpu, shmem);
+
   breakpoint();
 }
 
@@ -346,4 +348,88 @@ virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
 
    const int ret = virtgpu_ioctl(gpu, DRM_IOCTL_VIRTGPU_GETPARAM, &args);
    return ret ? 0 : val;
+}
+
+
+
+#define PK_COMMAND_TYPE_pkCreateThread 255
+
+static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
+{
+
+  /*
+   * Data passed to the host
+   */
+  int32_t command[3];
+  // command identifier
+  command[0] = PK_COMMAND_TYPE_pkCreateThread;
+  command[1] = 0; // ?
+  // arguments
+  command[2] = shmem->res_id;
+
+  /*
+   * Reply notification pointer
+   */
+
+  volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) shmem->mmap_ptr;
+  *atomic_reply_notif = 0;
+
+  /*
+   * Trigger the execbuf ioctl
+   */
+
+  struct drm_virtgpu_execbuffer args = {
+    .flags = VIRTGPU_EXECBUF_RING_IDX,
+    .size =  sizeof(command),
+    .command = (uintptr_t) &command,
+
+    .bo_handles = 0,
+    .num_bo_handles = 0,
+
+    .fence_fd = 0,
+    .ring_idx = 0,
+    .syncobj_stride = 0,
+    .num_in_syncobjs = 0,
+    .num_out_syncobjs = 0,
+    .in_syncobjs = 0,
+    .out_syncobjs = 0,
+  };
+
+  int ret = drmIoctl(gpu->fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &args);
+
+  /*
+   * Wait for the response notification
+   */
+
+  int resp = std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire);
+  printf("waiting for the response ... | %d | %p\n", resp, (void*) atomic_reply_notif);
+
+  while (std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire) == 0) {
+    int64_t base_sleep_us = 160;
+
+    os_time_sleep(base_sleep_us);
+  }
+  printf("got the response!\n");
+  /*
+   * Read the reply
+   */
+
+  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[1]);
+  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[2]);
+  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[3]);
+
+#if 0
+  VkCommandTypeEXT command_type;
+  vn_decode_VkCommandTypeEXT(dec, &command_type);
+  assert(command_type == VK_COMMAND_TYPE_vkEnumerateInstanceVersion_EXT);
+  VkResult ret;
+  vn_decode_VkResult(dec, &ret);
+  if (vn_decode_simple_pointer(dec)) {
+    vn_decode_uint32_t(dec, pApiVersion);
+  } else {
+    pApiVersion = NULL;
+  }
+#endif
+
+  return ret;
 }
