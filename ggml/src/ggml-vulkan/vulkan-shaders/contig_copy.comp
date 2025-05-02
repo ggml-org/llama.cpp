@@ -18,11 +18,7 @@ void main() {
     // fast path for when all four iterations are in-bounds
     if (idx + (num_iter-1)*num_threads < p.ne) {
         [[unroll]] for (uint i = 0; i < num_iter; ++i) {
-
-#if defined(DATA_D_BF16)
-            float f = float(data_a[get_aoffset() + idx]);
-            data_d[get_doffset() + idx] = D_TYPE(fp32_to_bf16(f));
-#elif !defined(OPTIMIZATION_ERROR_WORKAROUND)
+#ifndef OPTIMIZATION_ERROR_WORKAROUND
             data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
             data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
@@ -35,10 +31,7 @@ void main() {
                 continue;
             }
 
-#if defined(DATA_D_BF16)
-            float f = float(data_a[get_aoffset() + idx]);
-            data_d[get_doffset() + idx] = D_TYPE(fp32_to_bf16(f));
-#elif !defined(OPTIMIZATION_ERROR_WORKAROUND)
+#ifndef OPTIMIZATION_ERROR_WORKAROUND
             data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
             data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
