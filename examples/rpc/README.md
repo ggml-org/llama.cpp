@@ -34,7 +34,13 @@ You can also run multiple `rpc-server` instances on the same host, each with a d
 
 ## Usage
 
-On each host, build the corresponding backend with `cmake` and add `-DGGML_RPC=ON` to the build options.
+First, clone the repository `on each host`:
+```bash
+git clone https://github.com/ggml-org/llama.cpp.git
+cd llama.cpp
+```
+
+Then, `on each host`, build the corresponding backend with `cmake` and add `-DGGML_RPC=ON` to the build options.
 For example, to build the CUDA backend with RPC support:
 
 ```bash
