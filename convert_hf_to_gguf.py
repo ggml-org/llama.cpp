@@ -455,8 +455,12 @@ class ModelBase:
 
 
 class TextModel(ModelBase):
+    model_type = ModelType.TEXT
+    hf_arch: str
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.hf_arch = get_model_architecture(self.hparams, self.model_type)
 
         if "text_config" in self.hparams:
             # move the text_config to the root level
@@ -506,7 +510,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -1075,10 +1079,36 @@ class TextModel(ModelBase):
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
 
+    def _try_set_pooling_type(self) -> None:
+        # get pooling path
+        pooling_path = None
+        module_path = self.dir_model / "modules.json"
+        if module_path.is_file():
+            with open(module_path, encoding="utf-8") as f:
+                modules = json.load(f)
+            for mod in modules:
+                if mod["type"] == "sentence_transformers.models.Pooling":
+                    pooling_path = mod["path"]
+                    break
+
+        # get pooling type
+        if pooling_path is not None:
+            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
+                pooling = json.load(f)
+            if pooling["pooling_mode_mean_tokens"]:
+                pooling_type = gguf.PoolingType.MEAN
+            elif pooling["pooling_mode_cls_token"]:
+                pooling_type = gguf.PoolingType.CLS
+            elif pooling["pooling_mode_lasttoken"]:
+                pooling_type = gguf.PoolingType.LAST
+            else:
+                raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
+            self.gguf_writer.add_pooling_type(pooling_type)
+
 
 class VisionModel(ModelBase):
+    model_type = ModelType.VISION
     model_arch = gguf.MODEL_ARCH.CLIP_VISION
-    n_text_embd = 0
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
@@ -1089,6 +1119,8 @@ class VisionModel(ModelBase):
             raise TypeError("VisionModel must be subclassed with model_arch = gguf.MODEL_ARCH.CLIP_VISION")
 
         # get n_embd of the text model
+        if "text_config" not in self.hparams:
+            self.hparams["text_config"] = {}
         text_config = {**self.hparams, **self.hparams["text_config"]}
         self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
         assert self.n_embd_text > 0, "n_embd not found in hparams"
@@ -2540,7 +2572,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2ForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -2552,11 +2584,17 @@ class Qwen2Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self._try_set_pooling_type()
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
             if self.hparams["rope_scaling"].get("type") == "yarn":
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.hf_arch == "Qwen2Model":
+            name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -2581,6 +2619,82 @@ class Qwen2VLModel(TextModel):
             # skip visual tensors
             return []
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+class Qwen2VLVisionModel(VisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["image_size"] = self.hparams.get("image_size", 560)
+        # rename config.json values
+        self.hparams["num_attention_heads"] = self.hparams.get("num_heads")
+        self.hparams["num_hidden_layers"] = self.hparams.get("depth")
+        if "embed_dim" in self.hparams: # qwen2vl
+            self.hparams["intermediate_size"] = self.hparams.get("hidden_size")
+            self.hparams["hidden_size"] = self.hparams.get("embed_dim")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if self.global_config['model_type'] == 'qwen2_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN2VL)
+        elif self.global_config['model_type'] == 'qwen2_5_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN25VL)
+            self.gguf_writer.add_vision_use_silu(True)
+            # find n_wa_pattern (window attention pattern)
+            fullatt_block_indexes = hparams.get("fullatt_block_indexes")
+            assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for qwen2_5_vl"
+            n_wa_pattern = fullatt_block_indexes[0] + 1
+            # validate n_wa_pattern
+            for i in range(1, len(fullatt_block_indexes)):
+                if fullatt_block_indexes[i] - fullatt_block_indexes[i - 1] != n_wa_pattern:
+                    raise ValueError(f"Invalid fullatt_block_indexes: {fullatt_block_indexes}")
+            self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+        else:
+            raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
+        # default values below are taken from HF tranformers code
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd." in new_name:
+            return gguf.GGMLQuantizationType.F16
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("visual."):
+            # process visual tensors
+            # split QKV tensors if needed
+            if ".qkv." in name:
+                if data_torch.ndim == 2: # weight
+                    c3, _ = data_torch.shape
+                else: # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("qkv", "q")), wq),
+                    (self.map_tensor_name(name.replace("qkv", "k")), wk),
+                    (self.map_tensor_name(name.replace("qkv", "v")), wv),
+                ]
+            elif 'patch_embed.proj.weight' in name:
+                # split Conv3D into Conv2Ds
+                c1, c2, kt, kh, kw = data_torch.shape
+                del c1, c2, kh, kw  # unused
+                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
+                return [
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                ]
+            else:
+                return [(self.map_tensor_name(name), data_torch)]
+        return [] # skip other tensors
 
 
 @ModelBase.register("WavTokenizerDec")
@@ -3318,29 +3432,7 @@ class BertModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_causal_attention(False)
-
-        # get pooling path
-        pooling_path = None
-        module_path = self.dir_model / "modules.json"
-        if module_path.is_file():
-            with open(module_path, encoding="utf-8") as f:
-                modules = json.load(f)
-            for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
-                    pooling_path = mod["path"]
-                    break
-
-        # get pooling type
-        if pooling_path is not None:
-            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
-                pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
-                pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
-                pooling_type = gguf.PoolingType.CLS
-            else:
-                raise NotImplementedError("Only MEAN and CLS pooling types supported")
-            self.gguf_writer.add_pooling_type(pooling_type)
+        self._try_set_pooling_type()
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -3549,8 +3641,13 @@ class NomicBertModel(BertModel):
         if self._tokenizer_is_xlmroberta:
             self._xlmroberta_tokenizer_init()
 
-        # the HF config claims n_ctx=8192, but it uses RoPE scaling
-        self.hparams["n_ctx"] = 2048
+        npos, mtp = self.hparams["n_positions"], self.hparams.get("max_trained_positions", 2048)
+        if npos == 8192 and mtp == 2048:
+            self.hparams["n_positions"] = 2048  # nomic-embed-text v1 and v1.5 are trained for 2048 tokens.
+        elif npos == 2048 and mtp == 2048:
+            self.hparams["n_positions"] = 512   # nomic-embed-text-v2-moe is trained for 512 tokens.
+        else:
+            raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
 
         assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
 
@@ -5879,8 +5976,7 @@ def split_str_to_n_bytes(split_str: str) -> int:
     return n
 
 
-def get_model_architecture(dir_model: Path, model_type: ModelType, hparams: Any = None) -> str:
-    hparams = ModelBase.load_hparams(dir_model) if hparams is None else hparams
+def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
     text_config = hparams.get("text_config", {})
     vision_config = hparams.get("vision_config", {})
     arch = hparams["architectures"][0]
@@ -5951,7 +6047,8 @@ def main() -> None:
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
         model_type = ModelType.VISION if args.mmproj else ModelType.TEXT
-        model_architecture = get_model_architecture(dir_model, model_type)
+        hparams = ModelBase.load_hparams(dir_model)
+        model_architecture = get_model_architecture(hparams, model_type)
         logger.info(f"Model architecture: {model_architecture}")
         try:
             model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
