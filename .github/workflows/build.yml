@@ -601,9 +601,8 @@ jobs:
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
 
-# Disabled for now due to sporadic issue syncing.
-#  build-linux-cross:
-#    uses: ./.github/workflows/build-linux-cross.yml
+  build-linux-cross:
+    uses: ./.github/workflows/build-linux-cross.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest

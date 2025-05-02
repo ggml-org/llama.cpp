@@ -290,6 +290,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "language_model.model.layers.{bid}.feed_forward.router", # llama4
+            "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -322,6 +323,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
+            "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe
             "model.layers.{bid}.mlp.c_fc",                            # starcoder2
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
@@ -337,6 +339,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
             "language_model.model.layers.{bid}.feed_forward.experts.up_proj", # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -418,6 +421,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
             "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
             "language_model.model.layers.{bid}.feed_forward.experts.down_proj", # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -997,6 +1001,10 @@ class TensorNameMap:
             "multi_modal_projector.mm_input_projection",
         ),
 
+        MODEL_TENSOR.V_MM_INP_NORM: (
+            "multi_modal_projector.norm",
+        ),
+
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
             "multi_modal_projector.mm_soft_emb_norm",
         ),
@@ -1047,6 +1055,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK: (
             "v.token_embd.img_break", # for pixtral, this is a generated vector
+        ),
+
+        MODEL_TENSOR.V_MM_PATCH_MERGER: (
+            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
         ),
     }
 

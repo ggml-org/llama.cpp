@@ -114,7 +114,7 @@ llama_context::llama_context(
     }
 
     if (n_ctx_per_seq > hparams.n_ctx_train) {
-        LLAMA_LOG_WARN("%s: n_ctx_pre_seq (%u) > n_ctx_train (%u) -- possible training context overflow\n",
+        LLAMA_LOG_WARN("%s: n_ctx_per_seq (%u) > n_ctx_train (%u) -- possible training context overflow\n",
                 __func__, n_ctx_per_seq, hparams.n_ctx_train);
     }
 
@@ -1535,8 +1535,6 @@ int32_t llama_context::output_reserve(int32_t n_outputs) {
 
     // set all ids as invalid (negative)
     std::fill(output_ids.begin(), output_ids.end(), -1);
-
-    ggml_backend_buffer_clear(buf_output.get(), 0);
 
     this->n_outputs     = 0;
     this->n_outputs_max = n_outputs_max;
