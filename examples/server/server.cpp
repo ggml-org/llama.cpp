@@ -1848,6 +1848,7 @@ struct server_context {
     llama_context * ctx = nullptr;
 
     const llama_vocab * vocab = nullptr;
+    bool vocab_dft_compatible = true;
 
     llama_model * model_dft = nullptr;
 
@@ -1939,10 +1940,9 @@ struct server_context {
                 return false;
             }
 
-            if (!common_speculative_are_compatible(ctx, llama_init_dft.context.get())) {
-                SRV_ERR("the draft model '%s' is not compatible with the target model '%s'\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
-
-                return false;
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            if (!vocab_dft_compatible) {
+                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.c_str(), params_base.model.c_str());
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
@@ -1988,7 +1988,7 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx_dft);
+                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
@@ -3336,6 +3336,7 @@ struct server_context {
                 params_spec.n_draft   = n_draft_max;
                 params_spec.n_reuse   = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
                 params_spec.p_min     = slot.params.speculative.p_min;
+                params_spec.vocab_dft_compatible = vocab_dft_compatible;
 
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, slot.cache_tokens, id);
 
