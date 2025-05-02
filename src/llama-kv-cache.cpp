@@ -216,11 +216,6 @@ void llama_kv_cache_unified::seq_keep(llama_seq_id seq_id) {
     uint32_t new_head = size;
 
     for (uint32_t i = 0; i < size; ++i) {
-        // TODO: remove tail
-        //if (recurrent && (llama_seq_id) i != seq_id) {
-        //    cells[i].tail = -1;
-        //}
-
         if (!cells[i].has_seq_id(seq_id)) {
             if (cells[i].pos >= 0) {
                 used--;
