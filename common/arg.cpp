@@ -2783,7 +2783,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_THREADS_HTTP"));
     add_opt(common_arg(
         {"--cache-reuse"}, "N",
-        string_format("min chunk size to attempt reusing from the cache via KV shifting (default: %d)", params.n_cache_reuse),
+        string_format(
+            "min chunk size to attempt reusing from the cache via KV shifting (default: %d)\n"
+            "[(card)](https://ggml.ai/f0.png)", params.n_cache_reuse
+        ),
         [](common_params & params, int value) {
             params.n_cache_reuse = value;
         }

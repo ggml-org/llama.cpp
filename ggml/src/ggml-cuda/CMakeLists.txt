@@ -133,6 +133,7 @@ if (CUDAToolkit_FOUND)
                 COMMAND ${NVCC_CMD} -Xcompiler "-dumpfullversion -dumpversion"
                 OUTPUT_VARIABLE CUDA_CCVER
                 ERROR_QUIET
+                OUTPUT_STRIP_TRAILING_WHITESPACE
             )
         else()
             if (CUDA_CCFULLVER MATCHES Apple)
@@ -143,7 +144,7 @@ if (CUDAToolkit_FOUND)
             string(REGEX REPLACE "^.* version ([0-9.]*).*$" "\\1" CUDA_CCVER ${CUDA_CCFULLVER})
         endif()
 
-        message("-- CUDA host compiler is ${CUDA_CCID} ${CUDA_CCVER}")
+        message(STATUS "CUDA host compiler is ${CUDA_CCID} ${CUDA_CCVER}")
 
         ggml_get_flags(${CUDA_CCID} ${CUDA_CCVER})
         list(APPEND CUDA_CXX_FLAGS ${CXX_FLAGS} ${GF_CXX_FLAGS})  # This is passed to -Xcompiler later

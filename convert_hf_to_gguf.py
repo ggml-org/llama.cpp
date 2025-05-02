@@ -419,7 +419,9 @@ class ModelBase:
     @staticmethod
     def load_hparams(dir_model: Path):
         try:
-            return AutoConfig.from_pretrained(dir_model).to_dict()
+            # for security reason, we don't allow loading remote code by default
+            # if a model need remote code, we will fallback to config.json
+            return AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")

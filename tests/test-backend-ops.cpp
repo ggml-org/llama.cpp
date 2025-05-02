@@ -1981,7 +1981,7 @@ struct test_mul_mat : public test_case {
     const std::array<int64_t, 2> bs;  // dims 3 and 4
     const std::array<int64_t, 2> nr;  // repeat in dims 3 and 4
     const std::array<int64_t, 4> per; // permutation of dimensions
-    const bool v; // whether a is a non-contiguous view
+    const bool v; // whether a and b are non-contiguous views
 
     std::string vars() override {
         return VARS_TO_STR9(type_a, type_b, m, n, k, bs, nr, per, v);
@@ -2042,12 +2042,15 @@ struct test_mul_mat : public test_case {
         } else {
 
             if (v) {
-                a = ggml_new_tensor_4d(ctx, type_a, k*2, m, bs[0], bs[1]);
-                a = ggml_view_4d(ctx, a, k, m, bs[0], bs[1], a->nb[1], a->nb[2], a->nb[3], 0);
+                a = ggml_new_tensor_4d(ctx, type_a, k*2, m, bs[0],       bs[1]);
+                b = ggml_new_tensor_4d(ctx, type_b, k*2, n, bs[0]*nr[0], bs[1]*nr[1]);
+
+                a = ggml_view_4d(ctx, a, k, m, bs[0],       bs[1],       a->nb[1], a->nb[2], a->nb[3], 0);
+                b = ggml_view_4d(ctx, b, k, n, bs[0]*nr[0], bs[1]*nr[1], b->nb[1], b->nb[2], b->nb[3], 0);
             } else {
                 a = ggml_new_tensor_4d(ctx, type_a, k, m, bs[0],       bs[1]);
+                b = ggml_new_tensor_4d(ctx, type_b, k, n, bs[0]*nr[0], bs[1]*nr[1]);
             }
-            b = ggml_new_tensor_4d(ctx, type_b, k, n, bs[0]*nr[0], bs[1]*nr[1]);
             if (!ggml_is_quantized(type_a)) {
                 if (bs[1] == 1 && nr[1] == 1) {
                     ggml_set_param(ctx, a);
