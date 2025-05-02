@@ -105,8 +105,9 @@ fun AppScaffold(
             is BottomBarConfig.Benchmark -> {
                 BenchmarkBottomBar(
                     engineIdle = config.engineIdle,
-                    onRerun = config.onRerun,
                     onShare = config.onShare,
+                    onRerun = config.onRerun,
+                    onClear = config.onClear,
                     showModelCard = config.showModelCard,
                     onToggleModelCard = config.onToggleModelCard,
                 )

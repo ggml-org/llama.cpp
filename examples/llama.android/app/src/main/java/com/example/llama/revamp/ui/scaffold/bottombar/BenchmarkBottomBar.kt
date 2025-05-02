@@ -7,6 +7,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
+import androidx.compose.material.icons.filled.ClearAll
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.outlined.Badge
@@ -20,8 +21,9 @@ import androidx.compose.runtime.Composable
 @Composable
 fun BenchmarkBottomBar(
     engineIdle: Boolean,
-    onRerun: () -> Unit,
     onShare: () -> Unit,
+    onRerun: () -> Unit,
+    onClear: () -> Unit,
     showModelCard: Boolean,
     onToggleModelCard: (Boolean) -> Unit,
 ) {
@@ -34,6 +36,13 @@ fun BenchmarkBottomBar(
                     tint =
                         if (engineIdle) MaterialTheme.colorScheme.onSurface
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                )
+            }
+
+            IconButton(onClick = onClear) {
+                Icon(
+                    imageVector = Icons.Default.ClearAll,
+                    contentDescription = "Clear benchmark results"
                 )
             }
 

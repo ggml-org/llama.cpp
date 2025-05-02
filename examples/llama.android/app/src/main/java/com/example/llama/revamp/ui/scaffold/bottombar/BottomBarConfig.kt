@@ -87,8 +87,9 @@ sealed class BottomBarConfig {
 
     data class Benchmark(
         val engineIdle: Boolean,
-        val onRerun: () -> Unit,
         val onShare: () -> Unit,
+        val onRerun: () -> Unit,
+        val onClear: () -> Unit,
         val showModelCard: Boolean,
         val onToggleModelCard: (Boolean) -> Unit,
     ) : BottomBarConfig()

@@ -271,6 +271,11 @@ fun AppContent(
                 ),
                 bottomBarConfig = BottomBarConfig.Benchmark(
                     engineIdle = !engineState.isUninterruptible,
+                    onShare = {
+                        benchmarkResults.lastOrNull()?.let {
+                            handleScaffoldEvent(ScaffoldEvent.ShareText(it.text))
+                        }
+                    },
                     onRerun = {
                         if (engineState.isUninterruptible) {
                             handleScaffoldEvent(ScaffoldEvent.ShowSnackbar(
@@ -281,11 +286,7 @@ fun AppContent(
                             benchmarkViewModel.runBenchmark()
                         }
                     },
-                    onShare = {
-                        benchmarkResults.lastOrNull()?.let {
-                            handleScaffoldEvent(ScaffoldEvent.ShareText(it.text))
-                        }
-                    },
+                    onClear = benchmarkViewModel::clearResults,
                     showModelCard = showModelCard,
                     onToggleModelCard = benchmarkViewModel::toggleModelCard,
                 )

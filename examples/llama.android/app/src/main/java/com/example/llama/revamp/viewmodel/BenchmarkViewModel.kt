@@ -67,6 +67,12 @@ class BenchmarkViewModel @Inject constructor(
         }
         return true
     }
+
+    override suspend fun performCleanup() = clearResults()
+
+    fun clearResults() {
+        _benchmarkResults.value = emptyList()
+    }
 }
 
 data class BenchmarkResult(
