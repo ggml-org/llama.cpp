@@ -31,6 +31,18 @@ enum outetts_version {
 #define SQR(X)    ((X) * (X))
 #define UNCUBE(x) x < 48 ? 0 : x < 115 ? 1 : (x - 35) / 40
 
+#ifdef _WIN32
+#include <io.h>
+static bool stdin_isatty() {
+    return _isatty( _fileno(stdin) );
+}
+#else
+#include <unistd.h>
+static bool stdin_isatty() {
+    return isatty( fileno(stdin) );
+}
+#endif
+
 /**
  * Quantizes 24-bit RGB to xterm256 code range [16,256).
  */
@@ -533,6 +545,35 @@ static std::string audio_data_from_speaker(json speaker, const outetts_version t
     return audio_data;
 }
 
+static void read_stdin(std::string& in) {
+    static constexpr const size_t size_buf = 8;
+
+    while (true) {
+        char buffer[size_buf] = {0};
+        const size_t bytes_read = fread(buffer, 1, size_buf, stdin);
+        if (bytes_read==0) {
+            break;
+        }
+        in.append(buffer, bytes_read);
+    }
+}
+
+static bool check_text(std::string& in) {
+    if (in.empty()) {
+        LOG_ERR("%s: Empty text prompt, nothing to do.\n", __func__);
+        return false;
+    }
+
+    if (in.size()==1) {
+        if (! std::isalnum(in[0])) {
+            LOG_ERR("%s: Weird text prompt, nothing to do.\n", __func__);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 int main(int argc, char ** argv) {
     common_params params;
 
@@ -548,6 +589,22 @@ int main(int argc, char ** argv) {
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
         return 1;
+    }
+
+    if (params.prompt.empty()) {
+        // no '-p', no '-f'.
+        if (stdin_isatty()) {
+            // terminal interactive mode not supported, IO would block
+            LOG_ERR("%s: Missing text prompt, nothing to do.\n", __func__);
+            return EINVAL;
+        }
+
+        // can be a redirected input
+        read_stdin(params.prompt);
+    }
+
+    if (! check_text(params.prompt)) {
+        return EINVAL;
     }
 
     const int n_parallel = params.n_parallel;
