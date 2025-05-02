@@ -77,6 +77,10 @@ play the audio:
 ```console
 $ aplay output.wav
 ```
+On macOS, use:
+```console
+$ afplay output.wav
+```
 
 ### Running the example with llama-server
 Running this example with `llama-server` is also possible and requires two
