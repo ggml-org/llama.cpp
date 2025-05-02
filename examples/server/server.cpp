@@ -3003,6 +3003,12 @@ struct server_context {
                         }
 
                         if (slot.is_non_causal()) {
+                            if (slot.task_type == SERVER_TASK_TYPE_EMBEDDING) {
+                                if(n_batch > n_ubatch){
+                                    SRV_WRN("%s","setting batch= ubatch \n");
+                                    n_batch = n_ubatch;
+                                }
+                            }
                             if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.release();
                                 send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
