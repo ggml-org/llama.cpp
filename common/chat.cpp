@@ -448,6 +448,7 @@ std::string common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_HERMES_2_PRO_EXTRACT_REASONING: return "Hermes 2 Pro (extract reasoning)";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_COMMAND_R7B_EXTRACT_REASONING: return "Command R7B (extract reasoning)";
+        case COMMON_CHAT_FORMAT_PHI_4: return "Phi-4";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -583,10 +584,7 @@ static common_chat_msg parse_json_tool_calls(
     }
 
     if (!result.tool_calls.empty()) {
-        if (!string_strip(result.content).empty()) {
-            LOG_WRN("Content found with tool calls: %s\n", result.content.c_str());
-        }
-        result.content = "";
+        result.content = string_strip(result.content);
     }
     return result;
 }
@@ -1356,6 +1354,66 @@ static common_chat_msg common_chat_parse_functionary_v3_1_llama_3_1(const std::s
     return parse_json_tool_calls(input, std::nullopt, function_regex, close_regex);
 }
 
+static common_chat_params common_chat_params_init_phi_4(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    // Phi-4 has a unique format that expects tools in the system message with <|tool|> tags
+    // and returns function calls as a JSON object after <|tool_call|> tag
+    common_chat_params data;
+
+    data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+        std::vector<std::string> tool_rules;
+        std::vector<std::string> tool_call_alts;
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            std::string name = function.at("name");
+            auto parameters = function.at("parameters");
+            builder.resolve_refs(parameters);
+            auto call_rule = builder.add_schema(name + "-call", {
+                {"type", "object"},
+                {"properties", {
+                    {"name", {{"const", name}}},
+                    {"arguments", parameters},
+                }},
+                {"required", json::array({"name", "arguments"})},
+            });
+            tool_rules.push_back(builder.add_rule(name + "-call", "\"<|tool_call|>\" " + call_rule + " \"<|/tool_call|>\""));
+        });
+        auto any_tool_call = builder.add_rule("any_tool_call", "( " + string_join(tool_rules, " | ") + " ) space");
+        std::vector<std::string> alt_tags {
+            any_tool_call,
+        };
+        tool_call_alts.push_back(any_tool_call);
+        auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
+        builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
+        data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call|>"});
+        data.preserved_tokens = {
+            "<|tool_call|>",
+            "<|/tool_call|>",
+            "<|tool_response|>",
+            "<|tool|>",
+            "<|/tool|>",
+        };
+    });
+
+    // For Phi-4, we need to inject tools into the system message
+    // because the template expects tools in the system message with <|tool|> tags
+    // The Phi-4 template has issues with tool calls.
+    // It is advisable to use --chat-template-file models/templates/llama-cpp-microsoft-Phi-4-mini-instruct.jinja
+    // - It expects tools from the system message (instead of as a global variable as most templates).
+    // - It does not print tool calls (this is worked around by the Minja + the generic mode, but without the <|tool_call|> syntax)
+    // - With defaults, it prints tool call results (messages such as {"role": "tool", "name": "foo", "content": "42"}) as <|tool|>42<|end|> which conflicts with the tool description wrapping mechanism.
+    // - Tool call results are expected to be injected as a message from the <|tool_response|> role. i.e. <|tool_response|>(json.dump())<|end|>
+    data.prompt = apply(tmpl, inputs.messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt);
+    data.format = COMMON_CHAT_FORMAT_PHI_4;
+    return data;
+}
+
+static common_chat_msg common_chat_parse_phi_4(const std::string & input) {
+    static std::regex function_regex("<\\|tool_call\\|>\\s*\\{\\s*\"name\"\\s*:\\s*\"([^\"]+)\"\\s*,\\s*\"arguments\"\\s*:");
+    static std::regex close_regex(R"(\}\s*(<\|/tool_call\|>)?)");
+    return parse_json_tool_calls(input, std::nullopt, function_regex, close_regex);
+}
+
 static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     // (content)?(<tool_call>{"name": "foo", "arguments": {"a": 1}}</tool_call>)*
@@ -1642,6 +1700,15 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_firefunction_v2(tmpl, params);
     }
 
+    // Phi-4 mini.
+    if (src.find("<|tool|>") != std::string::npos) {
+        if (src.find("<|tool_response|>") != std::string::npos) {
+            return common_chat_params_init_phi_4(tmpl, params);
+        } else {
+            LOG_WRN("[%s] Invalid legacy Phi 4 template detected: switching to Generic tool call format. To enable native support, please restart with `--chat-template-file models/template/microsoft-Phi-4-mini-instruct.jinja`", __func__);
+        }
+    }
+
     // Plain handler (no tools)
     if (params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
         return common_chat_params_init_without_tools(tmpl, params);
@@ -1773,6 +1840,8 @@ common_chat_msg common_chat_parse(const std::string & input, common_chat_format 
             return common_chat_parse_command_r7b(input, /* extract_reasoning= */ false);
         case COMMON_CHAT_FORMAT_COMMAND_R7B_EXTRACT_REASONING:
             return common_chat_parse_command_r7b(input, /* extract_reasoning= */ true);
+        case COMMON_CHAT_FORMAT_PHI_4:
+            return common_chat_parse_phi_4(input);
         default:
             throw std::runtime_error("Unsupported format: " + common_chat_format_name(format));
     }

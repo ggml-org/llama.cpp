@@ -1,0 +1,37 @@
+{%- if messages[0]["role"] == "system" %}
+    {%- set system_message = messages[0]["content"] %}
+{% elif tools is defined -%}
+    {%- set system_message = "" -%}
+{%- endif %}
+
+{%- if system_message is defined -%}
+    {{- '<|system|>' + system_message -}}
+    {%- if tools is defined -%}
+        {% for tool in tools %}
+            {{- '<|tool|>' + (tool['function'] | tojson) + '<|/tool|>' -}}
+        {% endfor %}
+        {%- if '<|tool_call|>' not in system_message -%}
+            {{- 'You are a helpful assistant with some tools.\nTo use a tool, respond in this format: <|tool_call|>{"name": "foo", "arguments": {"a": 1}}<|/tool_call|>' -}}
+        {%- endif -%}
+    {%- endif -%}
+    {{- '<|end|>' -}}
+{%- endif -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'tool' -%}
+        {{- '<|tool_response|>' + (message['content'] | tojson) + '<|end|>' -}}
+    {%- elif message['role'] != 'system' -%}
+        {{- '<|' + message['role'] + '|>' -}}
+        {%- if message.content -%}
+            {{- message['content'] -}}
+        {%- endif -%}  
+        {%- for tool_call in message.tool_calls -%}
+            {{- '<|tool_call|>' + (tool_call['function'] | tojson) + '<|/tool_call|>' -}}
+        {%- endfor -%}
+        {{- '<|end|>' -}}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+   {{- '<|assistant|>' -}}
+{%- else -%}
+   {{- eos_token -}}
+{%- endif -%}
