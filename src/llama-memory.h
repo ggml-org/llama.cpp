@@ -7,12 +7,7 @@ struct llama_memory_params {
     ggml_type type_k;
     ggml_type type_v;
 
-    //bool v_trans;
-    //bool offload_kqv;
-
-    //uint32_t kv_size;
-
-    // other types of memory
+    // parameters for other types of memory
     // ...
 };
 
