@@ -3,6 +3,8 @@
 #include <cerrno>
 #include <unistd.h>
 
+#include <cstdlib>
+
 #include "virtgpu.h"
 
 static inline void
@@ -31,9 +33,13 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
    gpu->shmem_blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
 }
 
-void breakpoint() {
+void *something = NULL;
+void breakpoint () {
   // break here
   INFO("BREAKPOINT HERE");
+  if (!something) { // avoid the [[noreturn]] detection mechanism
+    exit(0);
+  }
 }
 
 void
