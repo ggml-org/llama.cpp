@@ -9,6 +9,7 @@
 
 #include <set>
 #include <vector>
+#include <unordered_map>
 
 struct llama_cparams;
 struct llama_hparams;
@@ -393,6 +394,79 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+};
+
+//
+// llama_kv_cache_hybrid
+//
+
+class llama_kv_cache_hybrid : public llama_kv_cache {
+public:
+
+    struct child_cache {
+        llama_kv_cache * child;
+        std::vector<size_t> layer_ids;
+    };
+
+    llama_kv_cache_hybrid(
+        const llama_hparams            & hparams,
+        const std::vector<child_cache> & children);
+
+    //
+    // llama_memory_i
+    //
+
+    void clear() override;
+
+    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
+    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
+    void seq_keep(llama_seq_id seq_id) override;
+    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
+    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
+
+    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    //
+    // llama_kv_cache
+    //
+
+    void restore() override;
+    void commit()  override;
+
+    bool update(llama_context & ctx) override;
+
+    void defrag_sched(float thold) override;
+
+    void set_full() override;
+
+    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
+
+    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
+
+    // updates the cache head
+    // Note: On success, it's important that cache.head points
+    // to the first cell of the slot.
+    bool find_slot(const llama_ubatch & batch) override;
+
+    int32_t get_n_tokens()   const override;
+    int32_t get_used_cells() const override;
+
+    // TODO: better data structures to reduce the cost of this operation
+    llama_pos get_pos_max() const override;
+
+    bool get_can_shift() const override;
+
+    // state write/load
+
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
+
+private:
+
+    const llama_hparams                                & m_hparams;
+    const std::unordered_map<size_t, llama_kv_cache *>   m_layer_cache_map;
+    const std::set<llama_kv_cache *>                     m_children; // Ordered for state IO
+    const bool                                           m_has_recurrent;
 };
 
 
