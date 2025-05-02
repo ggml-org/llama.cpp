@@ -1936,7 +1936,7 @@ int32_t llama_kv_cache_recurrent::s_copy(int i) const {
 
     //////////////////////////////////////////////
     // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[i]);
+    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
 
     // prevent out-of-bound sources
     if (cell.src < 0 || (uint32_t) cell.src >= size) {
@@ -1959,7 +1959,7 @@ float llama_kv_cache_recurrent::s_mask(int i) const {
 
     //////////////////////////////////////////////
     // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[i]);
+    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
 
     float res = (float) (cell.src >= 0);
 
