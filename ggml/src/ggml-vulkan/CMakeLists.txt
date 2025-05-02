@@ -32,10 +32,18 @@ function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VA
     if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
         message(STATUS "${EXTENSION_NAME} not supported by glslc")
         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
+
+        # Append to the shader extensions definitions file
+        file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
+             "set(${RESULT_VARIABLE} OFF)\n")
     else()
         message(STATUS "${EXTENSION_NAME} supported by glslc")
         set(${RESULT_VARIABLE} ON PARENT_SCOPE)
         add_compile_definitions(${RESULT_VARIABLE})
+
+        # Append to the shader extensions definitions file
+        file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
+             "set(${RESULT_VARIABLE} ON)\nadd_compile_definitions(${RESULT_VARIABLE})\n")
     endif()
 endfunction()
 
@@ -46,6 +54,10 @@ if (Vulkan_FOUND)
                              ggml-vulkan.cpp
                              ../../include/ggml-vulkan.h
                             )
+
+    # Create the shader extensions definitions file
+    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
+         "# Auto-generated file with Vulkan shader extension support definitions\n\n")
 
     # Test all shader extensions
     test_shader_extension_support(
@@ -140,10 +152,7 @@ if (Vulkan_FOUND)
             SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
             CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE}
                     -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
-                    -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT=${GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT=${GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT}
+                    -DVULKAN_SHADER_EXTENSIONS_FILE=${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
             BUILD_COMMAND ${CMAKE_COMMAND} --build .
             INSTALL_COMMAND ${CMAKE_COMMAND} --install .
             INSTALL_DIR ${CMAKE_BINARY_DIR}
