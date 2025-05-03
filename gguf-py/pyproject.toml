@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gguf"
-version = "0.16.1"
+version = "0.16.2"
 description = "Read and write ML models in GGUF for GGML"
 authors = ["GGML <ggml@ggml.ai>"]
 packages = [
@@ -23,7 +23,7 @@ numpy = ">=1.17"
 tqdm = ">=4.27"
 pyyaml = ">=5.1"
 sentencepiece = ">=0.1.98,<=0.2.0"
-PySide6 = { version = "^6.9", optional = true }
+PySide6 = { version = "^6.9", python = ">=3.9,<3.14", optional = true }
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

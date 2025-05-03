@@ -27,10 +27,10 @@ on:
   push:
     branches:
       - master
-    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
+    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'tools/server/*.h*', 'tools/server/*.cpp']
   pull_request_target:
     types: [opened, synchronize, reopened]
-    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
+    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'tools/server/*.h*', 'tools/server/*.cpp']
   schedule:
     -  cron: '04 2 * * *'
 
@@ -69,7 +69,7 @@ jobs:
       - name: Install python env
         id: pipenv
         run: |
-          cd examples/server/bench
+          cd tools/server/bench
           python3 -m venv venv
           source venv/bin/activate
           pip install -r requirements.txt
@@ -79,7 +79,7 @@ jobs:
         run: |
           wget --quiet https://github.com/prometheus/prometheus/releases/download/v2.51.0/prometheus-2.51.0.linux-amd64.tar.gz
           tar xzf prometheus*.tar.gz --strip-components=1
-          ./prometheus --config.file=examples/server/bench/prometheus.yml &
+          ./prometheus --config.file=tools/server/bench/prometheus.yml &
           while ! nc -z localhost 9090; do
             sleep 0.1
           done
@@ -92,7 +92,7 @@ jobs:
       - name: Install k6 and xk6-sse
         id: k6_installation
         run: |
-          cd examples/server/bench
+          cd tools/server/bench
           go install go.k6.io/xk6/cmd/xk6@latest
           xk6 build master \
               --with github.com/phymbert/xk6-sse
@@ -116,7 +116,7 @@ jobs:
       - name: Download the dataset
         id: download_dataset
         run: |
-          cd examples/server/bench
+          cd tools/server/bench
           wget --quiet https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json
 
       - name: Server bench
@@ -126,7 +126,7 @@ jobs:
         run: |
           set -eux
 
-          cd examples/server/bench
+          cd tools/server/bench
           source venv/bin/activate
           python bench.py \
               --runner-label ${{ env.RUNNER_LABEL }} \
@@ -157,9 +157,9 @@ jobs:
           name: bench-server-${{ github.job }}-${{ env.RUNNER_LABEL }}-${{ matrix.model }}-${{ matrix.ftype }}
           compression-level: 9
           path: |
-            examples/server/bench/*.jpg
-            examples/server/bench/*.json
-            examples/server/bench/*.log
+            tools/server/bench/*.jpg
+            tools/server/bench/*.json
+            tools/server/bench/*.log
 
       - name: Commit status
         uses: Sibz/github-status-action@v1
@@ -178,17 +178,17 @@ jobs:
         with:
           client_id: ${{secrets.IMGUR_CLIENT_ID}}
           path: |
-            examples/server/bench/prompt_tokens_seconds.jpg
-            examples/server/bench/predicted_tokens_seconds.jpg
-            examples/server/bench/kv_cache_usage_ratio.jpg
-            examples/server/bench/requests_processing.jpg
+            tools/server/bench/prompt_tokens_seconds.jpg
+            tools/server/bench/predicted_tokens_seconds.jpg
+            tools/server/bench/kv_cache_usage_ratio.jpg
+            tools/server/bench/requests_processing.jpg
 
       - name: Extract mermaid
         id: set_mermaid
         run: |
           set -eux
 
-          cd examples/server/bench
+          cd tools/server/bench
           PROMPT_TOKENS_SECONDS=$(cat prompt_tokens_seconds.mermaid)
           echo "PROMPT_TOKENS_SECONDS<<EOF" >> $GITHUB_ENV
           echo "$PROMPT_TOKENS_SECONDS" >> $GITHUB_ENV

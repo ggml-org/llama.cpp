@@ -19,9 +19,9 @@ logger = logging.getLogger("compare-llama-bench")
 
 # Properties by which to differentiate results per commit:
 KEY_PROPERTIES = [
-    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "model_filename", "model_type", "n_batch", "n_ubatch",
-    "embeddings", "cpu_mask", "cpu_strict", "poll", "n_threads", "type_k", "type_v", "use_mmap", "no_kv_offload",
-    "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen"
+    "cpu_info", "gpu_info", "backends", "n_gpu_layers", "tensor_buft_overrides", "model_filename", "model_type",
+    "n_batch", "n_ubatch", "embeddings", "cpu_mask", "cpu_strict", "poll", "n_threads", "type_k", "type_v",
+    "use_mmap", "no_kv_offload", "split_mode", "main_gpu", "tensor_split", "flash_attn", "n_prompt", "n_gen", "n_depth"
 ]
 
 # Properties that are boolean and are converted to Yes/No for the table:
@@ -30,11 +30,11 @@ BOOL_PROPERTIES = ["embeddings", "cpu_strict", "use_mmap", "no_kv_offload", "fla
 # Header names for the table:
 PRETTY_NAMES = {
     "cpu_info": "CPU", "gpu_info": "GPU", "backends": "Backends", "n_gpu_layers": "GPU layers",
-    "model_filename": "File", "model_type": "Model", "model_size": "Model size [GiB]",
-    "model_n_params": "Num. of par.", "n_batch": "Batch size", "n_ubatch": "Microbatch size",
-    "embeddings": "Embeddings", "cpu_mask": "CPU mask", "cpu_strict": "CPU strict", "poll": "Poll",
-    "n_threads": "Threads", "type_k": "K type", "type_v": "V type", "split_mode": "Split mode", "main_gpu": "Main GPU",
-    "no_kv_offload": "NKVO", "flash_attn": "FlashAttention", "tensor_split": "Tensor split", "use_mmap": "Use mmap",
+    "tensor_buft_overrides": "Tensor overrides", "model_filename": "File", "model_type": "Model", "model_size": "Model size [GiB]",
+    "model_n_params": "Num. of par.", "n_batch": "Batch size", "n_ubatch": "Microbatch size", "embeddings": "Embeddings",
+    "cpu_mask": "CPU mask", "cpu_strict": "CPU strict", "poll": "Poll", "n_threads": "Threads", "type_k": "K type", "type_v": "V type",
+    "use_mmap": "Use mmap", "no_kv_offload": "NKVO", "split_mode": "Split mode", "main_gpu": "Main GPU", "tensor_split": "Tensor split",
+    "flash_attn": "FlashAttention",
 }
 
 DEFAULT_SHOW = ["model_type"]  # Always show these properties by default.
@@ -281,12 +281,12 @@ def get_rows(properties):
     The returned rows are unique in terms of property combinations.
     """
     select_string = ", ".join(
-        [f"tb.{p}" for p in properties] + ["tb.n_prompt", "tb.n_gen", "AVG(tb.avg_ts)", "AVG(tc.avg_ts)"])
+        [f"tb.{p}" for p in properties] + ["tb.n_prompt", "tb.n_gen", "tb.n_depth", "AVG(tb.avg_ts)", "AVG(tc.avg_ts)"])
     equal_string = " AND ".join(
         [f"tb.{p} = tc.{p}" for p in KEY_PROPERTIES] + [
             f"tb.build_commit = '{hexsha8_baseline}'", f"tc.build_commit = '{hexsha8_compare}'"]
     )
-    group_order_string = ", ".join([f"tb.{p}" for p in properties] + ["tb.n_gen", "tb.n_prompt"])
+    group_order_string = ", ".join([f"tb.{p}" for p in properties] + ["tb.n_gen", "tb.n_prompt", "tb.n_depth"])
     query = (f"SELECT {select_string} FROM test tb JOIN test tc ON {equal_string} "
              f"GROUP BY {group_order_string} ORDER BY {group_order_string};")
     return cursor.execute(query).fetchall()
@@ -309,7 +309,7 @@ else:
     rows_full = get_rows(KEY_PROPERTIES)
     properties_different = []
     for i, kp_i in enumerate(KEY_PROPERTIES):
-        if kp_i in DEFAULT_SHOW or kp_i == "n_prompt" or kp_i == "n_gen":
+        if kp_i in DEFAULT_SHOW or kp_i in ["n_prompt", "n_gen", "n_depth"]:
             continue
         for row_full in rows_full:
             if row_full[i] != rows_full[0][i]:
@@ -340,17 +340,20 @@ else:
 
 table = []
 for row in rows_show:
-    n_prompt = int(row[-4])
-    n_gen    = int(row[-3])
+    n_prompt = int(row[-5])
+    n_gen    = int(row[-4])
+    n_depth  = int(row[-3])
     if n_prompt != 0 and n_gen == 0:
         test_name = f"pp{n_prompt}"
     elif n_prompt == 0 and n_gen != 0:
         test_name = f"tg{n_gen}"
     else:
         test_name = f"pp{n_prompt}+tg{n_gen}"
+    if n_depth != 0:
+        test_name = f"{test_name}@d{n_depth}"
     #           Regular columns    test name    avg t/s values              Speedup
     #            VVVVVVVVVVVVV     VVVVVVVVV    VVVVVVVVVVVVVV              VVVVVVV
-    table.append(list(row[:-4]) + [test_name] + list(row[-2:]) + [float(row[-1]) / float(row[-2])])
+    table.append(list(row[:-5]) + [test_name] + list(row[-2:]) + [float(row[-1]) / float(row[-2])])
 
 # Some a-posteriori fixes to make the table contents prettier:
 for bool_property in BOOL_PROPERTIES:
@@ -376,7 +379,7 @@ if "gpu_info" in show:
         for gns in GPU_NAME_STRIP:
             row_table[ip] = row_table[ip].replace(gns, "")
 
-        gpu_names = row_table[ip].split("/")
+        gpu_names = row_table[ip].split(", ")
         num_gpus = len(gpu_names)
         all_names_the_same = len(set(gpu_names)) == 1
         if len(gpu_names) >= 2 and all_names_the_same:
