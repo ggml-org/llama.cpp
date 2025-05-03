@@ -67,7 +67,15 @@ const std::vector<std::string> type_names = {
 };
 
 namespace {
-void execute_command(const std::string& command, std::string& stdout_str, std::string& stderr_str) {
+void execute_command(
+    #ifdef _WIN32
+    const std::string& command,
+    #else
+    const std::vector<std::string>& command,
+    #endif
+    std::string& stdout_str,
+    std::string& stderr_str
+) {
 #ifdef _WIN32
     HANDLE stdout_read, stdout_write;
     HANDLE stderr_read, stderr_write;
@@ -136,7 +144,15 @@ int stdout_pipe[2];
         dup2(stderr_pipe[1], STDERR_FILENO);
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
-        execl("/bin/sh", "sh", "-c", command.c_str(), (char*) nullptr);
+
+        std::vector<char*> argv;
+        argv.reserve(command.size());
+        for (const auto& part : command) {
+            argv.push_back(const_cast<char*>(part.c_str()));
+        }
+        argv.push_back(nullptr);
+        execv(argv[0], argv.data());
+
         _exit(EXIT_FAILURE);
     } else {
         close(stdout_pipe[1]);
@@ -220,13 +236,19 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
 
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
+    std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env};
+    
     // disable spirv-opt for coopmat shaders for https://github.com/ggerganov/llama.cpp/issues/10734
-    std::string opt_level = coopmat ? "" : "-O";
+    if (!coopmat) cmd.push_back("-O");
 
     #ifdef _WIN32
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, "\"" + in_path + "\"", "-o", "\"" + out_fname + "\""};
+        cmd.push_back("\"" + in_path + "\"");
+        cmd.push_back("-o");
+        cmd.push_back("\"" + out_fname + "\"");
     #else
-        std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, in_path, "-o",  out_fname};
+        cmd.push_back(in_path);
+        cmd.push_back("-o");
+        cmd.push_back(out_fname);
     #endif
 
     #ifdef GGML_VULKAN_SHADER_DEBUG_INFO
@@ -250,7 +272,15 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
         // }
         // std::cout << std::endl;
 
-        execute_command(command, stdout_str, stderr_str);
+        execute_command(
+            #ifdef _WIN32
+            command,
+            #else
+            cmd,
+            #endif
+            stdout_str,
+            stderr_str
+        );
         if (!stderr_str.empty()) {
             std::cerr << "cannot compile " << name << "\n\n" << command << "\n\n" << stderr_str << std::endl;
             return;
