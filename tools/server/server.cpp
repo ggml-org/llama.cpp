@@ -3212,7 +3212,14 @@ struct server_context {
                 batch.logits   + i,
             };
 
-            const int ret = llama_decode(ctx, batch_view);
+            int ret = 0;
+
+            if (params_base.embedding || params_base.reranking) {
+                ret = llama_encode(ctx, batch_view);
+            } else {
+                ret = llama_decode(ctx, batch_view);
+            }
+
             metrics.on_decoded(slots);
 
             if (ret != 0) {
