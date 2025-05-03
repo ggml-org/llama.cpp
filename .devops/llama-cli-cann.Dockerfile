@@ -22,7 +22,7 @@ ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/runtime/lib64/stub:$LD_LIBRARY_PATH
 
 RUN echo "Building with static libs" && \
     source /usr/local/Ascend/ascend-toolkit/set_env.sh --force && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_CANN=ON -DBUILD_SHARED_LIBS=OFF  && \
+    cmake -B build -DGGML_NATIVE=OFF -DGGML_CANN=ON -DBUILD_SHARED_LIBS=OFF -DLLAMA_BUILD_TESTS=OFF  && \
     cmake --build build --config Release --target llama-cli
 
 # TODO: use image with NNRT

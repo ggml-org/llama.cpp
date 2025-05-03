@@ -2,8 +2,9 @@
 max-line-length = 125
 ignore = E203,E211,E221,E225,E231,E241,E251,E261,E266,E501,E701,E704,W503
 exclude =
-    # Do not traverse examples
+    # Do not traverse examples and tools
     examples,
+    tools,
     # Do not include package initializers
     __init__.py,
     # No need to traverse our git directory
