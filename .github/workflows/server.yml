@@ -15,10 +15,10 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
+    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
+    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
 
 env:
   LLAMA_LOG_COLORS: 1
@@ -74,7 +74,7 @@ jobs:
       - name: Tests dependencies
         id: test_dependencies
         run: |
-          pip install -r examples/server/tests/requirements.txt
+          pip install -r tools/server/tests/requirements.txt
 
       # Setup nodejs (to be used for verifying bundled index.html)
       - uses: actions/setup-node@v4
@@ -84,14 +84,14 @@ jobs:
       - name: WebUI - Install dependencies
         id: webui_lint
         run: |
-          cd examples/server/webui
+          cd tools/server/webui
           npm ci
 
       - name: WebUI - Check code format
         id: webui_format
         run: |
           git config --global --add safe.directory $(realpath .)
-          cd examples/server/webui
+          cd tools/server/webui
           git status
 
           npm run format
@@ -108,7 +108,7 @@ jobs:
         id: verify_server_index_html
         run: |
           git config --global --add safe.directory $(realpath .)
-          cd examples/server/webui
+          cd tools/server/webui
           git status
 
           npm run build
@@ -161,21 +161,21 @@ jobs:
         env:
           GITHUB_ACTIONS: "true"
         run: |
-          cd examples/server/tests
+          cd tools/server/tests
           ./tests.sh
 
       - name: Tests (sanitizers)
         id: server_integration_tests_sanitizers
         if: ${{ matrix.sanitizer != '' }}
         run: |
-          cd examples/server/tests
+          cd tools/server/tests
           LLAMA_SANITIZE=1 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
-          cd examples/server/tests
+          cd tools/server/tests
           SLOW_TESTS=1 ./tests.sh
 
 
@@ -211,7 +211,7 @@ jobs:
       - name: Tests dependencies
         id: test_dependencies
         run: |
-          pip install -r examples/server/tests/requirements.txt
+          pip install -r tools/server/tests/requirements.txt
 
       - name: Copy Libcurl
         id: prepare_libcurl
@@ -224,7 +224,7 @@ jobs:
         id: server_integration_tests
         if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
-          cd examples/server/tests
+          cd tools/server/tests
           $env:PYTHONIOENCODING = ":replace"
           pytest -v -x -m "not slow"
 
@@ -232,6 +232,6 @@ jobs:
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
         run: |
-          cd examples/server/tests
+          cd tools/server/tests
           $env:SLOW_TESTS = "1"
           pytest -v -x

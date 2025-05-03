@@ -13,6 +13,7 @@ Checks: >
     -readability-magic-numbers,
     -readability-uppercase-literal-suffix,
     -readability-simplify-boolean-expr,
+    -readability-math-missing-parentheses,
     clang-analyzer-*,
     -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
     performance-*,
