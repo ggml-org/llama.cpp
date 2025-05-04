@@ -408,6 +408,23 @@ ggml_context * llama_context::get_ctx_compute() const {
     return ctx_compute.get();
 }
 
+void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params){
+    // Allow only to increase the context size.
+    if (cparams.n_ctx < new_n_ctx) {
+        cparams.n_ctx = new_n_ctx;
+        llama_memory_params params_mem = {
+            /*.type_k =*/ params.type_k,
+            /*.type_v =*/ params.type_v,
+        };
+    
+        // Resets the memory and sets it to new memory params with modified cparams 
+        memory.reset(model.create_memory(params_mem, cparams));
+    }
+    else{
+        LLAMA_LOG_ERROR("%s: Cannot decrease the context size.", __func__);
+    }
+}
+
 uint32_t llama_context::n_ctx() const {
     return cparams.n_ctx;
 }
@@ -1916,6 +1933,10 @@ void llama_free(llama_context * ctx) {
 
 uint32_t llama_n_ctx(const llama_context * ctx) {
     return ctx->n_ctx();
+}
+
+void llama_mod_n_ctx(struct llama_context * ctx, uint32_t new_n_ctx, llama_context_params params){
+    ctx->mod_n_ctx(new_n_ctx, params);
 }
 
 uint32_t llama_n_batch(const llama_context * ctx) {
