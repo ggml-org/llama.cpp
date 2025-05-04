@@ -408,21 +408,21 @@ ggml_context * llama_context::get_ctx_compute() const {
     return ctx_compute.get();
 }
 
-void dump_state(llama_context *ctx) {
+void dump_state(llama_context *ctx, const char* dump_file_path) {
     std::vector<uint8_t> state_mem;
     
     std::vector<uint8_t> state_mem(llama_state_get_size(ctx));
     const size_t written = llama_state_get_data(ctx, state_mem.data(), state_mem.size());
 
-    FILE *fp_write = fopen("dump_state.bin", "wb");
+    FILE *fp_write = fopen(dump_file_path, "wb");
     fwrite(state_mem.data(), 1, written, fp_write);
     fclose(fp_write);
 }
 
-void load_state(llama_context* ctx){
+void load_state(llama_context* ctx, const char* dump_file_path){
     std::vector<uint8_t> state_mem;
     
-    FILE * fp_read = fopen("dump_state.bin", "rb");
+    FILE * fp_read = fopen(dump_file_path, "rb");
     fseek(fp_read, 0, SEEK_END);
     state_mem.resize(ftell(fp_read));
     fseek(fp_read, 0, SEEK_SET);
@@ -438,7 +438,7 @@ void load_state(llama_context* ctx){
     }
 }
 
-void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params){
+void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params, const char* dump_file_path = "dump_state.bin"){
     // Allow only to increase the context size.
     if (cparams.n_ctx < new_n_ctx) {
         cparams.n_ctx = new_n_ctx;
@@ -448,9 +448,9 @@ void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params){
         };
     
         // Resets the memory and sets it to new memory params with modified cparams 
-        dump_state(this); // Dump the state here.
+        dump_state(this, dump_file_path); // Dump the state here.
         memory.reset(model.create_memory(params_mem, cparams));
-        load_state(this); // Load the state.
+        load_state(this, dump_file_path); // Load the state.
     }
     else{
         LLAMA_LOG_ERROR("%s: Cannot decrease the context size.", __func__);
@@ -1967,8 +1967,8 @@ uint32_t llama_n_ctx(const llama_context * ctx) {
     return ctx->n_ctx();
 }
 
-void llama_mod_n_ctx(struct llama_context * ctx, uint32_t new_n_ctx, llama_context_params params){
-    ctx->mod_n_ctx(new_n_ctx, params);
+void llama_mod_n_ctx(struct llama_context * ctx, uint32_t new_n_ctx, llama_context_params params, const char* dump_file_path){
+    ctx->mod_n_ctx(new_n_ctx, params, dump_file_path);
 }
 
 uint32_t llama_n_batch(const llama_context * ctx) {

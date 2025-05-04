@@ -34,7 +34,7 @@ struct llama_context {
 
     ggml_context * get_ctx_compute() const;
 
-    void mod_n_ctx(uint32_t new_ctx, llama_context_params params);
+    void mod_n_ctx(uint32_t new_ctx, llama_context_params params, const char* dump_file_path);
     
     uint32_t n_ctx()         const;
     uint32_t n_ctx_per_seq() const;
