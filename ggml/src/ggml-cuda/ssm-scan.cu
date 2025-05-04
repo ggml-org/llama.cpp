@@ -55,10 +55,10 @@ __global__ void __launch_bounds__(splitD, 2)
     const int stride_s0 = src0_nb1 / sizeof(float);
     const int stride_A = src3_nb1 / sizeof(float);
 #pragma unroll
-    for (int j = 0; j < N; ++j)
+    for (size_t n = 0; n < N; ++n)
     {
-        regA[j] = A_block[threadIdx.x * stride_A + j];
-        regs0[j] = s0_block[threadIdx.x * stride_s0 + j];
+        regA[n] = A_block[threadIdx.x * stride_A + n];
+        regs0[n] = s0_block[threadIdx.x * stride_s0 + n];
     }
 #endif
 
@@ -80,11 +80,11 @@ __global__ void __launch_bounds__(splitD, 2)
 
         float sumf = 0.0f;
 #pragma unroll
-        for (int j = 0; j < N; j++)
+        for (size_t n = 0; n < N; n++)
         {
-            float state = regs0[j] * expf(dt_soft_plus * regA[j]) + smemB[j] * x_dt;
-            sumf += state * smemC[j];
-            regs0[j] = state;
+            float state = regs0[n] * expf(dt_soft_plus * regA[n]) + smemB[n] * x_dt;
+            sumf += state * smemC[n];
+            regs0[n] = state;
         }
         y_block[i * stride_y + threadIdx.x] = sumf;
     }
@@ -94,9 +94,9 @@ __global__ void __launch_bounds__(splitD, 2)
 #else
     const int stride_s = stride_s0;
 #pragma unroll
-    for (int j = 0; j < N; ++j)
+    for (size_t n = 0; n < N; ++n)
     {
-        s_block[threadIdx.x * stride_s + j] = regs0[j];
+        s_block[threadIdx.x * stride_s + n] = regs0[n];
     }
 #endif
 }
@@ -140,10 +140,10 @@ __global__ void __launch_bounds__(splitD, 2)
     const int stride_s0 = src0_nb1 / sizeof(float);
     const int stride_A = src3_nb1 / sizeof(float);
 #pragma unroll
-    for (int j = 0; j < N; ++j)
+    for (size_t n = 0; n < N; ++n)
     {
-        regA[j] = A_block[threadIdx.x * stride_A + j];
-        regs0[j] = s0_block[threadIdx.x * stride_s0 + j];
+        regA[n] = A_block[threadIdx.x * stride_A + n];
+        regs0[n] = s0_block[threadIdx.x * stride_s0 + n];
     }
 #endif
 
@@ -163,11 +163,11 @@ __global__ void __launch_bounds__(splitD, 2)
         float x_dt = x_block[threadIdx.x] * dt_soft_plus;
         float sumf = 0.0f;
 #pragma unroll
-        for (int j = 0; j < N; j++)
+        for (size_t n = 0; n < N; n++)
         {
-            float state = regs0[j] * expf(dt_soft_plus * regA[j]) + smemB[j] * x_dt;
-            sumf += state * smemC[j];
-            regs0[j] = state;
+            float state = regs0[n] * expf(dt_soft_plus * regA[n]) + smemB[n] * x_dt;
+            sumf += state * smemC[n];
+            regs0[n] = state;
         }
         y_block[threadIdx.x] = sumf;
     }
@@ -175,11 +175,11 @@ __global__ void __launch_bounds__(splitD, 2)
 #ifdef USE_CUB
     BlockStoreS(block_store_tempS).Store(s_block, regs0);
 #else
-    const int stride_s = s0;
+    const int stride_s = stride_s0;
 #pragma unroll
-    for (int j = 0; j < N; ++j)
+    for (size_t n = 0; n < N; ++n)
     {
-        s_block[threadIdx.x * stride_s + j] = regs0[j];
+        s_block[threadIdx.x * stride_s + n] = regs0[n];
     }
 #endif
 }
