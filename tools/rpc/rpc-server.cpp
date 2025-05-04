@@ -300,13 +300,6 @@ int main(int argc, char * argv[]) {
         }
         cache_dir = cache_dir_str.c_str();
     }
-    printf("Starting RPC server v%d.%d.%d\n",
-           RPC_PROTO_MAJOR_VERSION,
-           RPC_PROTO_MINOR_VERSION,
-           RPC_PROTO_PATCH_VERSION);
-    printf("  endpoint       : %s\n", endpoint.c_str());
-    printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
-    printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));
 
     ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
     if (!reg) {
