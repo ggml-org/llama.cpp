@@ -337,18 +337,18 @@ static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t d
 }
 
 static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    #ifdef _WIN32
-        MEMORYSTATUSEX status;
-        status.dwLength = sizeof(status);
-        GlobalMemoryStatusEx(&status);
-        *total = status.ullTotalPhys;
-        *free = status.ullAvailPhys;
-    #else
-        long pages = sysconf(_SC_PHYS_PAGES);
-        long page_size = sysconf(_SC_PAGE_SIZE);
-        *total = pages * page_size;
-        *free = *total;
-    #endif
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total = pages * page_size;
+    *free = *total;
+#endif
 
     GGML_UNUSED(dev);
 }
