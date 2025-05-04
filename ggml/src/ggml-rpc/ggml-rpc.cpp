@@ -1753,6 +1753,9 @@ static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const ch
     if (std::strcmp(name, "ggml_backend_rpc_add_device") == 0) {
         return (void *)ggml_backend_rpc_add_device;
     }
+    if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
+        return (void *)ggml_backend_rpc_start_server;
+    }
     return NULL;
 
     GGML_UNUSED(reg);
