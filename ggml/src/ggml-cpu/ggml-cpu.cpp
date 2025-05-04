@@ -10,32 +10,27 @@
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#    include <windows.h>
-#else
-#    include <sys/stat.h>
-#    include <unistd.h>
-#endif
-
 #ifdef GGML_USE_CPU_HBM
-#include "ggml-cpu-hbm.h"
+#    include "ggml-cpu-hbm.h"
 #endif
 
 #ifdef GGML_USE_CPU_KLEIDIAI
-#include "kleidiai/kleidiai.h"
-#endif
-
-#if defined(__APPLE__)
-#include <sys/types.h>
-#include <sys/sysctl.h>
+#    include "kleidiai/kleidiai.h"
 #endif
 
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-    #define NOMINMAX
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
 #endif
-#include <windows.h>
+
+#if defined(__APPLE__)
+#    include <sys/sysctl.h>
+#    include <sys/types.h>
 #endif
 
 // ggml-backend interface
@@ -77,8 +72,10 @@ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_ty
 }
 
 static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buft) {
-    for (auto extra : ggml_backend_cpu_get_extra_buffers_type()) {
-        if (extra && extra == buft) return true;
+    for (auto * extra : ggml_backend_cpu_get_extra_buffers_type()) {
+        if (extra && extra == buft) {
+            return true;
+        }
     }
     return false;
 }
