@@ -2,24 +2,6 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #endif
 
-#include "ggml-cpu.h"
-
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
-
-#ifdef GGML_USE_VULKAN
-#include "ggml-vulkan.h"
-#endif
-
-#ifdef GGML_USE_SYCL
-#include "ggml-sycl.h"
-#endif
-
 #include "ggml-rpc.h"
 #ifdef _WIN32
 #  define NOMINMAX
@@ -154,6 +136,7 @@ struct rpc_server_params {
     size_t      backend_mem = 0;
     bool        use_cache   = false;
     int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
+    std::string device;
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
@@ -161,6 +144,7 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h, --help                show this help message and exit\n");
     fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
+    fprintf(stderr, "  -d DEV,  --device         device to use\n");
     fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
@@ -184,6 +168,22 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             params.n_threads = std::stoi(argv[i]);
             if (params.n_threads <= 0) {
                 fprintf(stderr, "error: invalid number of threads: %d\n", params.n_threads);
+                return false;
+            }
+        } else if (arg == "-d" || arg == "--device") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.device = argv[i];
+            if (ggml_backend_dev_by_name(params.device.c_str()) == nullptr) {
+                fprintf(stderr, "error: unknown device: %s\n", params.device.c_str());
+                fprintf(stderr, "available devices:\n");
+                for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                    auto * dev = ggml_backend_dev_get(i);
+                    size_t free, total;
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
+                }
                 return false;
             }
         } else if (arg == "-p" || arg == "--port") {
@@ -214,66 +214,53 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
 }
 
 static ggml_backend_t create_backend(const rpc_server_params & params) {
-    ggml_backend_t backend = NULL;
-#ifdef GGML_USE_CUDA
-    fprintf(stderr, "%s: using CUDA backend\n", __func__);
-    backend = ggml_backend_cuda_init(0); // init device 0
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
-    }
-#elif GGML_USE_METAL
-    fprintf(stderr, "%s: using Metal backend\n", __func__);
-    backend = ggml_backend_metal_init();
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
-    }
-#elif GGML_USE_VULKAN
-    fprintf(stderr, "%s: using Vulkan backend\n", __func__);
-    backend = ggml_backend_vk_init(0); // init device 0
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_vulkan_init() failed\n", __func__);
-    }
-#elif GGML_USE_SYCL
-    fprintf(stderr, "%s: using SYCL backend\n", __func__);
-    backend = ggml_backend_sycl_init(0); // init device 0
-    if (!backend) {
-        fprintf(stderr, "%s: ggml_backend_sycl_init() failed\n", __func__);
-    }
-#endif
+    ggml_backend_t backend = nullptr;
 
-    // if there aren't GPU Backends fallback to CPU backend
-    if (!backend) {
-        fprintf(stderr, "%s: using CPU backend\n", __func__);
-        backend = ggml_backend_cpu_init();
-        ggml_backend_cpu_set_n_threads(backend, params.n_threads);
+    if (!params.device.empty()) {
+        ggml_backend_dev_t dev = ggml_backend_dev_by_name(params.device.c_str());
+        if (dev) {
+            backend = ggml_backend_dev_init(dev, nullptr);
+            if (!backend) {
+                fprintf(stderr, "Failed to create backend for device %s\n", params.device.c_str());
+                return nullptr;
+            }
+        }
     }
+
+    // try to initialize a GPU backend first
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+    }
+
+    // if there aren't GPU backends fallback to CPU backend
+    if (!backend) {
+        backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    }
+
+    fprintf(stderr, "%s: using %s backend\n", __func__, ggml_backend_name(backend));
+
+    // set the number of threads
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+    if (reg) {
+        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+        if (ggml_backend_set_n_threads_fn) {
+            ggml_backend_set_n_threads_fn(backend, params.n_threads);
+        }
+    }
+
     return backend;
 }
 
-static void get_backend_memory(size_t * free_mem, size_t * total_mem) {
-#ifdef GGML_USE_CUDA
-    ggml_backend_cuda_get_device_memory(0, free_mem, total_mem);
-#elif GGML_USE_VULKAN
-    ggml_backend_vk_get_device_memory(0, free_mem, total_mem);
-#elif GGML_USE_SYCL
-    ggml_backend_sycl_get_device_memory(0, free_mem, total_mem);
-#else
-    #ifdef _WIN32
-        MEMORYSTATUSEX status;
-        status.dwLength = sizeof(status);
-        GlobalMemoryStatusEx(&status);
-        *total_mem = status.ullTotalPhys;
-        *free_mem = status.ullAvailPhys;
-    #else
-        long pages = sysconf(_SC_PHYS_PAGES);
-        long page_size = sysconf(_SC_PAGE_SIZE);
-        *total_mem = pages * page_size;
-        *free_mem = *total_mem;
-    #endif
-#endif
+static void get_backend_memory(ggml_backend_t backend, size_t * free_mem, size_t * total_mem) {
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    GGML_ASSERT(dev != nullptr);
+    ggml_backend_dev_memory(dev, free_mem, total_mem);
 }
 
 int main(int argc, char * argv[]) {
+    ggml_backend_load_all();
+
     rpc_server_params params;
     if (!rpc_server_params_parse(argc, argv, params)) {
         fprintf(stderr, "Invalid parameters\n");
@@ -301,7 +288,7 @@ int main(int argc, char * argv[]) {
         free_mem = params.backend_mem;
         total_mem = params.backend_mem;
     } else {
-        get_backend_memory(&free_mem, &total_mem);
+        get_backend_memory(backend, &free_mem, &total_mem);
     }
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
@@ -313,14 +300,21 @@ int main(int argc, char * argv[]) {
         }
         cache_dir = cache_dir_str.c_str();
     }
-    printf("Starting RPC server v%d.%d.%d\n",
-           RPC_PROTO_MAJOR_VERSION,
-           RPC_PROTO_MINOR_VERSION,
-           RPC_PROTO_PATCH_VERSION);
-    printf("  endpoint       : %s\n", endpoint.c_str());
-    printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
-    printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));
-    ggml_backend_rpc_start_server(backend, endpoint.c_str(), cache_dir, free_mem, total_mem);
+
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
+    if (!reg) {
+        fprintf(stderr, "Failed to find RPC backend\n");
+        return 1;
+    }
+
+    auto start_server_fn = (decltype(ggml_backend_rpc_start_server)*) ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server");
+    if (!start_server_fn) {
+        fprintf(stderr, "Failed to obtain RPC backend start server function\n");
+        return 1;
+    }
+
+    start_server_fn(backend, endpoint.c_str(), cache_dir, free_mem, total_mem);
+
     ggml_backend_free(backend);
     return 0;
 }

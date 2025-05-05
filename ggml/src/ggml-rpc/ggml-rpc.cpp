@@ -1594,6 +1594,14 @@ static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
 void ggml_backend_rpc_start_server(ggml_backend_t backend, const char * endpoint,
                                    const char * cache_dir,
                                    size_t free_mem, size_t total_mem) {
+    printf("Starting RPC server v%d.%d.%d\n",
+        RPC_PROTO_MAJOR_VERSION,
+        RPC_PROTO_MINOR_VERSION,
+        RPC_PROTO_PATCH_VERSION);
+    printf("  endpoint       : %s\n", endpoint);
+    printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
+    printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));
+
     std::string host;
     int port;
     if (!parse_endpoint(endpoint, host, port)) {
@@ -1752,6 +1760,9 @@ static ggml_backend_dev_t ggml_backend_rpc_reg_get_device(ggml_backend_reg_t reg
 static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (std::strcmp(name, "ggml_backend_rpc_add_device") == 0) {
         return (void *)ggml_backend_rpc_add_device;
+    }
+    if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
+        return (void *)ggml_backend_rpc_start_server;
     }
     return NULL;
 
