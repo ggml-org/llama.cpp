@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "virtgpu.h"
+#include "virtgpu-types.h"
 
 static inline void
 virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
@@ -358,14 +359,31 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
 {
 
   /*
-   * Data passed to the host
+   * Prepare the command encoder buffer
    */
-  int32_t command[3];
-  // command identifier
-  command[0] = PK_COMMAND_TYPE_pkCreateThread;
-  command[1] = 0; // ?
-  // arguments
-  command[2] = shmem->res_id;
+
+  char encoder_buffer[4096];
+
+  struct vn_cs_encoder _encoder = {
+    encoder_buffer,
+    encoder_buffer + sizeof(encoder_buffer),
+  };
+  struct vn_cs_encoder *encoder = &_encoder;
+
+  /*
+   * Fill the command encoder buffer
+   */
+
+  /* VkCommandTypeEXT is int32_t */
+  int32_t cmd_type = PK_COMMAND_TYPE_pkCreateThread;
+  vn_encode_int32_t(encoder, &cmd_type);
+  int32_t cmd_flags = 0x0;
+  vn_encode_int32_t(encoder, &cmd_flags);
+
+  uint32_t reply_res_id = shmem->res_id;
+  vn_encode_uint32_t(encoder, &reply_res_id);
+
+  printf("call pkCreateThread(flags=0x%x, reply_buf=%d)\n", cmd_flags, reply_res_id);
 
   /*
    * Reply notification pointer
@@ -380,8 +398,8 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
 
   struct drm_virtgpu_execbuffer args = {
     .flags = VIRTGPU_EXECBUF_RING_IDX,
-    .size =  sizeof(command),
-    .command = (uintptr_t) &command,
+    .size = sizeof(encoder_buffer),
+    .command = (uintptr_t) encoder_buffer,
 
     .bo_handles = 0,
     .num_bo_handles = 0,
@@ -401,35 +419,33 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
    * Wait for the response notification
    */
 
-  int resp = std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire);
-  printf("waiting for the response ... | %d | %p\n", resp, (void*) atomic_reply_notif);
-
   while (std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire) == 0) {
     int64_t base_sleep_us = 160;
 
     os_time_sleep(base_sleep_us);
   }
-  printf("got the response!\n");
+
   /*
    * Read the reply
    */
 
-  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[1]);
-  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[2]);
-  printf("virtgpu_submit() --> 0x%x\n", ((uint32_t *)shmem->mmap_ptr)[3]);
+  struct vn_cs_decoder _dec = {
+    .cur = (char *) shmem->mmap_ptr + sizeof(*atomic_reply_notif),
+    .end = (char *) shmem->mmap_ptr + shmem->mmap_size,
+  };
+  struct vn_cs_decoder *dec = &_dec;
 
-#if 0
-  VkCommandTypeEXT command_type;
-  vn_decode_VkCommandTypeEXT(dec, &command_type);
-  assert(command_type == VK_COMMAND_TYPE_vkEnumerateInstanceVersion_EXT);
-  VkResult ret;
-  vn_decode_VkResult(dec, &ret);
-  if (vn_decode_simple_pointer(dec)) {
-    vn_decode_uint32_t(dec, pApiVersion);
-  } else {
-    pApiVersion = NULL;
-  }
-#endif
+  uint32_t apiVersion;
+  vn_decode_uint32_t(dec, &apiVersion);
+  printf("pkCreateThread() --> 0x%x\n", apiVersion);
+  vn_decode_uint32_t(dec, &apiVersion);
+  printf("pkCreateThread() --> 0x%x\n", apiVersion);
+  vn_decode_uint32_t(dec, &apiVersion);
+  printf("pkCreateThread() --> 0x%x\n", apiVersion);
+
+  int32_t vk_ret;
+  vn_decode_int32_t(dec, &vk_ret);
+  printf("pkCreateThread() --> ret=%d\n", vk_ret);
 
   return ret;
 }
