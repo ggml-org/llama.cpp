@@ -243,11 +243,15 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
         // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
         marker_modified = ctx->image_marker + "[IMG_END]";
         string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
-    }
 
-    else if (proj_type == PROJECTOR_TYPE_QWEN2VL || proj_type == PROJECTOR_TYPE_QWEN25VL) {
+    } else if (proj_type == PROJECTOR_TYPE_QWEN2VL || proj_type == PROJECTOR_TYPE_QWEN25VL) {
         // <|vision_start|> ... (image embeddings) ... <|vision_end|>
         marker_modified = "<|vision_start|>" + ctx->image_marker + "<|vision_end|>";
+        string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_LLAMA4) {
+        // <|image_start|> ... (image embeddings) ... <|image_end|>
+        marker_modified = "<|image_start|>" + ctx->image_marker + "<|image_end|>";
         string_replace_all(prompt_modified, ctx->image_marker, marker_modified);
 
     }

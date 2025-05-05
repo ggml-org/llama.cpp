@@ -47,7 +47,7 @@
 // tensor name constants
 //
 
-#define TN_POS_EMBD        "%s.position_embd.weight"
+#define TN_POS_EMBD        "v.position_embd.weight"
 #define TN_CLASS_EMBD      "v.class_embd"
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backwrad compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
@@ -105,6 +105,7 @@ enum projector_type {
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
     PROJECTOR_TYPE_QWEN25VL,
+    PROJECTOR_TYPE_LLAMA4,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -119,6 +120,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
+    { PROJECTOR_TYPE_LLAMA4,    "llama4"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

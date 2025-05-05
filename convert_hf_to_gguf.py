@@ -308,6 +308,7 @@ class ModelBase:
                             gguf.MODEL_TENSOR.TIME_MIX_LERP_FUSED,
                             gguf.MODEL_TENSOR.POSNET_NORM1,
                             gguf.MODEL_TENSOR.POSNET_NORM2,
+                            gguf.MODEL_TENSOR.V_ENC_EMBD_POS,
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -2074,6 +2075,27 @@ class Llama4Model(LlamaModel):
         if "multi_modal_projector" in name or "vision_model" in name:
             return []
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Llama4ForConditionalGeneration")
+class Llama4VisionModel(VisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.LLAMA4)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["norm_eps"])
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / self.hparams["pixel_shuffle_ratio"]))
+        assert self.hparams["hidden_act"] == "gelu"
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
+        if "multi_modal_projector" in name or "vision_model" in name:
+            # process vision tensors
+            if "positional_embedding_vlm" in name and ".weight" not in name:
+                name += ".weight"
+            return [(self.map_tensor_name(name), data_torch)]
+        return []
+
 
 
 @ModelBase.register("Mistral3ForConditionalGeneration")
