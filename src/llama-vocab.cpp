@@ -2731,6 +2731,7 @@ int32_t llama_vocab::impl::detokenize(
 }
 
 void llama_vocab::impl::print_info() const {
+    return;
     LLAMA_LOG_INFO("%s: vocab type       = %s\n",     __func__, type_name().c_str());
     LLAMA_LOG_INFO("%s: n_vocab          = %u\n",     __func__, vocab.n_tokens());
     LLAMA_LOG_INFO("%s: n_merges         = %u\n",     __func__, (uint32_t) bpe_ranks.size());
@@ -3055,6 +3056,7 @@ std::string llama_vocab::detokenize(const std::vector<llama_token> & tokens, boo
 }
 
 void llama_vocab::print_info() const {
+    return;
     pimpl->print_info();
 }
 

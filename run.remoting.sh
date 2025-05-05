@@ -1,5 +1,5 @@
 #! /bin/bash
-
+clear
 if [[ ${1:-} == "gdb" ]]; then
     prefix="gdb --args"
 else
