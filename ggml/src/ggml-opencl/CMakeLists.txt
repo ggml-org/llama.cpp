@@ -55,6 +55,7 @@ endfunction()
 
 set(GGML_OPENCL_KERNELS
     add
+    argsort
     clamp
     cpy
     cvt
