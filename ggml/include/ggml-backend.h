@@ -38,7 +38,7 @@ extern "C" {
     GGML_API ggml_backend_buffer_t ggml_backend_buft_alloc_buffer  (ggml_backend_buffer_type_t buft, size_t size);
     GGML_API size_t                ggml_backend_buft_get_alignment (ggml_backend_buffer_type_t buft);
     GGML_API size_t                ggml_backend_buft_get_max_size  (ggml_backend_buffer_type_t buft);
-    GGML_API size_t                ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, struct ggml_tensor * tensor);
+    GGML_API size_t                ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
     GGML_API bool                  ggml_backend_buft_is_host       (ggml_backend_buffer_type_t buft);
     GGML_API ggml_backend_dev_t    ggml_backend_buft_get_device    (ggml_backend_buffer_type_t buft);
 
@@ -59,7 +59,7 @@ extern "C" {
     GGML_API enum ggml_status               ggml_backend_buffer_init_tensor   (ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
     GGML_API size_t                         ggml_backend_buffer_get_alignment (ggml_backend_buffer_t buffer);
     GGML_API size_t                         ggml_backend_buffer_get_max_size  (ggml_backend_buffer_t buffer);
-    GGML_API size_t                         ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor);
+    GGML_API size_t                         ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor);
     GGML_API void                           ggml_backend_buffer_clear         (ggml_backend_buffer_t buffer, uint8_t value);
     GGML_API bool                           ggml_backend_buffer_is_host       (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_set_usage     (ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
