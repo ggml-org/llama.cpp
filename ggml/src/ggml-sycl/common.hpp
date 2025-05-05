@@ -80,10 +80,6 @@ extern int g_ggml_sycl_disable_optimize;
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 
-#if defined(_MSC_VER)
-#pragma warning(disable : 4244 4267) // possible loss of data
-#endif
-
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
 #define GGML_SYCL_DMMV_X 32
