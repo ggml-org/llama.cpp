@@ -128,7 +128,7 @@ void ggml_cuda_mul_mat_q(
 
         const mmq_args args = {
             src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
-            ne00, ne01, ne1, s01, s1,
+            ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             use_stream_k};
@@ -212,7 +212,7 @@ void ggml_cuda_mul_mat_q(
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
     const mmq_args args = {
         src0_d, src0->type, (const int *) src1_q8_1.ptr, ids_dst_dev, expert_bounds_dev, dst_d,
-        ne00, ne01, ne_get_rows, s01, s1,
+        ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
         use_stream_k};
@@ -251,7 +251,7 @@ void ggml_cuda_op_mul_mat_q(
         ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA && src1_ncols == ne11;
     const mmq_args args = {
         src0_dd_i, src0->type, (const int *) src1_ddq_i, nullptr, nullptr, dst_dd_i,
-        ne00, row_diff, src1_ncols, stride01, nrows_dst,
+        ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst,
         1, 1, 0, 0, 0,
         1, 1, 0, 0, 0,
         use_stream_k};
