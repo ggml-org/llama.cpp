@@ -2831,13 +2831,19 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+enum class Mul_Mat_Algo {
+    DMMV         = 0,
+    MMVQ         = 1,
+    MUL_MAT_SYCL = 2,
+};
+
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
     // TODO: accuracy issues in MMQ
     GGML_UNUSED(type);
     return false;
 }
 
-inline bool ggml_sycl_supports_reorder_dequantize(enum ggml_type type) {
+inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
             return true;
@@ -2927,20 +2933,37 @@ static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_ten
             dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
 }
 
-/*
-* This function could be called when the OP (mul_mat) function support reorder optimizition.
-*/
-static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-    ggml_tensor * dst) {
-    if (should_reorder_tensor(*ctx, dst)) {
-        ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-        if (!extra) return; //only happen in CI/UT permute case.
-
-        if (extra->optimized_feature.reorder) return; //skip the tensor which is handled for reorder.
-
-        reorder_qw(src0, ctx->stream());
-        extra->optimized_feature.reorder = true; //used to decode/dequan in next steps.
+static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
+                            ggml_tensor * dst, Mul_Mat_Algo mul_mat_algo) {
+    if (!should_reorder_tensor(*ctx, dst)) {
+        return;
     }
+
+    ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra || extra->optimized_feature.reorder) {
+        return;  // Skip permutations and already reordered tensors
+    }
+
+    switch (mul_mat_algo) {
+        case Mul_Mat_Algo::DMMV:
+            if (!ggml_sycl_supports_reorder_dmmv(src0->type)) {
+                return;
+            }
+            break;
+        case Mul_Mat_Algo::MMVQ:
+            if (!ggml_sycl_supports_reorder_mmvq(src0->type)) {
+                return;
+            }
+            break;
+        case Mul_Mat_Algo::MUL_MAT_SYCL:
+            if (!ggml_sycl_supports_reorder_mul_mat_sycl(src0->type)) {
+                return;
+            }
+            break;
+    }
+
+    reorder_qw(src0, ctx->stream());
+    extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -3013,24 +3036,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
     } else if (use_dequantize_mul_mat_vec) {
         constexpr bool convert_src1_to_q8_1 = false;
-        if (ggml_sycl_supports_reorder_dmmv(src0->type)) {
-            opt_for_reorder(&ctx, src0, src1, dst);
-        }
+        opt_for_reorder(&ctx, src0, src1, dst, Mul_Mat_Algo::DMMV);
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec, convert_src1_to_q8_1);
     } else if (use_mul_mat_vec_q) {
         constexpr bool convert_src1_to_q8_1 = true;
-        if (ggml_sycl_supports_reorder_mmvq(src0->type)) {
-            opt_for_reorder(&ctx, src0, src1, dst);
-        }
+        opt_for_reorder(&ctx, src0, src1, dst, Mul_Mat_Algo::MMVQ);
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q, convert_src1_to_q8_1);
     } else if (use_mul_mat_q) {
         constexpr bool convert_src1_to_q8_1 = true;
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q, convert_src1_to_q8_1);
     } else {
         constexpr bool convert_src1_to_q8_1 = false;
-        if (ggml_sycl_supports_reorder_dequantize(src0->type)) {
-            opt_for_reorder(&ctx, src0, src1, dst); //the OP function in this branch support reorder.
-        }
+        // MUL_MAT_SYCL supports reorder
+        opt_for_reorder(&ctx, src0, src1, dst, Mul_Mat_Algo::MUL_MAT_SYCL);
         ggml_sycl_op_mul_mat(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl, convert_src1_to_q8_1);
     }
     GGML_SYCL_DEBUG("call %s done\n", __func__);
