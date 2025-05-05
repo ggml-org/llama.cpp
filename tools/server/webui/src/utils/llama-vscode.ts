@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MessageExtraContext } from './types';
 import { ChatTextareaApi } from '../components/useChatTextarea.ts';
 
@@ -15,25 +15,14 @@ interface SetTextEvData {
  * window.postMessage({ command: 'setText', text: 'Spot the syntax error', context: 'def test()\n  return 123' }, '*');
  */
 
-export const useVSCodeContext = (
-  textarea: ChatTextareaApi,
-  onSend?: () => void
-) => {
-  const [extraContext, _setExtraContext] = useState<MessageExtraContext | null>(
+export const useVSCodeContext = (textarea: ChatTextareaApi) => {
+  const [extraContext, setExtraContext] = useState<MessageExtraContext | null>(
     null
   );
 
-  // Use ref to store the latest value
-  const extraContextRef = useRef(extraContext);
-
-  const setExtraContext = (value: MessageExtraContext | null) => {
-    extraContextRef.current = value;
-    _setExtraContext(value);
-  };
   // Accept setText message from a parent window and set inputMsg and extraContext
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
-      if (event.source !== window.parent) return;
       if (event.data?.command === 'setText') {
         const data: SetTextEvData = event.data;
         textarea.setValue(data?.text);
@@ -44,18 +33,13 @@ export const useVSCodeContext = (
           });
         }
         textarea.focus();
-        if (onSend && data?.text) {
-          // Use setTimeout to ensure state updates are processed
-          setTimeout(() => {
-            onSend();
-          }, 50);
-        }
+        textarea.refOnSubmit.current?.();
       }
     };
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [textarea, onSend]);
+  }, [textarea]);
 
   // Add a keydown listener that sends the "escapePressed" message to the parent window
   useEffect(() => {

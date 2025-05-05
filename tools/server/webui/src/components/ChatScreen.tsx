@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CallbackGeneratedChunk, useAppContext } from '../utils/app.context';
 import ChatMessage from './ChatMessage';
 import { CanvasType, Message, PendingMessage } from '../utils/types';
@@ -103,6 +103,10 @@ export default function ChatScreen() {
 
   const textarea: ChatTextareaApi = useChatTextarea(prefilledMsg.content());
 
+  const { extraContext, clearExtraContext } = useVSCodeContext(textarea);
+  // TODO: improve this when we have "upload file" feature
+  const currExtra: Message['extra'] = extraContext ? [extraContext] : undefined;
+
   // keep track of leaf node for rendering
   const [currNodeId, setCurrNodeId] = useState<number>(-1);
   const messages: MessageDisplay[] = useMemo(() => {
@@ -128,7 +132,7 @@ export default function ChatScreen() {
     scrollToBottom(true);
   };
 
-  const sendNewMessage = useCallback(async () => {
+  const sendNewMessage = async () => {
     const lastInpMsg = textarea.value();
     if (lastInpMsg.trim().length === 0 || isGenerating(currConvId ?? ''))
       return;
@@ -137,10 +141,6 @@ export default function ChatScreen() {
     setCurrNodeId(-1);
     // get the last message node
     const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
-    // TODO: improve this when we have "upload file" feature
-    const currExtra = extraContextRef.current
-      ? [extraContextRef.current]
-      : undefined;
     if (
       !(await sendMessage(
         currConvId,
@@ -155,17 +155,10 @@ export default function ChatScreen() {
     }
     // OK
     clearExtraContext();
-  }, [textarea, currConvId, isGenerating, messages, sendMessage, onChunk]);
+  };
 
-  const { extraContext, clearExtraContext } = useVSCodeContext(
-    textarea,
-    sendNewMessage
-  );
-  const extraContextRef = useRef(extraContext);
-
-  useEffect(() => {
-    extraContextRef.current = extraContext;
-  }, [extraContext]);
+  // for vscode context
+  textarea.refOnSubmit.current = sendNewMessage;
 
   const handleEditMessage = async (msg: Message, content: string) => {
     if (!viewingChat) return;
