@@ -6,6 +6,9 @@
 #include <ctime>
 #include <cerrno>
 #include <atomic>
+#include <cstdlib>
+#include <cstdarg>
+#include <cstdio>
 
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #define likely(x) __builtin_expect(!!(x), 1)
@@ -21,6 +24,26 @@
 
 #define p_atomic_read(_v) __atomic_load_n((_v), __ATOMIC_ACQUIRE)
 
+inline void
+INFO(const char *format, ...) {
+  va_list argptr;
+  va_start(argptr, format);
+  vfprintf(stderr, format, argptr);
+  fprintf(stderr, "\n");
+  va_end(argptr);
+}
+
+inline void
+FATAL(const char *format, ...) {
+  fprintf(stderr, "FATAL: ");
+
+  va_list argptr;
+  va_start(argptr, format);
+  vfprintf(stderr, format, argptr);
+  fprintf(stderr, "\n");
+  va_end(argptr);
+  exit(1);
+}
 
 static inline bool
 util_is_power_of_two_nonzero64(uint64_t v)

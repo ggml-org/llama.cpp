@@ -101,15 +101,6 @@ vn_log(struct remoting_dev_instance *instance, const char *format, ...)
    PRINTFLIKE(2, 3);
 
 
-inline void
-INFO(const char *format, ...) {
-  va_list argptr;
-  va_start(argptr, format);
-  vfprintf(stderr, format, argptr);
-  fprintf(stderr, "\n");
-  va_end(argptr);
-}
-
 struct virtgpu {
    struct remoting_dev_instance *instance;
 
