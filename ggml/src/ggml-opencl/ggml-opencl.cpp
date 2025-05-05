@@ -310,6 +310,7 @@ struct ggml_backend_opencl_context {
     cl_program program_softmax_4_f32;
     cl_program program_softmax_4_f16;
     cl_program program_argsort_f32_i32;
+    cl_program program_sum_rows_f32;
 
     cl_kernel kernel_add, kernel_add_row;
     cl_kernel kernel_mul, kernel_mul_row;
@@ -342,6 +343,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mv_q6_K_f32;
     cl_kernel kernel_im2col_f32, kernel_im2col_f16;
     cl_kernel kernel_argsort_f32_i32;
+    cl_kernel kernel_sum_rows_f32;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // Transpose kernels
@@ -1019,6 +1021,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 
         CL_CHECK((backend_ctx->kernel_div     = clCreateKernel(backend_ctx->program_mul, "kernel_div", &err), err));
         CL_CHECK((backend_ctx->kernel_div_row = clCreateKernel(backend_ctx->program_mul, "kernel_div_row", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // sum_rows
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "sum_rows.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("sum_rows.cl");
+#endif
+        backend_ctx->program_sum_rows_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_sum_rows_f32 = clCreateKernel(backend_ctx->program_sum_rows_f32, "kernel_sum_rows_f32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -1951,6 +1969,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return true;
         case GGML_OP_ARGSORT:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_SUM_ROWS:
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
         default:
             return false;
     }
@@ -5194,6 +5214,69 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
 #endif
 }
 
+static void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+    GGML_UNUSED(src1);
+
+    GGML_ASSERT(src0->nb[0] == ggml_type_size(src0->type));
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+    cl_command_queue queue = backend_ctx->queue;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
+
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
+
+    const cl_ulong nb1  = dst->nb[1];
+    const cl_ulong nb2  = dst->nb[2];
+    const cl_ulong nb3  = dst->nb[3];
+
+    cl_kernel kernel = backend_ctx->kernel_sum_rows_f32;
+
+    CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,   3, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,   4, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,   5, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,   6, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,   7, sizeof(int),      &ne03));
+    CL_CHECK(clSetKernelArg(kernel,   8, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel,   9, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel,  10, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel,  11, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel,  12, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel,  13, sizeof(cl_ulong), &nb3));
+
+    size_t global_work_size[] = {(size_t)ne01, (size_t)ne02, (size_t)ne03};
+    size_t local_work_size[] = {(size_t)64, 1, 1};
+
+#ifdef GGML_OPENCL_PROFILING
+    cl_event evt;
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+
+    g_profiling_info.emplace_back();
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+#else
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+#endif
+}
+
 //------------------------------------------------------------------------------
 // Op offloading
 //------------------------------------------------------------------------------
@@ -5345,6 +5428,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_argsort;
+            break;
+        case GGML_OP_SUM_ROWS:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_sum_rows;
             break;
         default:
             return false;
