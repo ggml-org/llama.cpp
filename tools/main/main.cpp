@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
 #include <unistd.h>
@@ -47,6 +48,7 @@ static void print_usage(int argc, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
     LOG("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
+    LOG("\n  embeddings:          %s -m your_model.gguf --embedding -p \"Hello world\"\n", argv[0]);
     LOG("\n");
 }
 
@@ -83,6 +85,78 @@ static void sigint_handler(int signo) {
 }
 #endif
 
+// Function to generate embeddings
+static bool generate_embeddings(llama_context * ctx, const std::vector<llama_token> & tokens) {
+    // Make sure we have a valid context
+    if (ctx == nullptr) {
+        LOG_ERR("%s: error: context is null\n", __func__);
+        return false;
+    }
+
+    // Create a batch with the input tokens
+    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        common_batch_add(batch, tokens[i], i, { 0 }, true);
+    }
+
+    // Process the batch
+    if (llama_decode(ctx, batch)) {
+        LOG_ERR("%s: failed to decode\n", __func__);
+        llama_batch_free(batch);
+        return false;
+    }
+
+    // Get embeddings
+    const int n_embd = llama_model_n_embd(llama_get_model(ctx));
+    std::vector<float> embeddings;
+
+    // Determine if we're using sequence-level or token-level embeddings
+    enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
+    if (pooling_type != LLAMA_POOLING_TYPE_NONE) {
+        // Sequence-level embedding
+        const float * embd = llama_get_embeddings_seq(ctx, 0);
+        if (embd == nullptr) {
+            LOG_ERR("%s: failed to get sequence embeddings\n", __func__);
+            llama_batch_free(batch);
+            return false;
+        }
+
+        embeddings.assign(embd, embd + n_embd);
+
+        // Output the embeddings
+        LOG_INF("Sequence embedding (dimension: %d):\n", n_embd);
+        printf("[\n");
+        for (int i = 0; i < n_embd; ++i) {
+            printf("  %f%s\n", embeddings[i], i < n_embd - 1 ? "," : "");
+        }
+        printf("]\n");
+    } else {
+        // Token-level embeddings - print for each token
+        LOG_INF("Token-level embeddings (dimension: %d):\n", n_embd);
+        printf("[\n");
+        for (size_t t = 0; t < tokens.size(); ++t) {
+            const float * embd = llama_get_embeddings_ith(ctx, t);
+            if (embd == nullptr) {
+                LOG_ERR("%s: failed to get token embeddings for token %zu\n", __func__, t);
+                continue;
+            }
+
+            // Get the token string representation for reference
+            std::string token_str = common_token_to_piece(ctx, tokens[t]);
+            printf("  // Token %zu: '%s'\n", t, token_str.c_str());
+            printf("  [\n");
+            for (int i = 0; i < n_embd; ++i) {
+                printf("    %f%s\n", embd[i], i < n_embd - 1 ? "," : "");
+            }
+            printf("  ]%s\n", t < tokens.size() - 1 ? "," : "");
+        }
+        printf("]\n");
+    }
+
+    llama_batch_free(batch);
+    return true;
+}
+
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
@@ -102,14 +176,6 @@ int main(int argc, char ** argv) {
     if (params.logits_all) {
         LOG_ERR("************\n");
         LOG_ERR("%s: please use the 'perplexity' tool for perplexity calculations\n", __func__);
-        LOG_ERR("************\n\n");
-
-        return 0;
-    }
-
-    if (params.embedding) {
-        LOG_ERR("************\n");
-        LOG_ERR("%s: please use the 'embedding' tool for embedding calculations\n", __func__);
         LOG_ERR("************\n\n");
 
         return 0;
@@ -232,6 +298,53 @@ int main(int argc, char ** argv) {
         LOG_INF("\n");
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
         LOG_INF("\n");
+    }
+
+    // For embedding mode, we only need to process the prompt, generate embeddings, and exit
+    if (params.embedding) {
+        // Make sure we have a prompt
+        if (params.prompt.empty()) {
+            LOG_ERR("%s: error: prompt is required for embedding\n", __func__);
+            return 1;
+        }
+
+        // Enable embeddings for the context
+        llama_set_embeddings(ctx, true);
+
+        // Tokenize the prompt
+        const bool add_bos = llama_vocab_get_add_bos(vocab) && !params.use_jinja;
+        std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos, true);
+
+        if (tokens.empty()) {
+            LOG_ERR("%s: error: failed to tokenize prompt\n", __func__);
+            return 1;
+        }
+
+        LOG_INF("%s: generating embeddings for %zu tokens\n", __func__, tokens.size());
+        LOG_INF("%s: prompt: '%s'\n", __func__, params.prompt.c_str());
+
+        if (params.verbose_prompt) {
+            LOG_INF("%s: tokens: ", __func__);
+            for (size_t i = 0; i < tokens.size(); ++i) {
+                LOG_INF("%d ('%s') ", tokens[i], common_token_to_piece(ctx, tokens[i]).c_str());
+            }
+            LOG_INF("\n");
+        }
+
+        // Generate and print embeddings
+        if (!generate_embeddings(ctx, tokens)) {
+            LOG_ERR("%s: error: failed to generate embeddings\n", __func__);
+            return 1;
+        }
+
+        // Clean up and exit
+        ggml_threadpool_free_fn(threadpool);
+        if (threadpool_batch) {
+            ggml_threadpool_free_fn(threadpool_batch);
+        }
+        llama_backend_free();
+
+        return 0;
     }
 
     std::string path_session = params.path_prompt_cache;

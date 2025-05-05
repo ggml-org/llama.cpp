@@ -2720,7 +2720,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.embedding = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--reranking", "--rerank"},
         string_format("enable reranking endpoint on server (default: %s)", params.reranking ? "enabled" : "disabled"),
