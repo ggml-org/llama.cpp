@@ -60,6 +60,7 @@ set(GGML_OPENCL_KERNELS
     cpy
     cvt
     diag_mask_inf
+    div
     gelu
     gemv_noshuffle_general
     gemv_noshuffle
