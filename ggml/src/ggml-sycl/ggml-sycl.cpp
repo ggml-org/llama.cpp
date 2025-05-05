@@ -3873,6 +3873,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
+                if (!ggml_is_contiguous(b)) {
+                    return false;
+                }
                 ggml_type a_type = a->type;
                 if (a_type == GGML_TYPE_IQ4_NL  || a_type == GGML_TYPE_IQ4_XS ||
                     a_type == GGML_TYPE_IQ3_XXS || a_type == GGML_TYPE_IQ3_S  ||
