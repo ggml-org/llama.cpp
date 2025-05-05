@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MessageExtraContext } from './types';
 import { ChatTextareaApi } from '../components/useChatTextarea.ts';
 
@@ -15,16 +15,21 @@ interface SetTextEvData {
  * window.postMessage({ command: 'setText', text: 'Spot the syntax error', context: 'def test()\n  return 123' }, '*');
  */
 
-export const useVSCodeContext = (textarea: ChatTextareaApi, onSend?: () => void) => {
-    const [extraContext, _setExtraContext] = useState<MessageExtraContext | null>(null);
+export const useVSCodeContext = (
+  textarea: ChatTextareaApi,
+  onSend?: () => void
+) => {
+  const [extraContext, _setExtraContext] = useState<MessageExtraContext | null>(
+    null
+  );
 
-    // Use ref to store the latest value
-    const extraContextRef = useRef(extraContext);
+  // Use ref to store the latest value
+  const extraContextRef = useRef(extraContext);
 
-    const setExtraContext = (value: MessageExtraContext | null) => {
-        extraContextRef.current = value;
-        _setExtraContext(value);
-    };
+  const setExtraContext = (value: MessageExtraContext | null) => {
+    extraContextRef.current = value;
+    _setExtraContext(value);
+  };
   // Accept setText message from a parent window and set inputMsg and extraContext
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -42,7 +47,7 @@ export const useVSCodeContext = (textarea: ChatTextareaApi, onSend?: () => void)
         if (onSend && data?.text) {
           // Use setTimeout to ensure state updates are processed
           setTimeout(() => {
-              onSend()
+            onSend();
           }, 50);
         }
       }
@@ -50,7 +55,7 @@ export const useVSCodeContext = (textarea: ChatTextareaApi, onSend?: () => void)
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  },[textarea, onSend]);
+  }, [textarea, onSend]);
 
   // Add a keydown listener that sends the "escapePressed" message to the parent window
   useEffect(() => {

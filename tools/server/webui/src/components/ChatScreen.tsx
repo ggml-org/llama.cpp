@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CallbackGeneratedChunk, useAppContext } from '../utils/app.context';
 import ChatMessage from './ChatMessage';
 import { CanvasType, Message, PendingMessage } from '../utils/types';
@@ -103,8 +103,6 @@ export default function ChatScreen() {
 
   const textarea: ChatTextareaApi = useChatTextarea(prefilledMsg.content());
 
-
-
   // keep track of leaf node for rendering
   const [currNodeId, setCurrNodeId] = useState<number>(-1);
   const messages: MessageDisplay[] = useMemo(() => {
@@ -140,7 +138,9 @@ export default function ChatScreen() {
     // get the last message node
     const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
     // TODO: improve this when we have "upload file" feature
-    const currExtra = extraContextRef.current ? [extraContextRef.current] : undefined;
+    const currExtra = extraContextRef.current
+      ? [extraContextRef.current]
+      : undefined;
     if (
       !(await sendMessage(
         currConvId,
@@ -157,7 +157,10 @@ export default function ChatScreen() {
     clearExtraContext();
   }, [textarea, currConvId, isGenerating, messages, sendMessage, onChunk]);
 
-  const { extraContext, clearExtraContext } = useVSCodeContext(textarea,sendNewMessage);
+  const { extraContext, clearExtraContext } = useVSCodeContext(
+    textarea,
+    sendNewMessage
+  );
   const extraContextRef = useRef(extraContext);
 
   useEffect(() => {
