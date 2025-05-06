@@ -1750,7 +1750,7 @@ static const char * llama_sampler_top_n_sigma_name(const struct llama_sampler * 
 static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     const auto * ctx = (llama_sampler_top_n_sigma *) smpl->ctx;
 
-    if (ctx->n < 0.0f) {
+    if (ctx->n <= 0.0f) {
         return;
     }
 
