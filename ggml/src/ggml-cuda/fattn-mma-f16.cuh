@@ -112,7 +112,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile(
     // The minimum granularity with cp.async is 16 bytes, with synchronous data loading it's 4 bytes.
 
     if (use_cp_async) {
-        const unsigned int tile_KV_32 = __cvta_generic_to_shared(tile_KV);
+        const unsigned int tile_KV_32 = ggml_cuda_cvta_generic_to_shared(tile_KV);
 
         constexpr int preload = 64;
         constexpr int h2_per_chunk = 16/sizeof(half2);
@@ -186,7 +186,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
         constexpr int cols_per_warp = 8*WARP_SIZE/nbatch_fa;
         constexpr int stride_j = nwarps * cols_per_warp;
 
-        const unsigned int tile_mask_32 = __cvta_generic_to_shared(tile_mask);
+        const unsigned int tile_mask_32 = ggml_cuda_cvta_generic_to_shared(tile_mask);
 
 #pragma unroll
         for (int j0 = 0; j0 < ncols1; j0 += stride_j) {
