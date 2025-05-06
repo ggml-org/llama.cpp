@@ -9,6 +9,8 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
+#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/api_remoting.h"
+
 void thks_bye();
 
 #include "virtgpu-shm.h"
@@ -170,15 +172,3 @@ virtgpu_ioctl_get_caps(struct virtgpu *gpu,
 static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
 static void virtgpu_init_renderer_info(struct virtgpu *gpu);
 static int remote_call(struct virtgpu *gpu, int32_t cmd_type, int32_t cmd_flags);
-
-#define PK_COMMAND_TYPE_LoadLibrary 255
-#define PK_COMMAND_TYPE_SayHello 256
-
-static inline const char *command_name(int32_t type)
-{
-  switch (type) {
-  case PK_COMMAND_TYPE_LoadLibrary: return "LoadLibrary";
-  case PK_COMMAND_TYPE_SayHello: return "SayHello";
-  default: return "unknown";
-  }
-}

@@ -71,8 +71,8 @@ create_virtgpu() {
     assert(false);
   }
 
-  remote_call(gpu, PK_COMMAND_TYPE_LoadLibrary, 0);
-  remote_call(gpu, PK_COMMAND_TYPE_SayHello, 0);
+  remote_call(gpu, VIRGL_VK_COMMAND_TYPE_LoadLibrary, 0);
+  remote_call(gpu, VIRGL_VK_COMMAND_TYPE_Forward, 12346);
 
   thks_bye();
 }
@@ -386,7 +386,7 @@ static int remote_call(
   vn_encode_uint32_t(encoder, &reply_res_id);
 
   printf("%s: call %s(flags=0x%x, reply_buf=%d)\n", __func__,
-	 command_name(cmd_type),
+	 api_remoting_command_name(cmd_type),
 	 cmd_flags, reply_res_id);
 
   /*
@@ -446,7 +446,7 @@ static int remote_call(
   vn_decode_int32_t(dec, &rmt_call_ret);
 
   printf("%s: call %s() --> %d\n", __func__,
-	 command_name(cmd_type), rmt_call_ret);
+	 api_remoting_command_name(cmd_type), rmt_call_ret);
 
   return rmt_call_ret;
 }
