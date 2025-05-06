@@ -3,7 +3,7 @@
 // host buffer type
 
 static const char * ggml_backend_remoting_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
-    return GGML_REMOTING_NAME "_Host";
+    return GGML_REMOTING_FRONTEND_NAME "_Host";
 
     UNUSED(buft);
 }
@@ -43,7 +43,7 @@ ggml_backend_buffer_type_t ggml_backend_remoting_host_buffer_type() {
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
-        /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_remoting_reg(), 0),
+        /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_remoting_frontend_reg(), 0),
         /* .context  = */ nullptr,
     };
 

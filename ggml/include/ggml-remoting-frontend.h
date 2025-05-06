@@ -7,9 +7,9 @@
 extern "C" {
 #endif
 
-#define GGML_REMOTING_NAME "RemotingFrontend"
+#define GGML_REMOTING_FRONTEND_NAME "RemotingFrontend"
 
-GGML_BACKEND_API ggml_backend_reg_t ggml_backend_remoting_reg();
+GGML_BACKEND_API ggml_backend_reg_t ggml_backend_remoting_frontend_reg();
 
 #ifdef  __cplusplus
 }

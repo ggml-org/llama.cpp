@@ -177,7 +177,7 @@ struct ggml_backend_registry {
         register_backend(ggml_backend_vk_reg());
 #endif
 #ifdef GGML_USE_REMOTINGFRONTEND
-        register_backend(ggml_backend_remoting_reg());
+        register_backend(ggml_backend_remoting_frontend_reg());
 #endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());

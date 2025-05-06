@@ -29,7 +29,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
                 char desc[256] = "API Remoting device";
 
                 ctx->device = i;
-                ctx->name = GGML_REMOTING_NAME + std::to_string(i);
+                ctx->name = GGML_REMOTING_FRONTEND_NAME + std::to_string(i);
                 ctx->description = desc;
                 devices.push_back(new ggml_backend_device {
                     /* .iface   = */ ggml_backend_remoting_device_i,
@@ -47,7 +47,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
 
 static const char * ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
     UNUSED(reg);
-    return GGML_REMOTING_NAME;
+    return GGML_REMOTING_FRONTEND_NAME;
 }
 
 static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
@@ -57,7 +57,7 @@ static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
     /* .get_proc_address = */ NULL,
 };
 
-ggml_backend_reg_t ggml_backend_remoting_reg() {
+ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     static ggml_backend_reg reg = {
         /* .api_version = */ GGML_BACKEND_API_VERSION,
         /* .iface       = */ ggml_backend_remoting_reg_i,
