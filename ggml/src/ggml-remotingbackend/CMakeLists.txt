@@ -5,6 +5,9 @@ message(STATUS "Enable API Remoting backend")
 
 ggml_add_backend_library(ggml-remotingbackend
                          backend.cpp
+                         shared/api_remoting.h
+                         shared/apir_backend.h
+                         shared/venus_cs.h
                          ../../include/ggml-remoting-backend.h
                         )
 
