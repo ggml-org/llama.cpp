@@ -58,193 +58,77 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 | Model Name                  | FP16  | Q8_0 | Q4_0 |
 |:----------------------------|:-----:|:----:|:----:|
-| AquilaChat2-7B              |   √   |   √  |   √  |
-| Baichuan-7b                 |   √   |   √  |   √  |
-| Baichuan2-7B-Chat           |   √   |   √  |   √  |
-| bitnet_b1_58-large          |   √   |   √  |   √  |
-| bloom-560m                  |   √   |   x  |   √  |
-| bloomz-alpaca-560m          |   √   |   x  |   √  |
-| c4ai-command-r-35B-v01      |   x   |   x  |   x  |
-| chatglm3-6B                 |   x   |   x  |   x  |
-| chinese-alpaca-2-1.3b       |   √   |   √  |   √  |
-| CodeShell-7B                |   √   |   √  |   √  |
-| deepseek-ai_deepseek-coder-1.3B-base | x |   x  |   x  |
-| deepseek-ai_DeepSeek-V2-Lite | x   |   x  |   x   |
-| deepseek-coder-6.7B-instruct | x   |   x  |   x   |
-| DeepSeek-V2-Lite-64x1.5B    |   x   |   x  |   x  |
-| falcon-7b-instruct          |   √   |   √  |   √  |
-| flan-t5-large               |   √   |   √  |   √  |
-| gemma-2-9b-it               |   √   |   √  |   √  |
-| glm-4-9B                    |   x   |   x  |   x  |
-| gpt2                        |   √   |   √  |   √  |
-| Gpt2-163M                   |   √   |   √  |   √  |
-| granite-3B-code-instruct    |   √   |   √  |   √  |
+| Llama-2                     |   √   |   √  |   √  |
+| Llama-3                     |   √   |   √  |   √  |
+| Mistral-7B                  |   √   |   √  |   √  |
+| Mistral MOE                 |   x   |   x  |   x  |
+| DBRX                        |   x   |   x  |   x  |
+| Falcon                      |   √   |   √  |   √  |
+| Chinese LLaMA/Alpaca        |   √   |   √  |   √  |
+| Vigogne(French)             |   √   |   √  |   √  |
+| BERT                        |   √   |   √  |   √  |
+| Koala                       |   √   |   √  |   √  |
+| Baichuan                    |   √   |   √  |   √  |
+| Aquila 1 & 2                |   √   |   √  |   √  |
+| Starcoder models            |   √   |   √  |   √  |
+| Refact                      |   √   |   √  |   √  |
+| MPT                         |   √   |   √  |   √  |
+| Bloom                       |   √   |   √  |   √  |
+| Yi models                   |   √   |   √  |   √  |
+| stablelm models             |   √   |   √  |   √  |
+| DeepSeek models             |   x   |   x  |   x  |
+| Qwen models                 |   √   |   √  |   √  |
+| PLaMo-13B                   |   √   |   √  |   √  |
+| Phi models                  |   √   |   √  |   √  |
+| PhiMoE                      |   x   |   x  |   x  |
+| GPT-2                       |   √   |   √  |   √  |
+| Orion                       |   √   |   √  |   √  |
+| InternlLM2                  |   √   |   √  |   √  |
+| CodeShell                   |   √   |   √  |   √  |
+| Gemma                       |   √   |   √  |   √  |
+| Mamba                       |   √   |   √  |   √  |
+| Xverse                      |   √   |   √  |   √  |
+| command-r models            |   √   |   √  |   √  |
+| Grok-1                      |   x   |   x  |   x  |
+| SEA-LION                    |   √   |   √  |   √  |
 | GritLM-7B                   |   √   |   √  |   √  |
-| internlm2_5-7b-chat         |   √   |   √  |   √  |
-| koala-7B-HF                 |   √   |   √  |   √  |
-| Llama-2-7b-chat-hf          |   √   |   √  |   √  |
-| Llama-3-Smaug-8B            |   √   |   √  |   √  |
-| Llama2-Chinese-7b-Chat      |   √   |   √  |   √  |
-| Llama3-8B                   |   √   |   √  |   √  |
-| Llama3-8b-chinese           |   √   |   √  |   √  |
-| mamba-130m-hf               |   √   |   √  |   √  |
-| Mistral-7B-Instruct-v0.2    |   √   |   √  |   √  |
-| Mixtral-8x7B-Instruct-v0.1  |   x   |   √  |   √  |
-| mpt-7B                      |   √   |   √  |   √  |
-| OLMo-1B-hf                  |   √   |   √  |   √  |
-| OpenELM-3B-Instruct         |   √   |   √  |   √  |
-| Orion-14b-base              |   √   |   √  |   √  |
-| phi1                        |   x   |   x  |   x  |
-| phi2                        |   x   |   x  |   x  |
-| Phi-3-mini-4k-instruct      |   √   |   √  |   √  |
-| plamo-13b                   |   √   |   √  |   √  |
-| pythia-70M                  |   x   |   x  |   x  |
-| Qwen-7B                     |   √   |   √  |   √  |
-| Qwen2-1.5B-Instruct         |   √   |   x  |   √  |
-| Refact-1_6B-fim             |   √   |   √  |   √  |
-| SmolLM-135M                 |   √   |   √  |   √  |
-| stablelm-zephyr             |   x   |   x  |   x  |
-| stablelm-2-zephyr-1_6b      |   x   |   x  |   x  |
-| starcoderbase-1b            |   √   |   √  |   √  |
-| starcoder2-3b               |   √   |   √  |   √  |
-| vigogne-7b-chat             |   √   |   √  |   √  |
-| xverse-7b-chat              |   √   |   √  |   √  |
-| Yi-6b-Chat                  |   √   |   √  |   √  |
-| snowflake-arctic-embed        |   √   |   ×   |  ×   |
-| all-minilm                  |   √   |   ×   |  ×   |
-| granite-embedding           |   √   |   ×   |  ×   |
-| smollm                      |   √   |   √   |  √   |
-| smollm2                     |   √   |   √   |  √   |
-| nomic-embed-text            |   √   |   ×   |  ×   |
-| qwen2                       |   √   |   √   |  √   |
-| reader-lm                   |   √   |   √   |  √   |
-| qwen2.5                     |   √   |   √   |  √   |
-| qwen2.5-coder               |   √   |   √   |  √   |
-| qwen                        |   √   |   √   |  √   |
-| paraphrase-multilingual        |   √   |   ×   |  ×   |
-| tinydolphin                 |   √   |   √   |  √   |
-| tinyllama                   |   √   |   √   |  √   |
-| mxbai-embed-large           |   √   |   ×   |  ×   |
-| bge-large                   |   √   |   ×   |  ×   |
-| starcoder                   |   √   |   √   |  √   |
-| granite3-moe                |   √   |   √   |  √   |
-| llama3                      |   √   |   √   |  √   |
-| deepseek-coder              |   √   |   √   |  √   |
-| granite3                    |   √   |   √   |  √   |
-| moondream                   |   √   |   √   |  √   |
-| yi-coder                    |   √   |   √   |  √   |
-| llama-guard3                |   √   |   √   |  √   |
-| qwen2-math                  |   √   |   √   |  √   |
-| stablelm2                   |   ×   |   √   |  √   |
-| sailor2                     |   √   |   √   |  ×   |
-| gemma3                      |   √   |   √   |  ×   |
-| internlm2                   |   √   |   √   |  √   |
-| bge-m3                      |   √   |   ×   |  ×   |
-| granite3-dense              |   √   |   √   |  √   |
-| codegemma                   |   √   |   √   |  √   |
-| phi                         |   √   |   √   |  √   |
-| dolphin-phi                 |   ×   |   √   |  √   |
-| stable-code                 |   √   |   √   |  √   |
-| stablelm-zephyr             |   √   |   √   |  √   |
-| gemma2                      |   √   |   √   |  √   |
-| shieldgemma                 |   ×   |   √   |  √   |
-| gemma                       |   √   |   √   |  √   |
-| starcoder2                  |   √   |   √   |  √   |
-| falcon3                     |   √   |   √   |  ×   |
-| deepseek-r1                 |   √   |   √   |  ×   |
-| deepscaler                  |   √   |   √   |  ×   |
-| hermes3                     |   √   |   √   |  √   |
-| orca-mini                   |   √   |   √   |  √   |
-| granite-code                |   √   |   √   |  √   |
-| opencoder                   |   √   |   √   |  ×   |
-| nuextract                   |   √   |   √   |  √   |
-| phi3                        |   √   |   √   |  √   |
-| phi3.5                      |   √   |   √   |  √   |
-| nemotron-mini               |   √   |   √   |  √   |
-| granite3-guardian           |   √   |   √   |  ×   |
-| exaone3.5                   |   √   |   √   |  ×   |
-| exaone-deep                 |   √   |   √   |  ×   |
-| yi                          |   √   |   √   |  √   |
-| smallthinker                |   √   |   √   |  ×   |
-| yarn-llama2                 |   √   |   √   |  √   |
-| xwinlm                      |   √   |   √   |  √   |
-| wizard-vicuna-uncensored        |   √   |   √   |  √   |
-| vicuna                      |   √   |   √   |  √   |
-| stable-beluga               |   √   |   √   |  √   |
-| nous-hermes                 |   √   |   √   |  √   |
-| medllama2                   |   √   |   √   |  √   |
-| llama2-uncensored           |   √   |   √   |  √   |
-| meditron                    |   √   |   √   |  √   |
-| llava                       |   √   |   √   |  √   |
-| magicoder                   |   √   |   √   |  √   |
-| wizardlm                    |   √   |   √   |  √   |
-| wizard-math                 |   √   |   √   |  √   |
-| wizardcoder                 |   √   |   √   |  √   |
-| orca2                       |   √   |   √   |  √   |
-| codellama                   |   √   |   √   |  √   |
-| duckdb-nsql                 |   √   |   √   |  √   |
-| llama2                      |   √   |   √   |  √   |
-| deepseek-llm                |   √   |   √   |  √   |
-| phi4-mini                   |   √   |   √   |  ×   |
-| samantha-mistral            |   ×   |   √   |  √   |
-| yarn-mistral                |   √   |   √   |  √   |
-| sqlcoder                    |   √   |   √   |  √   |
-| neural-chat                 |   √   |   √   |  √   |
-| bakllava                    |   √   |   √   |  √   |
-| wizardlm2                   |   √   |   √   |  √   |
-| dolphin-mistral             |   √   |   √   |  √   |
-| mistral-openorca            |   √   |   √   |  √   |
-| openhermes                  |   √   |   √   |  √   |
-| mistrallite                 |   √   |   √   |  √   |
-| notus                       |   √   |   √   |  √   |
-| zephyr                      |   √   |   √   |  √   |
-| mistral                     |   √   |   √   |  √   |
-| openchat                    |   √   |   √   |  √   |
-| mathstral                   |   √   |   √   |  √   |
-| codeqwen                    |   √   |   √   |  √   |
-| falcon                      |   √   |   √   |  √   |
-| dolphincoder                |   √   |   √   |  √   |
-| minicpm-v                   |   √   |   √   |  √   |
-| bespoke-minicheck           |   √   |   √   |  √   |
-| llama3-chatqa               |   √   |   √   |  √   |
-| llama3-gradient             |   √   |   √   |  √   |
-| dolphin-llama3              |   √   |   √   |  √   |
-| llama3-groq-tool-use        |   ×   |   √   |  √   |
-| llama-pro                   |   √   |   √   |  √   |
-| aya                         |   ×   |   √   |  √   |
-| aya-expanse                 |   √   |   √   |  √   |
-| codegeex4                   |   ×   |   √   |  √   |
-| glm4                        |   √   |   √   |  √   |
-| solar                       |   √   |   √   |  √   |
-| nous-hermes2                |   √   |   √   |  √   |
-| falcon2                     |   √   |   √   |  √   |
-| mistral-nemo                |   √   |   √   |  √   |
-| llama2-chinese              |   √   |   √   |  ×   |
-| wizard-vicuna               |   √   |   √   |  √   |
-| codeup                      |   √   |   √   |  √   |
-| open-orca-platypus2         |   √   |   √   |  √   |
-| nexusraven                  |   √   |   √   |  √   |
-| everythinglm                |   √   |   √   |  √   |
-| llava-phi3                  |   √   |   ×   |  ×   |
-| starling-lm                 |   √   |   √   |  ×   |
-| olmo2                       |   √   |   √   |  ×   |
-| marco-o1                    |   ×   |   √   |  ×   |
-| openthinker                 |   √   |   √   |  ×   |
-| dolphin3                    |   √   |   √   |  ×   |
-| tulu3                       |   √   |   √   |  ×   |
-| command-r7b                 |   √   |   √   |  ×   |
-| command-r7b-arabic          |   √   |   √   |  ×   |
-| deepseek-v2                 |   ×   |   √   |  √   |
-| deepseek-coder-v2           |   ×   |   √   |  √   |
-| codestral                   |   ×   |   √   |  √   |
-| mistral-small               |   ×   |   √   |  √   |
-| wizardlm-uncensored         |   √   |   √   |  ×   |
-| phi4                        |   ×   |   √   |  ×   |
-| llava-llama3                |   √   |   ×   |  ×   |
-| command-r                   |   ×   |   ×   |  √   |
-| phind-codellama             |   ×   |   ×   |  √   |
-| codebooga                   |   ×   |   ×   |  √   |
-| alfred                      |   ×   |   ×   |  √   |
+| OLMo                        |   √   |   √  |   √  |
+| OLMo 2                      |   √   |   √  |   √  |
+| OLMoE                       |   x   |   x  |   x  |
+| Granite models              |   √   |   √  |   √  |
+| GPT-NeoX + Pythia           |   x   |   x  |   x  |
+| Snowflake-Arctic MoE        |   x   |   ×  |   ×  |
+| Smaug                       |   √   |   √  |   √  |
+| Poro 34B                    |   √   |   √  |   √  |
+| Bitnet b1.58 models         |   √   |   √  |   √  |
+| Flan-T5                     |   √   |   √  |   √  |
+| Open Elm models             |   √   |   √  |   √  |
+| chatGLM3-6B + ChatGLM4-9b +  GLMEdge-1.5b + GLMEdge-4b    |   √   |   √  |   √  |
+| GLM-4-0414                  |   √   |   √  |   √  |
+| SmolLM                      |   √   |   √  |   √  |
+| EXAONE-3.0-7.8B-Instruct    |   √   |   √  |   √  |
+| FalconMamba Models          |   √   |   √  |   √  |
+| Jais Models                 |   x   |   x  |   x  |
+| Bielik-11B-v2.3             |   √   |   √  |   √  |
+| RWKV-6                      |   x   |   x  |   x  |
+| QRWKV-6                     |   x   |   x  |   x  |
+| GigaChat-20B-A3B            |   x   |   x  |   x  |
+| Trillion-7B-preview         |   √   |   √  |   √  |
+| Ling models                 |   √   |   √  |   √  |
+
+
+**Multimodal**
+| LLaVA 1.5 models, LLaVA 1.6 models      |   √   |   √  |   √  |
+|  BakLLaVA                   |   x   |   x  |   x  |
+|  Obsidian                   |   x   |   x  |   x  |
+|  ShareGPT4V                 |   x   |   x  |   x  |
+|  MobileVLM 1.7B/3B models   |   x   |   x  |   x  |
+|  Yi-VL                      |   x   |   x  |   x  |
+|  Mini CPM                   |   √   |   √  |   √  |
+|  Moondream                  |   √   |   √  |   √  |
+|  Bunny                      |   x   |   x  |   x  |
+|  GLM-EDGE                   |   x   |   x  |   x  |
+|  Qwen2-VL                   |   √   |   √  |   √  |
 
 
 
