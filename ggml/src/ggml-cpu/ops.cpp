@@ -6982,8 +6982,11 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const int64_t rv3 = neq3/nev3;
 
     // parallelize by q rows using ggml_vec_dot_f32
+    const uint32_t n_head      = neq2;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
-    const int n_gqa = neq2 / nek2;
+    const uint32_t n_kv_head = nek2;
+    const int n_gqa = n_head / n_kv_head;
     GGML_ASSERT(n_gqa <= GGML_FLASH_ATTN_EXT_MAX_GQA);
 
     // total groups in q
@@ -7008,9 +7011,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         scale /= logit_softcap;
     }
 
-    const uint32_t n_head      = neq2;
-    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
-
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
@@ -7031,8 +7031,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     float slope[GGML_FLASH_ATTN_EXT_MAX_GQA];
 
     for (int ig = ig0; ig < ig1; ++ig) {
-        const int group_index = ig % ng;
-        const int batch_index = ig / ng;
+        const int group_index = ig % n_kv_head;
+        const int batch_index = ig / n_kv_head;
         // q indices
         const int iq3 = 0;
         const int iq2 = group_index * n_gqa; // start head index
