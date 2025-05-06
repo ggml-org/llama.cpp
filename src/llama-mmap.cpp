@@ -10,6 +10,12 @@
 #include <cerrno>
 #include <algorithm>
 
+#ifdef USE_LIBNUMA
+    #include <numa.h>
+    #include <numaif.h>
+    #include <sched.h>
+#endif
+
 #ifdef __has_include
     #if __has_include(<unistd.h>)
         #include <unistd.h>
@@ -273,6 +279,27 @@ struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
+#ifdef USE_LIBNUMA
+    static void move_pages(void *addr, size_t size) {
+        int cpu, ret;
+        struct bitmask *nodemask = numa_allocate_nodemask();
+
+        /* Get memory policy of the calling thread. */
+        ret = get_mempolicy(nullptr, nodemask->maskp, nodemask->size, nullptr, 0);
+        if (ret || numa_bitmask_weight(nodemask) == 0) {
+            cpu = sched_getcpu();
+            if (cpu >= 0) {
+                numa_bitmask_clearall(nodemask);
+                numa_bitmask_setbit(nodemask, numa_node_of_cpu(cpu));
+            }
+        }
+        if (numa_bitmask_weight(nodemask) == 1) {
+            mbind(addr, size, MPOL_BIND, nodemask->maskp, nodemask->size, MPOL_MF_MOVE);
+        }
+        numa_free_nodemask(nodemask);
+    }
+#endif
+
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         size = file->size();
         int fd = file->file_id();
@@ -291,6 +318,17 @@ struct llama_mmap::impl {
         }
 
         if (prefetch > 0) {
+#ifdef USE_LIBNUMA
+            /*
+             * Given that we already pre-fault all memory when prefetch > 0, it is
+             * necessary to move any page cache pages that might have been
+             * instantiated during previous runs on different NUMA nodes. This call
+             * to move_pages() ensures that all memory-mapped pages are relocated
+             * according to the calling thread's memory policy or the CPU on which
+             * it is running.
+             */
+            move_pages(addr, file->size());
+#endif
             if (posix_madvise(addr, std::min(file->size(), prefetch), POSIX_MADV_WILLNEED)) {
                 LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
                         strerror(errno));
