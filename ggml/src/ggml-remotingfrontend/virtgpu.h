@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
-void breakpoint();
+void thks_bye();
 
 #include "virtgpu-shm.h"
 #include "virtgpu-utils.h"
@@ -138,6 +138,9 @@ struct virtgpu {
   //   struct virtgpu_shmem_cache shmem_cache;
 
    bool supports_cross_device;
+
+  /* KP */
+  struct vn_renderer_shmem *reply_shmem;
 };
 
 
@@ -166,4 +169,16 @@ virtgpu_ioctl_get_caps(struct virtgpu *gpu,
                        size_t capset_size);
 static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
 static void virtgpu_init_renderer_info(struct virtgpu *gpu);
-static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem);
+static int remote_call(struct virtgpu *gpu, int32_t cmd_type, int32_t cmd_flags);
+
+#define PK_COMMAND_TYPE_LoadLibrary 255
+#define PK_COMMAND_TYPE_SayHello 256
+
+static inline const char *command_name(int32_t type)
+{
+  switch (type) {
+  case PK_COMMAND_TYPE_LoadLibrary: return "LoadLibrary";
+  case PK_COMMAND_TYPE_SayHello: return "SayHello";
+  default: return "unknown";
+  }
+}

@@ -1,0 +1,11 @@
+cmake_minimum_required(VERSION 3.19)
+cmake_policy(SET CMP0114 NEW)
+
+message(STATUS "Enable API Remoting backend")
+
+ggml_add_backend_library(ggml-remotingbackend
+                         backend.cpp
+                         ../../include/ggml-remoting-backend.h
+                        )
+
+target_compile_options(ggml-remotingbackend PRIVATE -std=c++20)

@@ -721,6 +721,11 @@ ifdef GGML_REMOTING_FRONTEND
 	OBJ_GGML_EXT += ggml/src/ggml-remotingfrontend/ggml-remoting-frontend.o
 endif
 
+ifdef GGML_REMOTING_BACKEND
+	MK_CPPFLAGS  += -DGGML_USE_REMOTINGBACKEND
+	OBJ_GGML_EXT += ggml/src/ggml-remotingbackend/ggml-remoting-backend.o
+endif
+
 ifdef GGML_VULKAN
 	MK_CPPFLAGS  += -DGGML_USE_VULKAN
 	MK_LDFLAGS   += $(shell pkg-config --libs vulkan)
@@ -761,6 +766,9 @@ ggml/src/ggml-vulkan.o: ggml/src/ggml-vulkan/ggml-vulkan.cpp ggml/include/ggml-v
 	$(CXX) $(CXXFLAGS) $(shell pkg-config --cflags vulkan) -c $< -o $@
 
 ggml/src/ggml-remotingfrontend/frontend.o: ggml/src/ggml-remotingfrontend/frontend.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+ggml/src/ggml-remotingbackend/backend.o: ggml/src/ggml-remotingbackend/backend.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(_ggml_vk_header): $(_ggml_vk_source)
