@@ -213,7 +213,7 @@ add_library(ggml
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
-if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_link_libraries(ggml PRIVATE dl stdc++fs)
 endif()
 

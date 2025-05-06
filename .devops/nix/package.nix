@@ -13,6 +13,7 @@
   cudaPackages,
   autoAddDriverRunpath,
   darwin,
+  llvmPackages,
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
@@ -34,6 +35,10 @@
   rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   enableCurl ? true,
   useVulkan ? false,
+  useOpenMP ? false,
+  buildCommon ? true,
+  buildExamples ? buildCommon,
+  buildServer ? buildExamples,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
 
   # It's necessary to consistently use backendStdenv when building with CUDA support,
@@ -49,6 +54,7 @@ let
     cmakeFeature
     optionals
     strings
+    assertMsg
     ;
 
   stdenv = throw "Use effectiveStdenv instead";
@@ -96,16 +102,24 @@ let
     rocblas
   ];
 
+  vulkanNativeBuildInputs = [
+    shaderc
+  ];
+
   vulkanBuildInputs = [
     vulkan-headers
     vulkan-loader
-    shaderc
   ];
 in
+
+assert assertMsg (buildExamples -> buildCommon) "buildCommon must be true when buildExamples is true";
+assert assertMsg (buildServer -> buildExamples) "buildExamples must be true when buildServer is true";
 
 effectiveStdenv.mkDerivation (finalAttrs: {
   pname = "llama-cpp${pnameSuffix}";
   version = llamaVersion;
+
+  outputs = [ "out" "lib" "dev" ];
 
   # Note: none of the files discarded here are visible in the sandbox or
   # affect the output hash. This also means they can be modified without
@@ -145,7 +159,6 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     [
       cmake
       ninja
-      pkg-config
       git
     ]
     ++ optionals useCuda [
@@ -153,6 +166,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
 
       autoAddDriverRunpath
     ]
+    ++ optionals useVulkan vulkanNativeBuildInputs
     ++ optionals (effectiveStdenv.hostPlatform.isGnu && enableStatic) [ glibc.static ]
     ++ optionals (effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders) [ xcrunHost ];
 
@@ -165,11 +179,15 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals useVulkan vulkanBuildInputs
     ++ optionals enableCurl [ curl ];
 
+  propagatedNativeBuildInputs = [ pkg-config ];
+
+  propagatedBuildInputs =
+    optionals useBlas [ blas ]
+    ++ optionals useOpenMP [ llvmPackages.openmp ];
+
   cmakeFlags =
     [
-      (cmakeBool "LLAMA_BUILD_SERVER" true)
       (cmakeBool "BUILD_SHARED_LIBS" (!enableStatic))
-      (cmakeBool "CMAKE_SKIP_BUILD_RPATH" true)
       (cmakeBool "LLAMA_CURL" enableCurl)
       (cmakeBool "GGML_NATIVE" false)
       (cmakeBool "GGML_BLAS" useBlas)
@@ -177,7 +195,14 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       (cmakeBool "GGML_HIP" useRocm)
       (cmakeBool "GGML_METAL" useMetalKit)
       (cmakeBool "GGML_VULKAN" useVulkan)
+      (cmakeBool "GGML_OPENMP" useOpenMP)
       (cmakeBool "GGML_STATIC" enableStatic)
+      (cmakeBool "LLAMA_BUILD_COMMON" (buildCommon || finalAttrs.doCheck or false))
+      (cmakeBool "LLAMA_BUILD_TESTS" finalAttrs.doCheck or false)
+      (cmakeBool "LLAMA_BUILD_EXAMPLES" buildExamples)
+      (cmakeBool "LLAMA_BUILD_SERVER" buildServer)
+      (cmakeBool "BLA_PREFER_PKGCONFIG" true)
+      (cmakeFeature "CMAKE_CTEST_ARGUMENTS" "--exclude-regex;test-eval-callback") # Uses Internet
     ]
     ++ optionals useCuda [
       (
@@ -209,6 +234,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     cp $src/include/llama.h $out/include/
   '';
 
+  doCheck = true;
+
   meta = {
     # Configurations we don't want even the CI to evaluate. Results in the
     # "unsupported platform" messages. This is mostly a no-op, because
@@ -239,6 +266,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     maintainers = with lib.maintainers; [
       philiptaron
       SomeoneSerge
+      hacker1024
     ];
 
     # Extend `badPlatforms` instead
