@@ -35,9 +35,9 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
 }
 
 void *something = NULL;
-void breakpoint () {
+void thks_bye () {
   // break here
-  INFO("BREAKPOINT HERE");
+  INFO("thks bye, stopping early.");
   if (!something) { // avoid the [[noreturn]] detection mechanism
     exit(0);
   }
@@ -64,18 +64,17 @@ create_virtgpu() {
 
   virtgpu_init_shmem_blob_mem(gpu);
 
-  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, 16384);
+  gpu->reply_shmem = virtgpu_shmem_create(gpu, 16384);
 
-  if (!shmem) {
-    INFO("failed to enumerate DRM devices");
+  if (!gpu->reply_shmem) {
+    FATAL("%s: failed to create the reply shared memory page :/", __func__);
     assert(false);
-  } else {
-    INFO("Created shm at %p", shmem);
   }
 
-  virtgpu_submit(gpu, shmem);
+  remote_call(gpu, PK_COMMAND_TYPE_LoadLibrary, 0);
+  remote_call(gpu, PK_COMMAND_TYPE_SayHello, 0);
 
-  breakpoint();
+  thks_bye();
 }
 
 static VkResult
@@ -352,10 +351,11 @@ virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
 }
 
 
-
-#define PK_COMMAND_TYPE_pkCreateThread 255
-
-static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
+static int remote_call(
+  struct virtgpu *gpu,
+  int32_t cmd_type,
+  int32_t cmd_flags
+  )
 {
 
   /*
@@ -375,21 +375,25 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
    */
 
   /* VkCommandTypeEXT is int32_t */
-  int32_t cmd_type = PK_COMMAND_TYPE_pkCreateThread;
   vn_encode_int32_t(encoder, &cmd_type);
-  int32_t cmd_flags = 0x0;
   vn_encode_int32_t(encoder, &cmd_flags);
 
-  uint32_t reply_res_id = shmem->res_id;
+  if (!gpu->reply_shmem) {
+    FATAL("%s: the reply shmem page can't be null", __func__);
+  }
+
+  uint32_t reply_res_id = gpu->reply_shmem->res_id;
   vn_encode_uint32_t(encoder, &reply_res_id);
 
-  printf("call pkCreateThread(flags=0x%x, reply_buf=%d)\n", cmd_flags, reply_res_id);
+  printf("%s: call %s(flags=0x%x, reply_buf=%d)\n", __func__,
+	 command_name(cmd_type),
+	 cmd_flags, reply_res_id);
 
   /*
    * Reply notification pointer
    */
 
-  volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) shmem->mmap_ptr;
+  volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) gpu->reply_shmem->mmap_ptr;
   *atomic_reply_notif = 0;
 
   /*
@@ -415,6 +419,9 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
 
   int ret = drmIoctl(gpu->fd, DRM_IOCTL_VIRTGPU_EXECBUFFER, &args);
 
+  if (ret != 0) {
+    FATAL("%s: the virtgpu EXECBUFFER ioctl failed (%d) :/ \n", ret);
+  }
   /*
    * Wait for the response notification
    */
@@ -430,22 +437,16 @@ static int virtgpu_submit(struct virtgpu *gpu, struct vn_renderer_shmem *shmem)
    */
 
   struct vn_cs_decoder _dec = {
-    .cur = (char *) shmem->mmap_ptr + sizeof(*atomic_reply_notif),
-    .end = (char *) shmem->mmap_ptr + shmem->mmap_size,
+    .cur = (char *) gpu->reply_shmem->mmap_ptr + sizeof(*atomic_reply_notif),
+    .end = (char *) gpu->reply_shmem->mmap_ptr + gpu->reply_shmem->mmap_size,
   };
   struct vn_cs_decoder *dec = &_dec;
 
-  uint32_t apiVersion;
-  vn_decode_uint32_t(dec, &apiVersion);
-  printf("pkCreateThread() --> 0x%x\n", apiVersion);
-  vn_decode_uint32_t(dec, &apiVersion);
-  printf("pkCreateThread() --> 0x%x\n", apiVersion);
-  vn_decode_uint32_t(dec, &apiVersion);
-  printf("pkCreateThread() --> 0x%x\n", apiVersion);
+  int32_t rmt_call_ret;
+  vn_decode_int32_t(dec, &rmt_call_ret);
 
-  int32_t vk_ret;
-  vn_decode_int32_t(dec, &vk_ret);
-  printf("pkCreateThread() --> ret=%d\n", vk_ret);
+  printf("%s: call %s() --> %d\n", __func__,
+	 command_name(cmd_type), rmt_call_ret);
 
-  return ret;
+  return rmt_call_ret;
 }
