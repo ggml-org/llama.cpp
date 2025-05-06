@@ -1,6 +1,7 @@
 #include "sampling.h"
 
 #include "common.h"
+#include "log.h"
 
 #include <cmath>
 #include <unordered_map>
@@ -534,14 +535,16 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         auto sampler = sampler_canonical_name_map.find(name);
         if (sampler != sampler_canonical_name_map.end()) {
             samplers.push_back(sampler->second);
-        } else {
-            if (allow_alt_names) {
-                sampler = sampler_alt_name_map.find(name);
-                if (sampler != sampler_alt_name_map.end()) {
-                    samplers.push_back(sampler->second);
-                }
+            continue;
+        }
+        if (allow_alt_names) {
+            sampler = sampler_alt_name_map.find(name);
+            if (sampler != sampler_alt_name_map.end()) {
+                samplers.push_back(sampler->second);
+                continue;
             }
         }
+        LOG_WRN("%s: unable to match sampler by name '%s'\n", __func__, name.c_str());
     }
 
     return samplers;
@@ -568,6 +571,8 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
         const auto sampler = sampler_name_map.find(c);
         if (sampler != sampler_name_map.end()) {
             samplers.push_back(sampler->second);
+        } else {
+            LOG_WRN("%s: unable to match sampler by char '%c'\n", __func__, c);
         }
     }
 
