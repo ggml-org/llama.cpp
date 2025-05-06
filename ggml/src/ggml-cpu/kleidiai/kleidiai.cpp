@@ -138,6 +138,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
     }
 
     bool compute_forward_kv_cache(ggml_compute_params * params, struct ggml_tensor * dst) {
+        static std::atomic_flag first_to_arrive = ATOMIC_FLAG_INIT;
+
         const ggml_tensor * src0 = dst->src[0];
         const ggml_tensor * src1 = dst->src[1];
 
@@ -149,32 +151,27 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         kernel_info * kernel = src1->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
         GGML_ASSERT(kernel);
 
-        const size_t nth = params->nth;
-        const size_t ith = params->ith;
+        const int nth = params->nth;
+        const int ith = params->ith;
 
-        const size_t lhs_batch_size0 = ne12;
-        const size_t rhs_batch_size0 = ne02;
+        const int64_t lhs_batch_size0 = ne12;
+        const int64_t rhs_batch_size0 = ne02;
+        const int64_t batch_size      = rhs_batch_size0;
 
-        const size_t r = lhs_batch_size0 / rhs_batch_size0;
+        const int64_t r = lhs_batch_size0 / rhs_batch_size0;
 
-        const size_t m = ne11 * r;
-        const size_t n = ne01;
-        const size_t k = ne00;
-        const size_t batch_size = rhs_batch_size0;
+        const int64_t m = ne11 * r;
+        const int64_t n = ne01;
+        const int64_t k = ne00;
 
         const size_t lhs_stride = src1->nb[1];
         const size_t rhs_stride = src0->nb[1];
         const size_t dst_stride = dst->nb[1];
 
-        const size_t mr = kernel->get_mr();
-        const size_t nr = kernel->get_nr();
-        const size_t kr = kernel->get_kr();
-        const size_t sr = kernel->get_sr();
-
-        const size_t m_step = kernel->get_m_step();
-        const size_t n_step = kernel->get_n_step();
-
-        const bool parallelize_on_m = m >= m_step * nth;
+        const int64_t mr = static_cast<int64_t>(kernel->get_mr());
+        const int64_t nr = static_cast<int64_t>(kernel->get_nr());
+        const int64_t kr = static_cast<int64_t>(kernel->get_kr());
+        const int64_t sr = static_cast<int64_t>(kernel->get_sr());
 
         const size_t lhs_packed_size = variant_call<size_t>(kernels->lhs_info.packed_size, m, k, mr, kr, sr);
         const size_t rhs_packed_size = variant_call<size_t>(kernels->rhs_info.packed_size, n, k);
@@ -189,40 +186,36 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         uint8_t * rhs_kxn    = rhs_packed + rhs_packed_size;
         uint8_t * bias       = rhs_kxn + kxn_size;
 
-        for (size_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
+        for (int64_t batch_idx = 0; batch_idx < batch_size; ++batch_idx) {
             const uint8_t * lhs_batch = static_cast<const uint8_t *>(src1->data) + batch_idx * m * lhs_stride;
             const uint8_t * rhs_batch = static_cast<const uint8_t *>(src0->data) + batch_idx * n * rhs_stride;
             uint8_t * dst_batch       = static_cast<uint8_t *>(dst->data) + batch_idx * m * dst_stride;
 
             // LHS packing
             {
-                const size_t m_roundup_mr = kai_roundup(m, mr);
-                const size_t num_threads  = KAI_MIN(m_roundup_mr / mr, nth);
+                const int64_t m_roundup_mr = kai_roundup(m, mr);
+                const int64_t num_threads  = KAI_MIN(m_roundup_mr / mr, nth);
 
                 if (ith < num_threads) {
-                    const size_t num_m_per_thread0 = round_down(m_roundup_mr / num_threads, mr);
-                    const size_t num_m_per_threadN_1 = m - (num_threads - 1) * num_m_per_thread0;
+                    const int64_t num_m_per_thread0   = round_down(m_roundup_mr / num_threads, mr);
+                    const int64_t num_m_per_threadN_1 = m - (num_threads - 1) * num_m_per_thread0;
 
-                    const size_t m_start = ith * num_m_per_thread0;
-                    const size_t num_m_per_thread = (ith == num_threads - 1) ? num_m_per_threadN_1 : num_m_per_thread0;
+                    const int64_t m_start          = ith * num_m_per_thread0;
+                    const int64_t num_m_per_thread = (ith == num_threads - 1) ? num_m_per_threadN_1 : num_m_per_thread0;
 
-                    const size_t lhs_offset = variant_call<size_t>(kernels->gemm.get_lhs_offset, m_start, lhs_stride);
+                    const size_t lhs_offset        = variant_call<size_t>(kernels->gemm.get_lhs_offset, m_start, lhs_stride);
                     const size_t lhs_packed_offset = variant_call<size_t>(kernels->lhs_info.get_packed_offset, m_start, k, mr, kr, sr);
 
                     const void * src_ptr = static_cast<const uint8_t *>(lhs_batch) + lhs_offset;
-                    void * dst_ptr = static_cast<uint8_t *>(lhs_packed) + lhs_packed_offset;
+                    void * dst_ptr       = static_cast<uint8_t *>(lhs_packed) + lhs_packed_offset;
 
                     variant_call<void>(kernels->lhs_info.pack_func, num_m_per_thread, k, mr, kr, sr, 0, src_ptr, lhs_stride, dst_ptr);
-                }
-
-                // Investigate if this barrier can be removed.
-                if (parallelize_on_m == false || num_threads != nth) {
-                    ggml_barrier(params->threadpool);
                 }
             }
 
             // RHS packing
-            if (ith == 0) {
+            if (first_to_arrive.test_and_set(std::memory_order_acquire) == false) {
+                // First thread to reach this point handles RHS packing
                 memset(bias, 0, n * sizeof(float));
                 transpose_f32kxn_f16nxk(n, k, reinterpret_cast<float *>(rhs_kxn),
                                         reinterpret_cast<const uint16_t *>(rhs_batch), rhs_stride);
@@ -233,19 +226,22 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
             ggml_barrier(params->threadpool);
 
+            first_to_arrive.clear(std::memory_order_release);
+
             // Perform the matmul
             {
-                const size_t m_to_process = m;
-                const size_t m_start = 0;
+                const int64_t m_to_process = m;
+                const int64_t m_start      = 0;
 
-                const size_t num_threads = KAI_MIN(n / n_step, nth);
+                const int64_t n_step      = static_cast<int64_t>(kernel->get_n_step());
+                const int64_t num_threads = KAI_MIN(n / n_step, nth);
 
                 if (ith < num_threads) {
-                    const size_t num_n_per_thread0 = round_down(n / num_threads, n_step);
-                    const size_t num_n_per_threadN_1 = n - (num_threads - 1) * num_n_per_thread0;
+                    const int64_t num_n_per_thread0   = round_down(n / num_threads, n_step);
+                    const int64_t num_n_per_threadN_1 = n - (num_threads - 1) * num_n_per_thread0;
 
-                    const size_t n_start = ith * num_n_per_thread0;
-                    const size_t n_to_process = (ith == num_threads - 1) ? num_n_per_threadN_1 : num_n_per_thread0;
+                    const int64_t n_start      = ith * num_n_per_thread0;
+                    const int64_t n_to_process = (ith == num_threads - 1) ? num_n_per_threadN_1 : num_n_per_thread0;
 
                     const size_t lhs_packed_offset = variant_call<size_t>(kernel->get_lhs_offset, m_start, k);
                     const size_t rhs_packed_offset = variant_call<size_t>(kernel->get_rhs_packed_offset, n_start, k);
@@ -253,11 +249,13 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
                     const void * lhs_ptr = lhs_packed + lhs_packed_offset;
                     const void * rhs_ptr = rhs_packed + rhs_packed_offset;
-                    float * dst_ptr = reinterpret_cast<float *>(dst_batch + dst_offset);
+                    float * dst_ptr      = reinterpret_cast<float *>(dst_batch + dst_offset);
 
                     variant_call<void>(kernel->run_kernel, m_to_process, n_to_process, k, lhs_ptr, rhs_ptr, dst_ptr, dst_stride, sizeof(float), -FLT_MAX, FLT_MAX);
                 }
+            }
 
+            if (batch_idx != batch_size - 1) {
                 ggml_barrier(params->threadpool);
             }
         }
@@ -311,7 +309,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             m_to_process = m - m_start;
         }
 
-        if(m_start < m) {
+        if (m_start < m) {
             // Transform LHS
             const size_t src_stride        = src1->nb[1];
             const float * src_ptr          = reinterpret_cast<const float *>(lhs + lhs_info->get_offset(m_start, dst->src[1]->nb[1]));

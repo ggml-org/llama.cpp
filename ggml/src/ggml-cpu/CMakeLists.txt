@@ -433,7 +433,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         string(FIND "${ARCH_FLAGS_TEMP}" "+i8mm" I8MM_ENABLED)
         string(FIND "${ARCH_FLAGS_TEMP}" "+sme" SME_ENABLED)
 
-        set(PRIVATE_ARCH_FLAGS ${ARCH_FLAGS})
+        set(PRIVATE_ARCH_FLAGS ${ARCH_FLAGS_TEMP})
 
         list(APPEND GGML_KLEIDIAI_SOURCES
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_quant_pack_qsi8d32p_f32.c
