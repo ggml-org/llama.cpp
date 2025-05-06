@@ -49,6 +49,10 @@
 #include "ggml-remoting-frontend.h"
 #endif
 
+#ifdef GGML_USE_REMOTINGBACKEND
+#include "ggml-remoting-backend.h"
+#endif
+
 #ifdef GGML_USE_OPENCL
 #include "ggml-opencl.h"
 #endif
@@ -178,6 +182,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_REMOTINGFRONTEND
         register_backend(ggml_backend_remoting_frontend_reg());
+#endif
+#ifdef GGML_USE_REMOTINGBACKEND
+        register_backend(ggml_backend_remoting_backend_reg());
 #endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
