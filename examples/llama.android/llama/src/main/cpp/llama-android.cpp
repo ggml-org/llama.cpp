@@ -187,7 +187,7 @@ Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, 
     int i, j;
     int nri;
     for (nri = 0; nri < nr; nri++) {
-        LOGi("Benchmark prompt processing (pp)");
+        LOGi("Benchmark prompt processing (pp = %d)", pp);
 
         common_batch_clear(g_batch);
 
@@ -207,7 +207,7 @@ Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, 
 
         // bench text generation
 
-        LOGi("Benchmark text generation (tg)");
+        LOGi("Benchmark text generation (tg = %d)", tg);
 
         llama_memory_clear(llama_get_memory(context), false);
         const auto t_tg_start = ggml_time_us();
