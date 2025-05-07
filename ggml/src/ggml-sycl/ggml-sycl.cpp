@@ -3639,11 +3639,37 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
     }
 }
 
+#ifdef GGML_SYCL_GRAPH
+static bool check_node_graph_compatibility(ggml_cgraph * cgraph) {
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        switch(node->op) {
+            default: break;
+            case GGML_OP_CONCAT:
+            // ggml_sycl_op_concat() does a blocking host wait after memcpy operations,
+            // but wait() can't be called on the events returned by a queue recording
+            // to a graph.
+            [[fallthrough]];
+            case GGML_OP_MUL_MAT_ID:
+            // ggml_sycl_mul_mat_id() does a blocking host wait on the sycl queue after
+            // submitting a memcpy operation, but wait() can't be called on a queue that
+            // is recording to a graph.
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to unsupported node type\n", __func__);
+#endif
+            return false;
+        }
+    }
+    return true;
+}
+#endif
+
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
 
 #ifdef GGML_SYCL_GRAPH
-    if (!g_ggml_sycl_disable_graph) {
+    bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_node_graph_compatibility(cgraph);
+    if (use_sycl_graph) {
         const bool graph_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         if (!graph_support) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
