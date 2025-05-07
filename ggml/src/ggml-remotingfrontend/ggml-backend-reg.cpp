@@ -3,18 +3,52 @@
 
 #include "ggml-remoting.h"
 
-static int ggml_backend_remoting_get_device_count() {
+static struct virtgpu *apir_gpu_instance = NULL;
+
+static int apir_initialize() {
+  static bool apir_initialized = false;
+
+  if (apir_initialized) {
+    if (!apir_gpu_instance) {
+      return 0;
+    }
+    return 1;
+  }
+  apir_initialized = true;
+
+  apir_gpu_instance = create_virtgpu();
+  if (!apir_gpu_instance) {
+    FATAL("failed to initialize the virtgpu :/");
+    return 0;
+  }
+
+  apir_initialized = true;
 
   return 1;
 }
 
+static int ggml_backend_remoting_get_device_count() {
+  if (!apir_initialize()) {
+    WARNING("apir_initialize failed :/");
+    return 0;
+  }
+  IMPLEMENTED;
+
+  return apir_get_device_count(apir_gpu_instance);
+}
+
 static size_t ggml_backend_remoting_reg_get_device_count(ggml_backend_reg_t reg) {
   UNUSED(reg);
+
+  IMPLEMENTED;
+
   return ggml_backend_remoting_get_device_count();
 }
 
 static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_t reg, size_t device) {
   static std::vector<ggml_backend_dev_t> devices;
+
+  IMPLEMENTED;
 
   static bool initialized = false;
 
@@ -22,8 +56,6 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
     if (!initialized) {
-
-      create_virtgpu();
 
       for (size_t i = 0; i < ggml_backend_remoting_reg_get_device_count(reg); i++) {
         ggml_backend_remoting_device_context * ctx = new ggml_backend_remoting_device_context;
@@ -48,6 +80,8 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
 
 static const char * ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
   UNUSED(reg);
+  printf("reached %s\n", __func__);
+  //thks_bye();
   return GGML_REMOTING_FRONTEND_NAME;
 }
 

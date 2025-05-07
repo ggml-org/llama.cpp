@@ -13,6 +13,7 @@ ggml_add_backend_library(ggml-remotingfrontend
                          virtgpu.cpp
                          virtgpu-shm.cpp
                          virtgpu-utils.cpp
+                         virtgpu-forward.cpp
                          ../../include/ggml-remoting-frontend.h
                         )
 

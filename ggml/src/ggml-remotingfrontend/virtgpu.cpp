@@ -7,6 +7,25 @@
 
 #include "virtgpu.h"
 
+static virt_gpu_result_t virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev);
+static virt_gpu_result_t virtgpu_open(struct virtgpu *gpu);
+
+
+static virt_gpu_result_t virtgpu_init_params(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_init_capset(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_init_context(struct virtgpu *gpu);
+
+static int virtgpu_ioctl_context_init(struct virtgpu *gpu,
+				      enum virgl_renderer_capset capset_id);
+static int
+virtgpu_ioctl_get_caps(struct virtgpu *gpu,
+                       enum virgl_renderer_capset id,
+                       uint32_t version,
+                       void *capset,
+                       size_t capset_size);
+static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
+static void virtgpu_init_renderer_info(struct virtgpu *gpu);
+
 static inline void
 virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
 {
@@ -33,7 +52,7 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
    gpu->shmem_blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
 }
 
-void
+struct virtgpu *
 create_virtgpu() {
   struct virtgpu *gpu = new struct virtgpu();
 
@@ -64,7 +83,7 @@ create_virtgpu() {
   struct vn_cs_decoder *decoder;
   int32_t ret;
 
-  encoder = remote_call_prepare(gpu,  VIRGL_VK_COMMAND_TYPE_LoadLibrary, 0);
+  encoder = remote_call_prepare(gpu,  VIRGL_APIR_COMMAND_TYPE_LoadLibrary, 0);
   if (!encoder) {
     FATAL("%s: failed to prepare the remote call encoder :/", __func__);
   }
@@ -77,6 +96,8 @@ create_virtgpu() {
   if (ret != 0) {
     FATAL("%s: failed to load the APIR backend libraries (code=%d):/", __func__, ret);
   }
+
+  return gpu;
 }
 
 
@@ -352,7 +373,8 @@ virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
 }
 
 
-static struct vn_cs_encoder *remote_call_prepare(
+struct vn_cs_encoder *
+remote_call_prepare(
   struct virtgpu *gpu,
   int32_t cmd_type,
   int32_t cmd_flags)
@@ -395,7 +417,8 @@ static struct vn_cs_encoder *remote_call_prepare(
   return &enc;
 }
 
-static int32_t remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+int32_t
+remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
   if (!enc) {
     WARNING("Invalid (null) encoder :/");
   }
@@ -410,7 +433,8 @@ static int32_t remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decode
   return remote_call_ret;
 }
 
-static struct vn_cs_decoder *remote_call(
+struct vn_cs_decoder *
+remote_call(
   struct virtgpu *gpu,
   struct vn_cs_encoder *encoder
   )

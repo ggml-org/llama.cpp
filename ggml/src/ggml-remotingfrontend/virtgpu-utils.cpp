@@ -8,8 +8,6 @@
 #define NODE_LEVEL_MASK ((uintptr_t)NODE_ALLOC_ALIGN - 1)
 #define NULL_NODE 0
 
-void thks_bye();
-
 #define os_malloc_aligned(_size, _align) _aligned_malloc(_size, _align)
 #define os_free_aligned(_ptr) free(_ptr)
 #define p_atomic_cmpxchg(v, old, _new) \
