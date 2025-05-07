@@ -139,6 +139,18 @@ actor LlamaContext {
             let i = Int(i1)
             llama_batch_add(&batch, tokens_list[i], Int32(i), [0], false)
         }
+        if llama_model_has_encoder(model) {
+            if (llama_encode(context, batch)) != 0 {
+                print("llama_encode() failed")
+            }
+
+            var decoder_start_token_id = llama_model_decoder_start_token(model)
+            if decoder_start_token_id == -1 {
+                decoder_start_token_id = llama_token_bos(model)
+            }
+            llama_batch_clear(&batch)
+            llama_batch_add(&batch, decoder_start_token_id, 0, [0], false)
+        }
         batch.logits[Int(batch.n_tokens) - 1] = 1 // true
 
         if llama_decode(context, batch) != 0 {
