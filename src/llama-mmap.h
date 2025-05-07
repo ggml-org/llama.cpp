@@ -28,6 +28,7 @@ struct llama_file {
 
     void write_raw(const void * ptr, size_t len) const;
     void write_u32(uint32_t val) const;
+    const char * fname;
 
 private:
     struct impl;
