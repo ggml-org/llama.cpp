@@ -8,6 +8,8 @@
 #define NODE_LEVEL_MASK ((uintptr_t)NODE_ALLOC_ALIGN - 1)
 #define NULL_NODE 0
 
+void thks_bye();
+
 #define os_malloc_aligned(_size, _align) _aligned_malloc(_size, _align)
 #define os_free_aligned(_ptr) free(_ptr)
 #define p_atomic_cmpxchg(v, old, _new) \
@@ -183,4 +185,13 @@ util_sparse_array_get(struct util_sparse_array *arr, uint64_t idx)
 
    uint64_t elem_idx = idx & ((1ull << node_size_log2) - 1);
    return (void *)((char *)node_data + (elem_idx * arr->elem_size));
+}
+
+void *something = NULL;
+void thks_bye () {
+  // break here
+  INFO("thks bye, stopping early and happilly :)");
+  if (!something) { // avoid the [[noreturn]] detection mechanism
+    exit(0);
+  }
 }

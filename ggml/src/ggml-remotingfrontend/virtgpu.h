@@ -13,8 +13,6 @@
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/api_remoting.h"
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/venus_cs.h"
 
-void thks_bye();
-
 #include "virtgpu-shm.h"
 
 #define VIRGL_RENDERER_UNSTABLE_APIS 1

@@ -33,15 +33,6 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
    gpu->shmem_blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
 }
 
-void *something = NULL;
-void thks_bye () {
-  // break here
-  INFO("thks bye, stopping early and happilly :)");
-  if (!something) { // avoid the [[noreturn]] detection mechanism
-    exit(0);
-  }
-}
-
 void
 create_virtgpu() {
   struct virtgpu *gpu = new struct virtgpu();
