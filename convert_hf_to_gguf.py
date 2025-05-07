@@ -1389,7 +1389,7 @@ class BaichuanModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -1513,7 +1513,7 @@ class XverseModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -1829,7 +1829,7 @@ class LlamaModel(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -2207,7 +2207,7 @@ class DeciModel(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -2450,7 +2450,7 @@ class MiniCPMModel(TextModel):
         self.gguf_writer.add_logit_scale(logit_scale)
         logger.info(f"gguf: (minicpm) logit_scale = {logit_scale}")
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "longrope":
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "longrope":
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LONGROPE)
             logger.info(f"gguf: (minicpm) rope_scaling_type = {gguf.RopeScalingType.LONGROPE}")
 
@@ -2598,7 +2598,7 @@ class Qwen2Model(TextModel):
         super().set_gguf_parameters()
         self._try_set_pooling_type()
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "yarn" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
@@ -2764,7 +2764,7 @@ class Qwen2MoeModel(TextModel):
         # YaRN is not enabled by default
         # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "yarn" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
@@ -3035,7 +3035,7 @@ class Phi3MiniModel(TextModel):
 
         scale = max_pos_embds / orig_max_pos_embds
 
-        rope_scaling_type = rope_scaling.get('type', rope_scaling.get('rope_type', '')).lower()
+        rope_scaling_type = rope_scaling.get('rope_type', rope_scaling.get('type', '')).lower()
         if len(rope_scaling_type) == 0:
             raise KeyError('Missing the required key rope_scaling.type')
 
@@ -3348,7 +3348,7 @@ class InternLM2Model(TextModel):
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
         self.gguf_writer.add_file_type(self.ftype)
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -3426,7 +3426,7 @@ class InternLM3Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -4867,7 +4867,7 @@ class DeepseekV2Model(TextModel):
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "yarn" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
@@ -5364,7 +5364,7 @@ class Glm4Model(TextModel):
         rope_dim = self.hparams["head_dim"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "yarn" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
@@ -5601,7 +5601,7 @@ class ExaoneModel(TextModel):
         rotary_factor = rotary_factor if rotary_factor is not None else 1.0
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "linear" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
@@ -5707,7 +5707,7 @@ class BailingMoeModel(TextModel):
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("type", rope_scaling.get("rope_type")) == "yarn" and "factor" in rope_scaling:
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
