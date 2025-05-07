@@ -1651,8 +1651,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
                     std::regex pattern(overrides->pattern);
                     if (std::regex_search(tensor_name, pattern)) {
-                        LLAMA_LOG_DEBUG("tensor %s buffer type overriden to %s\n", tensor_name.c_str(), ggml_backend_buft_name(overrides->buft));
                         buft = overrides->buft;
+                        LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
+                                tensor_name.c_str(),
+                                ggml_nbytes(t_meta) / 1024 / 1024, ggml_type_name(t_meta->type),
+                                ggml_backend_buft_name(buft));
                         break;
                     }
                 }
