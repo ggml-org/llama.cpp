@@ -18,6 +18,8 @@ GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
 
 
 class Keys:
+    EMBEDDED_FILES                 = "embedded_files"
+
     class General:
         TYPE                       = "general.type"
         ARCHITECTURE               = "general.architecture"
