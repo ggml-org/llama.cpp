@@ -5216,7 +5216,7 @@ static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         //FIXME: it seems there is unknown issue with 2+ GiB memory pool
         ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_TRY_MAP_STATIC, ctx->rpc_mempool_len);
         if (nullptr == ctx->rpc_mempool) {
-            GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %d failed", ctx->rpc_mempool_len);
+            GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %ld(%d MiB) failed", ctx->rpc_mempool_len, ctx->rpc_mempool_capacity / SIZE_IN_MB);
             return 2;
         } else {
             GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d MiB)",
@@ -5970,9 +5970,12 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
     if ((HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
         GGMLHEXAGON_LOG_DEBUG("device %d(%s)", ctx->device, ggml_backend_hexagon_get_devname(ctx->device));
         GGML_ASSERT(nullptr != ctx->rpc_mempool);
+        GGMLHEXAGON_LOG_DEBUG("size %ld(%d MiB), rpc_mempool_usage %ld(%d MiB), rpc_mempool_len %ld(%d MiB)",
+                              size, size / SIZE_IN_MB, ctx->rpc_mempool_usage, ctx->rpc_mempool_usage / SIZE_IN_MB,
+                              ctx->rpc_mempool_len, ctx->rpc_mempool_len / SIZE_IN_MB);
         GGML_ASSERT(size + ctx->rpc_mempool_usage <= ctx->rpc_mempool_len);
         buffer_ctx->buffer = (static_cast<char*>(ctx->rpc_mempool)) + ctx->rpc_mempool_usage;
-        GGMLHEXAGON_LOG_DEBUG("size %d(%d MiB), buffer_ctx->buffer %p", size, size / SIZE_IN_MB, buffer_ctx->buffer);
+        GGMLHEXAGON_LOG_DEBUG("buffer_ctx->buffer %p", buffer_ctx->buffer);
         GGML_ASSERT(nullptr != buffer_ctx->buffer);
         ctx->rpc_mempool_usage += size_aligned;
     } else {
@@ -6222,7 +6225,7 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
 static ggml_backend_buffer_type_t ggml_backend_hexagon_buffer_type(size_t device_index) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
+    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     if (device_index >= GGML_HEXAGON_MAX_DEVICES) {
         GGMLHEXAGON_LOG_DEBUG("ggml_backend_hexagon_buffer_type error: device_index:%d is out of range [0, %d]\n",
                       device_index, GGML_HEXAGON_MAX_DEVICES - 1);
