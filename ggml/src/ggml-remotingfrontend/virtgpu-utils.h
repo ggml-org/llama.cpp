@@ -34,6 +34,17 @@ INFO(const char *format, ...) {
 }
 
 inline void
+WARNING(const char *format, ...) {
+  fprintf(stderr, "WARNING: ");
+
+  va_list argptr;
+  va_start(argptr, format);
+  vfprintf(stderr, format, argptr);
+  fprintf(stderr, "\n");
+  va_end(argptr);
+}
+
+inline void
 FATAL(const char *format, ...) {
   fprintf(stderr, "FATAL: ");
 
@@ -42,7 +53,7 @@ FATAL(const char *format, ...) {
   vfprintf(stderr, format, argptr);
   fprintf(stderr, "\n");
   va_end(argptr);
-  exit(1);
+  assert(false);
 }
 
 static inline bool
