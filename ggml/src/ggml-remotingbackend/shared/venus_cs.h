@@ -1,5 +1,10 @@
 #pragma once
 
+#include <cassert>
+#include <cstring>
+
+// needs FATAL to be defined
+
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
