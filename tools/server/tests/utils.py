@@ -88,6 +88,7 @@ class ServerProcess:
     chat_template: str | None = None
     chat_template_file: str | None = None
     server_path: str | None = None
+    start_string: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -194,6 +195,8 @@ class ServerProcess:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.start_string:
+            server_args.extend(["--start_string", self.start_string])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")

@@ -104,6 +104,8 @@ struct slot_params {
     std::vector<common_adapter_lora_info> lora;
 
     std::vector<std::string> antiprompt;
+    std::vector<std::string> start_strings;
+    size_t                   start_string_max_len;
     std::vector<std::string> response_fields;
     bool timings_per_token = false;
     bool post_sampling_probs = false;
@@ -162,6 +164,7 @@ struct slot_params {
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
+            {"start",                     start_strings},
             {"stop",                      antiprompt},
             {"max_tokens",                n_predict}, // User configured n_predict
             {"n_keep",                    n_keep},
@@ -230,6 +233,7 @@ struct server_task {
         slot_params defaults;
         defaults.sampling    = params_base.sampling;
         defaults.speculative = params_base.speculative;
+        defaults.start_strings = params_base.start_strings;
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
@@ -279,6 +283,14 @@ struct server_task {
         params.speculative.n_min = std::min(params.speculative.n_max, params.speculative.n_min);
         params.speculative.n_min = std::max(params.speculative.n_min, 0);
         params.speculative.n_max = std::max(params.speculative.n_max, 0);
+
+        // start strings
+        params.start_strings    = json_value(data, "start_strings",      defaults.start_strings);
+        params.start_string_max_len = 0;
+        for (auto start_string: params.start_strings) {
+            params.start_string_max_len = std::max(params.start_string_max_len, start_string.size());
+        }
+
 
         // Use OpenAI API logprobs only if n_probs wasn't provided
         if (data.contains("logprobs") && params.sampling.n_probs == defaults.sampling.n_probs){
@@ -1293,6 +1305,8 @@ struct server_slot {
 
     std::string stopping_word;
 
+    bool   start_string_found = false;
+
     // sampling
     json json_schema;
 
@@ -1330,6 +1344,7 @@ struct server_slot {
         n_past             = 0;
         n_sent_text        = 0;
         task_type          = SERVER_TASK_TYPE_COMPLETION;
+        start_string_found = false;
 
         generated_tokens.clear();
         generated_token_probs.clear();
@@ -2000,6 +2015,7 @@ struct server_context {
             SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);
 
             slot.params.sampling = params_base.sampling;
+            slot.params.start_strings = params_base.start_strings;
 
             slot.callback_on_release = [this](int) {
                 queue_tasks.pop_deferred_task();
@@ -2182,43 +2198,86 @@ struct server_context {
         if (slot.params.return_tokens) {
             slot.generated_tokens.push_back(result.tok);
         }
-        slot.has_next_token = true;
 
+        // SECTION: compute conditions on generated tokens so far
+
+        slot.has_next_token = true;
         // check if there is incomplete UTF-8 character at the end
         bool incomplete = validate_utf8(slot.generated_text) < slot.generated_text.size();
+        bool token_budget_exhausted = slot.n_decoded > 0 && !slot.has_budget(params_base);
+        bool start_string_missing = !slot.params.start_strings.empty() && !slot.start_string_found;
+        bool full_stop_reached = false;
+        bool partial_stop_reached = false;
 
-        // search stop word and delete it
+        // search the start strings
+        if (start_string_missing && !incomplete && slot.has_next_token) {
+            size_t max_start_string_size = slot.params.start_string_max_len;
+            size_t search_len = max_start_string_size + token_str.size();
+            size_t search_pos = 0;
+            if (slot.generated_text.size() > search_len) {
+                search_pos = slot.generated_text.size() - search_len;
+            }
+
+            std::pair<size_t, std::string> search_result = find_first_substring(slot.generated_text,slot.params.start_strings, search_pos);
+            bool start_string_found = search_result.first != std::string::npos;
+            if (start_string_found) {
+                auto found_pos = search_result.first;
+                std::string found_string = search_result.second;
+                slot.generated_text.erase(
+                    slot.generated_text.begin(),
+                    slot.generated_text.begin() + found_pos + found_string.size());
+                slot.start_string_found = true;
+                start_string_missing = false;
+            }
+        }
+
+        // search the stop strings
         if (!incomplete) {
             size_t pos = std::min(slot.n_sent_text, slot.generated_text.size());
 
             const std::string str_test = slot.generated_text.substr(pos);
-            bool send_text = true;
 
+            // search stop word and delete it
             size_t stop_pos = slot.find_stopping_strings(str_test, token_str.size(), true);
             if (stop_pos != std::string::npos) {
                 slot.generated_text.erase(
                     slot.generated_text.begin() + pos + stop_pos,
                     slot.generated_text.end());
                 pos = std::min(slot.n_sent_text, slot.generated_text.size());
+                full_stop_reached = true;
             } else if (slot.has_next_token) {
                 stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
-                send_text = stop_pos == std::string::npos;
+                partial_stop_reached = (stop_pos != std::string::npos);
             }
+        }
 
-            // check if there is any token to predict
-            if (send_text) {
-                // no send the stop word in the response
-                result.text_to_send = slot.generated_text.substr(pos, std::string::npos);
-                slot.n_sent_text += result.text_to_send.size();
-                // add the token to slot queue and cache
-            } else {
-                result.text_to_send = "";
-            }
+        // @ngxson all the other stop reasons should be in this function
+        if(full_stop_reached)
+        {
+            slot.stop           = STOP_TYPE_WORD;
+            slot.has_next_token = false;
+            SLT_DBG(slot, "stopped by word, n_decoded = %d, n_predict = %d\n", slot.n_decoded, slot.params.n_predict);
+        }
 
-            slot.add_token(result);
-            if (slot.params.stream) {
-                send_partial_response(slot, result);
-            }
+        // hold the output if we are not ready
+        if(partial_stop_reached || start_string_missing)
+        {
+            result.text_to_send = "";
+        }
+        else
+        {
+            size_t valid_generated_len = validate_utf8(slot.generated_text);
+            size_t available_data = valid_generated_len - slot.n_sent_text;
+            result.text_to_send = slot.generated_text.substr(slot.n_sent_text, available_data);
+            slot.n_sent_text += result.text_to_send.size();
+        }
+
+        // @ngxson: add the token and its probabilities even if not valid utf8 data
+        slot.add_token(result);
+
+        // @ngxson: we also avoid outputting the final token if it's entirely a stop word
+        if (slot.params.stream && !result.text_to_send.empty()) {
+            send_partial_response(slot, result);
         }
 
         if (incomplete) {
@@ -2226,7 +2285,7 @@ struct server_context {
         }
 
         // check the limits
-        if (slot.n_decoded > 0 && slot.has_next_token && !slot.has_budget(params_base)) {
+        if (slot.has_next_token && token_budget_exhausted) {
             slot.stop           = STOP_TYPE_LIMIT;
             slot.has_next_token = false;
 

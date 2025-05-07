@@ -367,6 +367,7 @@ struct common_params {
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    std::vector<std::string> start_strings;
 
     std::vector<std::string> api_keys;
 

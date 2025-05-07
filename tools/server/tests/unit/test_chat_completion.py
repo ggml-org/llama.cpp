@@ -309,3 +309,85 @@ def test_logprobs_stream():
                 assert token.top_logprobs is not None
                 assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
+
+
+def test_startstring_serverconfig():
+    global server
+    server.jinja = False
+    server.start_string=" 9 "
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 32,
+        "messages": [
+            {"role": "user", "content": "List the numbers from 1 to 100"},
+        ],
+        "grammar": "root ::= \"1 2 3 4 5 6 7 8 9 10 11 12\"",
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    content = choice["message"]["content"]
+    print(content)
+    assert content.startswith("10 ")
+
+def test_startstring_clientconfig():
+    global server
+    server.jinja = False
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 32,
+        "messages": [
+            {"role": "user", "content": "List the numbers from 1 to 100"},
+        ],
+        "grammar": "root ::= \"1 2 3 4 5 6 7 8 9 10 11 12\"",
+        "start_strings": ["10"]
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    content = choice["message"]["content"]
+    assert content.startswith(" 11")
+
+
+def test_startstring_clientconfig_stream():
+    global server
+    server.jinja = False
+    server.start()
+    max_tokens=64
+    system_prompt=""
+    user_prompt=""
+    res = server.make_stream_request("POST", "/chat/completions", data={
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "grammar": "root ::= \"1 2 3 4 5 6 7 8 9 10 11 12\" .+",
+        "start_strings": ["10"],
+        "stream": True,
+    })
+
+    content = ""
+    last_cmpl_id = None
+    for data in res:
+        choice = data["choices"][0]
+        if choice["finish_reason"] not in ["stop", "length"]:
+            delta = choice["delta"]["content"]
+            content += delta
+    assert content.startswith(" 11")
+
+
+def test_startstring_clientconfig_multiple():
+    global server
+    server.jinja = False
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 32,
+        "messages": [
+            {"role": "user", "content": "List the numbers from 1 to 100"},
+        ],
+        "grammar": "root ::= \"1 2 3 4 5 6 7 8 9 10 11 12\"",
+        "start_strings": ["10","9"]
+    })
+    assert res.status_code == 200, res.body
+    choice = res.body["choices"][0]
+    content = choice["message"]["content"]
+    assert content.startswith(" 10")
