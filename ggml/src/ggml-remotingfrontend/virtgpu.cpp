@@ -77,42 +77,8 @@ create_virtgpu() {
   if (ret != 0) {
     FATAL("%s: failed to load the APIR backend libraries (code=%d):/", __func__, ret);
   }
-
-  int32_t forward_flag = 0;
-  encoder = remote_call_prepare(gpu, VIRGL_VK_COMMAND_TYPE_Forward, forward_flag);
-  if (!encoder) {
-    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
-  }
-
-  int32_t arg1 = 11;
-  int32_t arg2 = 22;
-  int32_t arg3 = 33;
-
-  vn_encode_int32_t(encoder, &arg1);
-  vn_encode_int32_t(encoder, &arg2);
-  vn_encode_int32_t(encoder, &arg3);
-  decoder = remote_call(gpu, encoder);
-  if (!decoder) {
-    FATAL("%s: failed to kick the remote call :/", __func__);
-  }
-
-  int32_t resp1;
-  int32_t resp2;
-  int32_t resp3;
-  int32_t resp4;
-  vn_decode_int32_t(decoder, &resp1);
-  vn_decode_int32_t(decoder, &resp2);
-  vn_decode_int32_t(decoder, &resp3);
-  vn_decode_int32_t(decoder, &resp4);
-  INFO("%s: Forward RESP %d %d %d %d", __func__, resp1, resp2, resp3, resp4);
-
-  ret = remote_call_finish(encoder, decoder);
-  if (ret != 0) {
-    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
-  }
-
-  thks_bye();
 }
+
 
 static virt_gpu_result_t
 virtgpu_open(struct virtgpu *gpu)
