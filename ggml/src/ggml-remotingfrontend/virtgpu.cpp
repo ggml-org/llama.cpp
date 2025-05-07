@@ -67,19 +67,59 @@ create_virtgpu() {
 
   if (!gpu->reply_shmem) {
     FATAL("%s: failed to create the reply shared memory page :/", __func__);
-    assert(false);
   }
 
-  uint32_t ret = remote_call(gpu, VIRGL_VK_COMMAND_TYPE_LoadLibrary, 0, 0, 0, 0);
+  struct vn_cs_encoder *encoder;
+  struct vn_cs_decoder *decoder;
+  int32_t ret;
+
+  encoder = remote_call_prepare(gpu,  VIRGL_VK_COMMAND_TYPE_LoadLibrary, 0);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+  decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  ret = remote_call_finish(encoder, decoder);
   if (ret != 0) {
     FATAL("%s: failed to load the APIR backend libraries (code=%d):/", __func__, ret);
-    assert(false);
   }
-  ret = remote_call(gpu, VIRGL_VK_COMMAND_TYPE_Forward, 0, 111, 555, 999);
+
+  int32_t forward_flag = 0;
+  encoder = remote_call_prepare(gpu, VIRGL_VK_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  int32_t arg1 = 11;
+  int32_t arg2 = 22;
+  int32_t arg3 = 33;
+
+  vn_encode_int32_t(encoder, &arg1);
+  vn_encode_int32_t(encoder, &arg2);
+  vn_encode_int32_t(encoder, &arg3);
+  decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  int32_t resp1;
+  int32_t resp2;
+  int32_t resp3;
+  int32_t resp4;
+  vn_decode_int32_t(decoder, &resp1);
+  vn_decode_int32_t(decoder, &resp2);
+  vn_decode_int32_t(decoder, &resp3);
+  vn_decode_int32_t(decoder, &resp4);
+  INFO("%s: Forward RESP %d %d %d %d", __func__, resp1, resp2, resp3, resp4);
+
+  ret = remote_call_finish(encoder, decoder);
   if (ret != 0) {
-    FATAL("%s: failed to forard the API call (code=%d):/", __func__, ret);
-    assert(false);
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
   }
+
   thks_bye();
 }
 
@@ -355,50 +395,71 @@ virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
 }
 
 
-static int remote_call(
+static struct vn_cs_encoder *remote_call_prepare(
   struct virtgpu *gpu,
   int32_t cmd_type,
-  int32_t cmd_flags,
-  int32_t arg1, int32_t arg2, int32_t arg3
-  )
+  int32_t cmd_flags)
 {
-
-  /*
-   * Prepare the command encoder buffer
-   */
-
-  char encoder_buffer[4096];
-
-  struct vn_cs_encoder _encoder = {
-    encoder_buffer,
-    encoder_buffer + sizeof(encoder_buffer),
-  };
-  struct vn_cs_encoder *encoder = &_encoder;
-
-  /*
-   * Fill the command encoder buffer
-   */
-
-  vn_encode_int32_t(encoder, &cmd_type);
-  vn_encode_int32_t(encoder, &cmd_flags);
 
   if (!gpu->reply_shmem) {
     FATAL("%s: the reply shmem page can't be null", __func__);
   }
 
-  uint32_t reply_res_id = gpu->reply_shmem->res_id;
-  vn_encode_uint32_t(encoder, &reply_res_id);
+  /*
+   * Prepare the command encoder and its buffer
+   */
 
-  printf("%s: call %s(flags=0x%x, reply_buf=%d)\n", __func__,
+  static char encoder_buffer[4096];
+
+  static struct vn_cs_encoder enc;
+  enc = {
+    encoder_buffer,
+    encoder_buffer,
+    encoder_buffer + sizeof(encoder_buffer),
+  };
+
+  /*
+   * Fill the command encoder with the common args:
+   * - cmd_type (int32_t)
+   * - cmd_flags (int32_t)
+   * - reply res id (uint32_t)
+   */
+
+  vn_encode_int32_t(&enc, &cmd_type);
+  vn_encode_int32_t(&enc, &cmd_flags);
+
+  uint32_t reply_res_id = gpu->reply_shmem->res_id;
+  vn_encode_uint32_t(&enc, &reply_res_id);
+
+  printf("%s: prepare %s(flags=0x%x, reply_buf=%d)\n", __func__,
 	 api_remoting_command_name(cmd_type),
 	 cmd_flags, reply_res_id);
 
-  vn_encode_int32_t(encoder, &arg1);
-  vn_encode_int32_t(encoder, &arg2);
-  vn_encode_int32_t(encoder, &arg3);
+  return &enc;
+}
 
+static int32_t remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  if (!enc) {
+    WARNING("Invalid (null) encoder :/");
+  }
+  if (!dec) {
+    FATAL("Invalid (null) decoder :/");
+  }
+  int32_t remote_call_ret;
+  vn_decode_int32_t(dec, &remote_call_ret);
+
+  // encoder and decoder are statically allocated, nothing to do to release them
+
+  return remote_call_ret;
+}
+
+static struct vn_cs_decoder *remote_call(
+  struct virtgpu *gpu,
+  struct vn_cs_encoder *encoder
+  )
+{
   /*
-   * Reply notification pointer
+   * Prepare the reply notification pointer
    */
 
   volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) gpu->reply_shmem->mmap_ptr;
@@ -410,8 +471,8 @@ static int remote_call(
 
   struct drm_virtgpu_execbuffer args = {
     .flags = VIRTGPU_EXECBUF_RING_IDX,
-    .size = sizeof(encoder_buffer),
-    .command = (uintptr_t) encoder_buffer,
+    .size = (uint32_t) (encoder->cur - encoder->start),
+    .command = (uintptr_t) encoder->start,
 
     .bo_handles = 0,
     .num_bo_handles = 0,
@@ -441,31 +502,11 @@ static int remote_call(
   }
 
   /*
-   * Read the reply
+   * Prepare the decoder
    */
+  static struct vn_cs_decoder dec;
+  dec.cur = (char *) gpu->reply_shmem->mmap_ptr + sizeof(*atomic_reply_notif);
+  dec.end = (char *) gpu->reply_shmem->mmap_ptr + gpu->reply_shmem->mmap_size;
 
-  struct vn_cs_decoder _dec = {
-    .cur = (char *) gpu->reply_shmem->mmap_ptr + sizeof(*atomic_reply_notif),
-    .end = (char *) gpu->reply_shmem->mmap_ptr + gpu->reply_shmem->mmap_size,
-  };
-  struct vn_cs_decoder *dec = &_dec;
-
-  int32_t resp1;
-  int32_t resp2;
-  int32_t resp3;
-  int32_t resp4;
-  vn_decode_int32_t(dec, &resp1);
-  vn_decode_int32_t(dec, &resp2);
-  vn_decode_int32_t(dec, &resp3);
-  vn_decode_int32_t(dec, &resp4);
-
-  int32_t rmt_call_ret;
-  vn_decode_int32_t(dec, &rmt_call_ret);
-
-  printf("%s: RESP %d %d %d %d\n", __func__, resp1, resp2, resp3, resp4);
-
-  printf("%s: call %s() --> %d\n", __func__,
-	 api_remoting_command_name(cmd_type), rmt_call_ret);
-
-  return rmt_call_ret;
+  return &dec;
 }

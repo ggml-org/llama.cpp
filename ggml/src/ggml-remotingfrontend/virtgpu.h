@@ -117,4 +117,10 @@ virtgpu_ioctl_get_caps(struct virtgpu *gpu,
                        size_t capset_size);
 static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
 static void virtgpu_init_renderer_info(struct virtgpu *gpu);
-static int remote_call(struct virtgpu *gpu, int32_t cmd_type, int32_t cmd_flags, int32_t arg1, int32_t arg2, int32_t arg3);
+
+static struct vn_cs_encoder *remote_call_prepare(
+  struct virtgpu *gpu,
+  int32_t cmd_type,
+  int32_t cmd_flags);
+static struct vn_cs_decoder *remote_call(struct virtgpu *gpu, struct vn_cs_encoder *enc);
+static int32_t remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
