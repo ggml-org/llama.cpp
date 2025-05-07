@@ -143,12 +143,14 @@ MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
 //
 // the instance will be constructed via mtmd_tokenize()
 // it will be freed along with mtmd_input_chunk
-MTMD_API size_t       mtmd_image_tokens_get_n_tokens(const mtmd_image_tokens * image_tokens);
-MTMD_API size_t       mtmd_image_tokens_get_nx      (const mtmd_image_tokens * image_tokens);
-MTMD_API size_t       mtmd_image_tokens_get_ny      (const mtmd_image_tokens * image_tokens);
-MTMD_API const char * mtmd_image_tokens_get_id      (const mtmd_image_tokens * image_tokens);
+MTMD_API size_t              mtmd_image_tokens_get_n_tokens (const mtmd_image_tokens * image_tokens);
+MTMD_API size_t              mtmd_image_tokens_get_nx       (const mtmd_image_tokens * image_tokens);
+MTMD_API size_t              mtmd_image_tokens_get_ny       (const mtmd_image_tokens * image_tokens);
+MTMD_API const char *        mtmd_image_tokens_get_id       (const mtmd_image_tokens * image_tokens);
 // number of temporal positions (always 1 for M-RoPE, n_tokens otherwise)
-MTMD_API llama_pos    mtmd_image_tokens_get_n_pos   (const mtmd_image_tokens * image_tokens);
+MTMD_API llama_pos           mtmd_image_tokens_get_n_pos    (const mtmd_image_tokens * image_tokens);
+MTMD_API mtmd_image_tokens * mtmd_image_tokens_copy         (const mtmd_image_tokens * image_tokens);
+MTMD_API void                mtmd_image_tokens_free         (mtmd_image_tokens * image_tokens);
 
 // tokenize an input text prompt and an image
 // the prompt must have the input image marker (default: "<__image__>") in it
@@ -177,6 +179,9 @@ MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
 
 // get output embeddings from the last encode pass
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+// returns a copy of output embeddings from the last encode pass, of size n_embd_out
+MTMD_API float * mtmd_get_output_embd_copy(mtmd_context * ctx, size_t * n_embd_out);
 
 /////////////////////////////////////////
 
@@ -231,6 +236,16 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                bool logits_last,
                                                llama_pos * new_n_past);
 
+// helper function to decode an image whose embeddings have already been calculated
+MTMD_API int32_t mtmd_helper_decode_image(mtmd_context *ctx,
+                                          struct llama_context *lctx,
+                                          const mtmd_image_tokens *image_tokens,
+                                          float *embd,
+                                          llama_pos n_past,
+                                          llama_seq_id seq_id,
+                                          int32_t n_batch,
+                                          llama_pos *new_n_past);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c
@@ -267,6 +282,11 @@ struct mtmd_input_chunk_deleter {
     void operator()(mtmd_input_chunk * val) { mtmd_input_chunk_free(val); }
 };
 using input_chunk_ptr = std::unique_ptr<mtmd_input_chunk, mtmd_input_chunk_deleter>;
+
+struct mtmd_image_tokens_deleter {
+    void operator()(mtmd_image_tokens * val) { mtmd_image_tokens_free(val); }
+};
+using image_tokens_ptr = std::unique_ptr<mtmd_image_tokens, mtmd_image_tokens_deleter>;
 
 struct bitmap {
     bitmap_ptr ptr;
