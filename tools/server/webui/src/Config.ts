@@ -4,9 +4,7 @@ import { isNumeric } from './utils/misc';
 export const isDev = import.meta.env.MODE === 'development';
 
 // constants
-export const BASE_URL = new URL('.', document.baseURI).href
-  .toString()
-  .replace(/\/$/, '');
+export const BASE_URL = 'http://127.0.0.1:8080';
 
 export const CONFIG_DEFAULT = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
@@ -39,6 +37,7 @@ export const CONFIG_DEFAULT = {
   custom: '', // custom json-stringified object
   // experimental features
   pyIntepreterEnabled: false,
+  jsInterpreterToolUse: false,
 };
 export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',

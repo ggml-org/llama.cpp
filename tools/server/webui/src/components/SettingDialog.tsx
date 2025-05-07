@@ -254,6 +254,21 @@ const SETTING_SECTIONS: SettingSection[] = [
         ),
         key: 'pyIntepreterEnabled',
       },
+      {
+        type: SettingInputType.CHECKBOX,
+        label: (
+          <>
+            <b>Enable JavaScript tool use</b>
+            <br />
+            <small className="text-xs">
+              This alows LLM to use browser your browser console as tool. If
+              model supports function calling, it can use the console to do e.g.
+              data analysis etc. by itself.
+            </small>
+          </>
+        ),
+        key: 'jsInterpreterToolUse',
+      },
     ],
   },
 ];
