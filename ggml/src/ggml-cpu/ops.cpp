@@ -7046,16 +7046,16 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             V32   [i_gqa] = (VKQ32[i_gqa] + 1*DV);
             VKQ16 [i_gqa] = (ggml_fp16_t *) (VKQ32[i_gqa] + 1*DV);
             Q_q   [i_gqa] = (ggml_fp16_t *) (VKQ32[i_gqa] + 2*DV);
-    
+
             if (v->type == GGML_TYPE_F16) {
                 memset(VKQ16[i_gqa], 0, DV*sizeof(ggml_fp16_t));
             } else {
                 memset(VKQ32[i_gqa], 0, DV*sizeof(float));
             }
-    
+
             const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + (iq2 + i_gqa)*nbq2 + iq3*nbq3));
             q_to_vec_dot(pq, Q_q[i_gqa], DK);
-            
+  
             const uint32_t h = iq2 + i_gqa;
             slope[i_gqa] = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
         }
@@ -7083,7 +7083,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             for (int i_gqa = 0; i_gqa < n_gqa; ++i_gqa) {
                 const float mv = mp_value_base * slope[i_gqa];
                 ggml_compute_forward_flash_attn_ext_f16_one_QKV(
-                    Q_q[i_gqa], k_data, v_data, DK, DV, mv, scale, logit_softcap, v->type, 
+                    Q_q[i_gqa], k_data, v_data, DK, DV, mv, scale, logit_softcap, v->type,
                     kq_vec_dot, v_to_float, VKQ16[i_gqa], VKQ32[i_gqa], V32[i_gqa], S+i_gqa, M+i_gqa);
             }
         }
@@ -7094,19 +7094,19 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                     VKQ32[i][d] = GGML_FP16_TO_FP32(VKQ16[i][d]);
                 }
             }
-    
+
             // V /= S
             const float S_inv = 1.0f/S[i];
             ggml_vec_scale_f32(DV, VKQ32[i], S_inv);
-    
+
             // dst indices
             const int i1 = iq1;
             const int i2 = iq2 + i;
             const int i3 = iq3;
-    
+
             // original
             //memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
-    
+
             // permute(0, 2, 1, 3)
             memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32[i], nb1);
         }
