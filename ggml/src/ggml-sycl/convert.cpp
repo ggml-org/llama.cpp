@@ -455,7 +455,7 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ 
 
 #pragma unroll
     for (int64_t i00 = global_id; i00 < ne00; i00 += work_group_size * item_ct1.get_group_range(2)) {
-        y[iy + i00] = static_cast<float>(x[ix + i00]);
+        y[iy + i00] = static_cast<dst_t>(x[ix + i00]);
     }
 }
 
