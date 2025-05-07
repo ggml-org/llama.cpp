@@ -298,6 +298,7 @@ class llm_graph_result_i {
 public:
     virtual ~llm_graph_result_i() = default;
 
+    virtual ggml_tensor * get_tokens()      = 0;
     virtual ggml_tensor * get_logits()      = 0;
     virtual ggml_tensor * get_embd()        = 0;
     virtual ggml_tensor * get_embd_pooled() = 0;
@@ -312,6 +313,7 @@ class llm_graph_result : public llm_graph_result_i {
 public:
     virtual ~llm_graph_result() = default;
 
+    ggml_tensor * get_tokens()      override { return t_tokens; }
     ggml_tensor * get_logits()      override { return t_logits; }
     ggml_tensor * get_embd()        override { return t_embd; }
     ggml_tensor * get_embd_pooled() override { return t_embd_pooled; }
@@ -328,6 +330,7 @@ public:
     }
 
     // important graph nodes
+    ggml_tensor * t_tokens      = nullptr;
     ggml_tensor * t_logits      = nullptr;
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;

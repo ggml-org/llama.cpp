@@ -1565,3 +1565,20 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
 
     return result;
 }
+
+ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride) {
+    const int64_t ne_datapoint = llama_n_ctx(ctx);
+    const int64_t ndata        = (tokens.size() - ne_datapoint - 1) / stride;
+    ggml_opt_dataset_t result = ggml_opt_dataset_init(
+        GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
+
+    llama_token * data   = (llama_token *) ggml_opt_dataset_data(result)->data;
+    llama_token * labels = (llama_token *) ggml_opt_dataset_labels(result)->data;
+
+    for (int64_t idata = 0; idata < ndata; ++idata) {
+        memcpy(data   + idata*ne_datapoint, tokens.data() + idata*stride + 0, ne_datapoint*sizeof(llama_token));
+        memcpy(labels + idata*ne_datapoint, tokens.data() + idata*stride + 1, ne_datapoint*sizeof(llama_token));
+    }
+
+    return result;
+}
