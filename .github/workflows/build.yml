@@ -15,7 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_LOG_COLORS: 1
