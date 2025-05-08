@@ -2628,6 +2628,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--parse-special"},
+        string_format("prase special tokens (chat, tool, etc) (default: %s)", params.parse_special ? "true" : "false"),
+        [](common_params & params) {
+            params.parse_special = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"-pps"},
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),
         [](common_params & params) {
