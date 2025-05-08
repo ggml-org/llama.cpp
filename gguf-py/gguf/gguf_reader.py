@@ -247,7 +247,7 @@ class GGUFReader:
         types.append(gtype)
         # Handle strings.
         if gtype == GGUFValueType.STRING:
-            sparts: list[npt.NDArray[Any]] = self._get_str(offs)
+            sparts: list[npt.NDArray[Any]] = list(self._get_str(offs))
             size = 8 + sparts[0].item()
             return size, sparts, [1], types
         # Check if it's a simple scalar type.
