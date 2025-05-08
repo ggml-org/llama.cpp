@@ -48,7 +48,6 @@ add_subdirectory(shared)
 
 if(GGML_HEXAGON_NPU_ONLY)
     message("GGML_HEXAGON_NPU_ONLY is enabled")
-    add_compile_definitions(GGML_HEXAGON_NPU_ONLY)
     set(GGML_QNN_ENABLE_HEXAGON_BACKEND ON)
 else()
     message("GGML_HEXAGON_NPU_ONLY is disabled")

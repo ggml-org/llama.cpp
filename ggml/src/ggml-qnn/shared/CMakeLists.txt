@@ -12,6 +12,10 @@ target_include_directories(runtime-common PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/../../../include/ # TODO: figure out how to remove this
 )
 
+if(GGML_HEXAGON_NPU_ONLY)
+    add_compile_definitions(GGML_HEXAGON_NPU_ONLY)
+endif()
+
 if(GGML_QNN_ENABLE_HEXAGON_BACKEND)
     if(DEFINED ENV{QNN_SDK_PATH})
         set(HEXAGON_SDK_ROOT $ENV{HEXAGON_SDK_ROOT})
