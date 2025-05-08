@@ -80,10 +80,6 @@ extern int g_ggml_sycl_disable_optimize;
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 
-#if defined(_MSC_VER)
-#pragma warning(disable : 4244 4267) // possible loss of data
-#endif
-
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
 #define GGML_SYCL_DMMV_X 32
@@ -313,7 +309,6 @@ struct ggml_backend_sycl_context {
     int device;
     std::string name;
     optimize_feature opt_feature;
-    bool optimized_graph=false;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
@@ -493,6 +488,10 @@ static __dpct_inline__ Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
 }
 
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size);
+
+constexpr size_t ceil_div(const size_t m, const size_t n) {
+    return (m + n - 1) / n;
+}
 
 bool gpu_has_xmx(sycl::device &dev);
 #endif // GGML_SYCL_COMMON_HPP

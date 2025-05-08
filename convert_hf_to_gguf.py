@@ -16,6 +16,7 @@ from pathlib import Path
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
 from itertools import chain
+from transformers import AutoConfig
 
 import math
 import numpy as np
@@ -66,8 +67,6 @@ class ModelBase:
     part_names: list[str]
     is_safetensors: bool
     hparams: dict[str, Any]
-    block_count: int
-    tensor_map: gguf.TensorNameMap
     tensor_names: set[str] | None
     gguf_writer: gguf.GGUFWriter
     model_name: str | None
@@ -78,7 +77,11 @@ class ModelBase:
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
 
-    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, is_big_endian: bool = False,
+    # subclasses should initialize this!
+    block_count: int
+    tensor_map: gguf.TensorNameMap
+
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
@@ -113,8 +116,6 @@ class ModelBase:
             if not self.is_safetensors:
                 self.part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
         self.hparams = ModelBase.load_hparams(self.dir_model) if hparams is None else hparams
-        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self.tensor_names = None
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -417,15 +418,15 @@ class ModelBase:
 
     @staticmethod
     def load_hparams(dir_model: Path):
-        with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-            hparams = json.load(f)
-            architectures = hparams.get("architectures")
-            if "text_config" in hparams:
-                hparams = {**hparams, **hparams["text_config"]}
-            if architectures is not None:
-                # preserve "architectures" from root level config
-                hparams["architectures"] = architectures
-            return hparams
+        try:
+            # for security reason, we don't allow loading remote code by default
+            # if a model need remote code, we will fallback to config.json
+            return AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
+        except Exception as e:
+            logger.warning(f"Failed to load model config from {dir_model}: {e}")
+            logger.warning("Trying to load config.json instead")
+            with open(dir_model / "config.json", "r", encoding="utf-8") as f:
+                return json.load(f)
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -454,6 +455,20 @@ class ModelBase:
 
 
 class TextModel(ModelBase):
+    model_type = ModelType.TEXT
+    hf_arch: str
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hf_arch = get_model_architecture(self.hparams, self.model_type)
+
+        if "text_config" in self.hparams:
+            # move the text_config to the root level
+            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+
+        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     @classmethod
     def __init_subclass__(cls):
         # can't use an abstract property, because overriding it without type errors
@@ -495,7 +510,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -1064,10 +1079,36 @@ class TextModel(ModelBase):
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
 
+    def _try_set_pooling_type(self) -> None:
+        # get pooling path
+        pooling_path = None
+        module_path = self.dir_model / "modules.json"
+        if module_path.is_file():
+            with open(module_path, encoding="utf-8") as f:
+                modules = json.load(f)
+            for mod in modules:
+                if mod["type"] == "sentence_transformers.models.Pooling":
+                    pooling_path = mod["path"]
+                    break
+
+        # get pooling type
+        if pooling_path is not None:
+            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
+                pooling = json.load(f)
+            if pooling["pooling_mode_mean_tokens"]:
+                pooling_type = gguf.PoolingType.MEAN
+            elif pooling["pooling_mode_cls_token"]:
+                pooling_type = gguf.PoolingType.CLS
+            elif pooling["pooling_mode_lasttoken"]:
+                pooling_type = gguf.PoolingType.LAST
+            else:
+                raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
+            self.gguf_writer.add_pooling_type(pooling_type)
+
 
 class VisionModel(ModelBase):
+    model_type = ModelType.VISION
     model_arch = gguf.MODEL_ARCH.CLIP_VISION
-    n_text_embd = 0
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
@@ -1077,9 +1118,11 @@ class VisionModel(ModelBase):
         if self.model_arch != gguf.MODEL_ARCH.CLIP_VISION:
             raise TypeError("VisionModel must be subclassed with model_arch = gguf.MODEL_ARCH.CLIP_VISION")
 
-        # small hack to correct the number of layers
-        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, 128)
-        self.n_embd_text = self.find_hparam(["hidden_size", "n_embd"])
+        # get n_embd of the text model
+        if "text_config" not in self.hparams:
+            self.hparams["text_config"] = {}
+        text_config = {**self.hparams, **self.hparams["text_config"]}
+        self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
         if "vision_config" not in self.hparams:
@@ -1087,6 +1130,9 @@ class VisionModel(ModelBase):
         # move vision config to the top level, while preserving the original hparams in global_config
         self.global_config = self.hparams
         self.hparams = self.hparams["vision_config"]
+
+        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"])
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, self.block_count)
 
         # load preprocessor config
         with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
@@ -1105,12 +1151,12 @@ class VisionModel(ModelBase):
         self.gguf_writer.add_vision_patch_size(self.find_hparam(["patch_size"]))
         self.gguf_writer.add_vision_embedding_length(self.find_hparam(["hidden_size"]))
         self.gguf_writer.add_vision_feed_forward_length(self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_vision_block_count(self.find_hparam(["num_hidden_layers"]))
+        self.gguf_writer.add_vision_block_count(self.block_count)
         self.gguf_writer.add_vision_head_count(self.find_hparam(["num_attention_heads"]))
 
         # preprocessor config
         self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
-        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_mean"])
+        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
 
     def write_vocab(self):
         raise ValueError("VisionModel does not support vocab writing")
@@ -1726,8 +1772,7 @@ class StableLMModel(TextModel):
     "LlamaForCausalLM",
     "MistralForCausalLM",
     "MixtralForCausalLM",
-    "Idefics3ForConditionalGeneration",
-    "SmolVLMForConditionalGeneration",
+    "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -1736,11 +1781,7 @@ class LlamaModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
-        if self.hparams["architectures"][0] == "SmolVLMForConditionalGeneration":
-            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        # fix for Pixtral, missing `num_attention_heads` in config.json
-        if self.hparams["architectures"][0] == "LlavaForConditionalGeneration" \
-                and self.hparams.get("model_type") == "mistral":
+        if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def set_vocab(self):
@@ -1898,31 +1939,50 @@ class LlamaModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("LlavaForConditionalGeneration")
+@ModelBase.register(
+    "LlavaForConditionalGeneration", # pixtral
+    "Mistral3ForConditionalGeneration", # mistral small 3.1
+)
 class LlavaVisionModel(VisionModel):
     img_break_tok_id = -1
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.hparams["model_type"] == "pixtral":
-            # fix missing config.json values
-            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 16)
-            self.hparams["num_hidden_layers"] = self.hparams.get("num_hidden_layers", 24)
-            self.hparams["intermediate_size"] = self.hparams.get("intermediate_size", 4096)
-            self.hparams["hidden_size"] = self.hparams.get("hidden_size", 1024)
+            # layer_norm_eps is not in config.json, it is hard-coded in modeling_pixtral.py
             self.hparams["layer_norm_eps"] = self.hparams.get("layer_norm_eps", 1e-5)
-            self.img_break_tok_id = 12 # see tokenizer_config.json
+            self.img_break_tok_id = self.get_token_id("[IMG_BREAK]")
+            logger.info(f"Image break token id: {self.img_break_tok_id}")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
+
+    def get_token_id(self, token: str) -> int:
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+            added_tokens_decoder = json.load(f)['added_tokens_decoder']
+            for id_, token_data in added_tokens_decoder.items():
+                if token_data["content"] == token:
+                    return int(id_)
+        raise ValueError(f"Token '{token}' not found in tokenizer config.")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
         if hparams["model_type"] == "pixtral":
             self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.PIXTRAL)
-            # default values below are taken from HF tranformers code
             self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
-            self.gguf_writer.add_vision_use_silu(True)
+
+            # hidden_act
+            if hparams["hidden_act"] == "silu":
+                self.gguf_writer.add_vision_use_silu(True)
+            elif hparams["hidden_act"] == "gelu":
+                self.gguf_writer.add_vision_use_gelu(True)
+            else:
+                raise ValueError(f"Unsupported hidden_act: {hparams['hidden_act']}")
+
+            # spatial_merge_size
+            if "spatial_merge_size" in self.global_config:
+                self.gguf_writer.add_vision_spatial_merge_size(self.global_config["spatial_merge_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -1951,13 +2011,12 @@ class LlavaVisionModel(VisionModel):
 class SmolVLMModel(VisionModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # fix for SmolVLM2, missing some keys in config.json
-        # default values are taken from transformers code
         if self.hparams["model_type"] == "smolvlm_vision":
+            # fix for SmolVLM2, missing some keys in config.json
+            # default values are taken from transformers code
             self.hparams["hidden_size"] = self.hparams.get("hidden_size", 1152)
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 16)
             self.hparams["intermediate_size"] = self.hparams.get("intermediate_size", 3072)
-            self.hparams["num_hidden_layers"] = self.hparams.get("num_hidden_layers", 12)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2070,6 +2129,9 @@ class DeciModel(TextModel):
             # if n_heads_in_group is not None, then
             # _num_kv_heads[il] is num_attention_head // n_heads_in_group and
             # _num_heads[il] is num_attention_head
+            # ***dummy layer*** for nemotron 253B
+            # if n_heads_in_group is None and ffn_mult is None
+            # then _num_kv_heads[il] is 0 and _num_heads[il] is 0 and _ffn_dims is 0
             for il in range(len(_block_configs)):
                 if _block_configs[il]["attention"]["n_heads_in_group"] is None:
                     if _block_configs[il]["attention"]["replace_with_linear"] is True:
@@ -2081,7 +2143,10 @@ class DeciModel(TextModel):
                 else:
                     self._num_kv_heads.append(self.hparams["num_attention_heads"] // _block_configs[il]["attention"]["n_heads_in_group"])
                     self._num_heads.append(self.hparams["num_attention_heads"])
-                _ffn_multipliers.append(_block_configs[il]["ffn"]["ffn_mult"])
+                if _block_configs[il]["ffn"]["ffn_mult"] is None: # dummy layer
+                    _ffn_multipliers.append(0.0)
+                else:
+                    _ffn_multipliers.append(_block_configs[il]["ffn"]["ffn_mult"])
             assert self.block_count == len(self._num_kv_heads)
             assert self.block_count == len(self._num_heads)
             assert self.block_count == len(_ffn_multipliers)
@@ -2519,7 +2584,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2ForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -2531,11 +2596,17 @@ class Qwen2Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self._try_set_pooling_type()
         if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
             if self.hparams["rope_scaling"].get("type") == "yarn":
                 self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
                 self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
                 self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.hf_arch == "Qwen2Model":
+            name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -2554,11 +2625,88 @@ class Qwen2VLModel(TextModel):
         except FileNotFoundError:
             self._set_vocab_gpt2()
 
-    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
-        for name, data in super().get_tensors():
-            if name.startswith("visual."):
-                continue
-            yield name, data
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("visual."):
+            # skip visual tensors
+            return []
+        return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+class Qwen2VLVisionModel(VisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["image_size"] = self.hparams.get("image_size", 560)
+        # rename config.json values
+        self.hparams["num_attention_heads"] = self.hparams.get("num_heads")
+        self.hparams["num_hidden_layers"] = self.hparams.get("depth")
+        if "embed_dim" in self.hparams: # qwen2vl
+            self.hparams["intermediate_size"] = self.hparams.get("hidden_size")
+            self.hparams["hidden_size"] = self.hparams.get("embed_dim")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if self.global_config['model_type'] == 'qwen2_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN2VL)
+        elif self.global_config['model_type'] == 'qwen2_5_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN25VL)
+            self.gguf_writer.add_vision_use_silu(True)
+            # find n_wa_pattern (window attention pattern)
+            fullatt_block_indexes = hparams.get("fullatt_block_indexes")
+            assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for qwen2_5_vl"
+            n_wa_pattern = fullatt_block_indexes[0] + 1
+            # validate n_wa_pattern
+            for i in range(1, len(fullatt_block_indexes)):
+                if fullatt_block_indexes[i] - fullatt_block_indexes[i - 1] != n_wa_pattern:
+                    raise ValueError(f"Invalid fullatt_block_indexes: {fullatt_block_indexes}")
+            self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+        else:
+            raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
+        # default values below are taken from HF tranformers code
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd." in new_name:
+            return gguf.GGMLQuantizationType.F16
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("visual."):
+            # process visual tensors
+            # split QKV tensors if needed
+            if ".qkv." in name:
+                if data_torch.ndim == 2: # weight
+                    c3, _ = data_torch.shape
+                else: # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("qkv", "q")), wq),
+                    (self.map_tensor_name(name.replace("qkv", "k")), wk),
+                    (self.map_tensor_name(name.replace("qkv", "v")), wv),
+                ]
+            elif 'patch_embed.proj.weight' in name:
+                # split Conv3D into Conv2Ds
+                c1, c2, kt, kh, kw = data_torch.shape
+                del c1, c2, kh, kw  # unused
+                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
+                return [
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                ]
+            else:
+                return [(self.map_tensor_name(name), data_torch)]
+        return [] # skip other tensors
 
 
 @ModelBase.register("WavTokenizerDec")
@@ -2613,6 +2761,13 @@ class Qwen2MoeModel(TextModel):
         if (shared_expert_intermediate_size := self.hparams.get('shared_expert_intermediate_size')) is not None:
             self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
             logger.info(f"gguf: expert shared feed forward length = {shared_expert_intermediate_size}")
+        # YaRN is not enabled by default
+        # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
+        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
+            if self.hparams["rope_scaling"].get("type") == "yarn":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -3296,29 +3451,7 @@ class BertModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_causal_attention(False)
-
-        # get pooling path
-        pooling_path = None
-        module_path = self.dir_model / "modules.json"
-        if module_path.is_file():
-            with open(module_path, encoding="utf-8") as f:
-                modules = json.load(f)
-            for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
-                    pooling_path = mod["path"]
-                    break
-
-        # get pooling type
-        if pooling_path is not None:
-            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
-                pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
-                pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
-                pooling_type = gguf.PoolingType.CLS
-            else:
-                raise NotImplementedError("Only MEAN and CLS pooling types supported")
-            self.gguf_writer.add_pooling_type(pooling_type)
+        self._try_set_pooling_type()
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -3372,14 +3505,7 @@ class BertModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
-
-@ModelBase.register("RobertaModel")
-class RobertaModel(BertModel):
-    model_arch = gguf.MODEL_ARCH.BERT
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
+    def _xlmroberta_tokenizer_init(self) -> None:
         # we need the pad_token_id to know how to chop down position_embd matrix
         if (pad_token_id := self.hparams.get("pad_token_id")) is not None:
             self._position_offset = 1 + pad_token_id
@@ -3388,82 +3514,7 @@ class RobertaModel(BertModel):
         else:
             self._position_offset = None
 
-    def set_vocab(self):
-        """Support BPE tokenizers for roberta models"""
-        bpe_tok_path = self.dir_model / "tokenizer.json"
-        if bpe_tok_path.exists():
-            self._set_vocab_gpt2()
-            self.gguf_writer.add_add_bos_token(True)
-            self.gguf_writer.add_add_eos_token(True)
-
-            # we need this to validate the size of the token_type embeddings
-            # though currently we are passing all zeros to the token_type embeddings
-            # "Sequence A" or "Sequence B"
-            self.gguf_writer.add_token_type_count(self.hparams.get("type_vocab_size", 1))
-
-        else:
-            return super().set_vocab()
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # if name starts with "roberta.", remove the prefix
-        # e.g. https://huggingface.co/BAAI/bge-reranker-v2-m3/tree/main
-        if name.startswith("roberta."):
-            name = name[8:]
-
-        # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
-        if name == "embeddings.position_embeddings.weight":
-            if self._position_offset is not None:
-                data_torch = data_torch[self._position_offset:,:]
-
-        return super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("NomicBertModel")
-class NomicBertModel(BertModel):
-    model_arch = gguf.MODEL_ARCH.NOMIC_BERT
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # the HF config claims n_ctx=8192, but it uses RoPE scaling
-        self.hparams["n_ctx"] = 2048
-
-        # SwigLU activation
-        assert self.hparams["activation_function"] == "swiglu"
-        # this doesn't do anything in the HF version
-        assert self.hparams["causal"] is False
-        # no bias tensors
-        assert self.hparams["qkv_proj_bias"] is False
-        assert self.hparams["mlp_fc1_bias"] is False
-        assert self.hparams["mlp_fc2_bias"] is False
-        # norm at end of layer
-        assert self.hparams["prenorm"] is False
-        # standard RoPE
-        assert self.hparams["rotary_emb_fraction"] == 1.0
-        assert self.hparams["rotary_emb_interleaved"] is False
-        assert self.hparams["rotary_emb_scale_base"] is None
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
-
-
-@ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
-class XLMRobertaModel(BertModel):
-    model_arch = gguf.MODEL_ARCH.BERT
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # we need the pad_token_id to know how to chop down position_embd matrix
-        if (pad_token_id := self.hparams.get("pad_token_id")) is not None:
-            self._position_offset = 1 + pad_token_id
-            if "max_position_embeddings" in self.hparams:
-                self.hparams["max_position_embeddings"] -= self._position_offset
-        else:
-            self._position_offset = None
-
-    def set_vocab(self):
+    def _xlmroberta_set_vocab(self) -> None:
         # to avoid TypeError: Descriptors cannot be created directly
         # exception when importing sentencepiece_model_pb2
         os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
@@ -3544,6 +3595,145 @@ class XLMRobertaModel(BertModel):
 
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
+
+
+@ModelBase.register("RobertaModel")
+class RobertaModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # we need the pad_token_id to know how to chop down position_embd matrix
+        if (pad_token_id := self.hparams.get("pad_token_id")) is not None:
+            self._position_offset = 1 + pad_token_id
+            if "max_position_embeddings" in self.hparams:
+                self.hparams["max_position_embeddings"] -= self._position_offset
+        else:
+            self._position_offset = None
+
+    def set_vocab(self):
+        """Support BPE tokenizers for roberta models"""
+        bpe_tok_path = self.dir_model / "tokenizer.json"
+        if bpe_tok_path.exists():
+            self._set_vocab_gpt2()
+            self.gguf_writer.add_add_bos_token(True)
+            self.gguf_writer.add_add_eos_token(True)
+
+            # we need this to validate the size of the token_type embeddings
+            # though currently we are passing all zeros to the token_type embeddings
+            # "Sequence A" or "Sequence B"
+            self.gguf_writer.add_token_type_count(self.hparams.get("type_vocab_size", 1))
+
+        else:
+            return super().set_vocab()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # if name starts with "roberta.", remove the prefix
+        # e.g. https://huggingface.co/BAAI/bge-reranker-v2-m3/tree/main
+        if name.startswith("roberta."):
+            name = name[8:]
+
+        # position embeddings start at pad_token_id + 1, so just chop down the weight tensor
+        if name == "embeddings.position_embeddings.weight":
+            if self._position_offset is not None:
+                data_torch = data_torch[self._position_offset:,:]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("NomicBertModel")
+class NomicBertModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model)
+
+        self.is_moe = bool(hparams.get("moe_every_n_layers"))
+        self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE if self.is_moe else gguf.MODEL_ARCH.NOMIC_BERT
+
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
+
+        self._tokenizer_is_xlmroberta = self._is_tokenizer_xlmroberta()
+        if self._tokenizer_is_xlmroberta:
+            self._xlmroberta_tokenizer_init()
+
+        npos, mtp = self.hparams["n_positions"], self.hparams.get("max_trained_positions", 2048)
+        if npos == 8192 and mtp == 2048:
+            self.hparams["n_positions"] = 2048  # nomic-embed-text v1 and v1.5 are trained for 2048 tokens.
+        elif npos == 2048 and mtp == 2048:
+            self.hparams["n_positions"] = 512   # nomic-embed-text-v2-moe is trained for 512 tokens.
+        else:
+            raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
+
+        assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
+
+        # this doesn't do anything in the HF version
+        assert self.hparams["causal"] is False
+        # no bias tensors unless MoE
+        assert self.hparams["qkv_proj_bias"] == self.is_moe
+        assert self.hparams["mlp_fc1_bias"]  == self.is_moe
+        assert self.hparams["mlp_fc2_bias"]  == self.is_moe
+
+        # norm at end of layer
+        assert self.hparams["prenorm"] is False
+        # standard RoPE
+        assert self.hparams["rotary_emb_fraction"] == 1.0
+        assert self.hparams["rotary_emb_interleaved"] is False
+        assert self.hparams["rotary_emb_scale_base"] is None
+
+    def set_vocab(self) -> None:
+        if self._tokenizer_is_xlmroberta:
+            return self._xlmroberta_set_vocab()
+        return super().set_vocab()
+
+    def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
+        # If the tensor is an experts bias tensor, skip it by returning an empty list.
+        if "mlp.experts.bias" in name:
+            return []  # Explicitly return an empty list.
+
+        if "mlp.experts.mlp.w1" in name:
+            data_torch = data_torch.view(self.hparams["num_experts"], self.hparams["n_inner"], self.hparams["n_embd"])
+            name += ".weight"
+
+        if "mlp.experts.mlp.w2" in name:
+            data_torch = data_torch.view(self.hparams["num_experts"], self.hparams["n_inner"], self.hparams["n_embd"])
+            data_torch = data_torch.transpose(1, 2)
+            name += ".weight"
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_rope_freq_base(self.hparams["rotary_emb_base"])
+        if self.is_moe:
+            self.gguf_writer.add_moe_every_n_layers(self.hparams["moe_every_n_layers"])
+            self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+            self.gguf_writer.add_expert_used_count(self.hparams["moe_top_k"])
+
+    def _is_tokenizer_xlmroberta(self) -> bool:
+        with open(self.dir_model / "tokenizer.json") as f:
+            tokenizer_json = json.load(f)
+        toktyp = tokenizer_json["model"]["type"]
+        if toktyp == "Unigram":
+            return True
+        if toktyp == "WordPiece":
+            return False
+        raise ValueError(f"unknown tokenizer: {toktyp}")
+
+
+@ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
+class XLMRobertaModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._xlmroberta_tokenizer_init()
+
+    def set_vocab(self):
+        self._xlmroberta_set_vocab()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # if name starts with "roberta.", remove the prefix
@@ -3725,6 +3915,16 @@ class Gemma3VisionModel(VisionModel):
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
+        # calculate proj_scale_factor (used by tinygemma3 test model)
+        image_seq_length = self.preprocessor_config.get("image_seq_length", 256)
+        n_per_side = int(image_seq_length ** 0.5)
+        image_size = self.hparams["image_size"]
+        patch_size = self.hparams["patch_size"]
+        proj_scale_factor = (image_size // patch_size) // n_per_side
+        if proj_scale_factor > 0 and proj_scale_factor != 4:
+            # we only need to write this if it's not the default value
+            # in this case, we are converting a test model
+            self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, new_name, n_dims  # unused
@@ -3737,6 +3937,9 @@ class Gemma3VisionModel(VisionModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
+
+        if "vision_model.head." in name:
+            return [] # skip redundant tensors for tinygemma3
 
         if name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
                 or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
@@ -5153,7 +5356,7 @@ class Glm4Model(TextModel):
         special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -5503,7 +5706,12 @@ class BailingMoeModel(TextModel):
         rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
-        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        if (self.hparams.get("rope_scaling") or {}).get("type") == "yarn" and "factor" in self.hparams["rope_scaling"]:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+        else:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
@@ -5805,6 +6013,18 @@ def split_str_to_n_bytes(split_str: str) -> int:
     return n
 
 
+def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
+    text_config = hparams.get("text_config", {})
+    vision_config = hparams.get("vision_config", {})
+    arch = hparams["architectures"][0]
+    # if "architectures" is found in the sub-config, use that instead
+    if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
+        arch = text_config["architectures"][0]
+    elif model_type == ModelType.VISION and vision_config.get("architectures") is not None:
+        arch = vision_config["architectures"][0]
+    return arch
+
+
 def main() -> None:
     args = parse_args()
 
@@ -5857,16 +6077,16 @@ def main() -> None:
 
     logger.info(f"Loading model: {dir_model.name}")
 
-    hparams = ModelBase.load_hparams(dir_model)
-
     if args.mmproj:
         if "mmproj" not in fname_out.name:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
-        model_architecture = hparams["architectures"][0]
         model_type = ModelType.VISION if args.mmproj else ModelType.TEXT
+        hparams = ModelBase.load_hparams(dir_model)
+        model_architecture = get_model_architecture(hparams, model_type)
+        logger.info(f"Model architecture: {model_architecture}")
         try:
             model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
         except NotImplementedError:

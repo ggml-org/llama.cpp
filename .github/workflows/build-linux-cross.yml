@@ -4,18 +4,25 @@ on:
   workflow_call:
 
 jobs:
-  ubuntu-latest-riscv64-cpu-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-riscv64-cpu-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
       - name: Setup Riscv
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
@@ -27,6 +34,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -40,21 +48,25 @@ jobs:
 
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-latest-riscv64-vulkan-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-riscv64-vulkan-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Riscv
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
@@ -69,6 +81,7 @@ jobs:
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -82,21 +95,25 @@ jobs:
 
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-latest-arm64-vulkan-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-arm64-vulkan-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Arm64
         run: |
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
@@ -110,6 +127,7 @@ jobs:
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=aarch64 \

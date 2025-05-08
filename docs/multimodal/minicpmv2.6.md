@@ -28,8 +28,8 @@ cmake --build build --config Release
 Convert PyTorch model to gguf files (You can also download the converted [gguf](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) by us)
 
 ```bash
-python ./examples/llava/minicpmv-surgery.py -m ../MiniCPM-V-2_6
-python ./examples/llava/minicpmv-convert-image-encoder-to-gguf.py -m ../MiniCPM-V-2_6 --minicpmv-projector ../MiniCPM-V-2_6/minicpmv.projector --output-dir ../MiniCPM-V-2_6/ --image-mean 0.5 0.5 0.5 --image-std 0.5 0.5 0.5 --minicpmv_version 3
+python ./tools/mtmd/minicpmv-surgery.py -m ../MiniCPM-V-2_6
+python ./tools/mtmd/minicpmv-convert-image-encoder-to-gguf.py -m ../MiniCPM-V-2_6 --minicpmv-projector ../MiniCPM-V-2_6/minicpmv.projector --output-dir ../MiniCPM-V-2_6/ --image-mean 0.5 0.5 0.5 --image-std 0.5 0.5 0.5 --minicpmv_version 3
 python ./convert_hf_to_gguf.py ../MiniCPM-V-2_6/model
 
 # quantize int4 version

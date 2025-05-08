@@ -719,6 +719,7 @@ void launch_fattn(
     size_t nb23 = V->nb[3];
 
     if (need_f16_K && K->type != GGML_TYPE_F16) {
+        GGML_ASSERT(ggml_is_contiguously_allocated(K));
         K_f16.alloc(ggml_nelements(K));
         to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(K->type);
         to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
@@ -733,6 +734,7 @@ void launch_fattn(
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
+        GGML_ASSERT(ggml_is_contiguously_allocated(V));
         V_f16.alloc(ggml_nelements(V));
         to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
         to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);

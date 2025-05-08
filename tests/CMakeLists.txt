@@ -111,10 +111,13 @@ if (NOT WIN32)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..)
-        target_include_directories(test-json-schema-to-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../examples/server)
+        target_include_directories(test-json-schema-to-grammar PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tools/server)
     endif()
 
-    llama_build(test-quantize-stats.cpp)
+    if (NOT GGML_BACKEND_DL)
+        llama_build(test-quantize-stats.cpp)
+    endif()
+
     llama_build(test-gbnf-validator.cpp)
 
     # build test-tokenizer-1-bpe target once and add many tests
@@ -162,6 +165,10 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-rope.cpp)
 endif()
 
+# libmtmd
+set(LLAMA_TEST_NAME test-mtmd-c-api)
+llama_build_and_test(test-mtmd-c-api.c)
+target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)

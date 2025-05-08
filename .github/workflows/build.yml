@@ -601,9 +601,8 @@ jobs:
             -DGGML_SYCL_F16=ON
           cmake --build build --config Release -j $(nproc)
 
-# Disabled for now due to sporadic issue syncing.
-#  build-linux-cross:
-#    uses: ./.github/workflows/build-linux-cross.yml
+  build-linux-cross:
+    uses: ./.github/workflows/build-linux-cross.yml
 
   macOS-latest-cmake-ios:
     runs-on: macos-latest
@@ -634,6 +633,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
@@ -670,6 +670,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=tvOS \
@@ -700,6 +701,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=visionOS \
@@ -740,6 +742,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
@@ -768,7 +771,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: windows-msys2
-          variant: sccache
+          variant: ccache
           evict-old-files: 1d
 
       - name: Setup ${{ matrix.sys }}
@@ -811,26 +814,18 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: 'noavx-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF'
-          - build: 'avx2-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON'
-          - build: 'avx-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_AVX2=OFF'
-          - build: 'avx512-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_AVX512=ON'
+          - build: 'cpu-x64'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
           - build: 'openblas-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
-          - build: 'kompute-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
-            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_VULKAN=ON'
+            defines: '-DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'llvm-arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
-          - build: 'msvc-arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
           - build: 'llvm-arm64-opencl-adreno'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+         # - build: 'kompute-x64'
+         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
 
     steps:
       - name: Clone
@@ -843,7 +838,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.build }}
-          variant: sccache
+          variant: ccache
           evict-old-files: 1d
 
       - name: Clone Kompute submodule
@@ -919,39 +914,26 @@ jobs:
           cp $env:RUNNER_TEMP/openblas/bin/libopenblas.dll ./build/bin/Release/openblas.dll
           cp $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt ./build/bin/Release/OpenBLAS-${env:OPENBLAS_VERSION}.txt
 
-      - name: Check AVX512F support
-        id: check_avx512f
-        if: ${{ matrix.build == 'avx512-x64' }}
-        continue-on-error: true
-        run: |
-          cd build
-          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
-          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
-          $cl =  $(join-path $msvc 'bin\Hostx64\x64\cl.exe')
-          echo 'int main(void){unsigned int a[4];__cpuid(a,7);return !(a[1]&65536);}' >> avx512f.c
-          & $cl /O2 /GS- /kernel avx512f.c /link /nodefaultlib /entry:main
-          .\avx512f.exe && echo "AVX512F: YES" && ( echo HAS_AVX512F=1 >> $env:GITHUB_ENV ) || echo "AVX512F: NO"
-
       - name: Test
         id: cmake_test
-        # not all machines have native AVX-512
-        if: ${{ matrix.build != 'msvc-arm64' && matrix.build != 'llvm-arm64' && matrix.build != 'llvm-arm64-opencl-adreno' && matrix.build != 'kompute-x64' && matrix.build != 'vulkan-x64' && (matrix.build != 'avx512-x64' || env.HAS_AVX512F == '1') }}
+        if: ${{ matrix.build != 'llvm-arm64' && matrix.build != 'llvm-arm64-opencl-adreno' }}
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
 
-      - name: Test (Intel SDE)
-        id: cmake_test_sde
-        if: ${{ matrix.build == 'avx512-x64' && env.HAS_AVX512F == '0' }} # use Intel SDE for AVX-512 emulation
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
-          # for some weird reason windows tar doesn't like sde tar.xz
-          7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar.xz
-          7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
-          $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
-          cd build
-          $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
-          & $sde -future -- ctest -L main -C Release --verbose --timeout 900
+      # TODO: disabled for now, consider adding tests for all CPU variants instead
+      # - name: Test (Intel SDE)
+      #   id: cmake_test_sde
+      #   if: ${{ matrix.build == 'avx512-x64' && env.HAS_AVX512F == '0' }} # use Intel SDE for AVX-512 emulation
+      #   run: |
+      #     curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
+      #     # for some weird reason windows tar doesn't like sde tar.xz
+      #     7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar.xz
+      #     7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
+      #     $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
+      #     cd build
+      #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
+      #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
       - name: Determine tag name
         id: tag
@@ -1036,7 +1018,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}-${{ matrix.cuda }}-${{ matrix.build }}
-          variant: sccache
+          variant: ccache
           evict-old-files: 1d
 
       - name: Install Cuda Toolkit 11.7
@@ -1114,6 +1096,8 @@ jobs:
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_CUDA=ON ^
             -DGGML_RPC=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
@@ -1188,7 +1172,7 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
-          variant: sccache
+          variant: ccache
           evict-old-files: 1d
 
       - name: Install
@@ -1418,6 +1402,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
+            -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
