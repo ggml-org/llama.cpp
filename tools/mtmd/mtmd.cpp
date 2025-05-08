@@ -167,7 +167,7 @@ struct mtmd_image_tokens {
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
-    mtmd_image_tokens clone() const {
+    mtmd_image_tokens clone() {
         return mtmd_image_tokens{
             nx,
             ny,
@@ -409,6 +409,12 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     return 0;
 }
 
+static void mtmd_image_tokens_free(mtmd_image_tokens * image_tokens) {
+    if (image_tokens) {
+        delete image_tokens;
+    }
+}
+
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
     int n_mmproj_embd = clip_n_mmproj_embd(ctx->ctx_clip);
     ctx->image_embd_v.resize(image_tokens->n_tokens() * n_mmproj_embd);
@@ -446,23 +452,6 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
 
 float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
-}
-
-float * mtmd_get_output_embd_copy(mtmd_context * ctx, size_t * n_embd_out) {
-    if (ctx->image_embd_v.empty()) {
-        *n_embd_out = 0;
-        return NULL;
-    }
-
-    *n_embd_out = ctx->image_embd_v.size();
-    float * copy = (float *) malloc(*n_embd_out * sizeof(float));
-    if (copy == NULL) {
-        *n_embd_out = 0;
-        return NULL;
-    }
-
-    memcpy(copy, ctx->image_embd_v.data(), ctx->image_embd_v.size() * sizeof(float));
-    return copy;
 }
 
 size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks) {
@@ -592,15 +581,26 @@ struct decode_embd_batch {
 };
 
 // Helper function for decoding an image whose embeddings have already been calculated
-int32_t mtmd_helper_decode_image(
+int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
         struct llama_context * lctx,
-        const mtmd_image_tokens * image_tokens,
+        const mtmd_input_chunk * chunk,
         float * embd,
         llama_pos n_past,
         llama_seq_id seq_id,
         int32_t n_batch,
         llama_pos * new_n_past) {
+
+    if (chunk->type != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+        LOG_ERR("failed to decode image chunk: input chunk not of image type\n");
+        return -1;
+    }
+    if (!chunk->tokens_image) {
+        LOG_ERR("failed to decode image chunk: image tokens are null\n");
+        return -1;
+    }
+    const auto image_tokens = chunk->tokens_image.get();
+
     int n_mmproj_embd = clip_n_mmproj_embd(ctx->ctx_clip);
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
 
@@ -710,7 +710,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             LOG_INF("image/slice encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
         }
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image(ctx, lctx, image_tokens, embd, n_past, seq_id, n_batch, new_n_past);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
         if (ret != 0) {
             LOG_ERR("failed to decode image\n");
             llama_batch_free(text_batch);
@@ -929,19 +929,6 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
         return 1; // for M-RoPE, the whole image is 1 in temporal dimension
     }
     return image_tokens->n_tokens();
-}
-
-void mtmd_image_tokens_free(mtmd_image_tokens * image_tokens) {
-    if (image_tokens) {
-        delete image_tokens;
-    }
-}
-
-mtmd_image_tokens * mtmd_image_tokens_copy(const mtmd_image_tokens * image_tokens) {
-    if (!image_tokens) {
-        return nullptr;
-    }
-    return new mtmd_image_tokens(image_tokens->clone());
 }
 
 // test function
