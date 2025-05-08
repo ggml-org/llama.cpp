@@ -1246,7 +1246,7 @@ struct ggml_sycl_pool_host : public ggml_sycl_pool {
         size_t size = 0;
     };
 
-    // Set arbitrarly to 64
+    // Set arbitrarily to 64
     static constexpr int          MAX_POOL_SIZE{ 64 };
     std::vector<ggml_sycl_buffer> buffer_pool = std::vector<ggml_sycl_buffer>(MAX_POOL_SIZE);
     size_t                        pool_size   = 0;

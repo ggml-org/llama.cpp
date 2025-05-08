@@ -9,7 +9,7 @@
 typedef minja::chat_template common_chat_template;
 
 struct common_chat_templates {
-    bool has_explicit_template; // Model had builtin template or template overridde was specified.
+    bool has_explicit_template; // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
 };
@@ -644,7 +644,7 @@ static std::string apply(
     // tmpl_inputs.now = std::chrono::system_clock::now();
 
     minja::chat_template_options tmpl_opts;
-    // To avoid double BOS / EOS tokens, we're manually removing begining / trailing tokens
+    // To avoid double BOS / EOS tokens, we're manually removing beginning / trailing tokens
     // instead of using `chat_template_options.use_bos_token = false`, since these tokens
     // may be needed inside the template / between messages too.
     auto result = tmpl.apply(tmpl_inputs, tmpl_opts);

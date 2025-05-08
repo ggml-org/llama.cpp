@@ -64,10 +64,10 @@ extern int g_ggml_sycl_disable_optimize;
 
 
 #define __SYCL_ARCH__ DPCT_COMPATIBILITY_TEMP
-#define VER_4VEC 610 // todo for hardward optimize.
-#define VER_GEN9 700 // todo for hardward optimize.
-#define VER_GEN12 1000000 // todo for hardward optimize.
-#define VER_GEN13 (VER_GEN12 + 1030) // todo for hardward optimize.
+#define VER_4VEC 610 // todo for hardware optimize.
+#define VER_GEN9 700 // todo for hardware optimize.
+#define VER_GEN12 1000000 // todo for hardware optimize.
+#define VER_GEN13 (VER_GEN12 + 1030) // todo for hardware optimize.
 
 #define GGML_SYCL_MAX_NODES 8192 // TODO: adapt to hardwares
 

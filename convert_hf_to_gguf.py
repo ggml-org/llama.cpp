@@ -2664,7 +2664,7 @@ class Qwen2VLVisionModel(VisionModel):
             self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
         else:
             raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
-        # default values below are taken from HF tranformers code
+        # default values below are taken from HF transformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
@@ -2699,7 +2699,7 @@ class Qwen2VLVisionModel(VisionModel):
                 # split Conv3D into Conv2Ds
                 c1, c2, kt, kh, kw = data_torch.shape
                 del c1, c2, kh, kw  # unused
-                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
+                assert kt == 2, "Current implementation only support temporal_patch_size of 2"
                 return [
                     (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
                     (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
@@ -3912,7 +3912,7 @@ class Gemma3VisionModel(VisionModel):
         super().set_gguf_parameters()
         hparams = self.hparams
         self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.GEMMA3)
-        # default values below are taken from HF tranformers code
+        # default values below are taken from HF transformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
         # calculate proj_scale_factor (used by tinygemma3 test model)
