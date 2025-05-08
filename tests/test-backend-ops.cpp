@@ -36,12 +36,18 @@
 #include <thread>
 #include <vector>
 
+static size_t get_n_threads(const int64_t ne) {
+    const size_t max_threads_hw = std::max(std::thread::hardware_concurrency()/2, (unsigned int)1);
+    const size_t max_threads_ne = (ne + 1024 - 1) / 1024;
+    return std::min(max_threads_hw, max_threads_ne);
+}
+
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
     {
         // parallel initialization
-        static const size_t n_threads = std::thread::hardware_concurrency();
+        static const size_t n_threads = get_n_threads(ggml_nelements(tensor));
         // static RNG initialization (revisit if n_threads stops being constant)
         static std::vector<std::default_random_engine> generators = []() {
             std::random_device rd;
@@ -100,7 +106,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
             };
 
             const size_t min_blocks_per_thread = 1;
-            const size_t n_threads = std::min<size_t>(std::thread::hardware_concurrency()/2,
+            const size_t n_threads = std::min<size_t>(get_n_threads(ggml_nelements(tensor)),
                                                       std::max<size_t>(1, n_blocks / min_blocks_per_thread));
             std::vector<std::future<void>> tasks;
             tasks.reserve(n_threads);
