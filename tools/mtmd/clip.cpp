@@ -3010,7 +3010,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         int n_per_side_2d_pool = n_per_side / params.proj_scale_factor;
         n_patches = n_per_side_2d_pool * n_per_side_2d_pool;
     } else if (ctx->proj_type == PROJECTOR_TYPE_IDEFICS3) {
-        n_patches /= params.proj_scale_factor;
+        n_patches /= (params.proj_scale_factor * params.proj_scale_factor);
     } else if (ctx->proj_type == PROJECTOR_TYPE_PIXTRAL) {
         int n_merge = params.spatial_merge_size;
         int n_patches_x = img->nx / params.patch_size / (n_merge > 0 ? n_merge : 1);
