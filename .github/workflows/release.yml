@@ -417,7 +417,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-cuda${{ matrix.cuda }}-x64.zip
-          name: llama-bin-win-cu${{ matrix.cuda }}-x64.zip
+          name: llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
 
       - name: Copy and pack Cuda runtime
         run: |
@@ -425,7 +425,7 @@ jobs:
           $dst='.\build\bin\cudart\'
           robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip $dst\*
+          7z a cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
