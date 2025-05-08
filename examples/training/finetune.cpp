@@ -16,7 +16,6 @@
 int main(int argc, char ** argv) {
     common_params params;
 
-    params.logits_all = true;
     params.escape = false;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
