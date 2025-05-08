@@ -21,15 +21,15 @@ indent_style = tab
 [prompts/*.txt]
 insert_final_newline = unset
 
-[examples/server/public/*]
+[tools/server/public/*]
 indent_size = 2
 
-[examples/server/public/deps_*]
+[tools/server/public/deps_*]
 trim_trailing_whitespace = unset
 indent_style = unset
 indent_size = unset
 
-[examples/server/deps_*]
+[tools/server/deps_*]
 trim_trailing_whitespace = unset
 indent_style = unset
 indent_size = unset
@@ -37,7 +37,7 @@ indent_size = unset
 [examples/llama.swiftui/llama.swiftui.xcodeproj/*]
 indent_style = tab
 
-[examples/cvector-generator/*.txt]
+[tools/cvector-generator/*.txt]
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 

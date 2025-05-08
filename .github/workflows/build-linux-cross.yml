@@ -34,6 +34,7 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -80,6 +81,7 @@ jobs:
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -125,6 +127,7 @@ jobs:
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
