@@ -53,7 +53,7 @@ if(GGML_HEXAGON_NPU_ONLY)
 else()
     message("GGML_HEXAGON_NPU_ONLY is disabled")
     add_subdirectory(qnn)
-    target_link_libraries(ggml-qnn PRIVATE qnn-backend)
+    target_link_libraries(runtime-common PUBLIC qnn-backend)
 endif()
 
 if(GGML_QNN_ENABLE_HEXAGON_BACKEND)
