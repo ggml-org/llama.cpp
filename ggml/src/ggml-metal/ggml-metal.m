@@ -2998,7 +2998,8 @@ static bool ggml_metal_encode_node(
                     [encoder setBuffer:id_src1 offset:offs_src1    atIndex:2];
                     [encoder setBuffer:id_dst  offset:offs_dst     atIndex:3];
 
-                    [encoder setThreadgroupMemoryLength:8192 atIndex:0];
+                    [encoder setThreadgroupMemoryLength:8192        atIndex:0];
+                  //[encoder setThreadgroupMemoryLength:4096 + 2048 atIndex:0];
                     [encoder dispatchThreadgroups:MTLSizeMake( (ne11 + 31)/32, (ne01 + 63)/64, ne12*ne13) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
                 } else {
                     id<MTLComputePipelineState> pipeline = nil;
