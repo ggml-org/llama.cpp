@@ -411,16 +411,15 @@ jobs:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\libcurl-x64.dll
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-cu${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cuda${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-cu${{ matrix.cuda }}-x64.zip
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cuda${{ matrix.cuda }}-x64.zip
           name: llama-bin-win-cu${{ matrix.cuda }}-x64.zip
 
       - name: Copy and pack Cuda runtime
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
           echo "Cuda install location: ${{ env.CUDA_PATH }}"
           $dst='.\build\bin\cudart\'
@@ -431,8 +430,8 @@ jobs:
       - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
         with:
-          path: cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip
-          name: cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip
+          path: cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
     runs-on: windows-latest
