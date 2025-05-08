@@ -409,7 +409,7 @@ struct common_params {
 
     bool process_output = false; // collect data for the output tensor
     bool compute_ppl    = true;  // whether to compute perplexity
-    bool parse_special  = false; // whether to parse special tokens during imatrix tokenization 
+    bool parse_special  = false; // whether to parse special tokens during imatrix tokenization
 
     // cvector-generator params
     int n_pca_batch = 100;
