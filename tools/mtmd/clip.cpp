@@ -352,9 +352,12 @@ struct clip_ctx {
 
     clip_ctx(clip_context_params & ctx_params) {
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
-        backend     = ctx_params.use_gpu
-                        ? ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr)
-                        : nullptr;
+        if (!backend_cpu) {
+            throw std::runtime_error("failed to initialize CPU backend");
+        }
+        backend = ctx_params.use_gpu
+                    ? ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr)
+                    : nullptr;
 
         if (backend) {
             LOG_INF("%s: CLIP using %s backend\n", __func__, ggml_backend_name(backend));
@@ -2185,9 +2188,10 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity) {
 
 struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_params) {
     g_logger_state.verbosity_thold = ctx_params.verbosity;
-    clip_ctx * ctx_clip = new clip_ctx(ctx_params);
+    clip_ctx * ctx_clip = nullptr;
 
     try {
+        ctx_clip = new clip_ctx(ctx_params);
         clip_model_loader loader(fname, *ctx_clip);
         loader.load_hparams();
         loader.load_tensors();

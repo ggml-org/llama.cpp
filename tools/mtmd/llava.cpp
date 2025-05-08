@@ -212,6 +212,7 @@ static bool clip_llava_handle_patches(clip_ctx * ctx_clip, std::vector<float *> 
     ggml_build_forward_expand(gf, flatten);
 
     ggml_backend_ptr backend { ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr) };
+    GGML_ASSERT(backend != nullptr && "failed to initialize CPU backend");
     ggml_backend_graph_compute(backend.get(), gf);
 
     struct ggml_tensor* result = ggml_graph_node(gf, -1);
