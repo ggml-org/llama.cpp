@@ -3,10 +3,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/frontend/manager.hpp>
 #include <openvino/openvino.hpp>
+#include <openvino/runtime/compiled_model.hpp>
+#include <openvino/runtime/tensor.hpp>
+#include <unordered_map>
 
 #include "ggml-impl.h"
 #include "ggml.h"
@@ -63,61 +67,65 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         return GGML_STATUS_FAILED;
     }
 
+    using CachedItem = std::pair<std::shared_ptr<ov::Model>, ov::CompiledModel>;
+    static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache;
+
+    std::shared_ptr<ov::Model> model;
+    ov::CompiledModel compiled_model;
+    int64_t conversion_end_time;
+    int64_t compile_end_time;
+
     auto ggml_decoder = get_ggml_decoder(cgraph);
-    std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
-    ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
-    if (!input_model) {
-        GGML_LOG_ERROR("Input Model is not loaded \n");
-        return GGML_STATUS_FAILED;
+    auto it = compiled_cache.find(cgraph);
+    if (it != compiled_cache.end()) {
+        model = it->second.first;
+        conversion_end_time = ggml_time_us();
+
+        compiled_model = it->second.second;
+        compile_end_time = ggml_time_us();
+    } else {
+        std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
+        ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
+        if (!input_model) {
+            GGML_LOG_ERROR("Input Model is not loaded \n");
+            return GGML_STATUS_FAILED;
+        }
+
+        model = front_end->convert(input_model);
+        conversion_end_time = ggml_time_us();
+
+        if (getenv("GGML_OPENVINO_DUMP_IR")) {
+            char timestamped_filename[64];
+            auto timestamp = (long long)ggml_time_us();
+            snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
+            ov::serialize(model, timestamped_filename);
+        }
+
+        if (!model) {
+            GGML_LOG_ERROR("Model is not converted \n");
+        }
+        compiled_model = core.compile_model(model, "CPU");
+        compile_end_time = ggml_time_us();
+
+        compiled_cache[cgraph] = std::make_pair(model, compiled_model);
     }
-
-    std::shared_ptr<ov::Model> model = front_end->convert(input_model);
-    auto conversion_end_time = ggml_time_us();
-
-    if (getenv("GGML_OPENVINO_DUMP_IR")) {
-        char timestamped_filename[64];
-        auto timestamp = (long long)ggml_time_us();
-        snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
-        ov::serialize(model, timestamped_filename);
-    }
-
-    if (!model) {
-        GGML_LOG_ERROR("Model is not converted \n");
-    }
-
-    ov::CompiledModel compiled_model = core.compile_model(model, "CPU");
-    auto compile_end_time = ggml_time_us();
 
     ov::InferRequest infer_request = compiled_model.create_infer_request();
-    auto infer_request_start_time = ggml_time_us();
 
-    auto input_names = ggml_decoder->get_input_names();
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
-        auto input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
-
-        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
-            std::cout << "Input name: " << param_name << ", Input shape: " << input_tensor.get_shape()
-                      << ", Address: " << input_tensor.data() << std::endl;
-            switch (input_tensor.get_element_type()) {
-            case ov::element::f32:
-                std::cout << *(float*)(input_tensor.data()) << std::endl;
-                break;
-            case ov::element::f16:
-                std::cout << ov::float16::from_bits(*(uint16_t*)(input_tensor.data())) << std::endl;
-                break;
-            case ov::element::i32:
-                std::cout << *(int32_t*)(input_tensor.data()) << std::endl;
-                break;
-            case ov::element::i64:
-                std::cout << *(int64_t*)(input_tensor.data()) << std::endl;
-                break;
-            default:
-                break;
-            }
+        ov::Tensor input_tensor;
+        if (ggml_decoder->get_model_extra_inputs().find(param_name) != ggml_decoder->get_model_extra_inputs().end()) {
+            input_tensor = *ggml_decoder->get_model_extra_input_values().at(param_name);
+        } else {
+            input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
         }
         infer_request.set_input_tensor(i, input_tensor);
+
+        if (getenv("GGML_OPENVINO_DEBUG_INPUT")) {
+            print_input_tensor_info(param_name, input_tensor);
+        }
     }
     auto input_end_time = ggml_time_us();
 
@@ -131,20 +139,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         std::memcpy(output_tensors[output_names[i]], output_tensor.data(), output_tensor.get_byte_size());
 
         if (getenv("GGML_OPENVINO_DEBUG_OUTPUT")) {
-            std::cout << "Output name: " << output_names[i] << ", Output shape: " << output_tensor.get_shape()
-                      << ", Address: " << output_tensors[output_names[i]] << std::endl;
-            switch (output_tensor.get_element_type()) {
-            case ov::element::f32:
-                std::cout << *(float*)(output_tensor.data()) << std::endl;
-                std::cout << checksum(output_tensor.data(), output_tensor.get_byte_size()) << std::endl;
-                break;
-            case ov::element::f16:
-                std::cout << ov::float16::from_bits(*(uint16_t*)(output_tensor.data())) << std::endl;
-                std::cout << checksum(output_tensor.data(), output_tensor.get_byte_size()) << std::endl;
-                break;
-            default:
-                break;
-            }
+            print_output_tensor_info(output_names[i], output_tensor, output_tensors);
         }
     }
     auto end_time = ggml_time_us();
@@ -153,9 +148,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         GGML_LOG_INFO("GGML OpenVINO Backend: \n");
         GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - start_time) / 1000);
         GGML_LOG_INFO("  - Graph compile Time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
-        GGML_LOG_INFO("  - Graph InferRequest created Time: %ld ms \n",
-                      (infer_request_start_time - compile_end_time) / 1000);
-        GGML_LOG_INFO("  - Graph Input Time: %ld ms \n", (input_end_time - infer_request_start_time) / 1000);
+        GGML_LOG_INFO("  - Graph Input Time: %ld ms \n", (input_end_time - compile_end_time) / 1000);
         GGML_LOG_INFO("  - Graph Inference Time: %ld ms \n", (infer_end_time - input_end_time) / 1000);
         GGML_LOG_INFO("  - Graph Output Time: %ld ms \n", (end_time - infer_end_time) / 1000);
     }
@@ -171,4 +164,44 @@ size_t checksum(const void* data, size_t size) {
         sum += bytes[i];
     }
     return sum;
+}
+
+void print_input_tensor_info(const std::string& name, const ov::Tensor& tensor) {
+    std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
+              << std::endl;
+    switch (tensor.get_element_type()) {
+    case ov::element::f32:
+        std::cout << *(float*)(tensor.data()) << std::endl;
+        break;
+    case ov::element::f16:
+        std::cout << ov::float16::from_bits(*(uint16_t*)(tensor.data())) << std::endl;
+        break;
+    case ov::element::i32:
+        std::cout << *(int32_t*)(tensor.data()) << std::endl;
+        break;
+    case ov::element::i64:
+        std::cout << *(int64_t*)(tensor.data()) << std::endl;
+        break;
+    default:
+        break;
+    }
+}
+
+void print_output_tensor_info(const std::string& name,
+                              const ov::Tensor& tensor,
+                              std::map<std::string, void*>& output_dst) {
+    std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape()
+              << ", Address: " << output_dst[name] << std::endl;
+    switch (tensor.get_element_type()) {
+    case ov::element::f32:
+        std::cout << *(float*)(tensor.data()) << std::endl;
+        std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+        break;
+    case ov::element::f16:
+        std::cout << ov::float16::from_bits(*(uint16_t*)(tensor.data())) << std::endl;
+        std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+        break;
+    default:
+        break;
+    }
 }

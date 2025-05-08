@@ -58,6 +58,7 @@ public:
     virtual bool check_if_continuous() const = 0;
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const = 0;
+    virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_extra_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const = 0;
     virtual const std::vector<std::string>& get_model_output_names() const = 0;
 };

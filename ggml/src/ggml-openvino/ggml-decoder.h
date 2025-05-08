@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <vector>
@@ -79,6 +80,12 @@ public:
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const override {
         return m_model_inputs;
     }
+    virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_extra_inputs() const override {
+        return m_model_extra_inputs;
+    }
+    virtual const std::map<std::string, std::shared_ptr<ov::Tensor>>& get_model_extra_input_values() const {
+        return m_model_extra_input_values;
+    }
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const override {
         return m_model_weights;
     }
@@ -88,11 +95,15 @@ public:
 
 private:
     void set_input_output(ggml_tensor* node, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
+    void add_extra_inputs();
     static void dump_cgraph(const struct ggml_cgraph* cgraph);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
     static ov::element::Type get_ov_type(const ggml_tensor* tensor);
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
+
+    void set_max_token_len();
+    int64_t m_max_token_len;
 
     struct ggml_cgraph * m_cgraph;
     std::map<std::string, ggml_tensor *> m_inputs;
@@ -106,6 +117,8 @@ private:
     bool m_continuous;
     std::vector<std::pair<std::string, std::string>> m_op_node_name;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
+    std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;
+    std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
 };
