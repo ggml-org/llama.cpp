@@ -409,8 +409,6 @@ ggml_context * llama_context::get_ctx_compute() const {
 }
 
 void dump_state(llama_context *ctx, const char* dump_file_path) {
-    std::vector<uint8_t> state_mem;
-    
     std::vector<uint8_t> state_mem(llama_state_get_size(ctx));
     const size_t written = llama_state_get_data(ctx, state_mem.data(), state_mem.size());
 
