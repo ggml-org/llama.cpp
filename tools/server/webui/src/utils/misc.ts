@@ -22,7 +22,6 @@ export async function* getSSEStreamAsync(fetchResponse: Response) {
     .pipeThrough(new TextLineStream());
   // @ts-expect-error asyncIterator complains about type, but it should work
   for await (const line of asyncIterator(lines)) {
-    //if (isDev) console.log({ line });
     if (line.startsWith('data:') && !line.endsWith('[DONE]')) {
       const data = JSON.parse(line.slice(5));
       yield data;

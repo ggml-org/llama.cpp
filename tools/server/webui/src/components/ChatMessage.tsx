@@ -81,7 +81,6 @@ export default function ChatMessage({
 
       // Process <tool> tags (after thoughts are processed)
       const toolParts = currentContent.split('<tool>');
-      console.log(toolParts);
       currentContent = toolParts[0];
       if (toolParts.length > 1) {
         const tempToolOutputArray: string[] = [];

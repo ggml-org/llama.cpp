@@ -1,19 +1,26 @@
-import { ToolCall, ToolCallOutput, ToolCallSpec } from '../types';
-
-/**
- * Map of available tools for function calling.
- * Note that these tools are not necessarily enabled by the user.
- */
-export const AVAILABLE_TOOLS = new Map<string, AgentTool>();
+import {
+  ToolCall,
+  ToolCallOutput,
+  ToolCallParameters,
+  ToolCallSpec,
+} from '../types';
 
 export abstract class AgentTool {
   id: string;
   isEnabled: () => boolean;
+  toolDescription: string;
+  parameters: ToolCallParameters;
 
-  constructor(id: string, enabled: () => boolean) {
+  constructor(
+    id: string,
+    enabled: () => boolean,
+    toolDescription: string,
+    parameters: ToolCallParameters
+  ) {
     this.id = id;
     this.isEnabled = enabled;
-    AVAILABLE_TOOLS.set(id, this);
+    this.toolDescription = toolDescription;
+    this.parameters = parameters;
   }
 
   /**
@@ -43,7 +50,16 @@ export abstract class AgentTool {
    * https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md
    * https://platform.openai.com/docs/guides/function-calling?api-mode=responses#defining-functions
    */
-  public abstract specs(): ToolCallSpec;
+  public specs(): ToolCallSpec {
+    return {
+      type: 'function',
+      function: {
+        name: this.id,
+        description: this.toolDescription,
+        parameters: this.parameters,
+      },
+    };
+  }
 
   /**
    * The actual tool call processing logic.

@@ -39,7 +39,7 @@ export interface Message {
   convId: string;
   type: 'text' | 'root';
   timestamp: number; // timestamp from Date.now()
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
@@ -105,12 +105,14 @@ export interface ToolCallSpec {
   function: {
     name: string;
     description: string;
-    parameters: {
-      type: 'object';
-      properties: object;
-      required: string[];
-    };
+    parameters: ToolCallParameters;
   };
+}
+
+export interface ToolCallParameters {
+  type: 'object';
+  properties: object;
+  required: string[];
 }
 
 export interface ToolCallOutput {

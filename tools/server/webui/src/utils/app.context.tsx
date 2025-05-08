@@ -16,7 +16,7 @@ import {
 } from './misc';
 import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
 import { matchPath, useLocation, useNavigate } from 'react-router';
-import { AVAILABLE_TOOLS } from './tool_calling/available_tools';
+import { AVAILABLE_TOOLS } from './tool_calling/register_tools';
 
 interface AppContextValue {
   // conversations and messages
@@ -212,9 +212,9 @@ export const AppContextProvider = ({
         max_tokens: config.max_tokens,
         timings_per_token: !!config.showTokensPerSecond,
         tools: config.jsInterpreterToolUse
-          ? Array.from(AVAILABLE_TOOLS, ([_name, tool], _index) => tool).filter(
-              (tool) => tool.enabled()
-            )
+          ? Array.from(AVAILABLE_TOOLS, ([_name, tool], _index) => tool)
+              .filter((tool) => tool.enabled())
+              .map((tool) => tool.specs())
           : undefined,
         ...(config.custom.length ? JSON.parse(config.custom) : {}),
       };
