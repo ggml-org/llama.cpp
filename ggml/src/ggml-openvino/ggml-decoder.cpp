@@ -10,9 +10,11 @@
 #include <iomanip>
 #include <map>
 #include <memory>
+#include <openvino/core/dimension.hpp>
 #include <openvino/core/node.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
 #include <string>
@@ -35,12 +37,15 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
             printed = true;
         }
 
+        set_max_token_len();
         for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
             auto* cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
             set_input_output(cur_node, model_weights);
         }
         m_model_weights = model_weights;
+
+        add_extra_inputs();
 
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
             dump_cgraph(m_cgraph);
@@ -102,7 +107,16 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
                 }
-                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), ov::Shape{get_shape(src)});
+                ov::PartialShape input_shape;
+                if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
+                    input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_max_token_len)};
+                } else if (std::string(src->name).find("KQ_mask") == 0) {
+                    input_shape =
+                        ov::PartialShape{1, ov::Dimension(1, m_max_token_len), ov::Dimension(1, m_max_token_len)};
+                } else {
+                    input_shape = ov::Shape{get_shape(src)};
+                }
+                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), input_shape);
                 param_node->set_friendly_name(src_name);
                 m_model_inputs[src_name] = param_node;
             }
@@ -141,6 +155,57 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
             break;
         }
         default:
+            break;
+        }
+    }
+}
+
+void GgmlOvDecoder::set_max_token_len() {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        auto* node = m_cgraph->nodes[i];
+        if (std::string(node->name) == "v-0") {
+            auto* cache_v = node->src[0];
+            m_max_token_len = cache_v->ne[0] / node->ne[1] / node->ne[2];
+            break;
+        }
+    }
+}
+
+void GgmlOvDecoder::add_extra_inputs() {
+    int64_t past_token_len;
+    int64_t attention_size;
+
+    for (const auto& node : m_nodes) {
+        if (node->op == GGML_OP_CPY && ggml_is_contiguous(node)) {
+            assert(std::string(node->view_src->name).find("cache_k") == 0);
+            int64_t head_size = node->src[0]->ne[0];
+            int64_t num_heads = node->src[0]->ne[1];
+            past_token_len = (int64_t)(node->src[1]->op_params[0] / node->src[1]->nb[0] / head_size / num_heads);
+
+            std::string name = "past_token_len";
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{});
+            param_node->set_friendly_name(name);
+            m_model_extra_inputs[name] = param_node;
+
+            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{});
+            *tensor->data<int64_t>() = past_token_len;
+            m_model_extra_input_values[name] = tensor;
+            break;
+        }
+    }
+    for (const auto& node : m_nodes) {
+        if (node->src[1] && std::string(node->src[1]->name).find("inp_tokens") == 0) {
+            int64_t total_token_len = node->src[1]->ne[0] + past_token_len;
+            attention_size = (total_token_len + 31) / 32 * 32;
+
+            std::string name = "attention_size";
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+            param_node->set_friendly_name(name);
+            m_model_extra_inputs[name] = param_node;
+
+            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
+            *tensor->data<int64_t>() = attention_size;
+            m_model_extra_input_values[name] = tensor;
             break;
         }
     }
