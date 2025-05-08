@@ -585,7 +585,6 @@ int main(int argc, char ** argv) {
     params.out_file = "imatrix.dat" ;
 
     params.n_ctx = 512;
-    params.logits_all = true;
     params.escape = false;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {
