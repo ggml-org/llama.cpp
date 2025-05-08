@@ -93,8 +93,28 @@ export type CanvasData = CanvasPyInterpreter;
 export interface ToolCall {
   id: string;
   type: 'function';
+  call_id: string;
   function: {
     name: string;
     arguments: string; // JSON string of arguments
   };
+}
+
+export interface ToolCallSpec {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: {
+      type: 'object';
+      properties: object;
+      required: string[];
+    };
+  };
+}
+
+export interface ToolCallOutput {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
 }

@@ -16,7 +16,7 @@ import {
 } from './misc';
 import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
 import { matchPath, useLocation, useNavigate } from 'react-router';
-import { JS_TOOL_CALL_SPEC } from './js_tool_call';
+import { AVAILABLE_TOOLS } from './tool_calling/available_tools';
 
 interface AppContextValue {
   // conversations and messages
@@ -211,7 +211,11 @@ export const AppContextProvider = ({
         dry_penalty_last_n: config.dry_penalty_last_n,
         max_tokens: config.max_tokens,
         timings_per_token: !!config.showTokensPerSecond,
-        tools: config.jsInterpreterToolUse ? [JS_TOOL_CALL_SPEC] : undefined,
+        tools: config.jsInterpreterToolUse
+          ? Array.from(AVAILABLE_TOOLS, ([_name, tool], _index) => tool).filter(
+              (tool) => tool.enabled()
+            )
+          : undefined,
         ...(config.custom.length ? JSON.parse(config.custom) : {}),
       };
 
@@ -278,35 +282,37 @@ export const AppContextProvider = ({
             messageFromAPI.tool_calls &&
             messageFromAPI.tool_calls.length > 0
           ) {
-            console.log(messageFromAPI.tool_calls[0]);
+            console.log(messageFromAPI.tool_calls);
             for (let i = 0; i < messageFromAPI.tool_calls.length; i++) {
               console.log('Tool use #' + i);
               const tc = messageFromAPI.tool_calls[i] as ToolCall;
               console.log(tc);
 
               if (tc) {
-                if (
-                  tc.function.name === 'javascript_interpreter' &&
-                  config.jsInterpreterToolUse
-                ) {
-                  // Execute code provided
-                  const args = JSON.parse(tc.function.arguments);
-                  console.log('Arguments for tool call:');
-                  console.log(args);
-                  const result = eval(args.code);
-                  console.log(result);
+                // Set up call id
+                tc.call_id ??= `call_${i}`;
 
-                  newContent += `<tool_result>${result}</tool_result>`;
+                // Process tool call
+                const toolResult = AVAILABLE_TOOLS.get(
+                  tc.function.name
+                )?.processCall(tc);
+
+                if (toolResult) {
+                  newContent += `<tool>Tool use: ${tc.function.name}\n\n`;
+                  newContent += toolResult.output;
+                  newContent += '</tool>';
+                } else {
+                  newContent += `<tool>Tool use: ${tc.function.name}\n\nError: invalid tool call!\n</tool>`;
                 }
               }
             }
 
-            const toolCallsInfo = messageFromAPI.tool_calls
+            /*const toolCallsInfo = messageFromAPI.tool_calls
               .map(
                 (
                   tc: any // Use 'any' for tc temporarily if type is not imported/defined here
                 ) =>
-                  `Tool Call Invoked: ${tc.function.name}\nArguments: ${tc.function.arguments}`
+                  `Tool invoked: ${tc.function.name}\nArguments: ${tc.function.arguments}`
               )
               .join('\n\n');
 
@@ -314,9 +320,7 @@ export const AppContextProvider = ({
               newContent += `\n\n${toolCallsInfo}`;
             } else {
               newContent = toolCallsInfo;
-            }
-            // TODO: Ideally, store structured tool_calls in pendingMsg if its type supports it.
-            // pendingMsg.tool_calls = messageFromAPI.tool_calls;
+              }*/
           }
 
           pendingMsg = {
@@ -338,6 +342,13 @@ export const AppContextProvider = ({
           }
           setPending(convId, pendingMsg);
           onChunk(); // Update UI to show the processed message
+
+          // if message ended due to "finish_reason": "tool_calls"
+          // resend it to assistant to process the result.
+          if (choice.finish_reason === 'tool_calls') {
+            console.log('Ended due to tool call. Interpreting results ...');
+            generateMessage(convId, pendingId, onChunk);
+          }
         } else {
           console.error(
             'API response missing choices or message:',
