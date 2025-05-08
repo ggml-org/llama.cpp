@@ -585,21 +585,20 @@ int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
         struct llama_context * lctx,
         const mtmd_input_chunk * chunk,
-        float * embd,
+        float * encoded_embd,
         llama_pos n_past,
         llama_seq_id seq_id,
         int32_t n_batch,
         llama_pos * new_n_past) {
-
-    if (chunk->type != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+    if (mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
         LOG_ERR("failed to decode image chunk: input chunk not of image type\n");
         return -1;
     }
-    if (!chunk->tokens_image) {
+    const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
+    if (!image_tokens) {
         LOG_ERR("failed to decode image chunk: image tokens are null\n");
         return -1;
     }
-    const auto image_tokens = chunk->tokens_image.get();
 
     int n_mmproj_embd = clip_n_mmproj_embd(ctx->ctx_clip);
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;
@@ -607,7 +606,7 @@ int32_t mtmd_helper_decode_image_chunk(
     int32_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
     int32_t i_batch = 0;
     int32_t n_img_batches = GGML_PAD(n_tokens, n_batch) / n_batch;
-    decode_embd_batch batch_embd(embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
+    decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
 
     const int nx = mtmd_image_tokens_get_nx(image_tokens);
     const int ny = mtmd_image_tokens_get_ny(image_tokens);
