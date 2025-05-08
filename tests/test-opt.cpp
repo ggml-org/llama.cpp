@@ -584,7 +584,6 @@ static std::pair<int, int> test_gradient_accumulation(
 
     struct helper_ctx_data cd = helper_get_ctx_data(
         backend_sched, backend, /*init_opt_ctx =*/ true, /*optimizer_defaults =*/ false, /*nbatch_logical =*/ 6, nbatch_physical, loss_type);
-    struct ggml_tensor * loss = ggml_opt_loss(cd.opt_ctx);
 
     std::vector<float> grad_history(ndata);
     for (int64_t idata = 0; idata < ndata; ++idata) {

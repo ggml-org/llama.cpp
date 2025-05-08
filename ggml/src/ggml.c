@@ -6038,6 +6038,9 @@ struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor) {
 }
 
 void ggml_graph_reset(struct ggml_cgraph * cgraph) {
+    if (!cgraph) {
+        return;
+    }
     GGML_ASSERT(cgraph->grads != NULL);
 
     for (int i = 0; i < cgraph->n_nodes; i++) {

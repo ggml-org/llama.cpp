@@ -694,6 +694,9 @@ void ggml_opt_prepare_alloc(
 
 void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
     GGML_ASSERT(!opt_ctx->eval_ready);
+    if (opt_ctx->build_type == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period > 1 && opt_ctx->opt_i == 0) {
+        ggml_graph_reset(opt_ctx->gb_grad);
+    }
     if (backward) {
         const int32_t opt_i_next = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
         opt_ctx->build_type = opt_i_next == 0 ? GGML_OPT_BUILD_TYPE_OPT : GGML_OPT_BUILD_TYPE_GRAD;
@@ -742,10 +745,6 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
 
     ggml_backend_sched_alloc_graph(opt_ctx->backend_sched, opt_ctx->allocated_graph_copy);
     opt_ctx->allocated_graph = graph;
-
-    if (opt_ctx->build_type == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period > 1 && opt_ctx->opt_i == 0) {
-        ggml_graph_reset(opt_ctx->gb_grad);
-    }
 
     opt_ctx->eval_ready = true;
 }
