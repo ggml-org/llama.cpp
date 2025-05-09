@@ -589,7 +589,11 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
   git submodule update --init --recursive
 
   export OPENVINO_LLAMA_PATH=$(pwd)
+  ```
 
+  Before building, change "ENABLE_OV_GGML_FRONTEND" from true to false in the CMakePresets.json file since we already have the code from the ov side in this branch of llama.cpp (`full_backend`). You could also build the master branch of ov instead.
+
+  ```
   cmake --preset Release
   cmake --build build/Release
   ```
@@ -597,7 +601,7 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 ### Build llama.cpp-ov
 
   ```bash
-  git clone https://github.com/intel-sandbox/llama.cpp-ov.git -b dev_backend_openvino
+  git clone https://github.com/intel-sandbox/llama.cpp-ov.git -b full_backend
   cd llama.cpp-ov
 
   cmake --preset ReleaseOV
