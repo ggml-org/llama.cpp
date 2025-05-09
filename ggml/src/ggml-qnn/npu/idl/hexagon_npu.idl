@@ -1,0 +1,90 @@
+#include "AEEStdDef.idl"
+#include "AEEStdErr.idl"
+#include "remote.idl"
+
+const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
+const uint32_t DEVICE_TENSOR_MAX_SRC = 2;
+
+interface npu_device : remote_handle64{
+
+    typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];
+    typedef uint64_t tensor_handle_t;
+    typedef uint64_t graph_handle_t;
+
+    enum tensor_op {
+        NPU_OP_MUL_MAT,
+        NPU_OP_ADD,
+        NPU_OP_SUB,
+        NPU_OP_MUL,
+        NPU_OP_COUNT
+    };
+
+    enum tensor_data_type {
+        NPU_DATA_TYPE_F32,
+        NPU_DATA_TYPE_COUNT
+    };
+
+    struct tensor_spec {
+        ne_type ne;
+        tensor_data_type type;
+    };
+
+    struct tensor_config {
+        ne_type ne;
+        uint64_t nb[DEVICE_TENSOR_MAX_DIMS];
+        long buffer_fd;
+        uint64_t offset;
+        uint64_t size;
+        tensor_data_type type;
+        tensor_op op;
+    };
+
+    AEEResult device_get_alignment(
+        rout uint32_t alignment
+    );
+
+    AEEResult device_support_op(
+        in tensor_spec src0,
+        in tensor_spec src1,
+        in tensor_spec dst,
+        in tensor_op op,
+        rout boolean is_supported
+    );
+
+    AEEResult tensor_init(
+        in tensor_config info,
+        rout tensor_handle_t tensor_handle
+    );
+
+    AEEResult tensor_set_src(
+        in tensor_handle_t tensor_handle,
+        in uint64_t index,
+        in tensor_handle_t src
+    );
+
+    AEEResult tensor_set_op(
+        in tensor_handle_t tensor_handle,
+        in tensor_op op
+    );
+
+    AEEResult tensor_free(
+        in tensor_handle_t tensor_handle
+    );
+
+    AEEResult graph_init(
+        rout graph_handle_t graph_handle
+    );
+
+    AEEResult graph_set_tensor(
+        in graph_handle_t graph_handle,
+        in sequence<tensor_handle_t> tensor_handles
+    );
+
+    AEEResult graph_compute(
+        in graph_handle_t graph_handle
+    );
+
+    AEEResult graph_free(
+        in graph_handle_t graph_handle
+    );
+};
