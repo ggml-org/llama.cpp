@@ -469,8 +469,6 @@ bool llama_kv_cache_unified::find_slot(
         head = 0;
     }
 
-    // otherwise, one cell per token.
-
     if (n_tokens > size) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %d\n", __func__, n_tokens, size);
         return false;
@@ -1894,6 +1892,18 @@ bool llama_kv_cache_recurrent::find_slot(
         }
     }
 
+    // Find first to-be-cleared cell
+    rs_z = -1;
+    for (int i = min; i <= max; ++i) {
+        if (rs_z < 0 && cells[i].src == -1) {
+            rs_z = i;
+        }
+        // Stage the source ids for all used cells to allow correct seq_* behavior
+        // and still make these values available when setting the inputs
+        cells[i].src0 = cells[i].src;
+        cells[i].src = i;
+    }
+
     // allow getting the range of used cells, from head to head + n
     head = min;
     n    = max - min + 1;
@@ -1928,47 +1938,8 @@ llama_pos llama_kv_cache_recurrent::get_pos_max() const {
 }
 
 bool llama_kv_cache_recurrent::get_can_shift() const {
-    return false;
-}
-
-int32_t llama_kv_cache_recurrent::s_copy(int i) const {
-    const uint32_t cell_id = i + head;
-
-    //////////////////////////////////////////////
-    // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
-
-    // prevent out-of-bound sources
-    if (cell.src < 0 || (uint32_t) cell.src >= size) {
-        cell.src = cell_id;
-    }
-
-    int32_t res = cell.src;
-
-    // TODO: do not mutate the KV cache
-    // ensure copy only happens once
-    if (cell.src != (int32_t) cell_id) {
-        cell.src = cell_id;
-    }
-
-    return res;
-}
-
-float llama_kv_cache_recurrent::s_mask(int i) const {
-    const uint32_t cell_id = i + head;
-
-    //////////////////////////////////////////////
-    // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
-
-    float res = (float) (cell.src >= 0);
-
-    // only clear once
-    if (cell.src < 0) {
-        cell.src = cell_id;
-    }
-
-    return res;
+    // shifting is trivial, the recurrent states don't care about the absolute position
+    return true;
 }
 
 uint32_t llama_kv_cache_recurrent::cell_max() const {
