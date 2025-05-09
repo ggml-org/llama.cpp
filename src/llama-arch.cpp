@@ -1747,3 +1747,25 @@ llm_arch llm_arch_from_string(const std::string & name) {
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor) {
     return LLM_TENSOR_INFOS.at(tensor);
 }
+
+bool llm_arch_is_recurrent(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_MAMBA:
+        case LLM_ARCH_RWKV6:
+        case LLM_ARCH_RWKV6QWEN2:
+        case LLM_ARCH_RWKV7:
+        case LLM_ARCH_ARWKV7:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool llm_arch_is_hybrid(const llm_arch & arch) {
+    // TODO: There are currently no hybrid models! Once there are, this will be
+    //  the place to identify them
+    switch (arch) {
+        default:
+            return false;
+    }
+}
