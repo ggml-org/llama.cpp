@@ -350,7 +350,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter "
-        "multiple times. Ranges can be specified with 'start-end' or 'start-end+step'.\n");
+        "multiple times. Ranges can be specified with 'first-last' or 'first-last+step'.\n");
 }
 
 static ggml_type ggml_type_from_name(const std::string & s) {
