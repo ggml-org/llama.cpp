@@ -194,11 +194,20 @@ static constexpr uint32_t p021_max_gqa_ratio = 8;
 
 enum vk_device_architecture {
     OTHER,
-    AMD_GCN,
+    AMD_GCN12,
+    AMD_GCN34,
+    AMD_GCN5,
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
 };
+
+static bool is_gcn(vk_device_architecture arch) {
+    if ((arch == AMD_GCN12) || (arch == AMD_GCN34) || (arch == AMD_GCN5))
+        return true;
+    else
+        return false;
+}
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
@@ -209,6 +218,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         bool amd_shader_core_properties = false;
         bool integer_dot_product = false;
         bool subgroup_size_control = false;
+        bool float16_int8 = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
@@ -217,10 +227,12 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 integer_dot_product = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 subgroup_size_control = true;
+            } else if (strcmp("VK_KHR_shader_float16_int8", properties.extensionName) == 0) {
+                float16_int8 = true;
             }
         }
 
-        if (!amd_shader_core_properties || !integer_dot_product || !subgroup_size_control) {
+        if (!amd_shader_core_properties || !integer_dot_product || !subgroup_size_control || !float16_int8) {
             return vk_device_architecture::OTHER;
         }
 
@@ -228,15 +240,25 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         vk::PhysicalDeviceShaderCorePropertiesAMD shader_core_props_amd;
         vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR integer_dot_props;
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+        vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR float16_int8_props;
 
         props2.pNext = &shader_core_props_amd;
         shader_core_props_amd.pNext = &integer_dot_props;
         integer_dot_props.pNext = &subgroup_size_control_props;
+        subgroup_size_control_props.pNext = &float16_int8_props;
 
         device.getProperties2(&props2);
 
         if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 64) {
-            return vk_device_architecture::AMD_GCN;
+            // GCN
+            if (shader_core_props_amd.sgprAllocationGranularity == 16) {
+                if (float16_int8_props.shaderFloat16) {
+                    return vk_device_architecture::AMD_GCN5;
+                } else {
+                    return vk_device_architecture::AMD_GCN34;
+                }
+            }
+            return vk_device_architecture::AMD_GCN12;
         }
         if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 32) {
             // RDNA
@@ -1792,7 +1814,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_warptile_mmq_int = { subgroup_size_32, 32, 32, 32, 32,       32, 2, 2, 1, 1, subgroup_size_8 };
 
         // chip specific tuning
-        if ((device->architecture == AMD_GCN) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
+        if (is_gcn(device->architecture) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
 
@@ -2357,7 +2379,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t rm_stdq = 1;
     uint32_t rm_kq = 2;
     if (device->vendor_id == VK_VENDOR_ID_AMD) {
-        if (device->architecture == AMD_GCN) {
+        if (is_gcn(device->architecture)) {
             rm_stdq = 2;
             rm_kq = 4;
         }
@@ -2960,7 +2982,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
 
-        device->fp16 = device->fp16 && vk12_features.shaderFloat16;
+        // GCN 3 and 4 chips support FP16 at regular speed, but the drivers don't indicate it
+        device->fp16 = device->fp16 && (vk12_features.shaderFloat16 || (device->architecture == AMD_GCN34));
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
 
@@ -3362,7 +3385,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 
     vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
 
-    fp16 = fp16 && vk12_features.shaderFloat16;
+    fp16 = fp16 && (vk12_features.shaderFloat16 || (device_architecture == AMD_GCN34));
 
     uint32_t default_subgroup_size = get_subgroup_size("", device_architecture);
     const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
