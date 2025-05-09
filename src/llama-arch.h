@@ -436,3 +436,6 @@ const char * llm_arch_name(llm_arch arch);
 llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
+
+bool llm_arch_is_recurrent(const llm_arch& arch);
+bool llm_arch_is_hybrid(const llm_arch& arch);
