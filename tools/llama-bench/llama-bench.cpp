@@ -195,6 +195,30 @@ static std::string pair_str(const std::pair<int, int> & p) {
     return buf;
 }
 
+static std::vector<int> parse_int_range(const std::string & s) {
+    // start[-end[+step]][,start[-end[+step]]...]
+    std::regex range_regex(R"(^(\d+)(?:-(\d+)(?:\+(\d+))?)?(,|$))");
+    std::smatch match;
+    std::string::const_iterator search_start(s.cbegin());
+    std::vector<int> result;
+    while (std::regex_search(search_start, s.cend(), match, range_regex)) {
+        int start = std::stoi(match[1]);
+        int end   = match[2].matched ? std::stoi(match[2]) : start;
+        int step  = match[3].matched ? std::stoi(match[3]) : 1;
+
+        for (int i = start; i <= end; i += step) {
+            result.push_back(i);
+        }
+        search_start = match.suffix().first;
+    }
+
+    if (search_start != s.cend()) {
+        throw std::invalid_argument("invalid range format");
+    }
+
+    return result;
+}
+
 struct cmd_params {
     std::vector<std::string>         model;
     std::vector<int>                 n_prompt;
@@ -326,7 +350,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter "
-        "multiple times.\n");
+        "multiple times. Ranges can be specified with 'start-end' or 'start-end+step'.\n");
 }
 
 static ggml_type ggml_type_from_name(const std::string & s) {
@@ -380,186 +404,190 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             std::replace(arg.begin(), arg.end(), '_', '-');
         }
 
-        if (arg == "-h" || arg == "--help") {
-            print_usage(argc, argv);
-            exit(0);
-        } else if (arg == "-m" || arg == "--model") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<std::string>(argv[i], split_delim);
-            params.model.insert(params.model.end(), p.begin(), p.end());
-        } else if (arg == "-p" || arg == "--n-prompt") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_prompt.insert(params.n_prompt.end(), p.begin(), p.end());
-        } else if (arg == "-n" || arg == "--n-gen") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_gen.insert(params.n_gen.end(), p.begin(), p.end());
-        } else if (arg == "-pg") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<std::string>(argv[i], ',');
-            if (p.size() != 2) {
-                invalid_param = true;
-                break;
-            }
-            params.n_pg.push_back({ std::stoi(p[0]), std::stoi(p[1]) });
-        } else if (arg == "-d" || arg == "--n-depth") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_depth.insert(params.n_depth.end(), p.begin(), p.end());
-        } else if (arg == "-b" || arg == "--batch-size") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_batch.insert(params.n_batch.end(), p.begin(), p.end());
-        } else if (arg == "-ub" || arg == "--ubatch-size") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_ubatch.insert(params.n_ubatch.end(), p.begin(), p.end());
-        } else if (arg == "-ctk" || arg == "--cache-type-k") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto                   p = string_split<std::string>(argv[i], split_delim);
-            std::vector<ggml_type> types;
-            for (const auto & t : p) {
-                ggml_type gt = ggml_type_from_name(t);
-                if (gt == GGML_TYPE_COUNT) {
+        try {
+            if (arg == "-h" || arg == "--help") {
+                print_usage(argc, argv);
+                exit(0);
+            } else if (arg == "-m" || arg == "--model") {
+                if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
-                types.push_back(gt);
-            }
-            if (invalid_param) {
-                break;
-            }
-            params.type_k.insert(params.type_k.end(), types.begin(), types.end());
-        } else if (arg == "-ctv" || arg == "--cache-type-v") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto                   p = string_split<std::string>(argv[i], split_delim);
-            std::vector<ggml_type> types;
-            for (const auto & t : p) {
-                ggml_type gt = ggml_type_from_name(t);
-                if (gt == GGML_TYPE_COUNT) {
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.model.insert(params.model.end(), p.begin(), p.end());
+            } else if (arg == "-p" || arg == "--n-prompt") {
+                if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
-                types.push_back(gt);
-            }
-            if (invalid_param) {
-                break;
-            }
-            params.type_v.insert(params.type_v.end(), types.begin(), types.end());
-        } else if (arg == "-t" || arg == "--threads") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
-        } else if (arg == "-C" || arg == "--cpu-mask") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<std::string>(argv[i], split_delim);
-            params.cpu_mask.insert(params.cpu_mask.end(), p.begin(), p.end());
-        } else if (arg == "--cpu-strict") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.cpu_strict.insert(params.cpu_strict.end(), p.begin(), p.end());
-        } else if (arg == "--poll") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.poll.insert(params.poll.end(), p.begin(), p.end());
-        } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<int>(argv[i], split_delim);
-            params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
-        } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params.rpc_servers.push_back(argv[i]);
-        } else if (arg == "-sm" || arg == "--split-mode") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto                          p = string_split<std::string>(argv[i], split_delim);
-            std::vector<llama_split_mode> modes;
-            for (const auto & m : p) {
-                llama_split_mode mode;
-                if (m == "none") {
-                    mode = LLAMA_SPLIT_MODE_NONE;
-                } else if (m == "layer") {
-                    mode = LLAMA_SPLIT_MODE_LAYER;
-                } else if (m == "row") {
-                    mode = LLAMA_SPLIT_MODE_ROW;
-                } else {
+                auto p = parse_int_range(argv[i]);
+                params.n_prompt.insert(params.n_prompt.end(), p.begin(), p.end());
+            } else if (arg == "-n" || arg == "--n-gen") {
+                if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
-                modes.push_back(mode);
-            }
-            if (invalid_param) {
-                break;
-            }
-            params.split_mode.insert(params.split_mode.end(), modes.begin(), modes.end());
-        } else if (arg == "-mg" || arg == "--main-gpu") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params.main_gpu = string_split<int>(argv[i], split_delim);
-        } else if (arg == "-nkvo" || arg == "--no-kv-offload") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.no_kv_offload.insert(params.no_kv_offload.end(), p.begin(), p.end());
-        } else if (arg == "--numa") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            } else {
+                auto p = parse_int_range(argv[i]);
+                params.n_gen.insert(params.n_gen.end(), p.begin(), p.end());
+            } else if (arg == "-pg") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], ',');
+                if (p.size() != 2) {
+                    invalid_param = true;
+                    break;
+                }
+                params.n_pg.push_back({ std::stoi(p[0]), std::stoi(p[1]) });
+            } else if (arg == "-d" || arg == "--n-depth") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_depth.insert(params.n_depth.end(), p.begin(), p.end());
+            } else if (arg == "-b" || arg == "--batch-size") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_batch.insert(params.n_batch.end(), p.begin(), p.end());
+            } else if (arg == "-ub" || arg == "--ubatch-size") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_ubatch.insert(params.n_ubatch.end(), p.begin(), p.end());
+            } else if (arg == "-ctk" || arg == "--cache-type-k") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+
+                std::vector<ggml_type> types;
+                for (const auto & t : p) {
+                    ggml_type gt = ggml_type_from_name(t);
+                    if (gt == GGML_TYPE_COUNT) {
+                        invalid_param = true;
+                        break;
+                    }
+                    types.push_back(gt);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.type_k.insert(params.type_k.end(), types.begin(), types.end());
+            } else if (arg == "-ctv" || arg == "--cache-type-v") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+
+                std::vector<ggml_type> types;
+                for (const auto & t : p) {
+                    ggml_type gt = ggml_type_from_name(t);
+                    if (gt == GGML_TYPE_COUNT) {
+                        invalid_param = true;
+                        break;
+                    }
+                    types.push_back(gt);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.type_v.insert(params.type_v.end(), types.begin(), types.end());
+            } else if (arg == "-t" || arg == "--threads") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+            } else if (arg == "-C" || arg == "--cpu-mask") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                params.cpu_mask.insert(params.cpu_mask.end(), p.begin(), p.end());
+            } else if (arg == "--cpu-strict") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.cpu_strict.insert(params.cpu_strict.end(), p.begin(), p.end());
+            } else if (arg == "--poll") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.poll.insert(params.poll.end(), p.begin(), p.end());
+            } else if (arg == "-ngl" || arg == "--n-gpu-layers") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_gpu_layers.insert(params.n_gpu_layers.end(), p.begin(), p.end());
+            } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.rpc_servers.push_back(argv[i]);
+            } else if (arg == "-sm" || arg == "--split-mode") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+
+                std::vector<llama_split_mode> modes;
+                for (const auto & m : p) {
+                    llama_split_mode mode;
+                    if (m == "none") {
+                        mode = LLAMA_SPLIT_MODE_NONE;
+                    } else if (m == "layer") {
+                        mode = LLAMA_SPLIT_MODE_LAYER;
+                    } else if (m == "row") {
+                        mode = LLAMA_SPLIT_MODE_ROW;
+                    } else {
+                        invalid_param = true;
+                        break;
+                    }
+                    modes.push_back(mode);
+                }
+                if (invalid_param) {
+                    break;
+                }
+                params.split_mode.insert(params.split_mode.end(), modes.begin(), modes.end());
+            } else if (arg == "-mg" || arg == "--main-gpu") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.main_gpu = parse_int_range(argv[i]);
+            } else if (arg == "-nkvo" || arg == "--no-kv-offload") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.no_kv_offload.insert(params.no_kv_offload.end(), p.begin(), p.end());
+            } else if (arg == "--numa") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
                 std::string value(argv[i]);
-                /**/ if (value == "distribute" || value == "") {
+                if (value == "distribute" || value == "") {
                     params.numa = GGML_NUMA_STRATEGY_DISTRIBUTE;
                 } else if (value == "isolate") {
                     params.numa = GGML_NUMA_STRATEGY_ISOLATE;
@@ -569,28 +597,27 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-            }
-        } else if (arg == "-fa" || arg == "--flash-attn") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.flash_attn.insert(params.flash_attn.end(), p.begin(), p.end());
-        } else if (arg == "-mmp" || arg == "--mmap") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.use_mmap.insert(params.use_mmap.end(), p.begin(), p.end());
-        } else if (arg == "-embd" || arg == "--embeddings") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.embeddings.insert(params.embeddings.end(), p.begin(), p.end());
+            } else if (arg == "-fa" || arg == "--flash-attn") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.flash_attn.insert(params.flash_attn.end(), p.begin(), p.end());
+            } else if (arg == "-mmp" || arg == "--mmap") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.use_mmap.insert(params.use_mmap.end(), p.begin(), p.end());
+            } else if (arg == "-embd" || arg == "--embeddings") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.embeddings.insert(params.embeddings.end(), p.begin(), p.end());
         } else if (arg == "-nopo" || arg == "--no-op-offload") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -598,148 +625,154 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<bool>(argv[i], split_delim);
             params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
-        } else if (arg == "-ts" || arg == "--tensor-split") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            for (auto ts : string_split<std::string>(argv[i], split_delim)) {
-                // split string by ; and /
-                const std::regex           regex{ R"([;/]+)" };
-                std::sregex_token_iterator it{ ts.begin(), ts.end(), regex, -1 };
-                std::vector<std::string>   split_arg{ it, {} };
-                GGML_ASSERT(split_arg.size() <= llama_max_devices());
+            } else if (arg == "-ts" || arg == "--tensor-split") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                for (auto ts : string_split<std::string>(argv[i], split_delim)) {
+                    // split string by ; and /
+                    const std::regex           regex{ R"([;/]+)" };
+                    std::sregex_token_iterator it{ ts.begin(), ts.end(), regex, -1 };
+                    std::vector<std::string>   split_arg{ it, {} };
+                    GGML_ASSERT(split_arg.size() <= llama_max_devices());
 
-                std::vector<float> tensor_split(llama_max_devices());
-                for (size_t i = 0; i < llama_max_devices(); ++i) {
-                    if (i < split_arg.size()) {
-                        tensor_split[i] = std::stof(split_arg[i]);
-                    } else {
-                        tensor_split[i] = 0.0f;
+                    std::vector<float> tensor_split(llama_max_devices());
+                    for (size_t i = 0; i < llama_max_devices(); ++i) {
+                        if (i < split_arg.size()) {
+                            tensor_split[i] = std::stof(split_arg[i]);
+                        } else {
+                            tensor_split[i] = 0.0f;
+                        }
+                    }
+                    params.tensor_split.push_back(tensor_split);
+                }
+            } else if (arg == "-ot" || arg == "--override-tensor") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto value = argv[i];
+                /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+                if (buft_list.empty()) {
+                    // enumerate all the devices and add their buffer types to the list
+                    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                        auto * dev = ggml_backend_dev_get(i);
+                        auto * buft = ggml_backend_dev_buffer_type(dev);
+                        if (buft) {
+                            buft_list[ggml_backend_buft_name(buft)] = buft;
+                        }
                     }
                 }
-                params.tensor_split.push_back(tensor_split);
-            }
-        } else if (arg == "-ot" || arg == "--override-tensor") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto value = argv[i];
-            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
-            if (buft_list.empty()) {
-                // enumerate all the devices and add their buffer types to the list
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        buft_list[ggml_backend_buft_name(buft)] = buft;
+                auto override_group_span_len = std::strcspn(value, ",");
+                bool last_group = false;
+                do {
+                    if (override_group_span_len == 0) {
+                        // Adds an empty override-tensors for an empty span
+                        params.tensor_buft_overrides.push_back({{}});
+                        if (value[override_group_span_len] == '\0') {
+                            value = &value[override_group_span_len];
+                            last_group = true;
+                        } else {
+                            value = &value[override_group_span_len + 1];
+                            override_group_span_len = std::strcspn(value, ",");
+                        }
+                        continue;
                     }
-                }
-            }
-            auto override_group_span_len = std::strcspn(value, ",");
-            bool last_group = false;
-            do {
-                if (override_group_span_len == 0) {
-                    // Adds an empty override-tensors for an empty span
-                    params.tensor_buft_overrides.push_back({{}});
+                    // Stamps null terminators into the argv
+                    // value for this option to avoid the
+                    // memory leak present in the implementation
+                    // over in arg.cpp. Acceptable because we
+                    // only parse these args once in this program.
+                    auto override_group = value;
                     if (value[override_group_span_len] == '\0') {
                         value = &value[override_group_span_len];
                         last_group = true;
                     } else {
+                        value[override_group_span_len] = '\0';
                         value = &value[override_group_span_len + 1];
-                        override_group_span_len = std::strcspn(value, ",");
                     }
-                    continue;
-                }
-                // Stamps null terminators into the argv
-                // value for this option to avoid the
-                // memory leak present in the implementation
-                // over in arg.cpp. Acceptable because we
-                // only parse these args once in this program.
-                auto override_group = value;
-                if (value[override_group_span_len] == '\0') {
-                    value = &value[override_group_span_len];
-                    last_group = true;
-                } else {
-                    value[override_group_span_len] = '\0';
-                    value = &value[override_group_span_len + 1];
-                }
-                std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
-                auto override_span_len = std::strcspn(override_group, ";");
-                while (override_span_len > 0) {
-                    auto override = override_group;
-                    if (override_group[override_span_len] != '\0') {
-                        override_group[override_span_len] = '\0';
-                        override_group = &override_group[override_span_len + 1];
-                    } else {
-                        override_group = &override_group[override_span_len];
-                    }
-                    auto tensor_name_span_len = std::strcspn(override, "=");
-                    if (tensor_name_span_len >= override_span_len) {
-                        invalid_param = true;
-                        break;
-                    }
-                    override[tensor_name_span_len] = '\0';
-                    auto tensor_name = override;
-                    auto buffer_type = &override[tensor_name_span_len + 1];
-                    if (buft_list.find(buffer_type) == buft_list.end()) {
-                        printf("Available buffer types:\n");
-                        for (const auto & it : buft_list) {
-                            printf("  %s\n", ggml_backend_buft_name(it.second));
+                    std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
+                    auto override_span_len = std::strcspn(override_group, ";");
+                    while (override_span_len > 0) {
+                        auto override = override_group;
+                        if (override_group[override_span_len] != '\0') {
+                            override_group[override_span_len] = '\0';
+                            override_group = &override_group[override_span_len + 1];
+                        } else {
+                            override_group = &override_group[override_span_len];
                         }
-                        invalid_param = true;
+                        auto tensor_name_span_len = std::strcspn(override, "=");
+                        if (tensor_name_span_len >= override_span_len) {
+                            invalid_param = true;
+                            break;
+                        }
+                        override[tensor_name_span_len] = '\0';
+                        auto tensor_name = override;
+                        auto buffer_type = &override[tensor_name_span_len + 1];
+                        if (buft_list.find(buffer_type) == buft_list.end()) {
+                            printf("Available buffer types:\n");
+                            for (const auto & it : buft_list) {
+                                printf("  %s\n", ggml_backend_buft_name(it.second));
+                            }
+                            invalid_param = true;
+                            break;
+                        }
+                        group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type)});
+                        override_span_len = std::strcspn(override_group, ";");
+                    }
+                    if (invalid_param) {
                         break;
                     }
-                    group_tensor_buft_overrides.push_back({tensor_name, buft_list.at(buffer_type)});
-                    override_span_len = std::strcspn(override_group, ";");
-                }
-                if (invalid_param) {
+                    group_tensor_buft_overrides.push_back({nullptr,nullptr});
+                    params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
+                    override_group_span_len = std::strcspn(value, ",");
+                } while (!last_group);
+            } else if (arg == "-r" || arg == "--repetitions") {
+                if (++i >= argc) {
+                    invalid_param = true;
                     break;
                 }
-                group_tensor_buft_overrides.push_back({nullptr,nullptr});
-                params.tensor_buft_overrides.push_back(group_tensor_buft_overrides);
-                override_group_span_len = std::strcspn(value, ",");
-            } while (!last_group);
-        } else if (arg == "-r" || arg == "--repetitions") {
-            if (++i >= argc) {
+                params.reps = std::stoi(argv[i]);
+            } else if (arg == "--prio") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.prio = (enum ggml_sched_priority) std::stoi(argv[i]);
+            } else if (arg == "--delay") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.delay = std::stoi(argv[i]);
+            } else if (arg == "-o" || arg == "--output") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                invalid_param = !output_format_from_str(argv[i], params.output_format);
+            } else if (arg == "-oe" || arg == "--output-err") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                invalid_param = !output_format_from_str(argv[i], params.output_format_stderr);
+            } else if (arg == "-v" || arg == "--verbose") {
+                params.verbose = true;
+            } else if (arg == "--progress") {
+                params.progress = true;
+            } else {
                 invalid_param = true;
                 break;
             }
-            params.reps = std::stoi(argv[i]);
-        } else if (arg == "--prio") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params.prio = (enum ggml_sched_priority) std::stoi(argv[i]);
-        } else if (arg == "--delay") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            params.delay = std::stoi(argv[i]);
-        } else if (arg == "-o" || arg == "--output") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            invalid_param = !output_format_from_str(argv[i], params.output_format);
-        } else if (arg == "-oe" || arg == "--output-err") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            invalid_param = !output_format_from_str(argv[i], params.output_format_stderr);
-        } else if (arg == "-v" || arg == "--verbose") {
-            params.verbose = true;
-        } else if (arg == "--progress") {
-            params.progress = true;
-        } else {
+        } catch (const std::exception & e) {
+            fprintf(stderr, "error: %s\n", e.what());
             invalid_param = true;
             break;
         }
     }
+
     if (invalid_param) {
         fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
         print_usage(argc, argv);
