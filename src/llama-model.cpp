@@ -1388,9 +1388,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 // For Granite MoE Shared
-                if (arch == LLM_ARCH_GRANITE_MOE_SHARED) {
-                    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
-                }
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
             } break;
         case LLM_ARCH_CHAMELEON:
             {
@@ -1777,7 +1775,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
 
                             // For Granite MoE Shared
-                            if (arch == LLM_ARCH_GRANITE_MOE_SHARED) {
+                            if (hparams.n_ff_shexp > 0) {
                                 layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
                                 layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
                                 layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
@@ -4688,7 +4686,7 @@ struct llm_build_llama : public llm_graph_context {
                 cb(moe_out, "ffn_moe_out", il);
 
                 // For Granite MoE Shared
-                if (model.arch == LLM_ARCH_GRANITE_MOE_SHARED) {
+                if (hparams.n_ff_shexp > 0) {
                     ggml_tensor * ffn_shexp = build_ffn(cur,
                         model.layers[il].ffn_up_shexp,   NULL, NULL,
                         model.layers[il].ffn_gate_shexp, NULL, NULL,
