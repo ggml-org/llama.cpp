@@ -203,10 +203,7 @@ enum vk_device_architecture {
 };
 
 static bool is_gcn(vk_device_architecture arch) {
-    if ((arch == AMD_GCN12) || (arch == AMD_GCN34) || (arch == AMD_GCN5))
-        return true;
-    else
-        return false;
+    return (arch == AMD_GCN12) || (arch == AMD_GCN34) || (arch == AMD_GCN5);
 }
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -240,19 +237,24 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         vk::PhysicalDeviceShaderCorePropertiesAMD shader_core_props_amd;
         vk::PhysicalDeviceShaderIntegerDotProductPropertiesKHR integer_dot_props;
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
-        vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR float16_int8_props;
 
         props2.pNext = &shader_core_props_amd;
         shader_core_props_amd.pNext = &integer_dot_props;
         integer_dot_props.pNext = &subgroup_size_control_props;
-        subgroup_size_control_props.pNext = &float16_int8_props;
 
         device.getProperties2(&props2);
+
+        vk::PhysicalDeviceFeatures2 features2;
+        vk::PhysicalDeviceShaderFloat16Int8FeaturesKHR float16_int8_features;
+
+        features2.pNext = &float16_int8_features;
+
+        device.getFeatures2(&features2);
 
         if (subgroup_size_control_props.maxSubgroupSize == 64 && subgroup_size_control_props.minSubgroupSize == 64) {
             // GCN
             if (shader_core_props_amd.sgprAllocationGranularity == 16) {
-                if (float16_int8_props.shaderFloat16) {
+                if (float16_int8_features.shaderFloat16) {
                     return vk_device_architecture::AMD_GCN5;
                 } else {
                     return vk_device_architecture::AMD_GCN34;
