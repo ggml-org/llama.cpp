@@ -578,6 +578,67 @@ Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/m
 
 To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
 
+## OPENVINO
+
+### Build openvino-llama
+
+  ```bash
+  git lfs install --skip-smudge
+  git clone https://github.com/intel-sandbox/openvino-llama.git -b dev_ggml_frontend
+  cd openvino-llama
+  git submodule update --init --recursive
+
+  export OPENVINO_LLAMA_PATH=$(pwd)
+
+  cmake --preset Release
+  cmake --build build/Release
+  ```
+
+### Build llama.cpp-ov
+
+  ```bash
+  git clone https://github.com/intel-sandbox/llama.cpp-ov.git -b dev_backend_openvino
+  cd llama.cpp-ov
+
+  cmake --preset ReleaseOV
+  cmake --build build/ReleaseOV
+  ```
+
+Download the test model file [Phi-3-mini-4k-instruct-fp16.gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf) from hugging face website.
+  ``` bash
+  wget https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-fp16.gguf?download=true -O  ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf
+  ```
+
+Execute the following command to test.
+  ```bash
+  export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+  # Currently GGML_OPENVINO_WEIGHT_AS_INPUT has better performance
+  export GGML_OPENVINO_WEIGHT_AS_INPUT=1
+  ./build/ReleaseOV/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
+  ```
+
+Environment variables:
+- GGML_OPENVINO_WEIGHT_AS_INPUT:
+    Pass the weights as input to the OpenVINO model instead of creating Constant nodes for them.
+- GGML_OPENVINO_CACHE_DIR:
+    If set, model caching in OpenVINO will be used.
+- GGML_OPENVINO_DUMP_CGRAPH:
+    Dumped the compute graph to "cgraph.txt". Note that the the compute graph is different for every token, so the later cgraph will overwrite the previous one.
+- GGML_OPENVINO_PROFILING:
+    Print the time taken for each phase in the OpenVINO backend.
+- GGML_OPENVINO_DUMP_IR:
+    Dump the converted OpenVINO IR. The filenames are timestamps.
+- GGML_OPENVINO_DEBUG_INPUT
+- GGML_OPENVINO_DEBUG_OUTPUT
+
+To use Llama.cpp's builtin CPU backend:
+```bash
+cmake --preset ReleaseCPU
+cmake --build build/ReleaseCPU
+
+./build/ReleaseCPU/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
+```
+
 ## Notes about GPU-accelerated backends
 
 The GPU may still be used to accelerate some parts of the computation even when using the `-ngl 0` option. You can fully disable GPU acceleration by using `--device none`.

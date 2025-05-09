@@ -42,12 +42,7 @@ std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDec
 
 static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
     auto fem = ov::frontend::FrontEndManager();
-    std::string fe_so_path;
-#ifdef GGML_OV_FRONTEND
-    fe_so_path = GGML_OV_FRONTEND;
-#endif
-    fem.register_front_end("ggml", fe_so_path);
-    front_end = fem.load_by_framework("ggml");
+    auto front_end = fem.load_by_framework("ggml");
     return front_end;
 }
 

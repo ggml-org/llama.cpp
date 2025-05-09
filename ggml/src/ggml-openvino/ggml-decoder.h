@@ -53,11 +53,7 @@ public:
 
     virtual std::string& get_output_name(size_t index) const override;
 
-    virtual size_t get_output_size() const override; 
-
-    virtual bool is_graph_output(size_t index) const override;
-
-    virtual std::string& get_output_name(size_t index) const override;
+    virtual std::vector<std::string> get_output_names() const override;
 
     virtual const std::string& get_op_type() const override;
 
@@ -105,10 +101,10 @@ private:
     void set_max_token_len();
     int64_t m_max_token_len;
 
-    struct ggml_cgraph * m_cgraph;
-    std::map<std::string, ggml_tensor *> m_inputs;
+    struct ggml_cgraph* m_cgraph;
+    std::map<std::string, ggml_tensor*> m_inputs;
     std::vector<std::string> m_input_names;
-    std::map<std::string, ggml_tensor *> m_outputs;
+    std::map<std::string, ggml_tensor*> m_outputs;
     std::vector<std::string> m_output_names;
     ggml_tensor* m_node;
     std::vector<ggml_tensor*> m_nodes;

@@ -354,7 +354,7 @@ std::vector<size_t> GgmlOvDecoder::get_shape(const ggml_tensor* tensor) {
 
 std::vector<size_t> GgmlOvDecoder::get_stride(const ggml_tensor* tensor) {
     std::vector<size_t> stride;
-    for (int i = GGML_MAX_DIMS - 2; i >= 0 ; --i) {
+    for (int i = GGML_MAX_DIMS - 2; i >= 0; --i) {
         stride.push_back(static_cast<size_t>(tensor->nb[i]));
     }
     return stride;
@@ -448,27 +448,16 @@ void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecode
 
 const std::string& GgmlOvDecoder::get_op_type() const {
     static const std::map<ggml_op, std::string> opTypeMap = {
-        {GGML_OP_ACC, "GGML_OP_ACC"},
-        {GGML_OP_ADD, "GGML_OP_ADD"},
-        {GGML_OP_ADD1, "GGML_OP_ADD1"},
-        {GGML_OP_CONT, "GGML_OP_CONT"},
-        {GGML_OP_CPY, "GGML_OP_CPY"},
-        {GGML_OP_DIV, "GGML_OP_DIV"},
-        {GGML_OP_DUP, "GGML_OP_DUP"},
-        {GGML_OP_GET_ROWS, "GGML_OP_GET_ROWS"},
-        {GGML_OP_MUL, "GGML_OP_MUL"},
-        {GGML_OP_MUL_MAT, "GGML_OP_MUL_MAT"},
-        {GGML_OP_PERMUTE, "GGML_OP_PERMUTE"},
-        {GGML_OP_RESHAPE, "GGML_OP_RESHAPE"},
-        {GGML_OP_RMS_NORM, "GGML_OP_RMS_NORM"},
-        {GGML_OP_ROPE, "GGML_OP_ROPE"},
-        {GGML_OP_SCALE, "GGML_OP_SCALE"},
-        {GGML_OP_SOFT_MAX, "GGML_OP_SOFT_MAX"},
-        {GGML_OP_SUB, "GGML_OP_SUB"},
-        {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
-        {GGML_OP_UNARY, "GGML_OP_UNARY"},
-        {GGML_OP_VIEW, "GGML_OP_VIEW"}
-    };
+        {GGML_OP_ACC, "GGML_OP_ACC"},           {GGML_OP_ADD, "GGML_OP_ADD"},
+        {GGML_OP_ADD1, "GGML_OP_ADD1"},         {GGML_OP_CONT, "GGML_OP_CONT"},
+        {GGML_OP_CPY, "GGML_OP_CPY"},           {GGML_OP_DIV, "GGML_OP_DIV"},
+        {GGML_OP_DUP, "GGML_OP_DUP"},           {GGML_OP_GET_ROWS, "GGML_OP_GET_ROWS"},
+        {GGML_OP_MUL, "GGML_OP_MUL"},           {GGML_OP_MUL_MAT, "GGML_OP_MUL_MAT"},
+        {GGML_OP_PERMUTE, "GGML_OP_PERMUTE"},   {GGML_OP_RESHAPE, "GGML_OP_RESHAPE"},
+        {GGML_OP_RMS_NORM, "GGML_OP_RMS_NORM"}, {GGML_OP_ROPE, "GGML_OP_ROPE"},
+        {GGML_OP_SCALE, "GGML_OP_SCALE"},       {GGML_OP_SOFT_MAX, "GGML_OP_SOFT_MAX"},
+        {GGML_OP_SUB, "GGML_OP_SUB"},           {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
+        {GGML_OP_UNARY, "GGML_OP_UNARY"},       {GGML_OP_VIEW, "GGML_OP_VIEW"}};
     static const std::map<ggml_unary_op, std::string> unaryOpTypeMap = {
         {GGML_UNARY_OP_ABS, "GGML_UNARY_OP_ABS"},
         {GGML_UNARY_OP_SGN, "GGML_UNARY_OP_SGN"},
@@ -484,8 +473,7 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_UNARY_OP_HARDSWISH, "GGML_UNARY_OP_HARDSWISH"},
         {GGML_UNARY_OP_HARDSIGMOID, "GGML_UNARY_OP_HARDSIGMOID"},
         {GGML_UNARY_OP_EXP, "GGML_UNARY_OP_EXP"},
-        {GGML_UNARY_OP_COUNT, "GGML_UNARY_OP_COUNT"}
-    };
+        {GGML_UNARY_OP_COUNT, "GGML_UNARY_OP_COUNT"}};
     auto it = opTypeMap.find(m_node->op);
     if (it != opTypeMap.end()) {
         if (it->first == GGML_OP_UNARY) {
