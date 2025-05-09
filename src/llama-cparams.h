@@ -30,7 +30,7 @@ struct llama_cparams {
     bool flash_attn;
     bool no_perf;
     bool warmup;
-    bool disable_op_offload;
+    bool op_offload;
 
     enum llama_pooling_type pooling_type;
 
