@@ -5,8 +5,8 @@
 #include <memory>
 #include <vector>
 
-#include "decoder.h"
 #include "ggml.h"
+#include "openvino/decoder.hpp"
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:

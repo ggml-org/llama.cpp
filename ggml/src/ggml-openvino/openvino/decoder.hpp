@@ -8,7 +8,6 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 
-// TODO: Directly include from openvino
 class GgmlDecoder : public DecoderBase {
 public:
     virtual ov::Any get_attribute(const std::string& name) const = 0;
