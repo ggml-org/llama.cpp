@@ -443,6 +443,11 @@ void llama_kv_cache_unified::set_full() {
     n = size;
 }
 
+bool llama_kv_cache_unified::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    // Unified attention cache can always do a sequence removal
+    return true;
+}
+
 llama_sbatch llama_kv_cache_unified::sbatch_init(
         const llama_batch & batch,
         bool logits_all) {
@@ -1481,39 +1486,33 @@ void llama_kv_cache_recurrent::clear() {
 }
 
 bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    uint32_t new_head = size;
+    if (!can_seq_rm(seq_id, p0, p1)) {
+        // could be fatal
+        return false;
+    }
 
+    uint32_t new_head = size;
     if (p0 < 0) {
         p0 = 0;
     }
-
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
-    // models like Mamba or RWKV can't have a state partially erased
-    if (seq_id >= (int64_t) size) {
-        // could be fatal
-        return false;
-    }
     if (0 <= seq_id) {
         int32_t & tail_id = cells[seq_id].tail;
         if (tail_id >= 0) {
             const kv_cell & cell = cells[tail_id];
-            // partial intersection is invalid
-            if ((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)) {
-                return false;
-            }
+            // already validated in can_seq_rm
+            GGML_ASSERT(!((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)));
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
                 tail_id = -1;
             }
         }
     } else {
-        // seq_id is negative, then the range should include everything or nothing
-        if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
-            return false;
-        }
+        // already validated in can_seq_rm
+        GGML_ASSERT(!(p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())));
     }
 
     for (uint32_t i = 0; i < size; ++i) {
@@ -1712,6 +1711,35 @@ void llama_kv_cache_recurrent::defrag_sched(float thold) {
 
 void llama_kv_cache_recurrent::set_full() {
     n = size;
+}
+
+bool llama_kv_cache_recurrent::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    if (p0 < 0) {
+        p0 = 0;
+    }
+
+    if (p1 < 0) {
+        p1 = std::numeric_limits<llama_pos>::max();
+    }
+    // models like Mamba or RWKV can't have a state partially erased
+    if (seq_id >= (int64_t) size) {
+        // could be fatal
+        return false;
+    }
+    if (0 <= seq_id) {
+        const int32_t & tail_id = cells[seq_id].tail;
+        if (tail_id >= 0) {
+            const kv_cell & cell = cells[tail_id];
+            // partial intersection is invalid
+            if ((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)) {
+                return false;
+            }
+        }
+    // seq_id is negative, then the range should include everything or nothing
+    } else if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
+        return false;
+    }
+    return true;
 }
 
 llama_sbatch llama_kv_cache_recurrent::sbatch_init(
@@ -2456,13 +2484,18 @@ void llama_kv_cache_hybrid::clear() {
 }
 
 bool llama_kv_cache_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    // TODO: Will it cause problems if some caches are able to remove the seq
-    //  but others aren't?
-    bool removed = true;
-    for (const auto & cache : m_children) {
-        removed = cache->seq_rm(seq_id, p0, p1) && removed;
+    // First check if we can do this removal. This checks all children so that
+    // no mutation happens before we know if it's possible
+    if (!can_seq_rm(seq_id, p0, p1)) {
+        return false;
     }
-    return removed;
+
+    // Do the removal from each child which should never fail
+    for (const auto & cache : m_children) {
+        const bool failed = cache->seq_rm(seq_id, p0, p1);
+        GGML_ASSERT(!failed);
+    }
+    return true;
 }
 
 void llama_kv_cache_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
@@ -2529,6 +2562,15 @@ void llama_kv_cache_hybrid::set_full() {
     }
 }
 
+bool llama_kv_cache_hybrid::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    for (const auto & cache : m_children) {
+        if (!cache->can_seq_rm(seq_id, p0, p1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 llama_sbatch llama_kv_cache_hybrid::sbatch_init(const llama_batch & batch, bool logits_all) {
     // If any of the caches are recurrent, require equal split
     return llama_sbatch(batch, m_hparams.n_embd, !m_has_recurrent, logits_all);
@@ -2566,7 +2608,7 @@ int32_t llama_kv_cache_hybrid::get_n_tokens() const {
 
 int32_t llama_kv_cache_hybrid::get_used_cells() const {
     // TODO: Is this correct?
-    // Return the largetst number of used cells
+    // Return the largest number of used cells
     int32_t used_cells = -1;
     for (const auto & cache : m_children) {
         used_cells = std::max(used_cells, cache->get_used_cells());
