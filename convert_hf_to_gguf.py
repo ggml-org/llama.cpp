@@ -5840,6 +5840,60 @@ class ChameleonModel(TextModel):
         return data_torch
 
 
+@Model.register("UltravoxModel")
+class UltravoxEncoderModel(Model):
+    model_arch = gguf.MODEL_ARCH.ULTRAVOX_ENC
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        audio_config = self.hparams["audio_config"]
+        self.block_count = audio_config["encoder_layers"]
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        audio_config = self.hparams["audio_config"]
+        self.gguf_writer.add_context_length(audio_config["max_source_positions"])
+        self.gguf_writer.add_embedding_length(audio_config["d_model"])
+        self.gguf_writer.add_feed_forward_length(audio_config["encoder_ffn_dim"])
+        self.gguf_writer.add_head_count(audio_config["encoder_attention_heads"])
+        self.gguf_writer.add_head_count_kv(audio_config["encoder_attention_heads"])
+        self.gguf_writer.add_layer_norm_eps(1e-5) # default from whisper
+        self.gguf_writer.add_block_count(audio_config["encoder_layers"])
+        self.gguf_writer.add_n_mel_bins(audio_config["num_mel_bins"])
+        self.gguf_writer.add_mm_stack_factor(self.hparams["stack_factor"])
+        self.gguf_writer.add_mm_embd_dim(self.hparams["hidden_size"])
+        self.gguf_writer.add_mm_output_dim(2048) # TODO: read from text_model_id
+        # We only have encoder, so we will always use non-causal attention
+        self.gguf_writer.add_causal_attention(False)
+
+    def set_vocab(self):
+        self._set_vocab_none()
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # TODO: maybe we can generate these filters ourselves?
+        from huggingface_hub import hf_hub_download
+        mel_filters_path = hf_hub_download(
+            repo_id="ggml-org/models",
+            filename="mel_filters.npz",
+        )
+        with np.load(mel_filters_path) as f:
+            yield ("mel_filters", torch.from_numpy(f["mel_128"]))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        name = name.replace("audio_tower.layers.", "model.layers.")
+        name = name.replace(".fc", ".mlp.fc")
+        name = name.replace(".self_attn_layer_norm", ".input_layernorm")
+        name = name.replace(".final_layer_norm", ".post_attention_layernorm")
+
+        if "conv1.bias" in name or "conv2.bias" in name:
+            # transpose conv1 and conv2 bias
+            data_torch = data_torch.unsqueeze(-1)
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 ###### CONVERSION LOGIC ######
 
 
