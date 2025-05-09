@@ -256,6 +256,10 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             }
 
             if (batch_idx != batch_size - 1) {
+                // This barrier is necessary when the batch size is larger than 1. While processing a batch,
+                // the work data buffer (params->wdata) is used as temporary storage which means that only
+                // a single batch can be processed at any given time. No barrier is needed for the last
+                // batch since GGML inserts a barrier between the execution of every operator.
                 ggml_barrier(params->threadpool);
             }
         }
