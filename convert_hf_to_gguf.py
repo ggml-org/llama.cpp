@@ -4817,16 +4817,7 @@ class BambaModel(Mamba2Model):
         self._transformer_model_class: type[TextModel] = LlamaModel
 
         # Lists of which layers use ssm vs attention
-        self._attn_layers = self.hparams.get("attn_layer_indices", [])
-        if not self._attn_layers:
-            attn_period = self.hparams.get("attn_layer_period")
-            assert attn_period, "Didn't find attn_layer_indices or attn_layer_period"
-            attn_offset = self.hparams.get("attn_layer_offset")
-            assert attn_offset is not None, "No attention layer offset set with attn_layer_period"
-            self._attn_layers = [
-                i for i in range(self.block_count)
-                if i % attn_period == attn_offset
-            ]
+        self._attn_layers = self.get_attn_layres()
         self._ssm_layers = [
             i for i in range(self.block_count)
             if i not in self._attn_layers
@@ -4836,6 +4827,19 @@ class BambaModel(Mamba2Model):
         self.d_model = self.find_hparam(["hidden_size", "d_model"])
         self.n_group = self.find_hparam(["n_groups"])
         self.d_inner = self.find_hparam(["expand"]) * self.d_model
+
+    def get_attn_layres(self) -> list[int]:
+        attn_layers = self.hparams.get("attn_layer_indices", [])
+        if not attn_layers:
+            attn_period = self.hparams.get("attn_layer_period")
+            assert attn_period, "Didn't find attn_layer_indices or attn_layer_period"
+            attn_offset = self.hparams.get("attn_layer_offset")
+            assert attn_offset is not None, "No attention layer offset set with attn_layer_period"
+            attn_layers = [
+                i for i in range(self.block_count)
+                if i % attn_period == attn_offset
+            ]
+        return attn_layers
 
     def find_hparam(self, keys: Iterable[str], *args, **kwargs) -> Any:
         prefixed = []
@@ -4867,7 +4871,8 @@ class BambaModel(Mamba2Model):
 
         ## Attention params ##
         self.gguf_writer.add_attn_layer_indices(self._attn_layers)
-        self.gguf_writer.add_rope_dimension_count(self.hparams["attn_rotary_emb"])
+        if rope_dim := self.hparams.get("attn_rotary_emb"):
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads", "n_head_kv"]))
 
@@ -6271,6 +6276,78 @@ class GraniteMoeModel(GraniteModel):
             ]
 
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("GraniteMoeHybridForCausalLM")
+class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
+    """GraniteMoeHybrid is a hybrid SSM + MoE Attention model that uses Mamba2
+    SSM layers"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_MOE_HYBRID
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._transformer_model_class = GraniteMoeModel
+
+    def get_attn_layres(self):
+        if layer_types := self.hparams.get("layer_types"):
+            return [
+                i for i, typ in enumerate(layer_types)
+                if typ == "attention"
+            ]
+        return super().get_attn_layres()
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+
+        # In GraniteMoeHybrid, the mamba layers also have an MoE + Shared expert
+        if name.endswith("block_sparse_moe.input_linear.weight"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
+            gate, up = data_torch[..., :ffn_dim, :], data_torch[..., ffn_dim:, :]
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
+            ]
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams["shared_intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
+            ]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if attention_scale := self.hparams.get("attention_multiplier"):
+            self.gguf_writer.add_attention_scale(attention_scale)
+            logger.info("gguf: (granite) attention_scale = %s", attention_scale)
+        if embedding_scale := self.hparams.get("embedding_multiplier"):
+            self.gguf_writer.add_embedding_scale(embedding_scale)
+            logger.info("gguf: (granite) embedding_scale = %s", embedding_scale)
+        if residual_scale := self.hparams.get("residual_multiplier"):
+            self.gguf_writer.add_residual_scale(residual_scale)
+            logger.info("gguf: (granite) residual_scale = %s", residual_scale)
+        if logits_scale := self.hparams.get("logits_scaling"):
+            self.gguf_writer.add_logit_scale(logits_scale)
+            logger.info("gguf: (granite) logits_scale = %s", logits_scale)
+        if shared_feed_forward_length := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_feed_forward_length)
+            logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
+        if (n_experts := self.hparams.get("num_local_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+            logger.info(f"gguf: expert count = {n_experts}")
+        if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
+            self.gguf_writer.add_expert_used_count(n_experts_used)
+            logger.info(f"gguf: experts used count = {n_experts_used}")
+
+    def set_vocab(self):
+        self.hparams["pad_vocab_size_multiple"] = 8
+        super().set_vocab()
 
 
 @ModelBase.register("BailingMoeForCausalLM")

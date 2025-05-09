@@ -280,79 +280,80 @@ class GGUFType:
 
 
 class MODEL_ARCH(IntEnum):
-    MMPROJ           = auto() # dummy arch for clip.cpp
-    LLAMA            = auto()
-    LLAMA4           = auto()
-    DECI             = auto()
-    FALCON           = auto()
-    BAICHUAN         = auto()
-    GROK             = auto()
-    GPT2             = auto()
-    GPTJ             = auto()
-    GPTNEOX          = auto()
-    MPT              = auto()
-    STARCODER        = auto()
-    REFACT           = auto()
-    BERT             = auto()
-    NOMIC_BERT       = auto()
-    NOMIC_BERT_MOE   = auto()
-    NEO_BERT         = auto()
-    JINA_BERT_V2     = auto()
-    BLOOM            = auto()
-    STABLELM         = auto()
-    QWEN             = auto()
-    QWEN2            = auto()
-    QWEN2MOE         = auto()
-    QWEN2VL          = auto()
-    QWEN3            = auto()
-    QWEN3MOE         = auto()
-    PHI2             = auto()
-    PHI3             = auto()
-    PHIMOE           = auto()
-    PLAMO            = auto()
-    CODESHELL        = auto()
-    ORION            = auto()
-    INTERNLM2        = auto()
-    MINICPM          = auto()
-    MINICPM3         = auto()
-    GEMMA            = auto()
-    GEMMA2           = auto()
-    GEMMA3           = auto()
-    STARCODER2       = auto()
-    RWKV6            = auto()
-    RWKV6QWEN2       = auto()
-    RWKV7            = auto()
-    ARWKV7           = auto()
-    MAMBA            = auto()
-    MAMBA2           = auto()
-    BAMBA            = auto()
-    XVERSE           = auto()
-    COMMAND_R        = auto()
-    COHERE2          = auto()
-    DBRX             = auto()
-    OLMO             = auto()
-    OLMO2            = auto()
-    OLMOE            = auto()
-    OPENELM          = auto()
-    ARCTIC           = auto()
-    DEEPSEEK         = auto()
-    DEEPSEEK2        = auto()
-    CHATGLM          = auto()
-    GLM4             = auto()
-    BITNET           = auto()
-    T5               = auto()
-    T5ENCODER        = auto()
-    JAIS             = auto()
-    NEMOTRON         = auto()
-    EXAONE           = auto()
-    GRANITE          = auto()
-    GRANITE_MOE      = auto()
-    CHAMELEON        = auto()
-    WAVTOKENIZER_DEC = auto()
-    PLM              = auto()
-    BAILINGMOE       = auto()
-    DOTS1            = auto()
-    ARCEE            = auto()
+    MMPROJ             = auto() # dummy arch for clip.cpp
+    LLAMA              = auto()
+    LLAMA4             = auto()
+    DECI               = auto()
+    FALCON             = auto()
+    BAICHUAN           = auto()
+    GROK               = auto()
+    GPT2               = auto()
+    GPTJ               = auto()
+    GPTNEOX            = auto()
+    MPT                = auto()
+    STARCODER          = auto()
+    REFACT             = auto()
+    BERT               = auto()
+    NOMIC_BERT         = auto()
+    NOMIC_BERT_MOE     = auto()
+    NEO_BERT           = auto()
+    JINA_BERT_V2       = auto()
+    BLOOM              = auto()
+    STABLELM           = auto()
+    QWEN               = auto()
+    QWEN2              = auto()
+    QWEN2MOE           = auto()
+    QWEN2VL            = auto()
+    QWEN3              = auto()
+    QWEN3MOE           = auto()
+    PHI2               = auto()
+    PHI3               = auto()
+    PHIMOE             = auto()
+    PLAMO              = auto()
+    CODESHELL          = auto()
+    ORION              = auto()
+    INTERNLM2          = auto()
+    MINICPM            = auto()
+    MINICPM3           = auto()
+    GEMMA              = auto()
+    GEMMA2             = auto()
+    GEMMA3             = auto()
+    STARCODER2         = auto()
+    RWKV6              = auto()
+    RWKV6QWEN2         = auto()
+    RWKV7              = auto()
+    ARWKV7             = auto()
+    MAMBA              = auto()
+    MAMBA2             = auto()
+    BAMBA              = auto()
+    XVERSE             = auto()
+    COMMAND_R          = auto()
+    COHERE2            = auto()
+    DBRX               = auto()
+    OLMO               = auto()
+    OLMO2              = auto()
+    OLMOE              = auto()
+    OPENELM            = auto()
+    ARCTIC             = auto()
+    DEEPSEEK           = auto()
+    DEEPSEEK2          = auto()
+    CHATGLM            = auto()
+    GLM4               = auto()
+    BITNET             = auto()
+    T5                 = auto()
+    T5ENCODER          = auto()
+    JAIS               = auto()
+    NEMOTRON           = auto()
+    EXAONE             = auto()
+    GRANITE            = auto()
+    GRANITE_MOE        = auto()
+    GRANITE_MOE_HYBRID = auto()
+    CHAMELEON          = auto()
+    WAVTOKENIZER_DEC   = auto()
+    PLM                = auto()
+    BAILINGMOE         = auto()
+    DOTS1              = auto()
+    ARCEE              = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -566,79 +567,80 @@ class MODEL_TENSOR(IntEnum):
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-    MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
-    MODEL_ARCH.LLAMA:            "llama",
-    MODEL_ARCH.LLAMA4:           "llama4",
-    MODEL_ARCH.DECI:             "deci",
-    MODEL_ARCH.FALCON:           "falcon",
-    MODEL_ARCH.BAICHUAN:         "baichuan",
-    MODEL_ARCH.GROK:             "grok",
-    MODEL_ARCH.GPT2:             "gpt2",
-    MODEL_ARCH.GPTJ:             "gptj",
-    MODEL_ARCH.GPTNEOX:          "gptneox",
-    MODEL_ARCH.MPT:              "mpt",
-    MODEL_ARCH.STARCODER:        "starcoder",
-    MODEL_ARCH.REFACT:           "refact",
-    MODEL_ARCH.BERT:             "bert",
-    MODEL_ARCH.NOMIC_BERT:       "nomic-bert",
-    MODEL_ARCH.NOMIC_BERT_MOE:   "nomic-bert-moe",
-    MODEL_ARCH.NEO_BERT:         "neo-bert",
-    MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
-    MODEL_ARCH.BLOOM:            "bloom",
-    MODEL_ARCH.STABLELM:         "stablelm",
-    MODEL_ARCH.QWEN:             "qwen",
-    MODEL_ARCH.QWEN2:            "qwen2",
-    MODEL_ARCH.QWEN2MOE:         "qwen2moe",
-    MODEL_ARCH.QWEN2VL:          "qwen2vl",
-    MODEL_ARCH.QWEN3:            "qwen3",
-    MODEL_ARCH.QWEN3MOE:         "qwen3moe",
-    MODEL_ARCH.PHI2:             "phi2",
-    MODEL_ARCH.PHI3:             "phi3",
-    MODEL_ARCH.PHIMOE:           "phimoe",
-    MODEL_ARCH.PLAMO:            "plamo",
-    MODEL_ARCH.CODESHELL:        "codeshell",
-    MODEL_ARCH.ORION:            "orion",
-    MODEL_ARCH.INTERNLM2:        "internlm2",
-    MODEL_ARCH.MINICPM:          "minicpm",
-    MODEL_ARCH.MINICPM3:         "minicpm3",
-    MODEL_ARCH.GEMMA:            "gemma",
-    MODEL_ARCH.GEMMA2:           "gemma2",
-    MODEL_ARCH.GEMMA3:           "gemma3",
-    MODEL_ARCH.STARCODER2:       "starcoder2",
-    MODEL_ARCH.RWKV6:            "rwkv6",
-    MODEL_ARCH.RWKV6QWEN2:       "rwkv6qwen2",
-    MODEL_ARCH.RWKV7:            "rwkv7",
-    MODEL_ARCH.ARWKV7:           "arwkv7",
-    MODEL_ARCH.MAMBA:            "mamba",
-    MODEL_ARCH.MAMBA2:           "mamba2",
-    MODEL_ARCH.BAMBA:            "bamba",
-    MODEL_ARCH.XVERSE:           "xverse",
-    MODEL_ARCH.COMMAND_R:        "command-r",
-    MODEL_ARCH.COHERE2:          "cohere2",
-    MODEL_ARCH.DBRX:             "dbrx",
-    MODEL_ARCH.OLMO:             "olmo",
-    MODEL_ARCH.OLMO2:            "olmo2",
-    MODEL_ARCH.OLMOE:            "olmoe",
-    MODEL_ARCH.OPENELM:          "openelm",
-    MODEL_ARCH.ARCTIC:           "arctic",
-    MODEL_ARCH.DEEPSEEK:         "deepseek",
-    MODEL_ARCH.DEEPSEEK2:        "deepseek2",
-    MODEL_ARCH.CHATGLM:          "chatglm",
-    MODEL_ARCH.GLM4:             "glm4",
-    MODEL_ARCH.BITNET:           "bitnet",
-    MODEL_ARCH.T5:               "t5",
-    MODEL_ARCH.T5ENCODER:        "t5encoder",
-    MODEL_ARCH.JAIS:             "jais",
-    MODEL_ARCH.NEMOTRON:         "nemotron",
-    MODEL_ARCH.EXAONE:           "exaone",
-    MODEL_ARCH.GRANITE:          "granite",
-    MODEL_ARCH.GRANITE_MOE:      "granitemoe",
-    MODEL_ARCH.CHAMELEON:        "chameleon",
-    MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
-    MODEL_ARCH.PLM:              "plm",
-    MODEL_ARCH.BAILINGMOE:       "bailingmoe",
-    MODEL_ARCH.DOTS1:            "dots1",
-    MODEL_ARCH.ARCEE:            "arcee",
+    MODEL_ARCH.MMPROJ:             "clip", # dummy arch for clip.cpp
+    MODEL_ARCH.LLAMA:              "llama",
+    MODEL_ARCH.LLAMA4:             "llama4",
+    MODEL_ARCH.DECI:               "deci",
+    MODEL_ARCH.FALCON:             "falcon",
+    MODEL_ARCH.BAICHUAN:           "baichuan",
+    MODEL_ARCH.GROK:               "grok",
+    MODEL_ARCH.GPT2:               "gpt2",
+    MODEL_ARCH.GPTJ:               "gptj",
+    MODEL_ARCH.GPTNEOX:            "gptneox",
+    MODEL_ARCH.MPT:                "mpt",
+    MODEL_ARCH.STARCODER:          "starcoder",
+    MODEL_ARCH.REFACT:             "refact",
+    MODEL_ARCH.BERT:               "bert",
+    MODEL_ARCH.NOMIC_BERT:         "nomic-bert",
+    MODEL_ARCH.NOMIC_BERT_MOE:     "nomic-bert-moe",
+    MODEL_ARCH.NEO_BERT:           "neo-bert",
+    MODEL_ARCH.JINA_BERT_V2:       "jina-bert-v2",
+    MODEL_ARCH.BLOOM:              "bloom",
+    MODEL_ARCH.STABLELM:           "stablelm",
+    MODEL_ARCH.QWEN:               "qwen",
+    MODEL_ARCH.QWEN2:              "qwen2",
+    MODEL_ARCH.QWEN2MOE:           "qwen2moe",
+    MODEL_ARCH.QWEN2VL:            "qwen2vl",
+    MODEL_ARCH.QWEN3:              "qwen3",
+    MODEL_ARCH.QWEN3MOE:           "qwen3moe",
+    MODEL_ARCH.PHI2:               "phi2",
+    MODEL_ARCH.PHI3:               "phi3",
+    MODEL_ARCH.PHIMOE:             "phimoe",
+    MODEL_ARCH.PLAMO:              "plamo",
+    MODEL_ARCH.CODESHELL:          "codeshell",
+    MODEL_ARCH.ORION:              "orion",
+    MODEL_ARCH.INTERNLM2:          "internlm2",
+    MODEL_ARCH.MINICPM:            "minicpm",
+    MODEL_ARCH.MINICPM3:           "minicpm3",
+    MODEL_ARCH.GEMMA:              "gemma",
+    MODEL_ARCH.GEMMA2:             "gemma2",
+    MODEL_ARCH.GEMMA3:             "gemma3",
+    MODEL_ARCH.STARCODER2:         "starcoder2",
+    MODEL_ARCH.RWKV6:              "rwkv6",
+    MODEL_ARCH.RWKV6QWEN2:         "rwkv6qwen2",
+    MODEL_ARCH.RWKV7:              "rwkv7",
+    MODEL_ARCH.ARWKV7:             "arwkv7",
+    MODEL_ARCH.MAMBA:              "mamba",
+    MODEL_ARCH.MAMBA2:             "mamba2",
+    MODEL_ARCH.BAMBA:              "bamba",
+    MODEL_ARCH.XVERSE:             "xverse",
+    MODEL_ARCH.COMMAND_R:          "command-r",
+    MODEL_ARCH.COHERE2:            "cohere2",
+    MODEL_ARCH.DBRX:               "dbrx",
+    MODEL_ARCH.OLMO:               "olmo",
+    MODEL_ARCH.OLMO2:              "olmo2",
+    MODEL_ARCH.OLMOE:              "olmoe",
+    MODEL_ARCH.OPENELM:            "openelm",
+    MODEL_ARCH.ARCTIC:             "arctic",
+    MODEL_ARCH.DEEPSEEK:           "deepseek",
+    MODEL_ARCH.DEEPSEEK2:          "deepseek2",
+    MODEL_ARCH.CHATGLM:            "chatglm",
+    MODEL_ARCH.GLM4:               "glm4",
+    MODEL_ARCH.BITNET:             "bitnet",
+    MODEL_ARCH.T5:                 "t5",
+    MODEL_ARCH.T5ENCODER:          "t5encoder",
+    MODEL_ARCH.JAIS:               "jais",
+    MODEL_ARCH.NEMOTRON:           "nemotron",
+    MODEL_ARCH.EXAONE:             "exaone",
+    MODEL_ARCH.GRANITE:            "granite",
+    MODEL_ARCH.GRANITE_MOE:        "granitemoe",
+    MODEL_ARCH.GRANITE_MOE_HYBRID: "granitemoehybrid",
+    MODEL_ARCH.CHAMELEON:          "chameleon",
+    MODEL_ARCH.WAVTOKENIZER_DEC:   "wavtokenizer-dec",
+    MODEL_ARCH.PLM:                "plm",
+    MODEL_ARCH.BAILINGMOE:         "bailingmoe",
+    MODEL_ARCH.DOTS1:              "dots1",
+    MODEL_ARCH.ARCEE:              "arcee",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -2041,6 +2043,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+    ],
+    MODEL_ARCH.GRANITE_MOE_HYBRID: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,
