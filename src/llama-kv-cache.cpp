@@ -2538,19 +2538,19 @@ void llama_kv_cache_hybrid::set_full() {
 }
 
 llama_sbatch llama_kv_cache_hybrid::sbatch_init(const llama_batch & batch, bool logits_all) {
-    // If any of the caches are recurrent, require simple split
-    return llama_sbatch(batch, m_hparams.n_embd, m_has_recurrent, logits_all);
+    // If any of the caches are recurrent, require equal split
+    return llama_sbatch(batch, m_hparams.n_embd, !m_has_recurrent, logits_all);
 }
 
 llama_ubatch llama_kv_cache_hybrid::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
-    if (m_has_recurrent) {
-        return sbatch.split_simple(n_ubatch);
-    }
     if (embd_pooled) {
         // Pooled embeddings cannot be split across ubatches (yet)
         return sbatch.split_seq(n_ubatch);
     }
-    return sbatch.split_equal(n_ubatch);
+    if (m_has_recurrent) {
+        return sbatch.split_equal(n_ubatch);
+    }
+    return sbatch.split_simple(n_ubatch);
 }
 
 bool llama_kv_cache_hybrid::find_slot(const llama_ubatch & batch) {
