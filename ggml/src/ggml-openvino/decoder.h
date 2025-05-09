@@ -1,9 +1,8 @@
 #pragma once
 
 #include <map>
-
-#include "openvino/core/node.hpp"
-#include "openvino/frontend/decoder.hpp"
+#include <openvino/core/node.hpp>
+#include <openvino/frontend/decoder.hpp>
 
 namespace ov {
 namespace frontend {
@@ -43,11 +42,7 @@ public:
 
     virtual std::string& get_output_name(size_t index) const = 0;
 
-    virtual size_t get_output_size() const = 0;
-
-    virtual bool is_graph_output(size_t index) const = 0;
-
-    virtual std::string& get_output_name(size_t index) const = 0;
+    virtual std::vector<std::string> get_output_names() const = 0;
 
     virtual const std::string& get_op_type() const = 0;
 
