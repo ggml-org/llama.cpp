@@ -265,7 +265,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
     using q4_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q4_0>;
     using q4_0_traits = typename q4_0_block::traits;
 
-    float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4, const sycl::half2 & ds8) {
+    __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4, const sycl::half2 & ds8) {
         int sumi = 0;
 
 #pragma unroll
@@ -284,7 +284,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
         return d4 * (sumi * ds8f.x() - (8 * q4_0_traits::vdr_mmvq / q4_0_traits::qi) * ds8f.y());
     }
 
-    float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
                      const block_q8_1 * __restrict__ bq8_1, const int & iqs) {
         const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset;
         const ggml_half d     = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset));

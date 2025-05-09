@@ -40,6 +40,7 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
 
+#pragma unroll
         for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {
             // x block quant index when casting the quants to int
             const int iqs = elem + block_traits::vdr_mmvq * (sg.get_local_linear_id() % block_elements_per_subgroup);
