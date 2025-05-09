@@ -14,6 +14,8 @@
 
 #include "ggml-impl.h"
 #include "ggml.h"
+#include "openvino/frontend.hpp"
+#include "openvino/input_model.hpp"
 
 std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph) {
     return std::make_shared<GgmlOvDecoder>(nullptr, cgraph);
@@ -56,11 +58,11 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     }
 
     // auto devices = core.get_available_devices();
-    static auto front_end = get_ggml_frontend();
-    if (!front_end) {
-        GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
-        return GGML_STATUS_FAILED;
-    }
+    // static auto front_end = get_ggml_frontend();
+    // if (!front_end) {
+    //     GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
+    //     return GGML_STATUS_FAILED;
+    // }
 
     using CachedItem = std::pair<std::shared_ptr<ov::Model>, ov::CompiledModel>;
     static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache;
@@ -79,14 +81,18 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         compiled_model = it->second.second;
         compile_end_time = ggml_time_us();
     } else {
-        std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
-        ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
-        if (!input_model) {
-            GGML_LOG_ERROR("Input Model is not loaded \n");
-            return GGML_STATUS_FAILED;
-        }
+        // std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
+        // ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
+        // if (!input_model) {
+        //     GGML_LOG_ERROR("Input Model is not loaded \n");
+        //     return GGML_STATUS_FAILED;
+        // }
 
-        model = front_end->convert(input_model);
+        // model = front_end->convert(input_model);
+
+        ov::frontend::InputModel::Ptr input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
+        model = ov::frontend::ggml::FrontEnd::convert(input_model);
+
         conversion_end_time = ggml_time_us();
 
         if (getenv("GGML_OPENVINO_DUMP_IR")) {
