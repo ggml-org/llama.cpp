@@ -2,7 +2,7 @@
 '''
     Simplistic tool call benchmarks for llama-server and ollama.
 
-    Essentially runs the tests at server/examples/server/tests/unit/test_tool_call.py N times, at different temperatures and on different backends (current llama-server, baseline llama-server and ollama),
+    Essentially runs the tests at server/tools/server/tests/unit/test_tool_call.py N times, at different temperatures and on different backends (current llama-server, baseline llama-server and ollama),
     and plots the results of multiple runs (from same .jsonl file or multiple ones) as a success rate heatmap.
 
     Simple usage example:
@@ -51,8 +51,8 @@ import typer
 
 sys.path.insert(0, Path(__file__).parent.parent.as_posix())
 if True:
-    from examples.server.tests.utils import ServerProcess
-    from examples.server.tests.unit.test_tool_call import TIMEOUT_SERVER_START, do_test_calc_result, do_test_hello_world, do_test_weather
+    from tools.server.tests.utils import ServerProcess
+    from tools.server.tests.unit.test_tool_call import TIMEOUT_SERVER_START, do_test_calc_result, do_test_hello_world, do_test_weather
 
 
 @contextmanager

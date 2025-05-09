@@ -33,6 +33,19 @@
 #endif
 #endif
 
+#if defined(DATA_A_BF16)
+#define QUANT_K 1
+#define QUANT_R 1
+
+#if !defined(LOAD_VEC_A) || LOAD_VEC_A == 1
+#define A_TYPE uint16_t
+#elif LOAD_VEC_A == 4
+#define A_TYPE u16vec4
+#elif LOAD_VEC_A == 8
+#error unsupported
+#endif
+#endif
+
 #define QUANT_K_Q4_0 32
 #define QUANT_R_Q4_0 2
 
@@ -1342,5 +1355,19 @@ void init_iq_shmem(uvec3 wgsize)
     barrier();
 }
 #endif
+
+// returns the bfloat value in the low 16b.
+// See ggml_compute_fp32_to_bf16
+uint32_t fp32_to_bf16(float f)
+{
+    uint32_t u = floatBitsToUint(f);
+    u = (u + (0x7fff + ((u >> 16) & 1))) >> 16;
+    return u;
+}
+
+float bf16_to_fp32(uint32_t u)
+{
+    return uintBitsToFloat(u << 16);
+}
 
 #endif // !defined(GGML_TYPES_COMP)
