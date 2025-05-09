@@ -196,17 +196,17 @@ static std::string pair_str(const std::pair<int, int> & p) {
 }
 
 static std::vector<int> parse_int_range(const std::string & s) {
-    // start[-end[+step]][,start[-end[+step]]...]
+    // first[-last[+step]][,first[-last[+step]]...]
     std::regex range_regex(R"(^(\d+)(?:-(\d+)(?:\+(\d+))?)?(,|$))");
     std::smatch match;
     std::string::const_iterator search_start(s.cbegin());
     std::vector<int> result;
     while (std::regex_search(search_start, s.cend(), match, range_regex)) {
-        int start = std::stoi(match[1]);
-        int end   = match[2].matched ? std::stoi(match[2]) : start;
+        int first = std::stoi(match[1]);
+        int last  = match[2].matched ? std::stoi(match[2]) : first;
         int step  = match[3].matched ? std::stoi(match[3]) : 1;
 
-        for (int i = start; i <= end; i += step) {
+        for (int i = first; i <= last; i += step) {
             result.push_back(i);
         }
         search_start = match.suffix().first;
