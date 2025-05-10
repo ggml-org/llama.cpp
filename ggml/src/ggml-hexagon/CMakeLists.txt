@@ -18,7 +18,7 @@ message("HEXAGON_SDK_PATH: ${HEXAGON_SDK_PATH}")
 message("HTP_ARCH_VERSION: ${HTP_ARCH_VERSION}")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    set(DEBUG_FLAG "-Wall")
+    set(DEBUG_FLAG "-DDEBUG -Wall")
     message("Debug mode:${DEBUG_FLAG}")
 else()
     set(DEBUG_FLAG "-DNDEBUG -Wall")
