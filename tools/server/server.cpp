@@ -3546,7 +3546,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
 std::function<void(int)> shutdown_handler;
 std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
-inline void signal_handler(int signal) {
+static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
         // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
         // this is for better developer experience, we can remove when the server is stable enough
@@ -3557,19 +3557,7 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
-int main(int argc, char ** argv) {
-    // own arguments required by this example
-    common_params params;
-
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
-        return 1;
-    }
-
-    common_init();
-
-    // struct that contains llama context and inference
-    server_context ctx_server;
-
+static bool initialize_server_context(common_params & params) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -3578,24 +3566,50 @@ int main(int argc, char ** argv) {
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     LOG_INF("\n");
 
-    std::unique_ptr<httplib::Server> svr;
+    return true;
+}
+
+static std::unique_ptr<httplib::Server> setup_server(common_params & params) {
+    std::unique_ptr<httplib::Server> server;
+
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_INF("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
-        svr.reset(
-            new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
-        );
+    if (!params.ssl_file_key.empty() && !params.ssl_file_cert.empty()) {
+        LOG_INF("Running with SSL: key = %s, cert = %s", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
+        server.reset(new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str()));
     } else {
-        LOG_INF("Running without SSL\n");
-        svr.reset(new httplib::Server());
+        LOG_INF("Running without SSL");
+        server.reset(new httplib::Server());
     }
 #else
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_ERR("Server is built without SSL support\n");
+    if (!params.ssl_file_key.empty() || !params.ssl_file_cert.empty()) {
+        LOG_ERR("Server is built without SSL support");
+        return nullptr;
+    }
+    server.reset(new httplib::Server());
+#endif
+
+    return server;
+}
+
+int main(int argc, char ** argv) {
+    // Parse and initialize common parameters
+    common_params params;
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
-    svr.reset(new httplib::Server());
-#endif
+    common_init();
+
+    // Initialize server context
+    server_context ctx_server;
+    if (!initialize_server_context(params)) {
+        return 1;
+    }
+
+    // Setup server and configure properties
+    std::unique_ptr<httplib::Server> svr = setup_server(params);
+    if (!svr) {
+        return 1;
+    }
 
     std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
