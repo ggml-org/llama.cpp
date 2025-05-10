@@ -144,6 +144,8 @@ struct slot_params {
             {"temperature",               sampling.temp},
             {"dynatemp_range",            sampling.dynatemp_range},
             {"dynatemp_exponent",         sampling.dynatemp_exponent},
+            {"smoothing_factor",          sampling.smoothing_factor},
+            {"smoothing_curve",           sampling.smoothing_curve},
             {"top_k",                     sampling.top_k},
             {"top_p",                     sampling.top_p},
             {"min_p",                     sampling.min_p},
@@ -257,6 +259,8 @@ struct server_task {
         params.sampling.temp               = json_value(data, "temperature",        defaults.sampling.temp);
         params.sampling.dynatemp_range     = json_value(data, "dynatemp_range",     defaults.sampling.dynatemp_range);
         params.sampling.dynatemp_exponent  = json_value(data, "dynatemp_exponent",  defaults.sampling.dynatemp_exponent);
+        params.sampling.smoothing_factor   = json_value(data, "smoothing_factor",   defaults.sampling.smoothing_factor);
+        params.sampling.smoothing_curve    = json_value(data, "smoothing_curve",    defaults.sampling.smoothing_curve);
         params.sampling.penalty_last_n     = json_value(data, "repeat_last_n",      defaults.sampling.penalty_last_n);
         params.sampling.penalty_repeat     = json_value(data, "repeat_penalty",     defaults.sampling.penalty_repeat);
         params.sampling.penalty_freq       = json_value(data, "frequency_penalty",  defaults.sampling.penalty_freq);

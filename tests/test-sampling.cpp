@@ -72,11 +72,11 @@ static void test_temp(const std::vector<float> & probs, const std::vector<float>
     tester.check();
 }
 
-static void test_temp_ext(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp, float delta, float exponent) {
+static void test_temp_ext(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp, float delta, float exponent, float smoothing_factor, float smoothing_curve) {
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
-    tester.apply(llama_sampler_init_temp_ext(temp, delta, exponent));
+    tester.apply(llama_sampler_init_temp_ext(temp, delta, exponent, smoothing_factor, smoothing_curve));
     tester.apply(llama_sampler_init_dist (0));
     DUMP(&tester.cur_p);
 
@@ -311,8 +311,11 @@ int main(void) {
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 1.0f);
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f, 0.0f, 0.0f, 0.0f}, 0.0f);
 
-    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 1.0f, 0.0f, 1.0f);
-    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f, 0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 1.0f);
+    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f, 0.3f, 0.2f, 0.1f}, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f);
+    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f, 0.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f);
+
+    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {0.372382f, 0.342804f, 0.230319f, 0.054495f}, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f);
+    test_temp_ext({0.1f, 0.2f, 0.3f, 0.4f}, {0.368339f, 0.349226f, 0.245247f, 0.037188f}, 1.0f, 0.0f, 1.0f, 1.0f, 2.0f);
 
     test_top_k({0.1f, 0.2f, 0.3f, 0.4f}, {1.0f}, 1);
     test_top_k({0.1f, 0.2f, 0.3f, 0.4f}, {0.44444f, 0.33333f, 0.22222f}, 3);
