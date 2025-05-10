@@ -174,6 +174,10 @@ struct clip_hparams {
     int32_t n_layer;
     int32_t proj_scale_factor = 0; // idefics3
 
+    // for models using dynamic image size, we need to have a smaller image size to warmup
+    // otherwise, user will get OOM everytime they load the model
+    int32_t warmup_image_size = 0;
+
     ffn_op_type ffn_op = FFN_GELU;
 
     patch_merge_type mm_patch_merge_type = PATCH_MERGE_FLAT;
@@ -1796,6 +1800,9 @@ struct clip_model_loader {
             get_u32(KEY_IMAGE_CROP_RESOLUTION,    hparams.image_crop_resolution, false);
             get_arr_int(KEY_IMAGE_GRID_PINPOINTS, hparams.image_grid_pinpoints, false);
 
+            // default warmup value
+            hparams.warmup_image_size = hparams.image_size;
+
             ctx_clip.has_llava_projector = ctx_clip.proj_type == PROJECTOR_TYPE_MLP
                                         || ctx_clip.proj_type == PROJECTOR_TYPE_MLP_NORM
                                         || ctx_clip.proj_type == PROJECTOR_TYPE_LDP
@@ -1870,6 +1877,7 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_PIXTRAL:
                     {
                         hparams.rope_theta = 10000.0f;
+                        hparams.warmup_image_size = hparams.patch_size * 8;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.spatial_merge_size, false);
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:
@@ -1880,8 +1888,19 @@ struct clip_model_loader {
                         // test model (tinygemma3) has a different value, we optionally read it
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.proj_scale_factor, false);
                     } break;
+                case PROJECTOR_TYPE_QWEN2VL:
+                    {
+                        // max image size = sqrt(max_pixels)
+                        // https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct/blob/main/preprocessor_config.json
+                        hparams.image_size = 3584;
+                        hparams.warmup_image_size = hparams.patch_size * 8;
+                    } break;
                 case PROJECTOR_TYPE_QWEN25VL:
                     {
+                        // max image size = sqrt(max_pixels)
+                        // https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
+                        hparams.image_size = 3584;
+                        hparams.warmup_image_size = hparams.patch_size * 8;
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern);
                     } break;
                 default:
@@ -2185,13 +2204,14 @@ struct clip_model_loader {
         // create a fake batch
         clip_image_f32_batch batch;
         clip_image_f32_ptr img(clip_image_f32_init());
-        img->nx = ctx_clip.vision_model.hparams.image_size;
-        img->ny = ctx_clip.vision_model.hparams.image_size;
+        img->nx = ctx_clip.vision_model.hparams.warmup_image_size;
+        img->ny = ctx_clip.vision_model.hparams.warmup_image_size;
         img->buf.resize(img->nx * img->ny * 3);
         batch.entries.push_back(std::move(img));
 
         ggml_cgraph * gf = clip_image_build_graph(&ctx_clip, batch);
         ggml_backend_sched_reserve(ctx_clip.sched.get(), gf);
+
         for (size_t i = 0; i < ctx_clip.backend_ptrs.size(); ++i) {
             ggml_backend_t backend = ctx_clip.backend_ptrs[i];
             ggml_backend_buffer_type_t buft = ctx_clip.backend_buft[i];
@@ -2590,8 +2610,8 @@ struct image_manipulation {
         float target_width_f  = static_cast<float>(inp_size.width)  * scale;
         float target_height_f = static_cast<float>(inp_size.height) * scale;
 
-        int aligned_width  = GGML_PAD((int)target_width_f,  align_size);
-        int aligned_height = GGML_PAD((int)target_height_f, align_size);
+        int aligned_width  = CLIP_ALIGN((int)target_width_f,  align_size);
+        int aligned_height = CLIP_ALIGN((int)target_height_f, align_size);
 
         return {aligned_width, aligned_height};
     }
@@ -2910,10 +2930,9 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
     }
     else if (ctx->proj_type == PROJECTOR_TYPE_QWEN2VL || ctx->proj_type == PROJECTOR_TYPE_QWEN25VL) {
         clip_image_u8 resized;
-        auto patch_size = clip_get_patch_size(ctx) * 2;
-        int nx = ceil((float)img->nx / patch_size) * patch_size;
-        int ny = ceil((float)img->ny / patch_size) * patch_size;
-        image_manipulation::bicubic_resize(*img, resized, nx, ny);
+        auto patch_size = params.patch_size * 2;
+        auto new_size = image_manipulation::calc_size_preserved_ratio(original_size, patch_size, params.image_size);
+        image_manipulation::bicubic_resize(*img, resized, new_size.width, new_size.height);
 
         clip_image_f32_ptr img_f32(clip_image_f32_init());
         // clip_image_f32_ptr res(clip_image_f32_init());

@@ -92,6 +92,9 @@
 #define TN_GLM_ADAPTER_GATE     "adapter.linear.gate.%s"
 #define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
 
+// align x to upper multiple of n
+#define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+
 enum projector_type {
     PROJECTOR_TYPE_MLP,
     PROJECTOR_TYPE_MLP_NORM,
