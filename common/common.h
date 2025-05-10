@@ -332,6 +332,7 @@ struct common_params {
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
+    bool disable_op_offload= false; // globally disable offload host tensor operations to device
 
     bool single_turn       = false; // single turn chat conversation
 

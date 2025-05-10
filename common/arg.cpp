@@ -2438,6 +2438,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--disable-op-offload"},
+        string_format("disable offloading host tensor operations to device (default: %s)", params.disable_op_offload ? "true" : "false"),
+        [](common_params & params) {
+            params.disable_op_offload = true;
+        }
+    ));
+    add_opt(common_arg(
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {

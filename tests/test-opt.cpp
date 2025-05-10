@@ -853,7 +853,7 @@ int main(void) {
         backends_modded.insert(backends_modded.end(), backends.begin(), backends.end());
 
         ggml_backend_sched_t backend_sched = ggml_backend_sched_new(
-            backends_modded.data(), nullptr, backends_modded.size(), GGML_DEFAULT_GRAPH_SIZE, false);
+            backends_modded.data(), nullptr, backends_modded.size(), GGML_DEFAULT_GRAPH_SIZE, false, true);
 
         printf("Backend %zu/%zu: %s\n", i + 1, dev_count, ggml_backend_dev_name(devs[i]));
         printf("  Device description: %s\n", ggml_backend_dev_description(devs[i]));
