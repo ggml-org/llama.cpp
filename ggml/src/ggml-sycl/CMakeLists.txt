@@ -52,9 +52,8 @@ target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 find_package(DNNL)
 set(GGML_SYCL_DNNL 0)
 if(DNNL_FOUND)
-    if (DEFINED ENV{ONEAPI_ROOT} AND NOT DEFINED DNNL_GPU_VENDOR)
-        # Assuming oneDNN packaged with oneapi release is used which
-        # supports only intel target
+    if (NOT DEFINED DNNL_GPU_VENDOR)
+        # default to intel target
         set(DNNL_GPU_VENDOR "INTEL")
         if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
             message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
@@ -108,6 +107,9 @@ endif()
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
     # See https://github.com/uxlfoundation/oneMath/issues/654
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(SYCL_COMPILER ON)
+    endif()
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
