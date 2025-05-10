@@ -28,8 +28,10 @@
 #include "shaderop_getrows_q4_0.h"
 #include "shaderop_getrows_q4_1.h"
 #include "shaderop_getrows_q6_k.h"
-#include "shaderop_rope_f16.h"
-#include "shaderop_rope_f32.h"
+#include "shaderop_rope_norm_f16.h"
+#include "shaderop_rope_norm_f32.h"
+#include "shaderop_rope_neox_f16.h"
+#include "shaderop_rope_neox_f32.h"
 #include "shaderop_cpy_f16_f16.h"
 #include "shaderop_cpy_f16_f32.h"
 #include "shaderop_cpy_f32_f16.h"
@@ -345,7 +347,7 @@ void ggml_vk_allocate_descriptor_pool(struct ggml_kompute_context * ctx, size_t 
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes = {
         vk::DescriptorPoolSize(
           vk::DescriptorType::eStorageBuffer,
-          3 * size // Descriptor count is number of possible tensors to pass into an algorithm
+          4 * size // Descriptor count is number of possible tensors to pass into an algorithm
           )
     };
 
@@ -788,7 +790,8 @@ static void ggml_vk_soft_max(
     const std::shared_ptr<kp::Tensor>& out,
     uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
     int32_t ne00, int32_t ne01, int32_t ne02, uint32_t ne03,
-    float scale
+    float scale, float max_bias, float m0, float m1,
+    uint32_t n_head_log2
 ) {
     const static auto spirv = getSpirvShader(kp::shader_data::op_softmax_comp_spv,
         kp::shader_data::op_softmax_comp_spv_len);
@@ -796,12 +799,14 @@ static void ggml_vk_soft_max(
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
         int32_t ne00, ne01, ne02;
-        float scale;
+        float scale, max_bias, m0, m1;
+        uint32_t n_head_log2;
         int32_t mask;
     } pushConsts {
         safe_divide(inAOff, 4), safe_divide(inBOff, 4), safe_divide(outOff, 4),
         ne00, ne01, ne02,
-        scale,
+        scale, max_bias, m0, m1,
+        n_head_log2,
         bool(inB)
     };
 
@@ -911,9 +916,9 @@ static void ggml_vk_mul_mat_f16(
     const std::shared_ptr<kp::Tensor>& out,
     uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
     int32_t ne00, int32_t ne01, int32_t ne02,
-    uint32_t nb00, uint32_t nb01, uint32_t nb02,
+    uint32_t nb00, uint32_t nb01, uint32_t nb02, uint32_t nb03,
     int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13,
-    uint32_t nb10, uint32_t nb11, uint32_t nb12,
+    uint32_t nb10, uint32_t nb11, uint32_t nb12, uint32_t nb13,
     int32_t ne0, int32_t ne1,
     uint32_t r2, uint32_t r3
 ) {
@@ -923,17 +928,17 @@ static void ggml_vk_mul_mat_f16(
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
         int32_t ne00, ne01, ne02;
-        uint32_t nb00, nb01, nb02;
+        uint32_t nb00, nb01, nb02, nb03;
         int32_t ne10, ne11, ne12;
-        uint32_t nb10, nb11, nb12;
+        uint32_t nb10, nb11, nb12, nb13;
         int32_t ne0, ne1;
         uint32_t r2, r3;
     } pushConsts {
         safe_divide(inAOff, 2), safe_divide(inBOff, 4), safe_divide(outOff, 4),
         ne00, ne01, ne02,
-        nb00, nb01, nb02,
+        nb00, nb01, nb02, nb03,
         ne10, ne11, ne12,
-        nb10, nb11, nb12,
+        nb10, nb11, nb12, nb13,
         ne0, ne1,
         r2, r3
     };
@@ -1013,6 +1018,8 @@ static void ggml_vk_mul_mat_impl(
     int32_t ne00, int32_t ne01, int32_t ne02,
     int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13,
     int32_t ne0, int32_t ne1,
+    uint32_t nb01, uint32_t nb02, uint32_t nb03,
+    uint32_t nb11, uint32_t nb12, uint32_t nb13,
     uint32_t r2, uint32_t r3
 ) {
     struct PushConstants {
@@ -1020,19 +1027,23 @@ static void ggml_vk_mul_mat_impl(
         int32_t ne00, ne01, ne02;
         int32_t ne10, ne12;
         int32_t ne0, ne1;
+        uint32_t nb01, nb02, nb03;
+        uint32_t nb11, nb12, nb13;
         uint32_t r2, r3;
     } pushConsts {
         safe_divide(inAOff, block_size), safe_divide(inBOff, 4), safe_divide(outOff, 4),
         ne00, ne01, ne02,
         ne10, ne12,
         ne0, ne1,
+        nb01, nb02, nb03,
+        nb11, nb12, nb13,
         r2, r3
     };
 
     auto name = std::string(__func__) + "_" + suffix;
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
     if (!komputeManager()->hasAlgorithm(name)) {
-        const uint32_t local_x = ggml_vk_current_device().subgroupSize * 2;
+        const uint32_t local_x = (ggml_vk_current_device().subgroupSize * 2) / 8;
         s_algo = komputeManager()->algorithm<uint32_t, PushConstants>(name, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned((ne01 + 7)/8), unsigned(ne11), unsigned(ne12*ne13)}, {local_x}, {pushConsts});
     } else {
         s_algo = komputeManager()->getAlgorithm(name);
@@ -1074,19 +1085,26 @@ static void ggml_vk_mul_mat_q4_k(
     const std::shared_ptr<kp::Tensor>& inB,
     const std::shared_ptr<kp::Tensor>& out,
     uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-    int32_t ne00, int32_t ne01, int32_t ne02, int32_t ne10,
-    int32_t ne11, int32_t ne12, int32_t ne13, int32_t ne0,
-    int32_t ne1, int32_t r2, int32_t r3
+    int32_t ne00, int32_t ne01, int32_t ne02,
+    int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13,
+    int32_t ne0, int32_t ne1,
+    uint32_t nb01, uint32_t nb02, uint32_t nb03,
+    uint32_t nb11, uint32_t nb12, uint32_t nb13,
+    uint32_t r2, uint32_t r3
 ) {
     const static auto spirv = getSpirvShader(kp::shader_data::op_mul_mat_q4_k_comp_spv,
         kp::shader_data::op_mul_mat_q4_k_comp_spv_len);
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne10, ne0, ne1, ne01, ne02, ne12, r2, r3;
+        int32_t ne00, ne10, ne0, ne1, ne01, ne02, ne12;
+        uint32_t nb01, nb02, nb03, nb11, nb12, nb13;
+        uint32_t r2, r3;
     } pushConsts {
-        0, 0, 0,
-        ne00, ne10, ne0, ne1, ne01, ne02, ne12, r2, r3
+        inAOff, safe_divide(inBOff, 4), safe_divide(outOff, 4),
+        ne00, ne10, ne0, ne1, ne01, ne02, ne12,
+        nb01, nb02, nb03, nb11, nb12, nb13,
+        r2, r3
     };
 
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
@@ -1108,28 +1126,37 @@ static void ggml_vk_mul_mat_q6_k(
     const std::shared_ptr<kp::Tensor>& inB,
     const std::shared_ptr<kp::Tensor>& out,
     uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
-    int32_t ne00, int32_t ne10, int32_t ne0, int32_t ne1,
-    int32_t ne01, int32_t ne11, int32_t ne12, int32_t ne02
+    int32_t ne00, int32_t ne01, int32_t ne02,
+    int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13,
+    int32_t ne0, int32_t ne1,
+    uint32_t nb01, uint32_t nb02, uint32_t nb03,
+    uint32_t nb11, uint32_t nb12, uint32_t nb13,
+    uint32_t r2, uint32_t r3
 ) {
     const static auto spirv = getSpirvShader(kp::shader_data::op_mul_mat_q6_k_comp_spv,
         kp::shader_data::op_mul_mat_q6_k_comp_spv_len);
 
     struct PushConstants {
         uint32_t inAOff, inBOff, outOff;
-        int32_t ne00, ne10, ne0, ne1, ne01, gqa;
+        int32_t ne00, ne10, ne0, ne1, ne01, ne02, ne12;
+        uint32_t nb01, nb02, nb03, nb11, nb12, nb13;
+        uint32_t r2, r3;
     } pushConsts {
         inAOff, safe_divide(inBOff, 4), safe_divide(outOff, 4),
-        ne00, ne10, ne0, ne1, ne01, ne12/ne02
+        ne00, ne10, ne0, ne1, ne01, ne02, ne12,
+        nb01, nb02, nb03, nb11, nb12, nb13,
+        r2, r3
     };
 
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
     if (!komputeManager()->hasAlgorithm(__func__)) {
-        const uint32_t local_x = ggml_vk_current_device().subgroupSize * 2;
-        s_algo = komputeManager()->algorithm<uint32_t, PushConstants>(__func__, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned((ne01 + 1)/2), unsigned(ne11), unsigned(ne12)}, {local_x}, {pushConsts});
+        const uint32_t local_x = 2;
+        const uint32_t local_y = ggml_vk_current_device().subgroupSize;
+        s_algo = komputeManager()->algorithm<uint32_t, PushConstants>(__func__, s_kompute_context->pool.get(), {inA, inB, out}, spirv, {unsigned((ne01 + 1)/2), unsigned(ne11), unsigned(ne12)*unsigned(ne13)}, {local_x, local_y}, {pushConsts});
     } else {
         s_algo = komputeManager()->getAlgorithm(__func__);
         s_algo->setTensors({inA, inB, out});
-        s_algo->setWorkgroup({unsigned((ne01 + 1)/2), unsigned(ne11), unsigned(ne12)});
+        s_algo->setWorkgroup({unsigned((ne01 + 1)/2), unsigned(ne11), unsigned(ne12)*unsigned(ne13)});
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
     }
@@ -1217,10 +1244,11 @@ static void ggml_vk_rope(
     kp::Sequence& seq,
     const std::shared_ptr<kp::Tensor>& inA,
     const std::shared_ptr<kp::Tensor>& inB,
+    const std::shared_ptr<kp::Tensor>& inC,
     const std::shared_ptr<kp::Tensor>& out,
-    uint32_t inAOff, uint32_t inBOff, uint32_t outOff,
+    uint32_t inAOff, uint32_t inBOff, uint32_t inCOff, uint32_t outOff,
     ggml_type src0t, int32_t n_dims, int32_t mode, int32_t n_ctx_orig,
-    float freq_base, float freq_scale, float ext_factor, float attn_factor, float beta_fast, float beta_slow,
+    float freq_base, float freq_scale, bool has_freq_factors, float ext_factor, float attn_factor, float beta_fast, float beta_slow,
     int32_t ne01, int32_t ne02, int32_t ne03,
     uint32_t nb00, uint32_t nb01, uint32_t nb02, uint32_t nb03,
     int32_t ne0,
@@ -1228,11 +1256,17 @@ static void ggml_vk_rope(
 ) {
     GGML_ASSERT(src0t == GGML_TYPE_F16 || src0t == GGML_TYPE_F32);
 
-    static const auto spirv_f16 = getSpirvShader(
-        kp::shader_data::op_rope_f16_comp_spv, kp::shader_data::op_rope_f16_comp_spv_len
+    static const auto spirv_norm_f16 = getSpirvShader(
+        kp::shader_data::op_rope_norm_f16_comp_spv, kp::shader_data::op_rope_norm_f16_comp_spv_len
     );
-    static const auto spirv_f32 = getSpirvShader(
-        kp::shader_data::op_rope_f32_comp_spv, kp::shader_data::op_rope_f32_comp_spv_len
+    static const auto spirv_norm_f32 = getSpirvShader(
+        kp::shader_data::op_rope_norm_f32_comp_spv, kp::shader_data::op_rope_norm_f32_comp_spv_len
+    );
+    static const auto spirv_neox_f16 = getSpirvShader(
+        kp::shader_data::op_rope_neox_f16_comp_spv, kp::shader_data::op_rope_neox_f16_comp_spv_len
+    );
+    static const auto spirv_neox_f32 = getSpirvShader(
+        kp::shader_data::op_rope_neox_f32_comp_spv, kp::shader_data::op_rope_neox_f32_comp_spv_len
     );
 
     int type_size = src0t == GGML_TYPE_F16 ? 2 : 4;
@@ -1247,32 +1281,40 @@ static void ggml_vk_rope(
     GGML_ASSERT(nb0  % type_size == 0);
 
     struct PushConstants {
-        uint32_t inAOff, inBOff, outOff;
+        uint32_t inAOff, inBOff, inCOff, outOff;
         int32_t n_dims, mode, n_ctx_orig;
-        float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+        float freq_base, freq_scale;
+        bool has_freq_factors;
+        float ext_factor, attn_factor, beta_fast, beta_slow;
         uint32_t nb00, nb01, nb02, nb03;
         int32_t ne0;
         uint32_t nb0, nb1, nb2, nb3;
     } pushConsts {
-        safe_divide(inAOff, type_size), safe_divide(inBOff, 4), safe_divide(outOff, type_size),
+        safe_divide(inAOff, type_size), safe_divide(inBOff, 4), safe_divide(inCOff, type_size), safe_divide(outOff, type_size),
         n_dims, mode, n_ctx_orig,
-        freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow,
+        freq_base, freq_scale,
+        has_freq_factors,
+        ext_factor, attn_factor, beta_fast, beta_slow,
         nb00, nb01, nb02, nb03,
         ne0,
         nb0, nb1, nb2, nb3
     };
 
-    auto name = std::string(__func__) + (src0t == GGML_TYPE_F16 ? "_f16" : "_f32");
+    auto & inC_ = inC ? inC : inA;
+    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
+    const bool is_f16 = src0t == GGML_TYPE_F16;
+
+    auto name = std::string(__func__) + (is_neox ? "_neox" : "_norm") + (src0t == GGML_TYPE_F16 ? "_f16" : "_f32");
     std::shared_ptr<kp::Algorithm> s_algo = nullptr;
     if (!komputeManager()->hasAlgorithm(name)) {
+        auto & spirv = is_neox ? is_f16 ? spirv_neox_f16 : spirv_neox_f32 : is_f16 ? spirv_norm_f16 : spirv_norm_f32;
         s_algo = komputeManager()->algorithm<float, PushConstants>(
-            name, s_kompute_context->pool.get(), {inA, inB, out},
-            src0t == GGML_TYPE_F16 ? spirv_f16 : spirv_f32,
+            name, s_kompute_context->pool.get(), {inA, inB, inC_, out}, spirv,
             {unsigned(ne01), unsigned(ne02), unsigned(ne03)}, {}, {pushConsts}
         );
     } else {
         s_algo = komputeManager()->getAlgorithm(name);
-        s_algo->setTensors({inA, inB, out});
+        s_algo->setTensors({inA, inB, inC_, out});
         s_algo->setWorkgroup({unsigned(ne01), unsigned(ne02), unsigned(ne03)});
         s_algo->setPushConstants<PushConstants>({pushConsts});
         s_algo->updateDescriptors(s_kompute_context->pool.get());
@@ -1351,11 +1393,15 @@ static void ggml_vk_cpy_f16_f32(Args&&... args) {
 }
 
 static bool ggml_backend_kompute_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    int64_t n = ggml_nelements(op);
     switch (op->op) {
         case GGML_OP_UNARY:
+            if (n % 4 != 0) return false;
             switch (ggml_get_unary_op(op)) {
-                case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_GELU:
+                    if (n % 8 != 0) return false;
+                    // fall through
+                case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_SILU:
                     return ggml_is_contiguous(op->src[0]);
                 default:
@@ -1373,8 +1419,18 @@ static bool ggml_backend_kompute_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_SOFT_MAX:
         case GGML_OP_RMS_NORM:
         case GGML_OP_NORM:
-        case GGML_OP_ROPE:
             return true;
+        case GGML_OP_ROPE:
+            {
+                const int mode = ((const int32_t *) op->op_params)[2];
+                if (mode & GGML_ROPE_TYPE_MROPE) {
+                    return false;
+                }
+                if (mode & GGML_ROPE_TYPE_VISION) {
+                    return false;
+                }
+                return true;
+            }
         case GGML_OP_DUP:
         case GGML_OP_CPY:
         case GGML_OP_CONT:
@@ -1413,8 +1469,8 @@ static bool ggml_backend_kompute_device_supports_op(ggml_backend_dev_t dev, cons
 
             switch (op->src[0]->type) {
                 case GGML_TYPE_F32:
-                case GGML_TYPE_Q6_K:
                     return op->ne[3] == 1;
+                case GGML_TYPE_Q6_K:
                 case GGML_TYPE_F16:
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
@@ -1515,9 +1571,11 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
             const static std::shared_ptr<kp::Tensor> nullTensor = nullptr;
             uint32_t off_src0 = 0;
             uint32_t off_src1 = 0;
+            uint32_t off_src2 = 0;
             uint32_t off_dst  = 0;
             const std::shared_ptr<kp::Tensor>& id_src0 = src0 ? ggml_vk_get_tensor(src0, &off_src0) : nullTensor;
             const std::shared_ptr<kp::Tensor>& id_src1 = src1 ? ggml_vk_get_tensor(src1, &off_src1) : nullTensor;
+            const std::shared_ptr<kp::Tensor>& id_src2 = src2 ? ggml_vk_get_tensor(src2, &off_src2) : nullTensor;
             const std::shared_ptr<kp::Tensor>& id_dst  = dst  ? ggml_vk_get_tensor(dst,  &off_dst)  : nullTensor;
 
             switch (dst->op) {
@@ -1593,11 +1651,16 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
 #pragma message("ref:  https://github.com/ggerganov/llama.cpp/pull/5021")
                         GGML_ASSERT(!src1 || src1t == GGML_TYPE_F32);
 
-#pragma message("TODO: add ALiBi support")
-#pragma message("ref:  https://github.com/ggerganov/llama.cpp/pull/7192")
-                        GGML_ASSERT(max_bias == 0.0f);
+                        const int64_t nrows_x = ggml_nrows(src0);
+                        const int64_t nrows_y = src0->ne[1];
 
-                        ggml_vk_soft_max(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, ne02, ne03, scale);
+                        const uint32_t n_head      = nrows_x/nrows_y;
+                        const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
+
+                        const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+                        const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+                        ggml_vk_soft_max(seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, ne00, ne01, ne02, ne03, scale, max_bias, m0, m1, n_head_log2);
                     } break;
                 case GGML_OP_DIAG_MASK_INF:
                     {
@@ -1649,38 +1712,44 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
                             case GGML_TYPE_F16:
                                 ggml_vk_mul_mat_f16(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne01, ne02, nb00, nb01, nb02, ne10, ne11, ne12, ne13, nb10, nb11, nb12,
+                                    ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                                    ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13,
                                     ne0, ne1, r2, r3
                                 );
                                 break;
                             case GGML_TYPE_Q8_0:
                                 ggml_vk_mul_mat_q8_0(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1, r2, r3
+                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1,
+                                    nb01, nb02, nb03, nb11, nb12, nb13, r2, r3
                                 );
                                 break;
                             case GGML_TYPE_Q4_0:
                                 ggml_vk_mul_mat_q4_0(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1, r2, r3
+                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1,
+                                    nb01, nb02, nb03, nb11, nb12, nb13, r2, r3
                                 );
                                 break;
                             case GGML_TYPE_Q4_1:
                                 ggml_vk_mul_mat_q4_1(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1, r2, r3
+                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1,
+                                    nb01, nb02, nb03, nb11, nb12, nb13, r2, r3
                                 );
                                 break;
                             case GGML_TYPE_Q4_K:
                                 ggml_vk_mul_mat_q4_k(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1, ne12/ne02, ne13/ne03
+                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1,
+                                    nb01, nb02, nb03, nb11, nb12, nb13, r2, r3
                                 );
                                 break;
                             case GGML_TYPE_Q6_K:
                                 ggml_vk_mul_mat_q6_k(
                                     seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst,
-                                    ne00, ne10, ne0, ne1, ne01, ne11, ne12, ne02
+                                    ne00, ne01, ne02, ne10, ne11, ne12, ne13, ne0, ne1,
+                                    nb01, nb02, nb03, nb11, nb12, nb13, r2, r3
                                 );
                                 break;
                             default: {
@@ -1709,13 +1778,6 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
                     } break;
                 case GGML_OP_ROPE:
                     {
-#pragma message("TODO: implement phi3 frequency factors support")
-#pragma message("      https://github.com/ggerganov/llama.cpp/pull/7225")
-                        GGML_ASSERT(dst->src[2] == nullptr && "phi3 frequency factors not implemented yet");
-
-#pragma message("TODO: update rope NORM mode to match NEOX mode")
-#pragma message("      https://github.com/ggerganov/llama.cpp/pull/7634")
-
                         GGML_ASSERT(ne10 == ne02);
                         GGML_ASSERT(src0t == dstt);
                         // const int n_past = ((int32_t *) dst->op_params)[0];
@@ -1723,6 +1785,8 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
                         const int mode       = ((int32_t *) dst->op_params)[2];
                         // skip 3, n_ctx used in GLM RoPE, unimplemented in Vulkan
                         const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+
+                        const bool has_freq_factors = dst->src[2] != nullptr;
 
                         float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
                         memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
@@ -1732,8 +1796,8 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
                         memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
                         memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
                         ggml_vk_rope(
-                            seq, id_src0, id_src1, id_dst, off_src0, off_src1, off_dst, src0t, n_dims, mode, n_ctx_orig,
-                            freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow,
+                            seq, id_src0, id_src1, id_src2, id_dst, off_src0, off_src1, off_src2, off_dst, src0t, n_dims, mode, n_ctx_orig,
+                            freq_base, freq_scale, has_freq_factors, ext_factor, attn_factor, beta_fast, beta_slow,
                             ne01, ne02, ne03, nb00, nb01, nb02, nb03, ne0, nb0, nb1, nb2, nb3
                         );
                     } break;
@@ -2176,9 +2240,12 @@ static const struct ggml_backend_reg_i ggml_backend_kompute_reg_i = {
 
 ggml_backend_reg_t ggml_backend_kompute_reg() {
     static ggml_backend_reg reg = {
-        /* .iface   = */ ggml_backend_kompute_reg_i,
-        /* .context = */ nullptr,
+        /* .api_version = */ GGML_BACKEND_API_VERSION,
+        /* .iface       = */ ggml_backend_kompute_reg_i,
+        /* .context     = */ nullptr,
     };
 
     return &reg;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_kompute_reg)

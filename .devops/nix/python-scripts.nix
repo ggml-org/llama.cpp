@@ -34,7 +34,7 @@ let
 
     # server tests
     openai
-    behave
+    pytest
     prometheus-client
   ];
 in

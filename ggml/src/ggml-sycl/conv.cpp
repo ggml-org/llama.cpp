@@ -71,8 +71,9 @@ static void conv_transpose_1d_f32_f32_sycl(
         });
 }
 
-void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-    const ggml_tensor *src1, ggml_tensor *dst) {
+void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+    const ggml_tensor *src0 = dst->src[0];
+    const ggml_tensor *src1 = dst->src[1];
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
 

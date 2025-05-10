@@ -1,0 +1,57 @@
+{%- set loop_messages = messages -%}
+{%- set message_roles = ['system', 'user', 'assistant', 'tool'] -%}
+{%- set system_prompt_suffix -%}
+{%- filter trim -%}
+In addition to plain text responses, you can chose to call one or more of the provided functions.
+
+Use the following rule to decide when to call a function:
+  * if the response can be generated from your internal knowledge (e.g., as in the case of queries like "What is the capital of Poland?"), do so
+  * if you need external information that can be obtained by calling one or more of the provided functions, generate a function calls
+
+If you decide to call functions:
+  * prefix function calls with functools marker (no closing marker required)
+  * all function calls should be generated in a single JSON list formatted as functools[{"name": [function name], "arguments": [function arguments as JSON]}, ...]
+  * follow the provided JSON schema. Do not hallucinate arguments or values. Do to blindly copy values from the provided samples
+  * respect the argument type formatting. E.g., if the type if number and format is float, write value 7 as 7.0
+  * make sure you pick the right functions that match the user intent
+
+Available functions as JSON spec:
+{%- endfilter -%}
+{%- endset -%}
+{%- set system_prompt_suffix = system_prompt_suffix + "\n" + functions -%}
+{%- set system_prompt_suffix = system_prompt_suffix + '\nToday is ' + datetime + '.' -%}
+{%- set ns = namespace(role='', content='') -%}
+{#- Basic consistency checks -#}
+{%- if not loop_messages -%}
+  {{ raise_exception('Expected non-empty messages') }}
+{%- endif -%}
+{%- for message in loop_messages -%}
+  {%- set ns.role = message['role'] | lower -%}
+  {%- if ns.role not in message_roles -%}
+    {%- set message_roles_string = message_roles | join(', ') -%}
+    {{ raise_exception('Invalid role ' + message['role'] + '. Only ' + message_roles_string + ' are supported.') }}
+  {%- endif -%}
+  {%- set msg_content = message['content'] | default('', true) | trim -%}
+  {%- if loop.index0 == 0 -%}
+    {%- if ns.role == 'system' -%}
+      {%- set system_prompt = '<|start_header_id|>' + 'system' + '<|end_header_id|>\n\n' + message['content'] | trim + '\n' + system_prompt_suffix + '<|eot_id|>' -%}
+    {%- else -%}
+      {%- set system_prompt = '<|start_header_id|>' + 'system' + '<|end_header_id|>\n\nYou are a helpful assistant with access to functions.\n' + system_prompt_suffix + '<|eot_id|>' -%}
+    {%- endif -%}
+    {%- set ns.content = bos_token + system_prompt -%}
+    {{- ns.content -}}
+  {%- endif -%}
+  {%- if loop.index0 > 0 or ns.role != 'system' -%}
+    {%- set ns.content = '<|start_header_id|>' + ns.role + '<|end_header_id|>\n\n' + msg_content -%}
+    {%- if 'tool_calls' in message and message['tool_calls'] -%}
+      {%- set tool = namespace(calls=[]) -%}
+      {%- for call in message['tool_calls'] -%}
+        {%- set tool.calls = tool.calls + ['{"name": "' + call['function']['name'] + '", "arguments": ' + call['function']['arguments'] + '}'] -%}
+      {%- endfor -%}
+      {%- set ns.content = ns.content + ' functools[' + tool.calls | join(', ') + ']' -%}
+    {%- endif -%}
+    {%- set ns.content = ns.content + '<|eot_id|>' -%}
+    {{- ns.content -}}
+  {%- endif -%}
+{%- endfor -%}
+{{- '<|start_header_id|>assistant<|end_header_id|>\n\n' -}}

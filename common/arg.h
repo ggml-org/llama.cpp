@@ -12,6 +12,7 @@
 
 struct common_arg {
     std::set<enum llama_example> examples = {LLAMA_EXAMPLE_COMMON};
+    std::set<enum llama_example> excludes = {};
     std::vector<const char *> args;
     const char * value_hint   = nullptr; // help text or example for arg value
     const char * value_hint_2 = nullptr; // for second arg value
@@ -53,9 +54,11 @@ struct common_arg {
     ) : args(args), value_hint(value_hint), value_hint_2(value_hint_2), help(help), handler_str_str(handler) {}
 
     common_arg & set_examples(std::initializer_list<enum llama_example> examples);
+    common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
     common_arg & set_env(const char * env);
     common_arg & set_sparam();
     bool in_example(enum llama_example ex);
+    bool is_exclude(enum llama_example ex);
     bool get_value_from_env(std::string & output);
     bool has_value_from_env();
     std::string to_string();
@@ -75,3 +78,12 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
 
 // function to be used by test-arg-parser
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
+bool common_has_curl();
+
+struct common_remote_params {
+    std::vector<std::string> headers;
+    long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout
+    long max_size = 0; // max size of the response ; unlimited if 0 ; max is 2GB
+};
+// get remote file content, returns <http_code, raw_response_body>
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);

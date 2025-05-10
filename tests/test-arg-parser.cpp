@@ -70,14 +70,14 @@ int main(void) {
 
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SERVER));
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
 
 
     printf("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "model_file.gguf");
+    assert(params.model.path == "model_file.gguf");
 
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -89,14 +89,14 @@ int main(void) {
 
     argv = {"binary_name", "-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "abc.gguf");
+    assert(params.model.path == "abc.gguf");
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--draft", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
-    assert(params.n_draft == 123);
+    assert(params.speculative.n_max == 123);
 
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
@@ -112,7 +112,7 @@ int main(void) {
     setenv("LLAMA_ARG_THREADS", "1010", true);
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "blah.gguf");
+    assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
 
@@ -122,10 +122,57 @@ int main(void) {
     setenv("LLAMA_ARG_THREADS", "1010", true);
     argv = {"binary_name", "-m", "overwritten.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model == "overwritten.gguf");
+    assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
+    if (common_has_curl()) {
+        printf("test-arg-parser: test curl-related functions\n\n");
+        const char * GOOD_URL = "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/README.md";
+        const char * BAD_URL  = "https://www.google.com/404";
+        const char * BIG_FILE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin";
+
+        {
+            printf("test-arg-parser: test good URL\n\n");
+            auto res = common_remote_get_content(GOOD_URL, {});
+            assert(res.first == 200);
+            assert(res.second.size() > 0);
+            std::string str(res.second.data(), res.second.size());
+            assert(str.find("llama.cpp") != std::string::npos);
+        }
+
+        {
+            printf("test-arg-parser: test bad URL\n\n");
+            auto res = common_remote_get_content(BAD_URL, {});
+            assert(res.first == 404);
+        }
+
+        {
+            printf("test-arg-parser: test max size error\n");
+            common_remote_params params;
+            params.max_size = 1;
+            try {
+                common_remote_get_content(GOOD_URL, params);
+                assert(false && "it should throw an error");
+            } catch (std::exception & e) {
+                printf("  expected error: %s\n\n", e.what());
+            }
+        }
+
+        {
+            printf("test-arg-parser: test timeout error\n");
+            common_remote_params params;
+            params.timeout = 1;
+            try {
+                common_remote_get_content(BIG_FILE, params);
+                assert(false && "it should throw an error");
+            } catch (std::exception & e) {
+                printf("  expected error: %s\n\n", e.what());
+            }
+        }
+    } else {
+        printf("test-arg-parser: no curl, skipping curl-related functions\n");
+    }
 
     printf("test-arg-parser: all tests OK\n\n");
 }

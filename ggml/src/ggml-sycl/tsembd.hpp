@@ -15,7 +15,6 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, const ggml_tensor *src0,
-    const ggml_tensor *src1, ggml_tensor * dst);
+void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 #endif // GGML_SYCL_TSEMBD_HPP

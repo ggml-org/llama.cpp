@@ -31,6 +31,7 @@
   # Increases the runtime closure size by ~700M
   useMpi ? false,
   useRocm ? config.rocmSupport,
+  rocmGpuTargets ? builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets,
   enableCurl ? true,
   useVulkan ? false,
   llamaVersion ? "0.0.0", # Arbitrary version, substituted by the flake
@@ -132,12 +133,12 @@ effectiveStdenv.mkDerivation (finalAttrs: {
       --replace '[bundle pathForResource:@"default" ofType:@"metallib"];' "@\"$out/bin/default.metallib\";"
   '';
 
-  # With PR#6015 https://github.com/ggerganov/llama.cpp/pull/6015,
+  # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,
   # `default.metallib` may be compiled with Metal compiler from XCode
   # and we need to escape sandbox on MacOS to access Metal compiler.
   # `xcrun` is used find the path of the Metal compiler, which is varible
   # and not on $PATH
-  # see https://github.com/ggerganov/llama.cpp/pull/6118 for discussion
+  # see https://github.com/ggml-org/llama.cpp/pull/6118 for discussion
   __noChroot = effectiveStdenv.isDarwin && useMetalKit && precompileMetalShaders;
 
   nativeBuildInputs =
@@ -188,7 +189,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ]
     ++ optionals useRocm [
       (cmakeFeature "CMAKE_HIP_COMPILER" "${rocmPackages.llvm.clang}/bin/clang")
-      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" (builtins.concatStringsSep ";" rocmPackages.clr.gpuTargets))
+      (cmakeFeature "CMAKE_HIP_ARCHITECTURES" rocmGpuTargets)
     ]
     ++ optionals useMetalKit [
       (lib.cmakeFeature "CMAKE_C_FLAGS" "-D__ARM_FEATURE_DOTPROD=1")
@@ -219,7 +220,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     broken = (useMetalKit && !effectiveStdenv.isDarwin);
 
     description = "Inference of LLaMA model in pure C/C++${descriptionSuffix}";
-    homepage = "https://github.com/ggerganov/llama.cpp/";
+    homepage = "https://github.com/ggml-org/llama.cpp/";
     license = lib.licenses.mit;
 
     # Accommodates `nix run` and `lib.getExe`

@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
@@ -63,22 +64,24 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_load_model_from_file(params.model.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n" , __func__);
         return 1;
     }
 
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     // initialize the context
 
     llama_context_params ctx_params = common_context_params_to_llama(params);
 
-    ctx_params.n_ctx = llama_n_ctx_train(model)*n_grp + n_keep;
+    ctx_params.n_ctx = llama_model_n_ctx_train(model)*n_grp + n_keep;
 
     GGML_ASSERT(ctx_params.n_batch % n_grp == 0 && "n_batch must be divisible by n_grp");
 
-    llama_context * ctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (ctx == NULL) {
         LOG_ERR("%s: failed to create the llama_context\n" , __func__);
         return 1;
@@ -130,11 +133,11 @@ int main(int argc, char ** argv) {
             const int ib = i/n_batch - 1;
             const int bd = n_batch_grp*(n_grp - 1);
 
-            llama_kv_cache_seq_add (ctx, 0, n_past - n_batch,         n_past,         ib*bd);
-            llama_kv_cache_seq_div (ctx, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
-            llama_kv_cache_update  (ctx);
+            llama_kv_self_seq_add (ctx, 0, n_past - n_batch,         n_past,         ib*bd);
+            llama_kv_self_seq_div (ctx, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
+            llama_kv_self_update  (ctx);
 
-            n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
+            n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
         }
 
         common_batch_clear(batch);
@@ -164,12 +167,12 @@ int main(int argc, char ** argv) {
 
         LOG_INF("%s: shifting KV cache with %d\n", __func__, n_discard);
 
-        llama_kv_cache_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-        llama_kv_cache_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
-      //llama_kv_cache_defrag (ctx);
-        llama_kv_cache_update (ctx);
+        llama_kv_self_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
+        llama_kv_self_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
+      //llama_kv_self_defrag (ctx);
+        llama_kv_self_update (ctx);
 
-        n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
+        n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
 
         common_batch_clear(batch);
 
@@ -195,12 +198,12 @@ int main(int argc, char ** argv) {
         if (n_discard > 0) {
             LOG_INF("%s: shifting KV cache with %d to free space for the answer\n", __func__, n_discard);
 
-            llama_kv_cache_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-            llama_kv_cache_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
-          //llama_kv_cache_defrag (ctx);
-            llama_kv_cache_update (ctx);
+            llama_kv_self_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
+            llama_kv_self_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
+          //llama_kv_self_defrag (ctx);
+            llama_kv_self_update (ctx);
 
-            n_past = llama_kv_cache_seq_pos_max(ctx, 0) + 1;
+            n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
         }
     }
 
@@ -223,7 +226,7 @@ int main(int argc, char ** argv) {
             const llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
 
             // is it an end of generation?
-            if (llama_token_is_eog(model, new_token_id) || n_cur == n_len) {
+            if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len) {
                 LOG("\n");
 
                 break;
@@ -266,7 +269,7 @@ int main(int argc, char ** argv) {
     llama_batch_free(batch);
 
     llama_free(ctx);
-    llama_free_model(model);
+    llama_model_free(model);
 
     llama_backend_free();
 

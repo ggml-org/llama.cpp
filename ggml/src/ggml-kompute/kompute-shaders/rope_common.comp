@@ -8,12 +8,14 @@ layout(local_size_x = 1) in;
 layout (push_constant) uniform parameter {
     uint inAOff;
     uint inBOff;
+    uint inCOff;
     uint outOff;
     int n_dims;
     int mode;
     int n_ctx_orig;
     float freq_base;
     float freq_scale;
+    bool has_freq_factors;
     float ext_factor;
     float attn_factor;
     float beta_fast;

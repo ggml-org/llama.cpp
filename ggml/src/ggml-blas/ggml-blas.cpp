@@ -506,9 +506,12 @@ static const struct ggml_backend_reg_i ggml_backend_blas_reg_i = {
 
 ggml_backend_reg_t ggml_backend_blas_reg(void) {
     static struct ggml_backend_reg ggml_backend_blas_reg = {
-        /* .iface   = */ ggml_backend_blas_reg_i,
-        /* .context = */ NULL,
+        /* .api_version = */ GGML_BACKEND_API_VERSION,
+        /* .iface       = */ ggml_backend_blas_reg_i,
+        /* .context     = */ NULL,
     };
 
     return &ggml_backend_blas_reg;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_blas_reg)

@@ -15,8 +15,6 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_rope(
-    ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
-    const float *src0_dd, const float *src1_dd, float *dst_dd, const queue_ptr &main_stream);
+void ggml_sycl_rope(ggml_backend_sycl_context & ctx, ggml_tensor *dst);
 
 #endif // GGML_SYCL_ROPE_HPP

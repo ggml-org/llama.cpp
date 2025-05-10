@@ -2,9 +2,10 @@
 #undef NDEBUG
 #endif
 
-#include "unicode.h"
-#include "llama-grammar.h"
 #include "json-schema-to-grammar.h"
+
+#include "../src/unicode.h"
+#include "../src/llama-grammar.h"
 
 #include <cassert>
 #include <string>
@@ -13,7 +14,7 @@
 using json = nlohmann::ordered_json;
 
 static llama_grammar * build_grammar(const std::string & grammar_str) {
-    return llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root");
+    return llama_grammar_init_impl(nullptr, grammar_str.c_str(), "root", false, nullptr, 0, nullptr, 0);
 }
 
 static bool test_build_grammar_fails(const std::string & grammar_str) {
@@ -32,13 +33,10 @@ static bool test_build_grammar_fails(const std::string & grammar_str) {
 static bool match_string(const std::string & input, llama_grammar * grammar) {
     const auto cpts = unicode_cpts_from_utf8(input);
 
-    const llama_grammar_rules  & rules      = llama_grammar_get_rules (grammar);
-          llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
+    auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
     for (const auto & cpt : cpts) {
-        const llama_grammar_stacks stacks_prev = llama_grammar_get_stacks(grammar); // copy
-
-        llama_grammar_accept(rules, stacks_prev, cpt, stacks_cur);
+        llama_grammar_accept(grammar, cpt);
 
         if (stacks_cur.empty()) {
             // no stacks means that the grammar failed to match at this point
@@ -63,7 +61,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
     auto * grammar = build_grammar(grammar_str);
 
     // Save the original grammar stacks so that we can reset after every new string we want to test
-    const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar);
+    const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar); // copy
 
     llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
 
@@ -132,7 +130,7 @@ static void test_grammar(const std::string & test_desc, const std::string & gram
     test(test_desc + ". Grammar: " + grammar_str, grammar_str, passing_strings, failing_strings);
 }
 static void test_schema(const std::string & test_desc, const std::string & schema_str, const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
-    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str)), passing_strings, failing_strings);
+    test(test_desc + ". Schema: " + schema_str, json_schema_to_grammar(json::parse(schema_str), true), passing_strings, failing_strings);
 }
 
 static void test_simple_grammar() {

@@ -79,9 +79,9 @@ static float dot_product(const float * a1, const float * a2, size_t test_size) {
 }
 
 // Total dot product error
-static float dot_product_error(
-    const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float *test_data2
-) {
+static float dot_product_error(const ggml_type_traits * qfns, const ggml_type_traits_cpu * qfns_cpu, size_t test_size, const float * test_data1, const float * test_data2) {
+    GGML_UNUSED(qfns);
+
     std::vector<uint8_t> tmp_q1(2*test_size);
     std::vector<uint8_t> tmp_q2(2*test_size);
 
@@ -120,13 +120,7 @@ int main(int argc, char * argv[]) {
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
 
-    // Initialize GGML, ensures float conversion tables are initialized
-    struct ggml_init_params ggml_params = {
-        /* .mem_size   = */ 1*1024,
-        /* .mem_buffer = */ NULL,
-        /* .no_alloc   = */ true,
-    };
-    struct ggml_context * ctx = ggml_init(ggml_params);
+    ggml_cpu_init();
 
     int num_failed = 0;
     bool failed = false;
@@ -187,8 +181,6 @@ int main(int argc, char * argv[]) {
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
     }
-
-    ggml_free(ctx);
 
     return num_failed > 0;
 }

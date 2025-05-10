@@ -1,9 +1,4 @@
-# TODO: should not use this
-if (WIN32)
-    if (BUILD_SHARED_LIBS)
-        set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
-    endif()
-endif()
+llama_add_compile_flags()
 
 #
 # libraries
@@ -14,16 +9,32 @@ endif()
 add_library(llama
             ../include/llama.h
             llama.cpp
-            llama-vocab.cpp
+            llama-adapter.cpp
+            llama-arch.cpp
+            llama-batch.cpp
+            llama-chat.cpp
+            llama-context.cpp
             llama-grammar.cpp
+            llama-graph.cpp
+            llama-hparams.cpp
+            llama-impl.cpp
+            llama-io.cpp
+            llama-kv-cache.cpp
+            llama-memory.cpp
+            llama-mmap.cpp
+            llama-model-loader.cpp
+            llama-model.cpp
+            llama-quant.cpp
             llama-sampling.cpp
-            unicode.h
-            unicode.cpp
+            llama-vocab.cpp
             unicode-data.cpp
+            unicode.cpp
+            unicode.h
             )
 
-target_include_directories(llama PUBLIC . ../include)
-target_compile_features   (llama PUBLIC cxx_std_11) # don't bump
+target_include_directories(llama PRIVATE .)
+target_include_directories(llama PUBLIC ../include)
+target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 

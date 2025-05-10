@@ -15,21 +15,12 @@
 
 #include "common.hpp"
 
-void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0, const ggml_tensor* src1,
-    ggml_tensor* dst, const float* src0_dd,
-    const float* src1_dd, float* dst_dd,
-    const queue_ptr& main_stream);
+void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
-void ggml_sycl_op_rms_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst,
-    const float* src0_dd, const float* src1_dd,
-    float* dst_dd,
-    const queue_ptr& main_stream);
+void ggml_sycl_op_rms_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
-void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, const ggml_tensor* src0,
-    const ggml_tensor* src1, ggml_tensor* dst,
-    const float* src0_dd, const float* src1_dd,
-    float* dst_dd,
-    const queue_ptr& main_stream);
+void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
+
+void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst);
 
 #endif // GGML_SYCL_NORM_HPP

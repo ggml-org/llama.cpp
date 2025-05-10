@@ -21,7 +21,16 @@ layout (push_constant) uniform parameter {
     int ne0;
     int ne1;
     int ne01;
-    int gqa;
+    int ne02;
+    int ne12;
+    uint nb01;
+    uint nb02;
+    uint nb03;
+    uint nb11;
+    uint nb12;
+    uint nb13;
+    uint r2;
+    uint r3;
 } pcs;
 
 void main() {
@@ -34,12 +43,15 @@ void main() {
 
     const uint r0 = gl_WorkGroupID.x;
     const uint r1 = gl_WorkGroupID.y;
-    const uint r2 = gl_WorkGroupID.z;
+    const uint im = gl_WorkGroupID.z;
 
     const uint row = (r0 * gl_NumSubgroups + gl_SubgroupID);
-    const uint offset0 = r2/pcs.gqa*(nb*pcs.ne0);
-    const uint x = row * nb + offset0; // Based from inA without base offset
-    const uint yy = r1*pcs.ne10 + r2*pcs.ne00*pcs.ne1+pcs.inBOff; // Based from inB
+
+    const uint i12 = im%pcs.ne12;
+    const uint i13 = im/pcs.ne12;
+
+    const uint x = row*(pcs.nb01/SIZE_OF_BLOCK) + (i12/pcs.r2)*(pcs.nb02/SIZE_OF_BLOCK) + (i13/pcs.r3)*(pcs.nb03/SIZE_OF_BLOCK);
+    const uint yy = (r1*pcs.nb11 + i12*pcs.nb12 + i13*pcs.nb13) / 4 + pcs.inBOff;
 
     float sumf = 0;
 
@@ -89,6 +101,6 @@ void main() {
 
     const float tot = subgroupAdd(sumf);
     if (subgroupElect()) {
-        out_[r1*pcs.ne0 + r2*pcs.ne0*pcs.ne1 + row + pcs.outOff] = tot;
+        out_[r1*pcs.ne0 + im*pcs.ne0*pcs.ne1 + row + pcs.outOff] = tot;
     }
 }

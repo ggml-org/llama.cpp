@@ -40,7 +40,8 @@ To protect sensitive data from potential leaks or unauthorized access, it is cru
 ### Untrusted environments or networks
 
 If you can't run your models in a secure and isolated environment or if it must be exposed to an untrusted network, make sure to take the following security precautions:
-* Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value
+* Do not use the RPC backend, [rpc-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) and [llama-server](https://github.com/ggml-org/llama.cpp/tree/master/tools/server) functionality (see https://github.com/ggml-org/llama.cpp/pull/13061).
+* Confirm the hash of any downloaded artifact (e.g. pre-trained model weights) matches a known-good value.
 * Encrypt your data if sending it over the network.
 
 ### Multi-Tenant environments
@@ -62,6 +63,6 @@ Beware that none of the topics under [Using llama.cpp securely](#using-llamacpp-
 <!-- normal version -->
 However, If you have discovered a security vulnerability in this project, please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
 
-Please disclose it as a private [security advisory](https://github.com/ggerganov/llama.cpp/security/advisories/new).
+Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
 
 A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.

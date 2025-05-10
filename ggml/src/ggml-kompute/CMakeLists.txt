@@ -6,13 +6,13 @@ if (NOT glslc_executable)
     message(FATAL_ERROR "glslc not found")
 endif()
 
-add_library(ggml-kompute
-            ggml-kompute.cpp
-            ../../include/ggml-kompute.h
-            )
+ggml_add_backend_library(ggml-kompute
+                         ggml-kompute.cpp
+                         ../../include/ggml-kompute.h
+                        )
 
 target_link_libraries(ggml-kompute PRIVATE ggml-base kompute)
-target_include_directories(ggml-kompute PRIVATE . .. ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(ggml-kompute PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 add_compile_definitions(VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1)
 
@@ -105,8 +105,10 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kompute/CMakeLists.txt")
         kompute-shaders/op_getrows_q4_0.comp
         kompute-shaders/op_getrows_q4_1.comp
         kompute-shaders/op_getrows_q6_k.comp
-        kompute-shaders/op_rope_f16.comp
-        kompute-shaders/op_rope_f32.comp
+        kompute-shaders/op_rope_norm_f16.comp
+        kompute-shaders/op_rope_norm_f32.comp
+        kompute-shaders/op_rope_neox_f16.comp
+        kompute-shaders/op_rope_neox_f32.comp
         kompute-shaders/op_cpy_f16_f16.comp
         kompute-shaders/op_cpy_f16_f32.comp
         kompute-shaders/op_cpy_f32_f16.comp
@@ -139,8 +141,10 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/kompute/CMakeLists.txt")
         shaderop_getrows_q4_0.h
         shaderop_getrows_q4_1.h
         shaderop_getrows_q6_k.h
-        shaderop_rope_f16.h
-        shaderop_rope_f32.h
+        shaderop_rope_norm_f16.h
+        shaderop_rope_norm_f32.h
+        shaderop_rope_neox_f16.h
+        shaderop_rope_neox_f32.h
         shaderop_cpy_f16_f16.h
         shaderop_cpy_f16_f32.h
         shaderop_cpy_f32_f16.h

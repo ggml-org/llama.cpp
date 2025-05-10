@@ -2,7 +2,7 @@
 
 layout (push_constant) uniform parameter
 {
-    uint ne; uint d_offset;
+    uint ne; uint a_offset; uint d_offset;
     uint nb00; uint nb01; uint nb02; uint nb03;
     uint ne10; uint ne11; uint ne12; uint ne13;
     float sf0; float sf1; float sf2; float sf3;
@@ -32,5 +32,5 @@ void main() {
     const uint i02 = uint(i12 / p.sf2);
     const uint i03 = uint(i13 / p.sf3);
 
-    data_d[p.d_offset + idx] = D_TYPE(data_a[i03 * p.nb03 + i02 * p.nb02 + i01 * p.nb01 + i00 * p.nb00]);
+    data_d[p.d_offset + idx] = D_TYPE(data_a[p.a_offset + i03 * p.nb03 + i02 * p.nb02 + i01 * p.nb01 + i00 * p.nb00]);
 }
