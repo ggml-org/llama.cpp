@@ -1372,7 +1372,7 @@ private:
                 }
 
                 if (layer.k_norm) {
-                    Kcur = build_norm(Kcur, layer.q_norm, NULL, norm_t, eps, il);
+                    Kcur = build_norm(Kcur, layer.k_norm, NULL, norm_t, eps, il);
                     cb(Kcur, "Kcur_norm", il);
                 }
 
@@ -2005,8 +2005,8 @@ struct clip_model_loader {
             layer.ln_2_w = get_tensor(string_format(TN_LN_2,        "v", il, "weight"), false);
             layer.ls_1_w = get_tensor(string_format(TN_LS_1,        "v", il, "weight"), false); // no bias
             layer.ls_2_w = get_tensor(string_format(TN_LS_2,        "v", il, "weight"), false); // no bias
-            layer.k_norm = get_tensor(string_format(TN_ATTN_Q_NORM, "v", il, "weight"), false);
-            layer.q_norm = get_tensor(string_format(TN_ATTN_K_NORM, "v", il, "weight"), false);
+            layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, "v", il, "weight"), false);
+            layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, "v", il, "weight"), false);
 
             layer.k_b    = get_tensor(string_format(TN_ATTN_K,      "v", il, "bias"), false);
             layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      "v", il, "bias"), false);
