@@ -15,7 +15,7 @@ import {
   getSSEStreamAsync,
   getServerProps,
 } from './misc';
-import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
+import { BASE_URL, getServerDefaultConfig, isDev, type AppConfig } from '../utils/initConfig';
 import { matchPath, useLocation, useNavigate } from 'react-router';
 import toast from 'react-hot-toast';
 
@@ -45,8 +45,8 @@ interface AppContextValue {
   setCanvasData: (data: CanvasData | null) => void;
 
   // config
-  config: typeof CONFIG_DEFAULT;
-  saveConfig: (config: typeof CONFIG_DEFAULT) => void;
+  config: AppConfig;
+  saveConfig: (config: AppConfig) => void;
   showSettings: boolean;
   setShowSettings: (show: boolean) => void;
 
@@ -90,16 +90,35 @@ export const AppContextProvider = ({
   const [aborts, setAborts] = useState<
     Record<Conversation['id'], AbortController>
   >({});
-  const [config, setConfig] = useState(StorageUtils.getConfig());
+  const [config, setConfig] = useState<AppConfig>(() => {
+    const cfg = StorageUtils.getConfig();
+    if (Object.keys(cfg).length === 0) {
+      console.warn('Config is empty at init (using {})');
+    }
+    return cfg;
+  });
   const [canvasData, setCanvasData] = useState<CanvasData | null>(null);
   const [showSettings, setShowSettings] = useState(false);
 
   // get server props
   useEffect(() => {
     getServerProps(BASE_URL, config.apiKey)
-      .then((props) => {
+      .then(async (props) => {
         console.debug('Server props:', props);
         setServerProps(props);
+
+        const hasUserConfig =
+          localStorage.getItem('config') &&
+          Object.keys(JSON.parse(localStorage.getItem('config') || '{}')).length > 0;
+
+        if (!hasUserConfig) {
+          const cfg = await getServerDefaultConfig(config.apiKey);
+          StorageUtils.setConfig(cfg);
+          setConfig(cfg);
+          console.info('[Config] Loaded from server (no local config found)');
+        } else {
+          console.info('[Config] Using localStorage config');
+        }
       })
       .catch((err) => {
         console.error(err);
@@ -380,7 +399,7 @@ export const AppContextProvider = ({
     await generateMessage(convId, parentNodeId, onChunk);
   };
 
-  const saveConfig = (config: typeof CONFIG_DEFAULT) => {
+  const saveConfig = (config: AppConfig) => {
     StorageUtils.setConfig(config);
     setConfig(config);
   };

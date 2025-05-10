@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useAppContext } from '../utils/app.context';
-import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
-import { isDev } from '../Config';
+import { CONFIG_INFO, getServerDefaultConfig, isDev } from '../utils/initConfig';
 import StorageUtils from '../utils/storage';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
 import {
@@ -14,7 +13,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
 
-type SettKey = keyof typeof CONFIG_DEFAULT;
+import type { AppConfig } from '../utils/initConfig';
+type SettKey = keyof AppConfig;
 
 const BASIC_KEYS: SettKey[] = [
   'temperature',
@@ -269,27 +269,32 @@ export default function SettingDialog({
   const [sectionIdx, setSectionIdx] = useState(0);
 
   // clone the config object to prevent direct mutation
-  const [localConfig, setLocalConfig] = useState<typeof CONFIG_DEFAULT>(
-    JSON.parse(JSON.stringify(config))
-  );
+  const [localConfig, setLocalConfig] = useState<AppConfig>({ ...config });
 
-  const resetConfig = () => {
-    if (window.confirm('Are you sure you want to reset all settings?')) {
-      setLocalConfig(CONFIG_DEFAULT);
+  const resetConfig = async () => {
+    if (!window.confirm('Reset all settings from server defaults?')) return;
+
+    try {
+      const cfg = await getServerDefaultConfig(config.apiKey);
+      StorageUtils.setConfig(cfg);
+      saveConfig(cfg);
+      setLocalConfig({ ...cfg });
+      console.info('[Config] Reset from server config');
+    } catch (err) {
+      console.error('[Config] Failed to fetch server defaults:', err);
+      alert('Failed to fetch server default config.');
     }
   };
 
   const handleSave = () => {
     // copy the local config to prevent direct mutation
-    const newConfig: typeof CONFIG_DEFAULT = JSON.parse(
-      JSON.stringify(localConfig)
-    );
+    const newConfig: AppConfig = JSON.parse(JSON.stringify(localConfig));
     // validate the config
     for (const key in newConfig) {
       const value = newConfig[key as SettKey];
-      const mustBeBoolean = isBoolean(CONFIG_DEFAULT[key as SettKey]);
-      const mustBeString = isString(CONFIG_DEFAULT[key as SettKey]);
-      const mustBeNumeric = isNumeric(CONFIG_DEFAULT[key as SettKey]);
+      const mustBeBoolean = typeof config[key as SettKey] === 'boolean';
+      const mustBeString = typeof config[key as SettKey] === 'string';
+      const mustBeNumeric = typeof config[key as SettKey] === 'number';
       if (mustBeString) {
         if (!isString(value)) {
           alert(`Value for ${key} must be string`);
@@ -382,6 +387,7 @@ export default function SettingDialog({
                     value={localConfig[field.key]}
                     onChange={onChange(field.key)}
                     label={field.label as string}
+                    defaultValue={config[field.key]}
                   />
                 );
               } else if (field.type === SettingInputType.LONG_INPUT) {
@@ -392,6 +398,7 @@ export default function SettingDialog({
                     value={localConfig[field.key].toString()}
                     onChange={onChange(field.key)}
                     label={field.label as string}
+                    defaultValue={config[field.key]}
                   />
                 );
               } else if (field.type === SettingInputType.CHECKBOX) {
@@ -445,18 +452,20 @@ function SettingsModalLongInput({
   value,
   onChange,
   label,
+  defaultValue,
 }: {
   configKey: SettKey;
   value: string;
   onChange: (value: string) => void;
   label?: string;
+  defaultValue: string | number | boolean;
 }) {
   return (
     <label className="form-control mb-2">
       <div className="label inline">{label || configKey}</div>
       <textarea
         className="textarea textarea-bordered h-24"
-        placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
+        placeholder={`Default: ${defaultValue ?? 'none'}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
@@ -469,12 +478,13 @@ function SettingsModalShortInput({
   value,
   onChange,
   label,
+  defaultValue,
 }: {
   configKey: SettKey;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   value: any;
   onChange: (value: string) => void;
   label?: string;
+  defaultValue: string | number | boolean;
 }) {
   const helpMsg = CONFIG_INFO[configKey];
 
@@ -502,7 +512,7 @@ function SettingsModalShortInput({
         <input
           type="text"
           className="grow"
-          placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
+          placeholder={`Default: ${defaultValue ?? 'none'}`}
           value={value}
           onChange={(e) => onChange(e.target.value)}
         />
