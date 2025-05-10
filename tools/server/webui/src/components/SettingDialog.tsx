@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { useAppContext } from '../utils/app.context';
-import { CONFIG_INFO } from '../utils/initConfig';
-import { isDev } from '../utils/initConfig';
+import { CONFIG_INFO, getServerDefaultConfig, isDev } from '../utils/initConfig';
 import StorageUtils from '../utils/storage';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
 import {
@@ -272,9 +271,17 @@ export default function SettingDialog({
   // clone the config object to prevent direct mutation
   const [localConfig, setLocalConfig] = useState<AppConfig>({ ...config });
 
-  const resetConfig = () => {
-    if (window.confirm('Are you sure you want to reset all settings?')) {
-      setLocalConfig({ ...config });
+  const resetConfig = async () => {
+    if (!window.confirm('Reset all settings from server defaults?')) return;
+
+    try {
+      const cfg = await getServerDefaultConfig(config.apiKey);
+      StorageUtils.setConfig(cfg);
+      setLocalConfig({ ...cfg });
+      console.info('[Config] Reset from server config');
+    } catch (err) {
+      console.error('[Config] Failed to fetch server defaults:', err);
+      alert('Failed to fetch server default config.');
     }
   };
 

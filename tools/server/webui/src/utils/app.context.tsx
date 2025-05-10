@@ -106,9 +106,19 @@ export const AppContextProvider = ({
       .then(async (props) => {
         console.debug('Server props:', props);
         setServerProps(props);
-        const cfg = await getServerDefaultConfig(config.apiKey);
-        StorageUtils.setConfig(cfg);
-        setConfig(cfg);
+
+        const hasUserConfig =
+          localStorage.getItem('config') &&
+          Object.keys(JSON.parse(localStorage.getItem('config') || '{}')).length > 0;
+
+        if (!hasUserConfig) {
+          const cfg = await getServerDefaultConfig(config.apiKey);
+          StorageUtils.setConfig(cfg);
+          setConfig(cfg);
+          console.info('[Config] Loaded from server (no local config found)');
+        } else {
+          console.info('[Config] Using localStorage config');
+        }
       })
       .catch((err) => {
         console.error(err);
