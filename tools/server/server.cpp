@@ -1884,8 +1884,7 @@ struct server_context {
 
     common_chat_templates_ptr chat_templates;
 
-    server_context() : batch({}) {
-    }
+    server_context() : batch({}) {}
     ~server_context() {
         mtmd_free(mctx);
 
