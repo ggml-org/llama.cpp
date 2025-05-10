@@ -64,6 +64,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     endif()
 
+    if (GGML_YIELD_BARRIER)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_YIELD_BARRIER)
+    endif()
+
     if (GGML_LLAMAFILE)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_LLAMAFILE)
 
