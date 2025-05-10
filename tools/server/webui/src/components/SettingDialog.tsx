@@ -277,6 +277,7 @@ export default function SettingDialog({
     try {
       const cfg = await getServerDefaultConfig(config.apiKey);
       StorageUtils.setConfig(cfg);
+      saveConfig(cfg);
       setLocalConfig({ ...cfg });
       console.info('[Config] Reset from server config');
     } catch (err) {
