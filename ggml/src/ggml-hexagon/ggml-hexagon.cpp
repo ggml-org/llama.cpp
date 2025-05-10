@@ -26,23 +26,6 @@
  * - GGML_OP_ADD & GGML_OP_MUL_MAT:
  *   this is a hwaccel skeleton, can expand other ggml ops accordingly
  *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to
- * deal in the Software without restriction, including without limitation the
- * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
- * sell copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
- * IN THE SOFTWARE.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -383,7 +366,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .hexagon_backend        = HEXAGON_BACKEND_CDSP,
         .enable_rpc_ion_mempool = 0,
         .enable_all_q_mulmat    = 0,
-        .profiler_duration      = 5,
+        .profiler_duration      = 5,    //seconds
         .profiler_counts        = 100,
         .thread_counts          = 4,
         .cfgfilename            = "ggml-hexagon.cfg",
@@ -398,7 +381,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.07"},
+        .ggml_hexagon_version   = {"1.08"},
         .ggml_dsp_version       = {"0.63"},
 };
 
@@ -835,21 +818,25 @@ static const char * ggmlhexagon_get_hwaccel_approach_name(int hwaccle_approach) 
 }
 
 static void ggmlhexagon_get_timestring(char * p_currenttime) {
-#if defined(__ANDROID__) || defined(__linux__)
-    time_t n_seconds    = 0;
-    struct tm now_time;
-
     if (nullptr == p_currenttime)
         return;
 
-    time(&n_seconds);
-    localtime_r(&n_seconds, &now_time);
-    snprintf(p_currenttime, GGMLHEXAGON_TMPBUF_LEN, "%04d-%02d-%02d,%02d:%02d:%02d",
-             now_time.tm_year + 1900, now_time.tm_mon + 1, now_time.tm_mday,
-             now_time.tm_hour, now_time.tm_min, now_time.tm_sec);
-#else
-    //TODO: WoA
-#endif
+    auto time_to_string = [](const std::chrono::system_clock::time_point & tp)->std::string {
+        auto as_time_t = std::chrono::system_clock::to_time_t(tp);
+        struct tm tm;
+
+        localtime_r(&as_time_t, &tm);
+
+        std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
+        char buf[GGMLHEXAGON_TMPBUF_LEN];
+        memset(buf, 0, GGMLHEXAGON_TMPBUF_LEN);
+        snprintf(buf, sizeof(buf), "%04d-%02d-%02d,%02d:%02d:%02d",
+                 tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        return buf;
+    };
+
+    std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
+    snprintf(p_currenttime, GGMLHEXAGON_TMPBUF_LEN, "%s", time_to_string(tp).c_str());
 }
 
 static void ggmlhexagon_log_internal(ggml_log_level level, const char * file, const char * func, int line, const char * format, ...) {
@@ -1791,8 +1778,7 @@ static void * ggmlhexagon_type_trait(ggml_backend_hexagon_context * ctx, ggml_te
 
                 const int min_cols_per_thread = 4096;
                 const int min_rows_per_thread = std::max((int)(min_cols_per_thread / ne00), 1);
-                const int n_threads = std::max(
-                        std::min(ctx->n_threads, (int)(ne01 / min_rows_per_thread)), 1);
+                const int n_threads = std::max(std::min(ctx->n_threads, (int)(ne01 / min_rows_per_thread)), 1);
                 for (int i = 1; i < n_threads; i++) {
                     const int64_t start = i * ne01 / n_threads;
                     const int64_t end   = (i + 1) * ne01 / n_threads;
@@ -1944,6 +1930,13 @@ static bool ggmlhexagon_check_valid_appcfg() {
     if (HWACCEL_QNN_SINGLEGRAPH == g_hexagon_appcfg.hwaccel_approach) {
         GGMLHEXAGON_LOG_INFO("HWACCEL_QNN_SINGLEGRAPH not supported");
         is_valid_appcfg = false;
+    }
+
+    if (HWACCEL_QNN == g_hexagon_appcfg.hwaccel_approach) {
+        if (HEXAGON_BACKEND_CDSP == g_hexagon_appcfg.hexagon_backend) {
+            GGMLHEXAGON_LOG_INFO("hexagon_backend HEXAGON_BACKEND_CDSP must match with hwaccel_approach HWACCEL_CDSP");
+            is_valid_appcfg = false;
+        }
     }
 
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
@@ -2271,6 +2264,7 @@ static int ggmlqnn_free_qnntensor(Qnn_Tensor_t * tensor) {
             free(src_qparam.bwAxisScaleOffsetEncoding.offsets);
         }
     }
+    GGMLHEXAGON_LOG_DEBUG("free tensor %p", tensor);
     free(ggmlqnn_get_tensor_dimensions(*tensor));
     free(tensor);
 
@@ -2804,15 +2798,12 @@ void qnn_instance::free_rpcmem(void * buf) {
         GGMLHEXAGON_LOG_WARN("no allocated tensor\n");
     } else {
         GGMLHEXAGON_LOG_DEBUG("free rpc mem %p", _rpcmem_store_map[buf]);
-        for (std::unordered_map<void *, size_t>::iterator it = _rpcmem_usage_map.begin();
-             it != _rpcmem_usage_map.end();
-             it++) {
-            void * rpcbuffer = it->first;
+        for (const auto & [rpcbuffer, rpcbuffer_size] : _rpcmem_usage_map) {
             if (buf == rpcbuffer) {
-                rpcbuffer_size = it->second;
                 _rpcmem_usage -= rpcbuffer_size;
             }
         }
+
         if (rpcbuffer_size != 0) {
             _rpcmem_usage_map.erase(buf);
         }
@@ -2827,13 +2818,11 @@ void qnn_instance::free_rpcmem() {
         return;
     }
 
-    for (std::unordered_map<void *, void *>::iterator it = _rpcmem_store_map.begin();
-         it != _qnn_mem_set.end();
-         it++) {
-        void * rpcbuffer = it->second;
+    for (const auto & [rpcbuffer, raw_rpcbuffer] : _rpcmem_store_map) {
         GGMLHEXAGON_LOG_DEBUG("free rpc buffer %p", rpcbuffer);
         _pfn_rpc_mem_free(rpcbuffer);
     }
+
     _rpcmem_store_map.clear();
     _rpcmem_usage_map.clear();
     _rpcmem_usage = 0;
@@ -2937,14 +2926,12 @@ Qnn_MemHandle_t  qnn_instance::register_rpcmem(void * p_data, const uint32_t ran
 }
 
 void * qnn_instance::get_rpcmem_from_memhandle(Qnn_MemHandle_t mem_handle) {
-    for (std::unordered_map<void *, Qnn_MemHandle_t>::iterator it = _qnn_mem_set.begin();
-         it != _qnn_mem_set.end();
-         it++) {
-        Qnn_MemHandle_t mem_handle = it->second;
-        if (it->second == mem_handle) {
-            return it->first;
+    for (const auto & [ptr, handle] : _qnn_mem_set) {
+        if (mem_handle == handle) {
+            return ptr;
         }
     }
+
     GGMLHEXAGON_LOG_WARN("can't find rpcmem from qnn mem handle %p", mem_handle);
     return nullptr;
 }
@@ -2956,11 +2943,8 @@ void qnn_instance::unregister_rpcmem() {
         GGMLHEXAGON_LOG_WARN("no rpcmem registered\n");
     }
 
-    for (std::unordered_map<void *, Qnn_MemHandle_t>::iterator it = _qnn_mem_set.begin();
-         it != _qnn_mem_set.end();
-         it++) {
-        Qnn_MemHandle_t mem_handle = it->second;
-        error = _qnn_interface.qnn_mem_de_register(&mem_handle, 1);
+    for (const auto & [ptr, mem_handle] : _qnn_mem_set) {
+        auto error = _qnn_interface.qnn_mem_de_register(&mem_handle, 1);
         if (error != QNN_SUCCESS) {
             GGMLHEXAGON_LOG_WARN("failed to unregister shared memory, error %d\n", QNN_GET_ERROR_CODE(error));
         } else {
@@ -5187,14 +5171,22 @@ static int ggmlhexagon_request_status_notifications(int domain_id, void * contex
 static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     size_t candidate_size   = 0;
     uint8_t * rpc_buffer    = nullptr;
+#ifdef SD_USE_HEXAGON // for stable-diffusion.cpp
+    size_t probe_slots[]    = {1024, 1536, 2000, 2048, 1024 + 2048, 4096};
+#else
     size_t probe_slots[]    = {1024, 1536, 2000, 2048};
+#endif
     size_t probe_counts     = sizeof(probe_slots) / sizeof(size_t);
 
     if (nullptr == ctx)
         return 1;
 
     for (size_t idx = 0; idx < probe_counts; idx++) {
+#ifdef SD_USE_HEXAGON // for stable-diffusion.cpp
+        rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
+#else
         rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
+#endif
         if (nullptr == rpc_buffer) {
             GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MiB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
             break;
@@ -5212,9 +5204,12 @@ static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
     if ((g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) && (1 == g_hexagon_appcfg.enable_rpc_ion_mempool)) {
         GGML_ASSERT(ctx->rpc_mempool_capacity > (8 * SIZE_IN_MB));
         ctx->rpc_mempool_len = ctx->rpc_mempool_capacity - (8 * SIZE_IN_MB);
-
+#ifdef SD_USE_HEXAGON // use rpcmem_alloc2 to alloc 2+ GiB memory, it's a workaround to make stablediffusion.cpp happy
+        ctx->rpc_mempool = rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_TRY_MAP_STATIC, ctx->rpc_mempool_len);
+#else
         //FIXME: it seems there is unknown issue with 2+ GiB memory pool
         ctx->rpc_mempool = rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_TRY_MAP_STATIC, ctx->rpc_mempool_len);
+#endif
         if (nullptr == ctx->rpc_mempool) {
             GGMLHEXAGON_LOG_WARN("alloc rpc memorypool %ld(%d MiB) failed", ctx->rpc_mempool_len, ctx->rpc_mempool_capacity / SIZE_IN_MB);
             return 2;
@@ -5586,7 +5581,6 @@ static bool ggmlhexagon_can_handle_op_through_cdsp(ggml_backend_dev_t dev, const
         {
             //TODO:workaround approach to fix HWACCEL_CDSP can't works in ASR inference and  LLM inference
             //     with some LLM models in a standard Android APP
-            //     one more thing, I think the latest QNN SDK's internal also use the similar approach
             if (ne00 < 1024) {
                 return false;
             }
@@ -6039,18 +6033,16 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
 
     qnn_instance * instance = (qnn_instance*)g_hexagon_mgr[ctx->device].instance;
     if (nullptr != instance) {
-        std::map<std::string, qnn_singlenode_res_t>::iterator singlenode_graph_it;
-        for (singlenode_graph_it = ctx->qnn_singlenode_graph_map.begin();
-             singlenode_graph_it != ctx->qnn_singlenode_graph_map.end(); singlenode_graph_it++) {
-            auto & graph_res = singlenode_graph_it->second;
-            Qnn_GraphHandle_t & graph_handle    = std::get<0>(graph_res);
-            qnn_ptensors_t    & ptensors        = std::get<1>(graph_res);
-            for (auto tensor_it = ptensors.begin(); tensor_it != ptensors.end(); ++tensor_it) {
-                ggmlqnn_free_qnntensor(*tensor_it);
+        for (auto & [graph_name, graph_res] : ctx->qnn_singlenode_graph_map) {
+            auto & graph_handle = std::get<0>(graph_res);
+            auto & ptensors     = std::get<1>(graph_res);
+            for (auto & tensor : ptensors) {
+                ggmlqnn_free_qnntensor(tensor);
             }
-            GGML_UNUSED(graph_handle);
-            GGMLHEXAGON_LOG_DEBUG("clean up graph:%s", singlenode_graph_it->first.c_str());
+            GGMLHEXAGON_LOG_DEBUG("graph handle %p", graph_handle);
+            GGMLHEXAGON_LOG_DEBUG("clean up graph:%s", graph_name.c_str());
         }
+
         ctx->qnn_singlenode_graph_map.clear();
 
         instance->qnn_finalize();
@@ -6225,18 +6217,22 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
 static ggml_backend_buffer_type_t ggml_backend_hexagon_buffer_type(size_t device_index) {
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
-    GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
+    GGMLHEXAGON_LOG_DEBUG("enter %s, device_index %d", __func__, device_index);
     if (device_index >= GGML_HEXAGON_MAX_DEVICES) {
         GGMLHEXAGON_LOG_DEBUG("ggml_backend_hexagon_buffer_type error: device_index:%d is out of range [0, %d]\n",
                       device_index, GGML_HEXAGON_MAX_DEVICES - 1);
         return nullptr;
     }
 
-    if (device_index != (size_t)(g_hexagon_appcfg.hexagon_backend)) {
+    if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         //cover following special case:
-        //      toggle backend and forth between cDSP and ggml in a standard Android APP or in
+        //      toggle back and forth frequently between cDSP and ggml in a standard Android APP or in
         //      a same running process
-        g_hexagon_appcfg.hexagon_backend = device_index;
+        if (device_index != (size_t)(g_hexagon_appcfg.hexagon_backend)) {
+            GGMLHEXAGON_LOG_INFO("device_index %d, backend %d", device_index, g_hexagon_appcfg.hexagon_backend);
+
+            g_hexagon_appcfg.hexagon_backend = device_index;
+        }
     }
 
     static struct ggml_backend_buffer_type ggml_backend_hexagon_buffer_types[GGML_HEXAGON_MAX_DEVICES];
@@ -6263,7 +6259,7 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_buffer_type(size_t device
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGML_ASSERT(HEXAGON_BACKEND_CDSP == g_hexagon_appcfg.hexagon_backend);
         //FIXME:this is workaround for cover following special case:
-        //      toggle back and forth between cDSP and ggml in a standard Android APP or in a same running process
+        //      toggle back and forth frequently between cDSP and ggml in a standard Android APP or in a same running process
         //      there is unknown issue with this workaround when toggle back and forth frequently in a standard Android APP
         int result = ggmlhexagon_init_dsp(&g_hexagon_mgr[HEXAGON_BACKEND_CDSP]);
         if (0 != result) {
@@ -6426,7 +6422,6 @@ static void ggml_backend_hexagon_set_n_threads(ggml_backend_t backend, int n_thr
 
 int ggml_backend_hexagon_get_device_count() {
     if (g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP) {
-        //here is the trick:
         //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
         //so return 1
         return 1;
@@ -6465,7 +6460,6 @@ static size_t ggml_backend_hexagon_reg_get_device_count(ggml_backend_reg_t reg) 
     GGML_UNUSED(reg);
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
-        //here is the trick:
         //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
         //so return 1
         return 1;
@@ -6483,7 +6477,6 @@ static ggml_backend_dev_t ggml_backend_hexagon_reg_get_device(ggml_backend_reg_t
     ggml_backend_hexagon_reg_context * ctx = (ggml_backend_hexagon_reg_context *)reg->context;
     if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
         GGML_ASSERT(g_hexagon_appcfg.hexagon_backend == HEXAGON_BACKEND_CDSP);
-        //here is the trick:
         //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
         //so return ctx->devices[0]
         return ctx->devices[0];
@@ -6517,7 +6510,7 @@ static const ggml_backend_reg_i ggml_backend_hexagon_reg_interface = {
 ggml_backend_reg_t ggml_backend_hexagon_reg() {
     static ggml_backend_reg reg;
     //TODO: the existing codes can't cover following special case:
-    //      toggle back and forth between QNN-NPU and cDSP and ggml in a standard Android APP or in
+    //      toggle back and forth frequently between QNN-NPU and cDSP and ggml in a standard Android APP or in
     //      a same running process
     //      supportive of such special case is easy but it will significantly increase the size of APK
     static bool initialized = false;
@@ -6556,7 +6549,6 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
                         /* .context     = */ &g_hexagon_mgr[i]
                 };
                 if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
-                    //here is the trick:
                     //there only 1 backend_device when g_hexagon_appcfg.hwaccel_approach == HWACCEL_CDSP
                     //so context is g_hexagon_mgr[HEXAGON_BACKEND_CDSP] rather than g_hexagon_mgr[0]
                     //attention here:
@@ -6565,7 +6557,7 @@ ggml_backend_reg_t ggml_backend_hexagon_reg() {
 
                 ctx->devices.push_back(dev);
 
-                //here is the trick: make cDSP rpc memory pool happy because ggml's backend subsystem need this
+                //make cDSP rpc memory pool happy because ggml's backend subsystem need this
                 if (HWACCEL_CDSP == g_hexagon_appcfg.hwaccel_approach) {
                     GGML_ASSERT(HEXAGON_BACKEND_CDSP == g_hexagon_appcfg.hexagon_backend);
                     int result = ggmlhexagon_init_dsp(&g_hexagon_mgr[HEXAGON_BACKEND_CDSP]);
@@ -6610,7 +6602,7 @@ const char * ggml_backend_hexagon_get_devname(size_t dev_num) {
 
 static qnn_instance * ggmlqnn_init_qnn_instance(size_t device, const char * qnn_lib_path) {
     int result = 0;
-    GGMLHEXAGON_LOG_INFO("hwaccel approach=%d(%s)", g_hexagon_appcfg.hwaccel_approach,
+    GGMLHEXAGON_LOG_INFO("device=%d, hwaccel approach=%d(%s)", device, g_hexagon_appcfg.hwaccel_approach,
                      ggmlhexagon_get_hwaccel_approach_name(g_hexagon_appcfg.hwaccel_approach));
 
     qnn_instance * instance = nullptr;
