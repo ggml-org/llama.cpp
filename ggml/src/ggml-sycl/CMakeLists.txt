@@ -135,8 +135,8 @@ else()
         endif()
         FetchContent_Declare(
             ONEMATH
-            GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
-            GIT_TAG c255b1b4c41e2ee3059455c1f96a965d6a62568a
+            GIT_REPOSITORY https://github.com/EwanC/oneMath.git
+            GIT_TAG 671d9bcc5aa6cc52cce6b6518c9b8f126c0352f4
         )
         FetchContent_MakeAvailable(ONEMATH)
         # Create alias to match with find_package targets name
