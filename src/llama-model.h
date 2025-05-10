@@ -96,6 +96,8 @@ enum llm_type {
     LLM_TYPE_235B_A22B,
 };
 
+std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+
 struct llama_layer_posnet {
     // resnet
     struct ggml_tensor * norm1   = nullptr;
