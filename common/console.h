@@ -3,9 +3,10 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 namespace console {
-    enum display_t {
+    enum display_t : uint8_t {
         reset = 0,
         prompt,
         user_input,

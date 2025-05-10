@@ -15,7 +15,7 @@
 
 using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
 
-enum llama_fver {
+enum llama_fver : uint8_t {
     GGUF_FILE_VERSION_V1 = 1,
     GGUF_FILE_VERSION_V2 = 2,
     GGUF_FILE_VERSION_V3 = 3,

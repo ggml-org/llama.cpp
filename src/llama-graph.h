@@ -22,13 +22,13 @@ class llama_kv_cache_unified;
 class llama_kv_cache_recurrent;
 
 // certain models (typically multi-modal) can produce different types of graphs
-enum llm_graph_type {
+enum llm_graph_type : uint8_t {
     LLM_GRAPH_TYPE_DEFAULT,
     LLM_GRAPH_TYPE_ENCODER,
     LLM_GRAPH_TYPE_DECODER,
 };
 
-enum llm_ffn_op_type {
+enum llm_ffn_op_type : uint8_t {
     LLM_FFN_SILU,
     LLM_FFN_GELU,
     LLM_FFN_RELU,
@@ -36,12 +36,12 @@ enum llm_ffn_op_type {
     LLM_FFN_SWIGLU,
 };
 
-enum llm_ffn_gate_type {
+enum llm_ffn_gate_type : uint8_t {
     LLM_FFN_SEQ,
     LLM_FFN_PAR, // ffn_gate is parallel to ffn_up
 };
 
-enum llm_norm_type {
+enum llm_norm_type : uint8_t {
     LLM_NORM,
     LLM_NORM_RMS,
     LLM_NORM_GROUP,

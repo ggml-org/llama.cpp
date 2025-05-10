@@ -284,16 +284,19 @@ static size_t ggml_hash_find_or_insert(struct ggml_hash_set * hash_set, struct g
 
 // computation graph
 
-enum ggml_cgraph_eval_order {
+GGML_PACKED_ENUM ggml_cgraph_eval_order {
     GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT = 0,
     GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT,
     GGML_CGRAPH_EVAL_ORDER_COUNT
 };
+GGML_PACKED_ENUM_END
 
 struct ggml_cgraph {
     int size;    // maximum number of nodes/leafs/grads/grad_accs
     int n_nodes; // number of nodes currently in use
     int n_leafs; // number of leafs currently in use
+
+    enum ggml_cgraph_eval_order order;
 
     struct ggml_tensor ** nodes;     // tensors with data that can change if the graph is evaluated
     struct ggml_tensor ** grads;     // the outputs of these tensors are the gradients of the nodes
@@ -301,8 +304,6 @@ struct ggml_cgraph {
     struct ggml_tensor ** leafs;     // tensors with constant data
 
     struct ggml_hash_set visited_hash_set;
-
-    enum ggml_cgraph_eval_order order;
 };
 
 // returns a slice of cgraph with nodes [i0, i1)

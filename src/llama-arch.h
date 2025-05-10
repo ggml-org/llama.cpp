@@ -8,7 +8,7 @@
 // gguf constants (sync with gguf.py)
 //
 
-enum llm_arch {
+enum llm_arch : uint8_t {
     LLM_ARCH_LLAMA,
     LLM_ARCH_LLAMA4,
     LLM_ARCH_DECI,
@@ -79,7 +79,7 @@ enum llm_arch {
     LLM_ARCH_UNKNOWN,
 };
 
-enum llm_kv {
+enum llm_kv : uint8_t {
     LLM_KV_GENERAL_TYPE,
     LLM_KV_GENERAL_ARCHITECTURE,
     LLM_KV_GENERAL_QUANTIZATION_VERSION,
@@ -219,7 +219,7 @@ enum llm_kv {
     LLM_KV_TOKENIZER_MIDDLE_ID,
 };
 
-enum llm_tensor {
+enum llm_tensor : uint8_t {
     LLM_TENSOR_TOKEN_EMBD,
     LLM_TENSOR_TOKEN_EMBD_NORM,
     LLM_TENSOR_TOKEN_TYPES,
@@ -364,7 +364,7 @@ enum llm_tensor {
     LLM_TENSOR_POS_NET_ATTN_OUT,
 };
 
-enum llm_tensor_layer {
+enum llm_tensor_layer : uint8_t {
     LLM_TENSOR_LAYER_INPUT,
     LLM_TENSOR_LAYER_REPEATING,
     LLM_TENSOR_LAYER_OUTPUT,

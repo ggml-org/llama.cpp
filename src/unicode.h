@@ -5,7 +5,7 @@
 #include <vector>
 
 struct unicode_cpt_flags {
-    enum {
+    enum : uint8_t {
         UNDEFINED       = 0x0001,
         NUMBER          = 0x0002,  // regex: \p{N}
         LETTER          = 0x0004,  // regex: \p{L}

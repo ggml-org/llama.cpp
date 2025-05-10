@@ -192,7 +192,7 @@ static void ggml_vk_destroy_buffer(vk_buffer& buf);
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
 static constexpr uint32_t p021_max_gqa_ratio = 8;
 
-enum vk_device_architecture {
+enum vk_device_architecture : uint8_t {
     OTHER,
     AMD_GCN,
     AMD_RDNA1,

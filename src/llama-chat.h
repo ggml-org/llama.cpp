@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-enum llm_chat_template {
+enum llm_chat_template : uint8_t {
     LLM_CHAT_TEMPLATE_CHATML,
     LLM_CHAT_TEMPLATE_LLAMA_2,
     LLM_CHAT_TEMPLATE_LLAMA_2_SYS,

@@ -20,7 +20,7 @@ static int64_t t_us() {
 }
 
 // colors
-enum common_log_col : int {
+enum common_log_col : uint8_t {
     COMMON_LOG_COL_DEFAULT = 0,
     COMMON_LOG_COL_BOLD,
     COMMON_LOG_COL_RED,

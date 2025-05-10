@@ -62,7 +62,7 @@ int32_t cpu_get_num_math();
 // Common params
 //
 
-enum llama_example {
+enum llama_example : uint8_t {
     LLAMA_EXAMPLE_COMMON,
     LLAMA_EXAMPLE_SPECULATIVE,
     LLAMA_EXAMPLE_MAIN,
@@ -83,7 +83,7 @@ enum llama_example {
     LLAMA_EXAMPLE_COUNT,
 };
 
-enum common_sampler_type {
+enum common_sampler_type : uint8_t {
     COMMON_SAMPLER_TYPE_NONE        = 0,
     COMMON_SAMPLER_TYPE_DRY         = 1,
     COMMON_SAMPLER_TYPE_TOP_K       = 2,
@@ -99,18 +99,18 @@ enum common_sampler_type {
 };
 
 // dimensionality reduction methods, used by cvector-generator
-enum dimre_method {
+enum dimre_method : uint8_t {
     DIMRE_METHOD_PCA,
     DIMRE_METHOD_MEAN,
 };
 
-enum common_conversation_mode {
+enum common_conversation_mode : uint8_t {
     COMMON_CONVERSATION_MODE_DISABLED = 0,
     COMMON_CONVERSATION_MODE_ENABLED  = 1,
     COMMON_CONVERSATION_MODE_AUTO     = 2,
 };
 
-enum common_grammar_trigger_type {
+enum common_grammar_trigger_type : uint8_t {
     COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN,
     COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
     COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
@@ -212,7 +212,7 @@ struct common_params_vocoder {
     bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy            // NOLINT
 };
 
-enum common_reasoning_format {
+enum common_reasoning_format : uint8_t {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_DEEPSEEK, // Extract thinking tag contents and return as `message.reasoning_content`
 };

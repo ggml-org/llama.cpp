@@ -91,7 +91,7 @@ extern int g_ggml_sycl_prioritize_dmmv;
 
 typedef sycl::queue *queue_ptr;
 
-enum ggml_sycl_backend_gpu_mode {
+enum ggml_sycl_backend_gpu_mode : int8_t {
   SYCL_UNSET_GPU_MODE = -1,
   SYCL_SINGLE_GPU_MODE = 0,
   SYCL_MUL_GPU_MODE
