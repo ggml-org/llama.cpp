@@ -874,6 +874,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             }
         }
 
+        __syncthreads();
+
         // Write back combined meta data:
 #pragma unroll
         for (int imeta = 0; imeta < nmeta; ++imeta) {
