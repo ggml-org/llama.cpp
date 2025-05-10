@@ -241,7 +241,7 @@ struct llama_file::impl {
     size_t size;
 };
 
-llama_file::llama_file(const char * fname, const char * mode) : pimpl(std::make_unique<impl>(fname, mode)) {}
+llama_file::llama_file(const char * fname, const char * mode) : fname(fname), pimpl(std::make_unique<impl>(fname, mode)) {}
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }

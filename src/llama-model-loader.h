@@ -155,6 +155,10 @@ struct llama_model_loader {
     // for backwards compatibility, does not support ggml-backend
     void load_data_for(struct ggml_tensor * cur) const;
 
+    typedef bool (*load_tensor_t)(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const char * path, size_t file_offset, size_t tensor_offset, size_t size);
+    load_tensor_t rpc_load_tensor_fn = nullptr;
+    bool load_tensor(ggml_tensor * cur, const char * path, size_t file_offset, size_t tensor_offset, size_t size);
+
     // Returns false if cancelled by progress_callback
     bool load_all_data(
             struct ggml_context * ctx,
