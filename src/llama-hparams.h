@@ -47,6 +47,9 @@ struct llama_hparams {
     uint32_t n_embd_head_k_mla = 0;
     uint32_t n_embd_head_v_mla = 0;
 
+    // for multi-token predict
+    uint32_t n_mtp = 0;
+
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
