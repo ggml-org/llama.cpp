@@ -1698,7 +1698,7 @@ static void ggml_vk_graph_compute(struct ggml_kompute_context * ctx, struct ggml
 
                         if (ggml_is_transposed(src0) ||
                             ggml_is_transposed(src1)) {
-                            fprintf(stderr, "%s: %s: matmul on tranposed tensor not supported: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
+                            fprintf(stderr, "%s: %s: matmul on transposed tensor not supported: %u/%u\n", __func__, ggml_op_name(dst->op), src0t, src1t);
                             goto not_implemented;
                         }
 
