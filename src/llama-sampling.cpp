@@ -1014,16 +1014,16 @@ static const char * llama_sampler_temp_ext_name(const struct llama_sampler * /*s
 static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     const auto * ctx = (llama_sampler_temp_ext *) smpl->ctx;
 
-    // no need to do anything if there is only one (or zero) candidates
-    if (cur_p->size <= 1) {
-        return;
-    }
-
     if (ctx->delta > 0) {
         const float min_temp = std::max(0.0f, ctx->temp - ctx->delta);
         const float max_temp = ctx->temp + ctx->delta;
 
         float exponent_val = ctx->exponent;
+
+        // no need to do anything if there is only one (or zero) candidates
+        if (cur_p->size <= 1) {
+            return;
+        }
 
         // Calculate maximum possible entropy
         float max_entropy = -logf(1.0f / cur_p->size);
@@ -1107,7 +1107,7 @@ struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, floa
         /* .ctx   = */ new llama_sampler_temp_ext {
             /* .temp     = */ temp,
             /* .delta    = */ delta,
-            /* .exponent = */ exponent
+            /* .exponent = */ exponent,
         }
     );
 }
