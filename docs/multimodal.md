@@ -69,9 +69,9 @@ NOTE: some models may require large context window, for example: `-c 8192`
 
 # InternVL 2.5 and 3
 (tool_name) -hf ggml-org/InternVL2_5-1B-GGUF
-(tool_name) -hf ggml-org/InternVL2_5-2B-GGUF
+(tool_name) -hf ggml-org/InternVL2_5-4B-GGUF
 (tool_name) -hf ggml-org/InternVL3-1B-Instruct-GGUF
 (tool_name) -hf ggml-org/InternVL3-2B-Instruct-GGUF
-(tool_name) -hf ggml-org/InternVL3-4B-Instruct-GGUF
+(tool_name) -hf ggml-org/InternVL3-8B-Instruct-GGUF
 (tool_name) -hf ggml-org/InternVL3-14B-Instruct-GGUF
 ```
