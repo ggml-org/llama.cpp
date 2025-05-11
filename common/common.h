@@ -66,7 +66,6 @@ enum llama_example {
     LLAMA_EXAMPLE_COMMON,
     LLAMA_EXAMPLE_SPECULATIVE,
     LLAMA_EXAMPLE_MAIN,
-    LLAMA_EXAMPLE_INFILL,
     LLAMA_EXAMPLE_EMBEDDING,
     LLAMA_EXAMPLE_PERPLEXITY,
     LLAMA_EXAMPLE_RETRIEVAL,
@@ -96,6 +95,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_XTC         = 8,
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
+    COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -161,6 +161,7 @@ struct common_params_sampling {
     std::vector<enum common_sampler_type> samplers = {
         COMMON_SAMPLER_TYPE_PENALTIES,
         COMMON_SAMPLER_TYPE_DRY,
+        COMMON_SAMPLER_TYPE_TOP_N_SIGMA,
         COMMON_SAMPLER_TYPE_TOP_K,
         COMMON_SAMPLER_TYPE_TYPICAL_P,
         COMMON_SAMPLER_TYPE_TOP_P,
@@ -323,7 +324,6 @@ struct common_params {
     bool ctx_shift         = true;  // context shift on inifinite text generation
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool logits_all        = false; // return logits for all tokens in the batch
     bool use_mmap          = true;  // use mmap for faster loads
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
@@ -340,7 +340,7 @@ struct common_params {
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
-    // multimodal models (see tools/llava)
+    // multimodal models (see tools/mtmd)
     struct common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
@@ -409,6 +409,7 @@ struct common_params {
 
     bool process_output = false; // collect data for the output tensor
     bool compute_ppl    = true;  // whether to compute perplexity
+    bool parse_special  = false; // whether to parse special tokens during imatrix tokenization
 
     // cvector-generator params
     int n_pca_batch = 100;

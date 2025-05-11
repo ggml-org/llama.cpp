@@ -11,6 +11,8 @@ import { ElementContent, Root } from 'hast';
 import { visit } from 'unist-util-visit';
 import { useAppContext } from '../utils/app.context';
 import { CanvasType } from '../utils/types';
+import { BtnWithTooltips } from '../utils/common';
+import { DocumentDuplicateIcon, PlayIcon } from '@heroicons/react/24/outline';
 
 export default function MarkdownDisplay({
   content,
@@ -81,10 +83,13 @@ const CodeBlockButtons: React.ElementType<
         'display-none': !node?.position,
       })}
     >
-      <CopyButton className="badge btn-mini" content={copiedContent} />
+      <CopyButton
+        className="badge btn-mini btn-soft shadow-sm"
+        content={copiedContent}
+      />
       {canRunCode && (
         <RunPyCodeButton
-          className="badge btn-mini ml-2"
+          className="badge btn-mini shadow-sm ml-2"
           content={copiedContent}
         />
       )}
@@ -101,16 +106,17 @@ export const CopyButton = ({
 }) => {
   const [copied, setCopied] = useState(false);
   return (
-    <button
+    <BtnWithTooltips
       className={className}
       onClick={() => {
         copyStr(content);
         setCopied(true);
       }}
       onMouseLeave={() => setCopied(false)}
+      tooltipsContent={copied ? 'Copied!' : 'Copy'}
     >
-      {copied ? 'Copied!' : '📋 Copy'}
-    </button>
+      <DocumentDuplicateIcon className="h-4 w-4" />
+    </BtnWithTooltips>
   );
 };
 
@@ -124,7 +130,7 @@ export const RunPyCodeButton = ({
   const { setCanvasData } = useAppContext();
   return (
     <>
-      <button
+      <BtnWithTooltips
         className={className}
         onClick={() =>
           setCanvasData({
@@ -132,9 +138,10 @@ export const RunPyCodeButton = ({
             content,
           })
         }
+        tooltipsContent="Run code"
       >
-        ▶️ Run
-      </button>
+        <PlayIcon className="h-4 w-4" />
+      </BtnWithTooltips>
     </>
   );
 };

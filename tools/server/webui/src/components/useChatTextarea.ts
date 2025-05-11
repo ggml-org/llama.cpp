@@ -1,35 +1,39 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { throttle } from '../utils/misc';
 
 // Media Query for detecting "large" screens (matching Tailwind's lg: breakpoint)
 const LARGE_SCREEN_MQ = '(min-width: 1024px)';
 
 // Calculates and sets the textarea height based on its scrollHeight
-const adjustTextareaHeight = (textarea: HTMLTextAreaElement | null) => {
-  if (!textarea) return;
+const adjustTextareaHeight = throttle(
+  (textarea: HTMLTextAreaElement | null) => {
+    if (!textarea) return;
 
-  // Only perform auto-sizing on large screens
-  if (!window.matchMedia(LARGE_SCREEN_MQ).matches) {
-    // On small screens, reset inline height and max-height styles.
-    // This allows CSS (e.g., `rows` attribute or classes) to control the height,
-    // and enables manual resizing if `resize-vertical` is set.
-    textarea.style.height = ''; // Use 'auto' or '' to reset
-    textarea.style.maxHeight = '';
-    return; // Do not adjust height programmatically on small screens
-  }
+    // Only perform auto-sizing on large screens
+    if (!window.matchMedia(LARGE_SCREEN_MQ).matches) {
+      // On small screens, reset inline height and max-height styles.
+      // This allows CSS (e.g., `rows` attribute or classes) to control the height,
+      // and enables manual resizing if `resize-vertical` is set.
+      textarea.style.height = ''; // Use 'auto' or '' to reset
+      textarea.style.maxHeight = '';
+      return; // Do not adjust height programmatically on small screens
+    }
 
-  const computedStyle = window.getComputedStyle(textarea);
-  // Get the max-height specified by CSS (e.g., from `lg:max-h-48`)
-  const currentMaxHeight = computedStyle.maxHeight;
+    const computedStyle = window.getComputedStyle(textarea);
+    // Get the max-height specified by CSS (e.g., from `lg:max-h-48`)
+    const currentMaxHeight = computedStyle.maxHeight;
 
-  // Temporarily remove max-height to allow scrollHeight to be calculated correctly
-  textarea.style.maxHeight = 'none';
-  // Reset height to 'auto' to measure the actual scrollHeight needed
-  textarea.style.height = 'auto';
-  // Set the height to the calculated scrollHeight
-  textarea.style.height = `${textarea.scrollHeight}px`;
-  // Re-apply the original max-height from CSS to enforce the limit
-  textarea.style.maxHeight = currentMaxHeight;
-};
+    // Temporarily remove max-height to allow scrollHeight to be calculated correctly
+    textarea.style.maxHeight = 'none';
+    // Reset height to 'auto' to measure the actual scrollHeight needed
+    textarea.style.height = 'auto';
+    // Set the height to the calculated scrollHeight
+    textarea.style.height = `${textarea.scrollHeight}px`;
+    // Re-apply the original max-height from CSS to enforce the limit
+    textarea.style.maxHeight = currentMaxHeight;
+  },
+  100
+); // Throttle to prevent excessive calls
 
 // Interface describing the API returned by the hook
 export interface ChatTextareaApi {
@@ -37,6 +41,7 @@ export interface ChatTextareaApi {
   setValue: (value: string) => void;
   focus: () => void;
   ref: React.RefObject<HTMLTextAreaElement>;
+  refOnSubmit: React.MutableRefObject<(() => void) | null>; // Submit handler
   onInput: (event: React.FormEvent<HTMLTextAreaElement>) => void; // Input handler
 }
 
@@ -46,6 +51,7 @@ export interface ChatTextareaApi {
 export function useChatTextarea(initValue: string): ChatTextareaApi {
   const [savedInitValue, setSavedInitValue] = useState<string>(initValue);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const onSubmitRef = useRef<(() => void) | null>(null);
 
   // Effect to set initial value and height on mount or when initValue changes
   useEffect(() => {
@@ -63,6 +69,7 @@ export function useChatTextarea(initValue: string): ChatTextareaApi {
     }
   }, [textareaRef, savedInitValue]); // Depend on ref and savedInitValue
 
+  // On input change, we adjust the height of the textarea
   const handleInput = useCallback(
     (event: React.FormEvent<HTMLTextAreaElement>) => {
       // Call adjustTextareaHeight on every input - it will decide whether to act
@@ -91,6 +98,7 @@ export function useChatTextarea(initValue: string): ChatTextareaApi {
       }
     },
     ref: textareaRef,
-    onInput: handleInput,
+    refOnSubmit: onSubmitRef,
+    onInput: handleInput, // for adjusting height on input
   };
 }

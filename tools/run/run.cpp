@@ -267,7 +267,7 @@ class Opt {
             "Commands:\n"
             "  model\n"
             "      Model is a string with an optional prefix of \n"
-            "      huggingface:// (hf://), ollama://, https:// or file://.\n"
+            "      huggingface:// (hf://), modelscope:// (ms://), ollama://, https:// or file://.\n"
             "      If no protocol is specified and a file exists in the specified\n"
             "      path, file:// is assumed, otherwise if a file does not exist in\n"
             "      the specified path, ollama:// is assumed. Models that are being\n"
@@ -282,6 +282,9 @@ class Opt {
             "  llama-run hf://QuantFactory/SmolLM-135M-GGUF/SmolLM-135M.Q2_K.gguf\n"
             "  llama-run "
             "huggingface://bartowski/SmolLM-1.7B-Instruct-v0.2-GGUF/SmolLM-1.7B-Instruct-v0.2-IQ3_M.gguf\n"
+            "  llama-run ms://QuantFactory/SmolLM-135M-GGUF/SmolLM-135M.Q2_K.gguf\n"
+            "  llama-run "
+            "modelscope://bartowski/SmolLM-1.7B-Instruct-v0.2-GGUF/SmolLM-1.7B-Instruct-v0.2-IQ3_M.gguf\n"
             "  llama-run https://example.com/some-file1.gguf\n"
             "  llama-run some-file2.gguf\n"
             "  llama-run file://some-file3.gguf\n"
@@ -689,15 +692,13 @@ class LlamaData {
         return 0;
     }
 
-    int huggingface_dl(std::string & model, const std::string & bn) {
+    int dl_from_endpoint(std::string & model_endpoint, std::string & model, const std::string & bn) {
         // Find the second occurrence of '/' after protocol string
         size_t pos = model.find('/');
         pos        = model.find('/', pos + 1);
         std::string              hfr, hff;
         std::vector<std::string> headers = { "User-Agent: llama-cpp", "Accept: application/json" };
         std::string              url;
-
-        std::string model_endpoint = get_model_endpoint();
 
         if (pos == std::string::npos) {
             auto [model_name, manifest_url] = extract_model_and_tag(model, model_endpoint + "v2/");
@@ -718,6 +719,16 @@ class LlamaData {
         url = model_endpoint + hfr + "/resolve/main/" + hff;
 
         return download(url, bn, true, headers);
+    }
+
+    int modelscope_dl(std::string & model, const std::string & bn) {
+        std::string model_endpoint = "https://modelscope.cn/models/";
+        return dl_from_endpoint(model_endpoint, model, bn);
+    }
+
+    int huggingface_dl(std::string & model, const std::string & bn) {
+        std::string model_endpoint = get_model_endpoint();
+        return dl_from_endpoint(model_endpoint, model, bn);
     }
 
     int ollama_dl(std::string & model, const std::string & bn) {
@@ -837,6 +848,9 @@ class LlamaData {
             rm_until_substring(model_, "hf.co/");
             rm_until_substring(model_, "://");
             ret = huggingface_dl(model_, bn);
+        } else if (string_starts_with(model_, "ms://") || string_starts_with(model_, "modelscope://")) {
+            rm_until_substring(model_, "://");
+            ret = modelscope_dl(model_, bn);
         } else if ((string_starts_with(model_, "https://") || string_starts_with(model_, "http://")) &&
                    !string_starts_with(model_, "https://ollama.com/library/")) {
             ret = download(model_, bn, true);

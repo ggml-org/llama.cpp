@@ -92,6 +92,10 @@ struct mtmd_cli_context {
         batch = llama_batch_init(params.n_batch, 0, 1);
         n_batch = params.n_batch;
 
+        if (!model || !lctx) {
+            exit(1);
+        }
+
         if (!llama_model_chat_template(model, nullptr) && params.chat_template.empty()) {
             LOG_ERR("Model does not have chat template.\n");
             LOG_ERR("  For old llava models, you may need to use '--chat-template vicuna'\n");
