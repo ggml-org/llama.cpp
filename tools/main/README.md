@@ -301,7 +301,15 @@ Example usage: `--xtc-probability 0.5 --xtc-threshold 0.1`
 -   `--smoothing-factor N`: Set the smoothing factor for smoothing / quadratic sampling (default: 0.0).
 -   `--smoothing-curve N`: Set the cubic transformation curve for smoothing / quadratic sampling (default: 1.0).
 
-Smoothing / Quadratic Sampling is a sampler that modifies the probability of each token instead of removing tokens, similar to what temperature does. (TODO: finish this part)
+(Source: https://github.com/ggml-org/llama.cpp/pull/6445)
+
+Smoothing / Quadratic Sampling, as described in the [original PR](https://github.com/ggml-org/llama.cpp/pull/6445), is a sampler that changes the probability distribution of tokens in a non-linear fashion. This sampler does not remote any tokens; instead, it tweaks the original logit scores of each token based on the distance from the topmost logit using quadratic transformation. This can be viewed as an alternative to Temperature that scales differently while still punishing extreme outlier tokens.
+
+By performing a non-linear transformation on token logits, we can effectively avoid biasing towards the topmost token if there is a group of similar probability tokens at the top, thus creating more variance. Higher values of `smoothing factor` would result in more deterministic output, while lower values would boost the creativity of the model. "Smoothing Factor" values of 0.2-0.3 are generally thought to be good for creative writing. It is worth noting that a smoothing factor value of `0.0` disables the sampler completely.
+
+`smoothing curve` is a second hyperparameter that adds a cubic transformation on top of the original quadratic one, and can "help make lower `smoothing factor` values work if the curve is set higher. A smoothing curve value of `1.0` is equivalant of using just quadratic transformation.
+
+This sampler is not mutually exclusive with Temperature, they can be used together. 
 
 ### Top-nσ Sampling
 
