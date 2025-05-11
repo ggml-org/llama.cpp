@@ -56,7 +56,7 @@ size_t ggml_backend_buft_get_max_size(ggml_backend_buffer_type_t buft) {
     return SIZE_MAX;
 }
 
-size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, struct ggml_tensor * tensor) {
+size_t ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     // get_alloc_size is optional, defaults to ggml_nbytes
     if (buft->iface.get_alloc_size) {
         size_t size = buft->iface.get_alloc_size(buft, tensor);
@@ -152,7 +152,7 @@ size_t ggml_backend_buffer_get_max_size(ggml_backend_buffer_t buffer) {
     return ggml_backend_buft_get_max_size(ggml_backend_buffer_get_type(buffer));
 }
 
-size_t ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
+size_t ggml_backend_buffer_get_alloc_size(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor) {
     return ggml_backend_buft_get_alloc_size(ggml_backend_buffer_get_type(buffer), tensor);
 }
 

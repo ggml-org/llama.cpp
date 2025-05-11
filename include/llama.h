@@ -112,6 +112,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
         LLAMA_VOCAB_PRE_TYPE_PIXTRAL        = 34,
+        LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 35,
     };
 
     enum llama_rope_type {
@@ -351,19 +352,17 @@ extern "C" {
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 
-        // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
-        // TODO: move at the end of the struct
-        bool logits_all;  // the llama_decode() call computes all logits, not just the last one (DEPRECATED - set llama_batch.logits instead)
-        bool embeddings;  // if true, extract embeddings (together with logits)
-        bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
-        bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
-        bool no_perf;     // whether to measure performance timings
-
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
         // currently works only with CPU execution
         ggml_abort_callback abort_callback;
         void *              abort_callback_data;
+
+        // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
+        bool embeddings;  // if true, extract embeddings (together with logits)
+        bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
+        bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
+        bool no_perf;     // whether to measure performance timings
     };
 
     // model quantization parameters
@@ -924,14 +923,19 @@ extern "C" {
     // Frees a batch of tokens allocated with llama_batch_init()
     LLAMA_API void llama_batch_free(struct llama_batch batch);
 
-    // Processes a batch of tokens with the ecoder part of the encoder-decoder model.
-    // Stores the encoder output internally for later use by the decoder cross-attention layers.
+    // Process a batch of tokens.
+    // In contrast to llama_decode() - this call does not use KV cache.
+    // For encode-decoder contexts, processes the batch using the encoder.
+    // Can store the encoder output internally for later use by the decoder's cross-attention layers.
     //   0 - success
     // < 0 - error. the KV cache state is restored to the state before this call
     LLAMA_API int32_t llama_encode(
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Process a batch of tokens.
+    // Requires KV cache.
+    // For encode-decoder contexts, processes the batch using the decoder.
     // Positive return values does not mean a fatal error, but rather a warning.
     //   0 - success
     //   1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)

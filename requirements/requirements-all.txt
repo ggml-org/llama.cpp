@@ -1,4 +1,4 @@
--r ../tools/llava/requirements.txt
+-r ../tools/mtmd/requirements.txt
 -r ../tools/server/bench/requirements.txt
 -r ../tools/server/tests/requirements.txt
 

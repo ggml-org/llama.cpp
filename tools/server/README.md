@@ -7,13 +7,15 @@ Set of LLM REST APIs and a simple web front end to interact with llama.cpp.
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
  * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions and embeddings routes
- * Reranking endoint (WIP: https://github.com/ggml-org/llama.cpp/pull/9510)
+ * Reranking endoint (https://github.com/ggml-org/llama.cpp/pull/9510)
  * Parallel decoding with multi-user support
  * Continuous batching
- * Multimodal (wip)
+ * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
  * Monitoring endpoints
  * Schema-constrained JSON response format
  * [Function calling](../../docs/function-calling.md) / tool use for ~any model
+ * Speculative decoding
+ * Easy-to-use web UI
 
 The project is under active development, and we are [looking for feedback and contributors](https://github.com/ggml-org/llama.cpp/issues/4216).
 
@@ -27,6 +29,7 @@ The project is under active development, and we are [looking for feedback and co
 | -------- | ----------- |
 | `-h, --help, --usage` | print usage and exit |
 | `--version` | show version and build info |
+| `--completion-bash` | print source-able bash completion script for llama.cpp |
 | `--verbose-prompt` | print a verbose prompt before generation (default: false) |
 | `-t, --threads N` | number of threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |
 | `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
@@ -41,7 +44,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--prio-batch N` | set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)<br/> |
 | `--poll-batch <0\|1>` | use polling to wait for work (default: same as --poll) |
 | `-c, --ctx-size N` | size of the prompt context (default: 4096, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE) |
-| `-n, --predict, --n-predict N` | number of tokens to predict (default: -1, -1 = infinity, -2 = until context filled)<br/>(env: LLAMA_ARG_N_PREDICT) |
+| `-n, --predict, --n-predict N` | number of tokens to predict (default: -1, -1 = infinity)<br/>(env: LLAMA_ARG_N_PREDICT) |
 | `-b, --batch-size N` | logical maximum batch size (default: 2048)<br/>(env: LLAMA_ARG_BATCH) |
 | `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |
 | `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |
@@ -69,6 +72,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
+| `--override-tensor, -ot <tensor name pattern>=<buffer type>,...` | override tensor buffer type |
 | `-ngl, --gpu-layers, --n-gpu-layers N` | number of layers to store in VRAM<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
 | `-sm, --split-mode {none,layer,row}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs<br/>- row: split rows across GPUs<br/>(env: LLAMA_ARG_SPLIT_MODE) |
 | `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT) |
@@ -82,15 +86,18 @@ The project is under active development, and we are [looking for feedback and co
 | `--control-vector-layer-range START END` | layer range to apply the control vector(s) to, start and end inclusive |
 | `-m, --model FNAME` | model path (default: `models/$filename` with filename from `--hf-file` or `--model-url` if set, otherwise models/7B/ggml-model-f16.gguf)<br/>(env: LLAMA_ARG_MODEL) |
 | `-mu, --model-url MODEL_URL` | model download url (default: unused)<br/>(env: LLAMA_ARG_MODEL_URL) |
-| `-hfr, --hf-repo REPO` | Hugging Face model repository (default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
-| `-hff, --hf-file FILE` | Hugging Face model file (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
+| `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: unsloth/phi-4-GGUF:q4_k_m<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
+| `-hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_HFD_REPO) |
+| `-hff, --hf-file FILE` | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
+| `-hfv, -hfrv, --hf-repo-v <user>/<model>[:quant]` | Hugging Face model repository for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_REPO_V) |
+| `-hffv, --hf-file-v FILE` | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V) |
 | `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
 | `--log-file FNAME` | Log to file |
 | `--log-colors` | Enable colored logging<br/>(env: LLAMA_LOG_COLORS) |
 | `-v, --verbose, --log-verbose` | Set verbosity level to infinity (i.e. log all messages, useful for debugging) |
 | `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored.<br/>(env: LLAMA_LOG_VERBOSITY) |
-| `--log-prefix` | Enable prefx in log messages<br/>(env: LLAMA_LOG_PREFIX) |
+| `--log-prefix` | Enable prefix in log messages<br/>(env: LLAMA_LOG_PREFIX) |
 | `--log-timestamps` | Enable timestamps in log messages<br/>(env: LLAMA_LOG_TIMESTAMPS) |
 
 
@@ -98,9 +105,9 @@ The project is under active development, and we are [looking for feedback and co
 
 | Argument | Explanation |
 | -------- | ----------- |
-| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: dry;top_k;typ_p;top_p;min_p;xtc;temperature) |
+| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature) |
 | `-s, --seed SEED` | RNG seed (default: -1, use random seed for -1) |
-| `--sampling-seq SEQUENCE` | simplified sequence for samplers that will be used (default: dkypmxt) |
+| `--sampling-seq, --sampler-seq SEQUENCE` | simplified sequence for samplers that will be used (default: edskypmxt) |
 | `--ignore-eos` | ignore end of stream token and continue generating (implies --logit-bias EOS-inf) |
 | `--temp N` | temperature (default: 0.8) |
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled) |
@@ -127,22 +134,26 @@ The project is under active development, and we are [looking for feedback and co
 | `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) (default: '') |
 | `--grammar-file FNAME` | file to read grammar from |
 | `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
-| `--jinja` | Enable experimental Jinja templating engine (required for tool use) |
-| `--reasoning-format FORMAT` | Controls extraction of model thinking traces and the format / field in which they are returned (default: `deepseek`; allowed values: `deepseek`, `none`; requires `--jinja`). `none` will leave thinking traces inline in `message.content` in a model-specific format, while `deepseek` will return them separately under `message.reasoning_content` |
+| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
+
 
 **Example-specific params**
 
 | Argument | Explanation |
 | -------- | ----------- |
-| `--no-context-shift` | disables context shift on inifinite text generation (default: disabled)<br/>(env: LLAMA_ARG_NO_CONTEXT_SHIFT) |
+| `--no-context-shift` | disables context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_NO_CONTEXT_SHIFT) |
 | `-sp, --special` | special tokens output enabled (default: false) |
 | `--no-warmup` | skip warming up the model with an empty run |
 | `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
 | `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
 | `-cb, --cont-batching` | enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
 | `-nocb, --no-cont-batching` | disable continuous batching<br/>(env: LLAMA_ARG_NO_CONT_BATCHING) |
+| `--mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
+| `--mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
+| `--no-mmproj` | explicitly disable multimodal projector, useful when using -hf<br/>(env: LLAMA_ARG_NO_MMPROJ) |
+| `--no-mmproj-offload` | do not offload multimodal projector to GPU<br/>(env: LLAMA_ARG_NO_MMPROJ_OFFLOAD) |
 | `-a, --alias STRING` | set alias for model name (to be used by REST API)<br/>(env: LLAMA_ARG_ALIAS) |
-| `--host HOST` | ip address to listen (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
+| `--host HOST` | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
 | `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--no-webui` | Disable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_NO_WEBUI) |
@@ -160,16 +171,29 @@ The project is under active development, and we are [looking for feedback and co
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--no-slots` | disables slots monitoring endpoint<br/>(env: LLAMA_ARG_NO_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
-| `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>list of built-in templates:<br/>chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, exaone3, gemma, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, monarch, openchat, orion, phi3, rwkv-world, vicuna, vicuna-orca, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
+| `--jinja` | use jinja template for chat (default: disabled)<br/>(env: LLAMA_ARG_JINJA) |
+| `--reasoning-format FORMAT` | reasoning format (default: deepseek; allowed values: deepseek, none)<br/>controls whether thought tags are extracted from the response, and in which format they're returned. 'none' leaves thoughts unparsed in `message.content`, 'deepseek' puts them in `message.reasoning_content` (for DeepSeek R1 & Command R7B only).<br/>only supported for non-streamed responses<br/>(env: LLAMA_ARG_THINK) |
+| `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, falcon3, gemma, gigachat, glmedge, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
+| `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek2, deepseek3, exaone3, falcon3, gemma, gigachat, glmedge, granite, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, phi3, phi4, rwkv-world, smolvlm, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.50, 0.0 = disabled)<br/> |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--draft-max, --draft, --draft-n N` | number of tokens to draft for speculative decoding (default: 16)<br/>(env: LLAMA_ARG_DRAFT_MAX) |
-| `--draft-min, --draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 5)<br/>(env: LLAMA_ARG_DRAFT_MIN) |
-| `--draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.9)<br/>(env: LLAMA_ARG_DRAFT_P_MIN) |
+| `--draft-min, --draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_DRAFT_MIN) |
+| `--draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.8)<br/>(env: LLAMA_ARG_DRAFT_P_MIN) |
 | `-cd, --ctx-size-draft N` | size of the prompt context for the draft model (default: 0, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE_DRAFT) |
 | `-devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
 | `-ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | number of layers to store in VRAM for the draft model<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `-md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_MODEL_DRAFT) |
+| `-mv, --model-vocoder FNAME` | vocoder model for audio generation (default: unused) |
+| `--tts-use-guide-tokens` | Use guide tokens to improve TTS word recall |
+| `--embd-bge-small-en-default` | use default bge-small-en-v1.5 model (note: can download weights from the internet) |
+| `--embd-e5-small-en-default` | use default e5-small-v2 model (note: can download weights from the internet) |
+| `--embd-gte-small-default` | use default gte-small model (note: can download weights from the internet) |
+| `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
+| `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
+| `--fim-qwen-7b-default` | use default Qwen 2.5 Coder 7B (note: can download weights from the internet) |
+| `--fim-qwen-7b-spec` | use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet) |
+| `--fim-qwen-14b-spec` | use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet) |
 
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
@@ -192,6 +216,12 @@ services:
       LLAMA_ARG_ENDPOINT_METRICS: 1
       LLAMA_ARG_PORT: 8080
 ```
+
+### Multimodal support
+
+Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
+
+For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
 
 ## Build
 
@@ -749,6 +779,9 @@ This endpoint is public (no API key check). By default, it is read-only. To make
   "total_slots": 1,
   "model_path": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
   "chat_template": "...",
+  "modalities": {
+    "vision": false
+  },
   "build_info": "b(build number)-(build commit hash)"
 }
 ```
@@ -757,6 +790,7 @@ This endpoint is public (no API key check). By default, it is read-only. To make
 - `total_slots` - the total number of slots for process requests (defined by `--parallel` option)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
+- `modalities` - the list of supported modalities
 
 ### POST `/props`: Change server global properties.
 
@@ -1068,6 +1102,8 @@ print(completion.choices[0].text)
 ### POST `/v1/chat/completions`: OpenAI-compatible Chat Completions API
 
 Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
+
+If model supports multimodal, you can input the media file via `image_url` content part. We support both base64 and remote URL as input. See OAI documentation for more.
 
 *Options:*
 
