@@ -1005,8 +1005,6 @@ struct llama_sampler_temp_ext {
     const float temp;
     const float delta;
     const float exponent;
-    const float smoothing_factor;
-    const float smoothing_curve;
 };
 
 static const char * llama_sampler_temp_ext_name(const struct llama_sampler * /*smpl*/) {
@@ -1019,21 +1017,6 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
     // no need to do anything if there is only one (or zero) candidates
     if (cur_p->size <= 1) {
         return;
-    }
-
-    // Apply smoothing if smoothing_factor is > 0. Do not change base implementation otherwise.
-    if (ctx->smoothing_factor > 0.0f) {
-        llama_sampler_softmax_impl(cur_p);
-        float h = cur_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
-
-        // Apply the modified quadratic transformation using the smoothing_factor and smoothing_curve
-        for (size_t i = 0; i < cur_p->size; ++i) {
-            float logit_shifted = cur_p->data[i].logit - h;
-            float k = (3 - ctx->smoothing_curve) / 2;
-            float s = (ctx->smoothing_curve - 1) / 2;
-            cur_p->data[i].logit = -(k * ctx->smoothing_factor * logit_shifted * logit_shifted) + (s * ctx->smoothing_factor * logit_shifted * logit_shifted * logit_shifted) + h;
-        }
-        llama_sampler_softmax_impl(cur_p);
     }
 
     if (ctx->delta > 0) {
@@ -1102,7 +1085,7 @@ static void llama_sampler_temp_ext_apply(struct llama_sampler * smpl, llama_toke
 
 static struct llama_sampler * llama_sampler_temp_ext_clone(const struct llama_sampler * smpl) {
     const auto * ctx = (const llama_sampler_temp_ext *) smpl->ctx;
-    return llama_sampler_init_temp_ext(ctx->temp, ctx->delta, ctx->exponent, ctx->smoothing_factor, ctx->smoothing_curve);
+    return llama_sampler_init_temp_ext(ctx->temp, ctx->delta, ctx->exponent);
 }
 
 static void llama_sampler_temp_ext_free(struct llama_sampler * smpl) {
@@ -1118,15 +1101,13 @@ static struct llama_sampler_i llama_sampler_temp_ext_i = {
     /* .free   = */ llama_sampler_temp_ext_free,
 };
 
-struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, float exponent, float smoothing_factor, float smoothing_curve) {
+struct llama_sampler * llama_sampler_init_temp_ext(float temp, float delta, float exponent) {
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_temp_ext_i,
         /* .ctx   = */ new llama_sampler_temp_ext {
             /* .temp     = */ temp,
             /* .delta    = */ delta,
-            /* .exponent = */ exponent,
-            /* .smoothing_factor = */ smoothing_factor,
-            /* .smoothing_curve = */ smoothing_curve
+            /* .exponent = */ exponent
         }
     );
 }
@@ -1222,6 +1203,68 @@ struct llama_sampler * llama_sampler_init_xtc(float p, float t, size_t min_keep,
             /* .seed          = */ seed,
             /* .seed_cur      = */ seed_cur,
             /* .rng           = */ std::mt19937(seed_cur),
+        }
+    );
+}
+
+// smoothing
+
+struct llama_sampler_smoothing {
+    const float factor;
+    const float curve;
+};
+
+static const char * llama_sampler_smoothing_name(const struct llama_sampler * /*smpl*/) {
+    return "smoothing";
+}
+
+static void llama_sampler_smoothing_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    const auto * ctx = (llama_sampler_smoothing *) smpl->ctx;
+
+    // no need to do anything if there is only one (or zero) candidates
+    if (cur_p->size <= 1) {
+        return;
+    }
+
+    if (ctx->factor > 0.0f) {
+        llama_sampler_softmax_impl(cur_p);
+        float h = cur_p->data[0].logit; // Find the maximum logit for h to be added after the transformation
+
+        // Apply the modified quadratic transformation using the smoothing_factor and smoothing_curve
+        for (size_t i = 0; i < cur_p->size; ++i) {
+            float logit_shifted = cur_p->data[i].logit - h;
+            float k = (3 - ctx->curve) / 2;
+            float s = (ctx->curve - 1) / 2;
+            cur_p->data[i].logit = -(k * ctx->factor * logit_shifted * logit_shifted) + (s * ctx->factor * logit_shifted * logit_shifted * logit_shifted) + h;
+        }
+        llama_sampler_softmax_impl(cur_p);
+    }
+}
+
+static struct llama_sampler * llama_sampler_smoothing_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_smoothing *) smpl->ctx;
+    return llama_sampler_init_smoothing(ctx->factor, ctx->curve);
+}
+
+static void llama_sampler_smoothing_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_smoothing *) smpl->ctx;
+}
+
+static struct llama_sampler_i llama_sampler_smoothing_i = {
+    /* .name   = */ llama_sampler_smoothing_name,
+    /* .accept = */ nullptr,
+    /* .apply  = */ llama_sampler_smoothing_apply,
+    /* .reset  = */ nullptr,
+    /* .clone  = */ llama_sampler_smoothing_clone,
+    /* .free   = */ llama_sampler_smoothing_free,
+};
+
+struct llama_sampler * llama_sampler_init_smoothing(float factor, float curve) {
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_smoothing_i,
+        /* .ctx   = */ new llama_sampler_smoothing {
+            /* .smoothing_factor = */ factor,
+            /* .smoothing_curve  = */ curve
         }
     );
 }

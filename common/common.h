@@ -96,6 +96,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
+    COMMON_SAMPLER_TYPE_SMOOTHING   = 12,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -139,7 +140,7 @@ struct common_params_sampling {
     float   temp               = 0.80f; // <= 0.0 to sample greedily, 0.0 to not output probabilities
     float   dynatemp_range     = 0.00f; // 0.0 = disabled
     float   dynatemp_exponent  = 1.00f; // controls how entropy maps to temperature in dynamic temperature sampler
-    float   smoothing_factor   = 0.0f;  // controls the quadratic adjustment in smooth / quadratic sampling
+    float   smoothing_factor   = 0.0f;  // controls the quadratic adjustment in smooth / quadratic sampling (0.0 = disabled)
     float   smoothing_curve    = 1.0f;  // controls the quadratic adjustment in smooth / quadratic sampling
     int32_t penalty_last_n     = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
     float   penalty_repeat     = 1.00f; // 1.0 = disabled
@@ -169,6 +170,7 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_TOP_P,
         COMMON_SAMPLER_TYPE_MIN_P,
         COMMON_SAMPLER_TYPE_XTC,
+        COMMON_SAMPLER_TYPE_SMOOTHING,
         COMMON_SAMPLER_TYPE_TEMPERATURE,
     };
 

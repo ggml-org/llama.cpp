@@ -115,6 +115,8 @@ The project is under active development, and we are [looking for feedback and co
 | `--min-p N` | min-p sampling (default: 0.1, 0.0 = disabled) |
 | `--xtc-probability N` | xtc probability (default: 0.0, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.1, 1.0 = disabled) |
+| `--smoothing-factor N` | smoothing factor (default: 0.0, 0.0 = disabled) |
+| `--smoothing-curve N` | smoothing curve (default: 1.0, 1.0 = disabled) |
 | `--typical N` | locally typical sampling, parameter p (default: 1.0, 1.0 = disabled) |
 | `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size) |
 | `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.0, 1.0 = disabled) |
@@ -446,6 +448,10 @@ These words will not be included in the completion, so make sure to add them to 
 `xtc_probability`: Set the chance for token removal via XTC sampler. Default: `0.0`, which is disabled.
 
 `xtc_threshold`: Set a minimum probability threshold for tokens to be removed via XTC sampler. Default: `0.1` (> `0.5` disables XTC)
+
+`smoothing_factor`: Set the smoothing factor for smoothing / quadratic sampling. Default: `0.0`, which is disabled.
+
+`smoothing_curve`: Set the cubic transformation curve for smoothing / quadratic sampling. Default: `1.0`, which makes it behaves like the original quadratic sampler.
 
 `mirostat`: Enable Mirostat sampling, controlling perplexity during text generation. Default: `0`, where `0` is disabled, `1` is Mirostat, and `2` is Mirostat 2.0.
 

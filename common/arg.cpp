@@ -1761,6 +1761,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--smoothing-factor"}, "N",
+        string_format("smoothing factor (default: %.1f, 0.0 = disabled)", (double)params.sampling.smoothing_factor),
+        [](common_params & params, const std::string & value) {
+            params.sampling.smoothing_factor = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--smoothing-curve"}, "N",
+        string_format("smoothing curve (default: %.1f, 1.0 = disabled)", (double)params.sampling.smoothing_curve),
+        [](common_params & params, const std::string & value) {
+            params.sampling.smoothing_curve = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--typical"}, "N",
         string_format("locally typical sampling, parameter p (default: %.1f, 1.0 = disabled)", (double)params.sampling.typ_p),
         [](common_params & params, const std::string & value) {

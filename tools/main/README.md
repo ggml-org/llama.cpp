@@ -296,6 +296,13 @@ Being experimental and unique, XTC is disabled by default. The recommended combi
 
 Example usage: `--xtc-probability 0.5 --xtc-threshold 0.1`
 
+### Smoothing / Quadratic Sampling
+
+-   `--smoothing-factor N`: Set the smoothing factor for smoothing / quadratic sampling (default: 0.0).
+-   `--smoothing-curve N`: Set the cubic transformation curve for smoothing / quadratic sampling (default: 1.0).
+
+Smoothing / Quadratic Sampling is a sampler that modifies the probability of each token instead of removing tokens, similar to what temperature does. (TODO: finish this part)
+
 ### Top-nσ Sampling
 
 -   `--top-nsigma N`: Limit the next token selection to a subset of tokens with pre-softmax logits that are within n * σ less than the max logit (default: -1, -1 = disabled).

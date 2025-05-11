@@ -1251,11 +1251,14 @@ extern "C" {
     /// #details Updates the logits l_i` = l_i/t. When t <= 0.0f, the maximum logit is kept at it's original value, the rest are set to -inf
     LLAMA_API struct llama_sampler * llama_sampler_init_temp       (float   t);
 
-    /// @details Dynamic temperature (a.k.a. entropy) + Smooth Sampling implementations wrapped into one function, no research papers available.
-    LLAMA_API struct llama_sampler * llama_sampler_init_temp_ext   (float   t, float   delta, float exponent, float   smoothing_factor, float   smoothing_curve);
+    /// @details Dynamic temperature implementation (a.k.a. entropy) described in the paper https://arxiv.org/abs/2309.02772.
+    LLAMA_API struct llama_sampler * llama_sampler_init_temp_ext   (float   t, float   delta, float exponent);
 
     /// @details XTC sampler as described in https://github.com/oobabooga/text-generation-webui/pull/6335
     LLAMA_API struct llama_sampler * llama_sampler_init_xtc        (float   p, float   t,     size_t min_keep, uint32_t seed);
+
+    /// @details Smoothing sampling as described in https://github.com/ggml-org/llama.cpp/pull/6445
+    LLAMA_API struct llama_sampler * llama_sampler_init_smoothing  (float   factor, float curve);
 
     /// @details Top n sigma sampling as described in academic paper "Top-nσ: Not All Logits Are You Need" https://arxiv.org/pdf/2411.07641
     LLAMA_API struct llama_sampler * llama_sampler_init_top_n_sigma(float   n);

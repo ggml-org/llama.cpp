@@ -136,11 +136,11 @@ std::string common_params_sampling::print() const {
     snprintf(result, sizeof(result),
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"
-            "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
+            "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, smoothing_factor = %.3f, smoothing_curve = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
             "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f",
             penalty_last_n, penalty_repeat, penalty_freq, penalty_present,
             dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
-            top_k, top_p, min_p, xtc_probability, xtc_threshold, typ_p, top_n_sigma, temp,
+            top_k, top_p, min_p, xtc_probability, xtc_threshold, smoothing_factor, smoothing_curve, typ_p, top_n_sigma, temp,
             mirostat, mirostat_eta, mirostat_tau);
 
     return std::string(result);
@@ -258,11 +258,14 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 case COMMON_SAMPLER_TYPE_XTC:
                     llama_sampler_chain_add(result->chain, llama_sampler_init_xtc         (params.xtc_probability, params.xtc_threshold, params.min_keep, params.seed));
                     break;
+                case COMMON_SAMPLER_TYPE_SMOOTHING:
+                    llama_sampler_chain_add(result->chain, llama_sampler_init_smoothing   (params.smoothing_factor, params.smoothing_curve));
+                    break;
                 case COMMON_SAMPLER_TYPE_TYPICAL_P:
                     llama_sampler_chain_add(result->chain, llama_sampler_init_typical     (params.typ_p, params.min_keep));
                     break;
                 case COMMON_SAMPLER_TYPE_TEMPERATURE:
-                    llama_sampler_chain_add(result->chain, llama_sampler_init_temp_ext    (params.temp, params.dynatemp_range, params.dynatemp_exponent, params.smoothing_factor, params.smoothing_curve));
+                    llama_sampler_chain_add(result->chain, llama_sampler_init_temp_ext    (params.temp, params.dynatemp_range, params.dynatemp_exponent));
                     break;
                 case COMMON_SAMPLER_TYPE_INFILL:
                     llama_sampler_chain_add(result->chain, llama_sampler_init_infill      (vocab));
@@ -479,6 +482,7 @@ char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_XTC:         return 'x';
         case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
         case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
+        case COMMON_SAMPLER_TYPE_SMOOTHING:   return 'q';
         default : return '?';
     }
 }
@@ -495,6 +499,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
         case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
         case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
+        case COMMON_SAMPLER_TYPE_SMOOTHING:   return "smoothing";
         default : return "";
     }
 }
@@ -509,6 +514,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "min_p",       COMMON_SAMPLER_TYPE_MIN_P },
         { "temperature", COMMON_SAMPLER_TYPE_TEMPERATURE },
         { "xtc",         COMMON_SAMPLER_TYPE_XTC },
+        { "smoothing",   COMMON_SAMPLER_TYPE_SMOOTHING},
         { "infill",      COMMON_SAMPLER_TYPE_INFILL },
         { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
     };
@@ -525,6 +531,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "typ-p",       COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
+        { "quadratic",   COMMON_SAMPLER_TYPE_SMOOTHING},
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
     };
 
@@ -560,6 +567,7 @@ std::vector<common_sampler_type> common_sampler_types_from_chars(const std::stri
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_MIN_P),       COMMON_SAMPLER_TYPE_MIN_P },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_TEMPERATURE), COMMON_SAMPLER_TYPE_TEMPERATURE },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_XTC),         COMMON_SAMPLER_TYPE_XTC },
+        { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_SMOOTHING),   COMMON_SAMPLER_TYPE_SMOOTHING},
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_INFILL),      COMMON_SAMPLER_TYPE_INFILL },
         { common_sampler_type_to_chr(COMMON_SAMPLER_TYPE_PENALTIES),   COMMON_SAMPLER_TYPE_PENALTIES },
     };
