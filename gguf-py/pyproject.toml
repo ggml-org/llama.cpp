@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "gguf"
-version = "0.16.2"
+version = "0.16.3"
 description = "Read and write ML models in GGUF for GGML"
 authors = ["GGML <ggml@ggml.ai>"]
 packages = [
@@ -36,8 +36,8 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
-gguf-convert-endian = "gguf.scripts:gguf_convert_endian_entrypoint"
-gguf-dump = "gguf.scripts:gguf_dump_entrypoint"
-gguf-set-metadata = "gguf.scripts:gguf_set_metadata_entrypoint"
-gguf-new-metadata = "gguf.scripts:gguf_new_metadata_entrypoint"
-gguf-editor-gui = "gguf.scripts:gguf_editor_gui_entrypoint"
+gguf-convert-endian = "gguf.scripts.gguf_convert_endian:main"
+gguf-dump = "gguf.scripts.gguf_dump:main"
+gguf-set-metadata = "gguf.scripts.gguf_set_metadata:main"
+gguf-new-metadata = "gguf.scripts.gguf_new_metadata:main"
+gguf-editor-gui = "gguf.scripts.gguf_editor_gui:main"

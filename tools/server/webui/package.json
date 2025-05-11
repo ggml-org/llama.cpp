@@ -24,6 +24,8 @@
     "postcss": "^8.4.49",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "react-dropzone": "^14.3.8",
+    "react-hot-toast": "^2.5.2",
     "react-markdown": "^9.0.3",
     "react-router": "^7.1.5",
     "rehype-highlight": "^7.0.2",

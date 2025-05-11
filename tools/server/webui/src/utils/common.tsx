@@ -36,3 +36,32 @@ export const OpenInNewTab = ({
     {children}
   </a>
 );
+
+export function BtnWithTooltips({
+  className,
+  onClick,
+  onMouseLeave,
+  children,
+  tooltipsContent,
+  disabled,
+}: {
+  className?: string;
+  onClick: () => void;
+  onMouseLeave?: () => void;
+  children: React.ReactNode;
+  tooltipsContent: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="tooltip tooltip-bottom" data-tip={tooltipsContent}>
+      <button
+        className={`${className ?? ''} flex items-center justify-center`}
+        onClick={onClick}
+        disabled={disabled}
+        onMouseLeave={onMouseLeave}
+      >
+        {children}
+      </button>
+    </div>
+  );
+}

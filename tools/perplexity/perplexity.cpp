@@ -1554,7 +1554,10 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
             if (int(batch_indeces.size()) != num_answers) {
                 batch_indeces.resize(num_answers);
             }
-            for (int s = 0; s < num_answers; ++s) batch_indeces[s] = s0 + s;
+
+            for (int s = 0; s < num_answers; ++s) {
+                batch_indeces[s] = s0 + s;
+            }
 
             for (size_t i = 0; i < cur_task.common_prefix; ++i) {
                 //llama_batch_add(batch, cur_task.seq_tokens[0][i], i, { s0 + 0, s0 + 1, s0 + 2, s0 + 3}, false);
@@ -1970,7 +1973,6 @@ int main(int argc, char ** argv) {
     common_params params;
 
     params.n_ctx = 512;
-    params.logits_all = true;
     params.escape = false;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {

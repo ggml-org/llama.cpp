@@ -366,6 +366,8 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4996  # Disable POSIX deprecation warnings
+        /wd4702  # Unreachable code warnings
     )
     function(disable_msvc_warnings target_name)
         if(TARGET ${target_name})

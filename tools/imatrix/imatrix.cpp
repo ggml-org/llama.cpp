@@ -24,7 +24,8 @@ static void print_usage(int, char ** argv) {
     LOG("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] \\\n"
             "       [--no-ppl] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
-            "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
+            "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...] \\\n"
+            "       [--parse-special]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -46,7 +47,7 @@ private:
     common_params                          m_params;
     std::mutex                             m_mutex;
     int                                    m_last_call = 0;
-    std::vector<float>                     m_src1_data;
+    std::vector<char>                      m_src1_data;
     std::vector<char>                      m_ids; // the expert ids from ggml_mul_mat_id
 };
 
@@ -93,11 +94,13 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     const bool is_host = ggml_backend_buffer_is_host(src1->buffer);
 
     if (!is_host) {
-        m_src1_data.resize(ggml_nelements(src1));
-        ggml_backend_tensor_get(src1, m_src1_data.data(), 0, ggml_nbytes(src1));
+        const size_t src1_nbytes = ggml_nbytes(src1);
+        m_src1_data.resize(src1_nbytes);
+        ggml_backend_tensor_get(src1, m_src1_data.data(), 0, src1_nbytes);
     }
 
-    const float * data = is_host ? (const float *) src1->data : m_src1_data.data();
+    const char * data = is_host ? (const char *) src1->data : m_src1_data.data();
+    GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
 
     // this has been adapted to the new format of storing merged experts in a single 3d tensor
     // ref: https://github.com/ggml-org/llama.cpp/pull/6387
@@ -144,7 +147,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
 
                     const int64_t i11 = idx % src1->ne[1];
                     const int64_t i12 = row;
-                    const float * x = (const float *)((const char *)data + i11*src1->nb[1] + i12*src1->nb[2]);
+                    const float * x = (const float *)(data + i11*src1->nb[1] + i12*src1->nb[2]);
 
                     for (int j = 0; j < (int)src1->ne[0]; ++j) {
                         e.values[e_start + j] += x[j]*x[j];
@@ -180,7 +183,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         ++e.ncall;
         LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_call, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->type);
         for (int row = 0; row < (int)src1->ne[1]; ++row) {
-            const float * x = data + row * src1->ne[0];
+            const float * x = (const float *) (data + row * src1->nb[1]);
             for (int j = 0; j < (int)src1->ne[0]; ++j) {
                 e.values[j] += x[j]*x[j];
                 e.counts[j]++;
@@ -437,7 +440,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
 
-    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true);
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true, params.parse_special);
 
     auto tim2 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
@@ -583,7 +586,6 @@ int main(int argc, char ** argv) {
     params.out_file = "imatrix.dat" ;
 
     params.n_ctx = 512;
-    params.logits_all = true;
     params.escape = false;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {

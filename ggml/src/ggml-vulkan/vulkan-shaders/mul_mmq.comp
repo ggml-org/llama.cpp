@@ -101,7 +101,7 @@ shared FLOAT_TYPE_VEC2 buf_b_ds[BN];
 #define LOAD_VEC_B 4
 
 #ifdef MUL_MAT_ID
-shared u16vec2 row_ids[3072];
+shared u16vec2 row_ids[4096];
 #endif // MUL_MAT_ID
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
