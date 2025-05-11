@@ -1,6 +1,5 @@
 #include "common.h"
 #include "llama.h"
-#include "llama-quant.h"
 
 #include <cstdio>
 #include <cstring>
@@ -56,6 +55,12 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "F32",      LLAMA_FTYPE_ALL_F32,         "26.00G              @ 7B",          },
     // Note: Ensure COPY comes after F32 to avoid ftype 0 from matching.
     { "COPY",     LLAMA_FTYPE_ALL_F32,         "only copy tensors, no quantizing",  },
+};
+
+// Quantization types. Changes to this struct must be replicated in llama-quantize.cpp
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
 };
 
 static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix.file";
@@ -245,7 +250,7 @@ static ggml_type parse_ggml_type(const char * arg) {
             return type;
         }
     }
-    fprintf(stderr, "%s: invalid ggml_type '%s'\n", __func__, arg);
+    fprintf(stderr, "\n%s: invalid ggml_type '%s'\n\n", __func__, arg);
     return GGML_TYPE_COUNT;
 }
 

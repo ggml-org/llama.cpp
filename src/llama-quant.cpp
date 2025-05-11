@@ -14,6 +14,12 @@
 #include <thread>
 #include <unordered_map>
 
+// Quantization types. Changes to this struct must be replicated in quantize.cpp
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
+};
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -793,20 +799,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
-                            for (const auto & allowed : ALLOWED_TENSOR_TYPE) {
-                                if (tensor_name.find(allowed) != std::string::npos) {
-                                    if  (qtype != new_type) {
-                                        LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
-                                        new_type = qtype;
-                                        break;
-                                    }
-                                }
+                            if  (qtype != new_type) {
+                                LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
+                                new_type = qtype;
+                                break; // if two or more types are specified for the tensor, first match wins
                             }
-                            goto loop_exit; // if two or more types are specified for the tensor, first match wins
                         }
                     }
                 }
-                loop_exit:;
             }
 
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
