@@ -363,6 +363,7 @@ extern "C" {
         bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
         bool no_perf;     // whether to measure performance timings
+        bool op_offload;  // whether to offload host tensor operations to device
     };
 
     // model quantization parameters

@@ -28,6 +28,7 @@ endif()
 
 add_library(mtmd OBJECT
             mtmd.cpp
+            mtmd-helper.cpp
             mtmd.h
             clip.cpp
             clip.h

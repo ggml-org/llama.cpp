@@ -318,7 +318,7 @@ else:
 
     show = []
     # Show CPU and/or GPU by default even if the hardware for all results is the same:
-    if "n_gpu_layers" not in properties_different:
+    if rows_full and "n_gpu_layers" not in properties_different:
         ngl = int(rows_full[0][KEY_PROPERTIES.index("n_gpu_layers")])
 
         if ngl != 99 and "cpu_info" not in properties_different:
@@ -337,6 +337,10 @@ else:
         except ValueError:
             pass
     rows_show = get_rows(show)
+
+if not rows_show:
+    logger.error(f"No comparable data was found between {name_baseline} and {name_compare}.\n")
+    sys.exit(1)
 
 table = []
 for row in rows_show:
