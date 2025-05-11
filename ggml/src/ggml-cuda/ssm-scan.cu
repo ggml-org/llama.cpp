@@ -10,7 +10,7 @@ using namespace cub;
 #include "ssm-scan.cuh"
 
 template <size_t splitD, size_t N, size_t L_template>
-__global__ void __launch_bounds__(splitD, 2)
+__global__ void __launch_bounds__(splitD, 1)
     ssm_scan_f32(const float *__restrict__ src0, const float *__restrict__ src1, const float *__restrict__ src2,
                  const float *__restrict__ src3, const float *__restrict__ src4, const float *__restrict__ src5,
                  const int src0_nb1, const int src0_nb2, const int src1_nb1, const int src1_nb2,
