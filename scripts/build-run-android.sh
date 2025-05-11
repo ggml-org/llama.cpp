@@ -29,6 +29,7 @@ QNN_SDK_URL=https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direc
 QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_VERSION=2.33.0.250327
+QNN_SDK_VERSION=2.34.0.250424
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
 #Hexagon SDK can be found at:
@@ -102,6 +103,7 @@ function check_and_download_qnn_sdk()
         sudo mv qairt/${QNN_SDK_VERSION} ${QNN_SDK_INSTALL_PATH}/
         printf "Qualcomm QNN SDK saved to ${QNN_SDK_PATH} \n\n"
         sudo rm -rf qairt
+        sudo mv v${QNN_SDK_VERSION}.zip /tmp/
     else
         printf "Qualcomm QNN SDK already exist:${QNN_SDK_PATH} \n\n"
     fi
