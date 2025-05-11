@@ -219,7 +219,7 @@ struct cmd_params {
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
-    std::vector<bool>                disable_op_offload;
+    std::vector<bool>                no_op_offload;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -254,7 +254,7 @@ static const cmd_params cmd_params_defaults = {
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{{nullptr,nullptr}} },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
-    /* disable_op_offload   */ { false },
+    /* no_op_offload        */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -313,7 +313,7 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
     printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;... (default: disabled)\n");
-    printf("  -dopo, --disable-op-offload <i>           (default: 0)\n");
+    printf("  -nopo, --no-op-offload <i>                (default: 0)\n");
     printf("  -r, --repetitions <n>                     (default: %d)\n", cmd_params_defaults.reps);
     printf("  --prio <0|1|2|3>                          (default: %d)\n", cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 (default: %d)\n", cmd_params_defaults.delay);
@@ -591,13 +591,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
             }
             auto p = string_split<bool>(argv[i], split_delim);
             params.embeddings.insert(params.embeddings.end(), p.begin(), p.end());
-        } else if (arg == "-dopo" || arg == "--disable-op-offload") {
+        } else if (arg == "-nopo" || arg == "--no-op-offload") {
             if (++i >= argc) {
                 invalid_param = true;
                 break;
             }
             auto p = string_split<bool>(argv[i], split_delim);
-            params.disable_op_offload.insert(params.disable_op_offload.end(), p.begin(), p.end());
+            params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
         } else if (arg == "-ts" || arg == "--tensor-split") {
             if (++i >= argc) {
                 invalid_param = true;
@@ -804,8 +804,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.embeddings.empty()) {
         params.embeddings = cmd_params_defaults.embeddings;
     }
-    if (params.disable_op_offload.empty()) {
-        params.disable_op_offload = cmd_params_defaults.disable_op_offload;
+    if (params.no_op_offload.empty()) {
+        params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
@@ -846,7 +846,7 @@ struct cmd_params_instance {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool               use_mmap;
     bool               embeddings;
-    bool               disable_op_offload;
+    bool               no_op_offload;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -916,7 +916,7 @@ struct cmd_params_instance {
         cparams.offload_kqv = !no_kv_offload;
         cparams.flash_attn  = flash_attn;
         cparams.embeddings  = embeddings;
-        cparams.op_offload  = !disable_op_offload;
+        cparams.op_offload  = !no_op_offload;
 
         return cparams;
     }
@@ -936,7 +936,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & mmp : params.use_mmap)
     for (const auto & embd : params.embeddings)
-    for (const auto & dopo : params.disable_op_offload)
+    for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -975,7 +975,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
-                /* .disable_op_offload= */ dopo,
+                /* .no_op_offload= */ nopo,
             };
             instances.push_back(instance);
         }
@@ -1007,7 +1007,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
-                /* .disable_op_offload= */ dopo,
+                /* .no_op_offload= */ nopo,
             };
             instances.push_back(instance);
         }
@@ -1039,7 +1039,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .tensor_buft_overrides = */ ot,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
-                /* .disable_op_offload= */ dopo,
+                /* .no_op_offload= */ nopo,
             };
             instances.push_back(instance);
         }
@@ -1075,7 +1075,7 @@ struct test {
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
     bool                     use_mmap;
     bool                     embeddings;
-    bool                     disable_op_offload;
+    bool                     no_op_offload;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1109,7 +1109,7 @@ struct test {
         tensor_buft_overrides = inst.tensor_buft_overrides;
         use_mmap       = inst.use_mmap;
         embeddings     = inst.embeddings;
-        disable_op_offload = inst.disable_op_offload;
+        no_op_offload  = inst.no_op_offload;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1155,7 +1155,7 @@ struct test {
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
             "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
-            "use_mmap",     "embeddings",   "disable_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
+            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
             "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
         };
         return fields;
@@ -1167,7 +1167,7 @@ struct test {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "disable_op_offload") {
+            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
@@ -1243,7 +1243,7 @@ struct test {
                                             tensor_buft_overrides_str,
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
-                                            std::to_string(disable_op_offload),
+                                            std::to_string(no_op_offload),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1426,7 +1426,7 @@ struct markdown_printer : public printer {
         if (field == "test") {
             return 15;
         }
-        if (field == "disable_op_offload") {
+        if (field == "no_op_offload") {
             return 4;
         }
 
@@ -1460,8 +1460,8 @@ struct markdown_printer : public printer {
         if (field == "embeddings") {
             return "embd";
         }
-        if (field == "disable_op_offload") {
-            return "dopo";
+        if (field == "no_op_offload") {
+            return "nopo";
         }
         if (field == "tensor_split") {
             return "ts";
@@ -1531,8 +1531,8 @@ struct markdown_printer : public printer {
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {
             fields.emplace_back("embeddings");
         }
-        if (params.disable_op_offload.size() > 1 || params.disable_op_offload != cmd_params_defaults.disable_op_offload) {
-            fields.emplace_back("disable_op_offload");
+        if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
+            fields.emplace_back("no_op_offload");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");

@@ -2437,10 +2437,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--disable-op-offload"},
-        string_format("disable offloading host tensor operations to device (default: %s)", params.disable_op_offload ? "true" : "false"),
+        {"--no-op-offload"},
+        string_format("disable offloading host tensor operations to device (default: %s)", params.no_op_offload ? "true" : "false"),
         [](common_params & params) {
-            params.disable_op_offload = true;
+            params.no_op_offload = true;
         }
     ));
     add_opt(common_arg(
