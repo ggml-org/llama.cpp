@@ -16,9 +16,9 @@ __global__ void __launch_bounds__(splitD, 2)
                  const int src0_nb1, const int src0_nb2, const int src1_nb1, const int src1_nb2,
                  const int src1_nb3, const int src2_nb1, const int src2_nb2, const int src3_nb1,
                  const int src4_nb1, const int src4_nb2, const int src5_nb1, const int src5_nb2,
-                 float *__restrict__ dst, const int64_t L)
+                 float *__restrict__ dst, const int64_t L_param)
 {
-
+    const size_t L = L_param;
     const float *s0_block = (const float *)((const char *)src0 + blockIdx.x * src0_nb2 + blockIdx.y * splitD * src0_nb1);
     const float *x_block = (const float *)((const char *)src1 + (blockIdx.x * src1_nb2) + blockIdx.y * splitD * sizeof(float));
     const float *dt_block = (const float *)((const char *)src2 + (blockIdx.x * src2_nb2) + blockIdx.y * splitD * sizeof(float));
@@ -62,7 +62,7 @@ __global__ void __launch_bounds__(splitD, 2)
     }
 #endif
 
-    for (int i = 0; i < L; i++)
+    for (size_t i = 0; i < L; i++)
     {
         if (threadIdx.x < N)
         {
