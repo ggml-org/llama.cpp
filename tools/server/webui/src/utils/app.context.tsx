@@ -219,6 +219,8 @@ export const AppContextProvider = ({
         typical_p: config.typical_p,
         xtc_probability: config.xtc_probability,
         xtc_threshold: config.xtc_threshold,
+        smoothing_factor: config.smoothing_factor,
+        smoothing_curve: config.smoothing_curve,
         repeat_last_n: config.repeat_last_n,
         repeat_penalty: config.repeat_penalty,
         presence_penalty: config.presence_penalty,

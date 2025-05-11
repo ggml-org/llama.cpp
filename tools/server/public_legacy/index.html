@@ -312,6 +312,8 @@
       min_p: 0.05, // 0 = disabled
       xtc_probability: 0.0, // 0 = disabled;
       xtc_threshold: 0.1, // > 0.5 disables XTC;
+      smoothing_factor: 0.0, // 0 = disabled;
+      smoothing_curve: 1.0, // > 0.5 = disabled
       typical_p: 1.0, // 1.0 = disabled
       presence_penalty: 0.0, // 0.0 = disabled
       frequency_penalty: 0.0, // 0.0 = disabled
@@ -1021,6 +1023,8 @@
               ${IntField({ label: "DRY Penalty Last N", max: 2048, min: -1, step: 16, name: "dry_penalty_last_n", value: params.value.dry_penalty_last_n })}
               ${FloatField({ label: "XTC probability", max: 1.0, min: 0.0, name: "xtc_probability", step: 0.01, value: params.value.xtc_probability })}
               ${FloatField({ label: "XTC threshold", max: 0.5, min: 0.0, name: "xtc_threshold", step: 0.01, value: params.value.xtc_threshold })}
+              ${FloatField({ label: "Smoothing Factor", max: 10.0, min: 0.0, name: "smoothing_factor", step: 0.01, value: params.value.smoothing_factor })}
+              ${FloatField({ label: "Smoothing Curve", max: 10.0, min: 0.0, name: "smoothing_curve", step: 0.01, value: params.value.smoothing_curve })}
             </fieldset>
             <hr />
             <fieldset class="three">

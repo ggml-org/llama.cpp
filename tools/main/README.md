@@ -309,7 +309,7 @@ By performing a non-linear transformation on token logits, we can effectively av
 
 `smoothing curve` is a second hyperparameter that adds a cubic transformation on top of the original quadratic one, and can "help make lower `smoothing factor` values work if the curve is set higher. A smoothing curve value of `1.0` is equivalant of using just quadratic transformation.
 
-This sampler is not mutually exclusive with Temperature, they can be used together. 
+This sampler is not mutually exclusive with Temperature, they can be used together.
 
 ### Top-nσ Sampling
 

@@ -48,6 +48,8 @@
       min_p: 0.05, // 0 = disabled; recommended for non-english: ~ 0.4
       xtc_probability: 0.0, // 0 = disabled;
       xtc_threshold: 0.1, // > 0.5 disables XTC;
+      smoothing_factor: 0.0, // 0 = disabled;
+      smoothing_curve: 1.0, // > 0.5 = disabled
       typical_p: 1.0, // 1.0 = disabled
       presence_penalty: 0.0, // 0.0 = disabled
       frequency_penalty: 0.0, // 0.0 = disabled
@@ -841,6 +843,8 @@ return html`
           ${FloatField({ label: "Typical-P", title: "Activates local typical sampling, a method used to limit the prediction of tokens that are atypical in the current context. The parameter p controls the strength of this limitation. A value of 1.0 means that this function is deactivated.", max: 1.0, min: 0.0, name: "typical_p", step: 0.01, value: params.value.typical_p })}
           ${FloatField({ label: "XTC probability", title: "Sets the chance for token removal (checked once on sampler start)", max: 1.0, min: 0.0, name: "xtc_probability", step: 0.01, value: params.value.xtc_probability })}
           ${FloatField({ label: "XTC threshold", title: "Sets a minimum probability threshold for tokens to be removed", max: 0.5, min: 0.0, name: "xtc_threshold", step: 0.01, value: params.value.xtc_threshold })}
+          ${FloatField({ label: "Smoothing Factor", max: 10.0, min: 0.0, name: "smoothing_factor", step: 0.01, value: params.value.smoothing_factor })}
+          ${FloatField({ label: "Smoothing Curve", max: 10.0, min: 0.0, name: "smoothing_curve", step: 0.01, value: params.value.smoothing_curve })}
           ${FloatField({ label: "DRY Penalty Multiplier", title: "Set the DRY repetition penalty multiplier. Default is 0.0, which disables DRY.", max: 5.0, min: 0.0, name: "dry_multiplier", step: 0.01, value: params.value.dry_multiplier })}
           ${FloatField({ label: "DRY Base", title: "Set the DRY repetition penalty base value. Default is 1.75", max: 3.0, min: 1.0, name: "dry_base", step: 0.01, value: params.value.dry_base })}
           ${IntField({ label: "DRY Allowed Length", title: "Tokens that extend repetition beyond this receive exponentially increasing penalty. Default is 2", max: 10, min: 1, step: 1, name: "dry_allowed_length", value: params.value.dry_allowed_length })}
@@ -1143,6 +1147,8 @@ document.addEventListener('DOMContentLoaded', (event) => {
     min_p: { snapValue: 0.05, snapRangeMultiplier: 2 },
     xtc_probability: { snapValue: 0.0, snapRangeMultiplier: 4 },
     xtc_threshold: { snapValue: 0.5, snapRangeMultiplier: 4 },
+    smoothing_factor: { snapValue: 0.0, snapRangeMultiplier: 4 },
+    smoothing_curve: { snapValue: 0.0, snapRangeMultiplier: 4 },
     top_p: { snapValue: 1.0, snapRangeMultiplier: 4 },
     typical_p: { snapValue: 1.0, snapRangeMultiplier: 4 },
     repeat_penalty: { snapValue: 1.0, snapRangeMultiplier: 4 },

@@ -29,6 +29,8 @@ const SAMPLER_KEYS: SettKey[] = [
   'typical_p',
   'xtc_probability',
   'xtc_threshold',
+  'smoothing_factor',
+  'smoothing_curve',
 ];
 const PENALTY_KEYS: SettKey[] = [
   'repeat_last_n',

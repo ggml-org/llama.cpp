@@ -105,7 +105,7 @@ The project is under active development, and we are [looking for feedback and co
 
 | Argument | Explanation |
 | -------- | ----------- |
-| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature) |
+| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;smoothing;temperature) |
 | `-s, --seed SEED` | RNG seed (default: -1, use random seed for -1) |
 | `--sampling-seq, --sampler-seq SEQUENCE` | simplified sequence for samplers that will be used (default: edskypmxt) |
 | `--ignore-eos` | ignore end of stream token and continue generating (implies --logit-bias EOS-inf) |
@@ -483,7 +483,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`
 
-`samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
+`samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "smoothing", "temperature"]` - these are all the available values.
 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
@@ -732,6 +732,8 @@ This endpoint is public (no API key check). By default, it is read-only. To make
       "min_p": 0.05000000074505806,
       "xtc_probability": 0.0,
       "xtc_threshold": 0.10000000149011612,
+      "smoothing_factor": 0.0,
+      "smoothing_curve": 1.0,
       "typical_p": 1.0,
       "repeat_last_n": 64,
       "repeat_penalty": 1.0,
@@ -766,6 +768,7 @@ This endpoint is public (no API key check). By default, it is read-only. To make
         "top_p",
         "min_p",
         "xtc",
+        "smoothing",
         "temperature"
       ],
       "speculative.n_max": 16,
@@ -878,6 +881,8 @@ Example:
       "min_p": 0.05000000074505806,
       "xtc_probability": 0.0,
       "xtc_threshold": 0.10000000149011612,
+      "smoothing_factor": 0.0,
+      "smoothing_curve": 1.0,
       "typical_p": 1.0,
       "repeat_last_n": 64,
       "repeat_penalty": 1.0,
@@ -912,6 +917,7 @@ Example:
         "top_p",
         "min_p",
         "xtc",
+        "smoothing",
         "temperature"
       ],
       "speculative.n_max": 16,

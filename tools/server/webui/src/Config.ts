@@ -17,7 +17,7 @@ export const CONFIG_DEFAULT = {
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
   // make sure these default values are in sync with `common.h`
-  samplers: 'edkypmxt',
+  samplers: 'edkypmxqt',
   temperature: 0.8,
   dynatemp_range: 0.0,
   dynatemp_exponent: 1.0,
@@ -26,6 +26,8 @@ export const CONFIG_DEFAULT = {
   min_p: 0.05,
   xtc_probability: 0.0,
   xtc_threshold: 0.1,
+  smoothing_factor: 0.0,
+  smoothing_curve: 1.0,
   typical_p: 1.0,
   repeat_last_n: 64,
   repeat_penalty: 1.0,
@@ -44,7 +46,7 @@ export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
   samplers:
-    'The order at which samplers are applied, in simplified way. Default is "dkypmxt": dry->top_k->typ_p->top_p->min_p->xtc->temperature',
+    'The order at which samplers are applied, in simplified way. Default is "dkypmxqt": dry->top_k->typ_p->top_p->min_p->xtc->smoothing->temperature',
   temperature:
     'Controls the randomness of the generated text by affecting the probability distribution of the output tokens. Higher = more random, lower = more focused.',
   dynatemp_range:
@@ -60,6 +62,10 @@ export const CONFIG_INFO: Record<string, string> = {
     'XTC sampler cuts out top tokens; this parameter controls the chance of cutting tokens at all. 0 disables XTC.',
   xtc_threshold:
     'XTC sampler cuts out top tokens; this parameter controls the token probability that is required to cut that token.',
+  smoothing_factor:
+    'Controls the quadratic adjustment in smooth / quadratic sampler',
+  smoothing_curve:
+    'Controls the cubic transformation curve for smoothing / quadratic sampler.',
   typical_p:
     'Sorts and limits tokens based on the difference between log-probability and entropy.',
   repeat_last_n: 'Last n tokens to consider for penalizing repetition',
