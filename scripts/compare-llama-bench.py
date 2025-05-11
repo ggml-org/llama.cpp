@@ -9,9 +9,6 @@ from glob import glob
 import sqlite3
 import json
 import csv
-from functools import reduce
-from itertools import groupby
-from statistics import fmean
 from typing import Optional, Union
 from collections.abc import Iterator, Sequence
 
@@ -23,6 +20,16 @@ except ImportError as e:
     raise e
 
 logger = logging.getLogger("compare-llama-bench")
+
+# All llama-bench SQLite3 fields
+DB_FIELDS = [
+    "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
+    "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
+    "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
+    "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
+    "use_mmap",     "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
+    "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
+]
 
 # Properties by which to differentiate results per commit:
 KEY_PROPERTIES = [
@@ -136,6 +143,7 @@ class LlamaBenchData:
     build_len_max: int
     build_len: int = 8
     builds: list[str] = []
+    check_keys = set(KEY_PROPERTIES + ["build_commit", "test_time", "avg_ts"])
 
     def __init__(self):
         try:
@@ -145,6 +153,12 @@ class LlamaBenchData:
 
     def _builds_init(self):
         self.build_len = self.build_len_min
+
+    def _check_keys(self, keys: set) -> Optional[set]:
+        """Private helper method that checks against required data keys and returns missing ones."""
+        if not keys >= self.check_keys:
+            return self.check_keys - keys
+        return None
 
     def find_parent_in_data(self, commit: git.Commit) -> Optional[str]:
         """Helper method to find the most recent parent measured in number of commits for which there is data."""
@@ -217,127 +231,26 @@ class LlamaBenchData:
         return []
 
 
-class LlamaBenchDataGeneric(LlamaBenchData):
-    data: list
-    check_keys = set(KEY_PROPERTIES + ["build_commit", "test_time", "avg_ts"])
+class LlamaBenchDataSQLite3(LlamaBenchData):
+    connection: sqlite3.Connection
+    cursor: sqlite3.Cursor
 
     def __init__(self):
         super().__init__()
-        self.data = []
-
-    def _check_keys(self, keys: set) -> Optional[set]:
-        if not keys >= self.check_keys:
-            return self.check_keys - keys
-        return None
-
-    def _builds_init(self):
-        self.build_len_min, self.build_len_max = reduce(lambda x, y: (min(x[0], y), max(x[1], y)), (len(d["build_commit"]) for d in self.data), (1000, 0))
-        self.builds = list(set(d["build_commit"] for d in self.data))
-        super()._builds_init()
-
-    def builds_timestamp(self, reverse: bool = False) -> Union[Iterator[tuple], Sequence[tuple]]:
-        return sorted(((d["build_commit"], d["test_time"]) for d in self.data), key=lambda x: x[1], reverse=reverse)
-
-    def get_rows(self, properties: list[str], hexsha8_baseline: str, hexsha8_compare: str) -> Sequence[tuple]:
-        select_data = []
-        join_equal = lambda x: tuple(x[p] for p in KEY_PROPERTIES) # noqa: E731
-        group_order = lambda x: tuple(x[p] for p in properties + ["n_gen", "n_prompt", "n_depth"]) # noqa: E731
-        for _, g in groupby(sorted(self.data, key=group_order), key=group_order):
-            g = list(g)
-            join_on = {}
-            for row in filter(lambda x: x["build_commit"] == hexsha8_baseline, g):
-                if (join_row := join_equal(row)) not in join_on:
-                    row_copy = row.copy()
-                    row_copy["avg_ts"] = []
-                    join_on[join_row] = row_copy
-                join_on[join_row]["avg_ts"].append(row["avg_ts"])
-            joined = {}
-            for row in filter(lambda x: x["build_commit"] == hexsha8_compare, g):
-                if (join_row := join_equal(row)) in join_on:
-                    joined.setdefault(join_row, join_on[join_row]).setdefault("tc.avg_ts", []).append(row["avg_ts"])
-            for row in joined.values():
-                select_data.append(tuple(row[p] for p in properties + ["n_prompt", "n_gen", "n_depth"]) + (fmean(row["avg_ts"]), fmean(row["tc.avg_ts"])))
-        return select_data
-
-
-class LlamaBenchDataJSONL(LlamaBenchDataGeneric):
-    def __init__(self, data_file: str):
-        super().__init__()
-
-        with open(data_file, "r", encoding="utf-8") as fp:
-            for i, line in enumerate(fp):
-                parsed = json.loads(line)
-                if (missing_keys := self._check_keys(parsed.keys())):
-                    raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
-                self.data.append(parsed)
-
-        self._builds_init()
-
-
-class LlamaBenchDataJSON(LlamaBenchDataGeneric):
-    def __init__(self, data_files: list[str]):
-        super().__init__()
-
-        for data_file in data_files:
-            with open(data_file, "r", encoding="utf-8") as fp:
-                parsed = json.load(fp)
-                for i, entry in enumerate(parsed):
-                    if (missing_keys := self._check_keys(entry.keys())):
-                        raise RuntimeError(f"Missing required data key(s) at entry {i + 1}: {', '.join(missing_keys)}")
-                self.data += parsed
-
-        self._builds_init()
-
-
-class LlamaBenchDataCSV(LlamaBenchDataGeneric):
-    def __init__(self, data_files: list[str]):
-        super().__init__()
-
-        for data_file in data_files:
-            with open(data_file, "r", encoding="utf-8") as fp:
-                for i, parsed in enumerate(csv.DictReader(fp)):
-                    if (missing_keys := self._check_keys(set(parsed.keys()))):
-                        raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
-                    # FIXME: Convert float/int columns from str!
-                    self.data.append(parsed)
-
-        self._builds_init()
-
-
-class LlamaBenchDataSQLite3(LlamaBenchData):
-    connection: Optional[sqlite3.Connection] = None
-    cursor: sqlite3.Cursor
-
-    def __init__(self, data_file: str):
-        super().__init__()
-
-        connection = sqlite3.connect(data_file)
-        cursor = connection.cursor()
-
-        # Test if data_file is a valid SQLite database
-        try:
-            if cursor.execute("PRAGMA schema_version;").fetchone()[0] == 0:
-                raise RuntimeError("The provided input file does not exist or is empty.")
-        except sqlite3.DatabaseError:
-            connection.close()
-            connection = None
-
-        if (connection):
-            self.connection = connection
-            self.cursor = cursor
-
-            self.build_len_min = cursor.execute("SELECT MIN(LENGTH(build_commit)) from test;").fetchone()[0]
-            self.build_len_max = cursor.execute("SELECT MAX(LENGTH(build_commit)) from test;").fetchone()[0]
-
-            if self.build_len_min != self.build_len_max:
-                logger.warning(f"{data_file} contains commit hashes of differing lengths. It's possible that the wrong commits will be compared. "
-                               "Try purging the the database of old commits.")
-                cursor.execute(f"UPDATE test SET build_commit = SUBSTRING(build_commit, 1, {self.build_len_min});")
-
-            self._builds_init()
+        self.connection = sqlite3.connect(":memory:")
+        self.cursor = self.connection.cursor()
+        self.cursor.execute(f"CREATE TABLE test({', '.join(DB_FIELDS)});")
 
     def _builds_init(self):
         if self.connection:
+            self.build_len_min = self.cursor.execute("SELECT MIN(LENGTH(build_commit)) from test;").fetchone()[0]
+            self.build_len_max = self.cursor.execute("SELECT MAX(LENGTH(build_commit)) from test;").fetchone()[0]
+
+            if self.build_len_min != self.build_len_max:
+                logger.warning("Data contains commit hashes of differing lengths. It's possible that the wrong commits will be compared. "
+                               "Try purging the the database of old commits.")
+                self.cursor.execute(f"UPDATE test SET build_commit = SUBSTRING(build_commit, 1, {self.build_len_min});")
+
             builds = self.cursor.execute("SELECT DISTINCT build_commit FROM test;").fetchall()
             self.builds = list(map(lambda b: b[0], builds))  # list[tuple[str]] -> list[str]
         super()._builds_init()
@@ -360,10 +273,91 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
         return self.cursor.execute(query).fetchall()
 
 
-bench_data = LlamaBenchDataSQLite3(input_file)
-if not bench_data.connection:
-    # Not a SQLite database, try JSONL instead
-    bench_data = LlamaBenchDataJSONL(input_file)
+class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
+    connected_file = False
+
+    def __init__(self, data_file: str):
+        super().__init__()
+
+        connection = sqlite3.connect(data_file)
+        cursor = connection.cursor()
+
+        # Test if data_file is a valid SQLite database
+        try:
+            if cursor.execute("PRAGMA schema_version;").fetchone()[0] == 0:
+                raise RuntimeError("The provided input file does not exist or is empty.")
+        except sqlite3.DatabaseError:
+            connection.close()
+            connection = None
+
+        if (connection):
+            self.connected_file = True
+            self.connection = connection
+            self.cursor = cursor
+            self._builds_init()
+
+
+class LlamaBenchDataSQLite3_or_JSONL(LlamaBenchDataSQLite3File):
+    def __init__(self, data_file: str):
+        super().__init__(data_file)
+
+        if not self.connected_file:
+            with open(data_file, "r", encoding="utf-8") as fp:
+                for i, line in enumerate(fp):
+                    parsed = json.loads(line)
+
+                    if "samples_ns" in parsed:
+                        del parsed["samples_ns"]
+                    if "samples_ts" in parsed:
+                        del parsed["samples_ts"]
+
+                    if (missing_keys := self._check_keys(parsed.keys())):
+                        raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
+
+                    self.cursor.execute(f"INSERT INTO test({', '.join(parsed.keys())}) VALUES({', '.join('?' * len(parsed))});", tuple(parsed.values()))
+
+            self._builds_init()
+
+
+class LlamaBenchDataJSON(LlamaBenchDataSQLite3):
+    def __init__(self, data_files: list[str]):
+        super().__init__()
+
+        for data_file in data_files:
+            with open(data_file, "r", encoding="utf-8") as fp:
+                parsed = json.load(fp)
+
+                for i, entry in enumerate(parsed):
+                    if "samples_ns" in entry:
+                        del entry["samples_ns"]
+                    if "samples_ts" in entry:
+                        del entry["samples_ts"]
+
+                    if (missing_keys := self._check_keys(entry.keys())):
+                        raise RuntimeError(f"Missing required data key(s) at entry {i + 1}: {', '.join(missing_keys)}")
+
+                    self.cursor.execute(f"INSERT INTO test({', '.join(entry.keys())}) VALUES({', '.join('?' * len(entry))});", tuple(entry.values()))
+
+        self._builds_init()
+
+
+class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
+    def __init__(self, data_files: list[str]):
+        super().__init__()
+
+        for data_file in data_files:
+            with open(data_file, "r", encoding="utf-8") as fp:
+                for i, parsed in enumerate(csv.DictReader(fp)):
+                    if (missing_keys := self._check_keys(set(parsed.keys()))):
+                        raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
+
+                    # FIXME: Convert float/int columns from str!
+                    self.cursor.execute(f"INSERT INTO test({', '.join(parsed.keys())}) VALUES({', '.join('?' * len(parsed))});", tuple(parsed.values()))
+
+        self._builds_init()
+
+
+bench_data = LlamaBenchDataSQLite3_or_JSONL(input_file)
 
 if not bench_data.builds:
     raise RuntimeError(f"{input_file} does not contain any builds.")
