@@ -41,16 +41,17 @@ __global__ void __launch_bounds__(splitD, 1)
     __shared__ float smemC[N];
 
 #ifdef USE_CUB
-    using BlockLoadA = cub::BlockLoad<float, splitD, N, cub::BLOCK_LOAD_VECTORIZE>;
-    using BlockLoadS0 = cub::BlockLoad<float, splitD, N, cub::BLOCK_LOAD_VECTORIZE>;
-    using BlockStoreS = cub::BlockStore<float, splitD, N, cub::BLOCK_STORE_VECTORIZE>;
+    using BlockLoad = cub::BlockLoad<float, splitD, N, cub::BLOCK_LOAD_WARP_TRANSPOSE>;
+    using BlockStore = cub::BlockStore<float, splitD, N, cub::BLOCK_STORE_WARP_TRANSPOSE>;
 
-    __shared__ typename BlockLoadA::TempStorage block_load_tempA;
-    __shared__ typename BlockLoadS0::TempStorage block_load_tempS0;
-    __shared__ typename BlockStoreS::TempStorage block_store_tempS;
+    union CubTempStorage {
+        typename BlockLoad::TempStorage load_temp;
+        typename BlockStore::TempStorage store_temp;
+    };
+    __shared__ CubTempStorage cub_temp_storage;
 
-    BlockLoadA(block_load_tempA).Load(A_block, regA);
-    BlockLoadS0(block_load_tempS0).Load(s0_block, regs0);
+    BlockLoad(cub_temp_storage.load_temp).Load(A_block, regA);
+    BlockLoad(cub_temp_storage.load_temp).Load(s0_block, regs0);
 #else
     const int stride_s0 = src0_nb1 / sizeof(float);
     const int stride_A = src3_nb1 / sizeof(float);
@@ -91,7 +92,7 @@ __global__ void __launch_bounds__(splitD, 1)
     }
 
 #ifdef USE_CUB
-    BlockStoreS(block_store_tempS).Store(s_block, regs0);
+    BlockStore(cub_temp_storage.store_temp).Store(s_block, regs0);
 #else
     const int stride_s = stride_s0;
 #pragma unroll
