@@ -31,12 +31,6 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                      bool    offload,
                  uint32_t    kv_size,
                  uint32_t    padding) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding) {
-    has_shift = false;
-    can_shift = true;
-
-    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d, padding = %d\n",
-            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), hparams.n_layer, can_shift, padding);
-
     GGML_ASSERT(kv_size % padding == 0 && "kv_size must be a multiple of padding");
 
     this->type_k = type_k;
@@ -133,8 +127,8 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
 
-        LLAMA_LOG_INFO("%s: KV self size  = %7.2f MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f),
+        LLAMA_LOG_INFO("%s: size = %7.2f (%6d cells, %3d layers) MiB, K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(),
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
@@ -174,6 +168,7 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             } else {
                 continue;
             }
+
             if (cells[i].is_empty()) {
                 // keep count of the number of used cells
                 if (cells[i].pos >= 0) {
@@ -339,6 +334,9 @@ void llama_kv_cache_unified::restore() {
     if (pending.ranges.empty()) {
         return;
     }
+
+    // TODO: here we assume that all sequences should be removed from the cache which is not always the case
+    //       need to start keeping more detailed pending information per-sequence
 
     uint32_t new_head = size;
 
@@ -555,11 +553,15 @@ int32_t llama_kv_cache_unified::get_used_cells() const {
 }
 
 bool llama_kv_cache_unified::get_can_shift() const {
-    return can_shift;
+    return true;
 }
 
 uint32_t llama_kv_cache_unified::get_n() const {
     return n;
+}
+
+uint32_t llama_kv_cache_unified::get_size() const {
+    return size;
 }
 
 ggml_tensor * llama_kv_cache_unified::get_k(ggml_context * ctx, int32_t il) const {
@@ -637,7 +639,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     return ggml_cpy(ctx, v_cur, v_view);
 }
 
-void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, bool swa) const {
     const int64_t n_tokens     = ubatch->n_tokens;
     const int64_t n_seq_tokens = ubatch->n_seq_tokens;
     const int64_t n_seqs       = ubatch->n_seqs;
@@ -681,68 +683,26 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
                         }
                     }
 
-                    if (data) {
-                        data[h*(n_kv*n_tokens) + s*(n_kv*n_seq_tokens) + j*n_kv + i] = f;
-                    }
-                }
-            }
-        }
+                    if (swa) {
+                        // may need to cut off old tokens for sliding window
+                        switch (hparams.swa_type) {
+                            case LLAMA_SWA_TYPE_STANDARD:
+                                {
+                                    if (pos - cells[i].pos >= (int32_t) hparams.n_swa) {
+                                        f = -INFINITY;
+                                    }
+                                } break;
+                            case LLAMA_SWA_TYPE_CHUNKED:
+                                {
+                                    const llama_pos pos_chunk_start = (pos / hparams.n_swa) * hparams.n_swa;
 
-        // mask padded tokens
-        if (data) {
-            for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                for (int j = 0; j < n_kv; ++j) {
-                    data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
-                }
-            }
-        }
-    }
-}
-
-void llama_kv_cache_unified::set_input_kq_mask_swa(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    const int64_t n_tokens     = ubatch->n_tokens;
-    const int64_t n_seq_tokens = ubatch->n_seq_tokens;
-    const int64_t n_seqs       = ubatch->n_seqs;
-
-    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    float * data = (float *) dst->data;
-
-    const int64_t n_kv = n;
-
-    for (int h = 0; h < 1; ++h) {
-        for (int s = 0; s < n_seqs; ++s) {
-            const llama_seq_id seq_id = ubatch->seq_id[s][0];
-
-            for (int j = 0; j < n_seq_tokens; ++j) {
-                const llama_pos pos = ubatch->pos[s*n_seq_tokens + j];
-
-                for (int i = 0; i < n_kv; ++i) {
-                    float f;
-                    // mask the token if:
-                    if (!cells[i].has_seq_id(seq_id) // not the correct sequence
-                            || (causal_attn && cells[i].pos > pos) // for causal, mask future tokens
-                       ) {
-                        f = -INFINITY;
-                    } else {
-                        if (hparams.use_alibi) {
-                            f = -std::abs(cells[i].pos - pos);
-                        } else {
-                            f = 0.0f;
+                                    if (cells[i].pos < pos_chunk_start) {
+                                        f = -INFINITY;
+                                    }
+                                } break;
                         }
                     }
 
-                    // may need to cut off old tokens for sliding window
-                    // TODO @ngxson : we are currently re-using the swa logic to store the chunked mask, we should rename SWA to something more generic like "aux mask"
-                    if (hparams.n_attn_chunk) {
-                        llama_pos pos_chunk_start = (pos / hparams.n_attn_chunk) * hparams.n_attn_chunk;
-                        if (cells[i].pos < pos_chunk_start || pos < pos_chunk_start) {
-                            f = -INFINITY;
-                        }
-                    } else {
-                        if (pos - cells[i].pos >= (int32_t)hparams.n_swa) {
-                            f = -INFINITY;
-                        }
-                    }
                     data[h*(n_kv*n_tokens) + s*(n_kv*n_seq_tokens) + j*n_kv + i] = f;
                 }
             }
@@ -800,6 +760,7 @@ llama_pos llama_kv_cache_unified::get_pos_max() const {
 
 size_t llama_kv_cache_unified::total_size() const {
     size_t size = 0;
+
     for (const auto & buf : bufs) {
         size += ggml_backend_buffer_get_size(buf.get());
     }
@@ -898,8 +859,6 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
     const auto & n_embd_head_k = hparams.n_embd_head_k;
   //const auto & n_embd_head_v = hparams.n_embd_head_v;
 
-    const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
-
     //GGML_ASSERT(kv_self->size == n_ctx);
 
     auto inp = std::make_unique<llm_graph_input_k_shift>(this);
@@ -913,14 +872,10 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
         const int64_t n_head_kv    = hparams.n_head_kv(il);
         const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
 
-        const bool is_swa = hparams.is_swa(il);
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
-        // note: the swa rope params could become part of the cparams in the future
-        //       if we decide to make them configurable, like the non-sliding ones
-        const float freq_base_l  = is_swa ? hparams.rope_freq_base_train_swa  : cparams.rope_freq_base;
-        const float freq_scale_l = is_swa ? hparams.rope_freq_scale_train_swa : cparams.rope_freq_scale;
-
-        ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
         ggml_tensor * k =
             ggml_view_3d(ctx, layer.k,
@@ -1429,6 +1384,7 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
             LLAMA_LOG_ERROR("%s: failed to find available cells in kv cache\n", __func__);
             return false;
         }
+
         commit();
 
         // DEBUG CHECK: kv.head should be our first cell, kv.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
@@ -1605,6 +1561,178 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t cell
     }
 
     return true;
+}
+
+//
+// llama_kv_cache_unified_iswa
+//
+
+llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
+        const llama_model & model,
+                ggml_type   type_k,
+                ggml_type   type_v,
+                     bool   v_trans,
+                     bool   offload,
+                 uint32_t   kv_size,
+                 uint32_t   n_seq_max,
+                 uint32_t   n_batch,
+                 uint32_t   padding) : hparams(model.hparams) {
+    llama_kv_cache_unified::layer_filter_cb filter_base = [&](int32_t il) { return !model.hparams.is_swa(il); };
+    llama_kv_cache_unified::layer_filter_cb filter_swa  = [&](int32_t il) { return  model.hparams.is_swa(il); };
+
+    const uint32_t kv_size_base = kv_size;
+    const uint32_t kv_size_swa  = std::min(kv_size, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, padding));
+
+    LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, kv_size_base);
+
+    kv_base = std::make_unique<llama_kv_cache_unified>(model, std::move(filter_base), type_k, type_v, v_trans, offload, kv_size_base, padding);
+
+    LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, kv_size_swa);
+
+    kv_swa  = std::make_unique<llama_kv_cache_unified>(model, std::move(filter_swa),  type_k, type_v, v_trans, offload, kv_size_swa,  padding);
+}
+
+void llama_kv_cache_unified_iswa::clear() {
+    kv_base->clear();
+    kv_swa ->clear();
+}
+
+bool llama_kv_cache_unified_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    bool res = true;
+
+    res = res & kv_base->seq_rm(seq_id, p0, p1);
+    res = res & kv_swa ->seq_rm(seq_id, p0, p1);
+
+    return res;
+}
+
+void llama_kv_cache_unified_iswa::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    kv_base->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+    kv_swa ->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+}
+
+void llama_kv_cache_unified_iswa::seq_keep(llama_seq_id seq_id) {
+    kv_base->seq_keep(seq_id);
+    kv_swa ->seq_keep(seq_id);
+}
+
+void llama_kv_cache_unified_iswa::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    kv_base->seq_add(seq_id, p0, p1, delta);
+    kv_swa ->seq_add(seq_id, p0, p1, delta);
+}
+
+void llama_kv_cache_unified_iswa::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    kv_base->seq_div(seq_id, p0, p1, d);
+    kv_swa ->seq_div(seq_id, p0, p1, d);
+}
+
+llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
+    return kv_base->seq_pos_max(seq_id);
+}
+
+void llama_kv_cache_unified_iswa::restore() {
+    kv_base->restore();
+    kv_swa ->restore();
+}
+
+void llama_kv_cache_unified_iswa::commit() {
+    if (pending.pos_max.empty()) {
+        return;
+    }
+
+    // slide the window, forgetting old tokens
+    for (const auto & [seq_id, pos_max] : pending.pos_max) {
+        if (pos_max <= (llama_pos) hparams.n_swa) {
+            continue;
+        }
+
+        kv_swa->seq_rm(seq_id, -1, pos_max - hparams.n_swa + 1);
+    }
+
+    pending.pos_max.clear();
+
+    kv_base->commit();
+    kv_swa ->commit();
+}
+
+bool llama_kv_cache_unified_iswa::update(llama_context & lctx) {
+    bool res = true;
+
+    res = res & kv_base->update(lctx);
+    res = res & kv_swa ->update(lctx);
+
+    return res;
+}
+
+void llama_kv_cache_unified_iswa::defrag_sched(float thold) {
+    kv_base->defrag_sched(thold);
+    kv_swa ->defrag_sched(thold);
+}
+
+void llama_kv_cache_unified_iswa::set_full() {
+    kv_base->set_full();
+    kv_swa ->set_full();
+}
+
+llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch, bool logits_all) {
+    // this will be used upon successful decode, during commit, to remove old SWA tokens
+    for (int i = 0; i < batch.n_tokens; ++i) {
+        for (int s = 0; s < batch.n_seq_id[i]; ++s) {
+            const llama_seq_id seq_id = batch.seq_id[i][s];
+            const llama_pos    pos    = batch.pos[i];
+
+            pending.pos_max[seq_id] = std::max(pending.pos_max[seq_id], pos);
+        }
+    }
+
+    return kv_base->sbatch_init(batch, logits_all);
+}
+
+llama_ubatch llama_kv_cache_unified_iswa::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
+    return kv_base->ubatch_next(sbatch, n_ubatch, embd_pooled);
+}
+
+bool llama_kv_cache_unified_iswa::find_slot(const llama_ubatch & batch) {
+    bool res = true;
+
+    res = res & kv_base->find_slot(batch);
+    res = res & kv_swa ->find_slot(batch);
+
+    return res;
+}
+
+int32_t llama_kv_cache_unified_iswa::get_n_tokens()   const {
+    return kv_base->get_n_tokens();
+}
+
+int32_t llama_kv_cache_unified_iswa::get_used_cells() const {
+    return kv_base->get_used_cells();
+}
+
+llama_pos llama_kv_cache_unified_iswa::get_pos_max() const {
+    return kv_base->get_pos_max();
+}
+
+bool llama_kv_cache_unified_iswa::get_can_shift() const {
+    return kv_base->get_size() == kv_swa->get_size();
+}
+
+void llama_kv_cache_unified_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+    kv_base->state_write(io, seq_id);
+    kv_swa ->state_write(io, seq_id);
+}
+
+void llama_kv_cache_unified_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+    kv_base->state_read(io, seq_id);
+    kv_swa ->state_read(io, seq_id);
+}
+
+llama_kv_cache_unified * llama_kv_cache_unified_iswa::get_kv_base() const {
+    return kv_base.get();
+}
+
+llama_kv_cache_unified * llama_kv_cache_unified_iswa::get_kv_swa() const {
+    return kv_swa.get();
 }
 
 //
@@ -2666,80 +2794,7 @@ void llama_kv_cache_view_free(llama_kv_cache_view * view) {
     }
 }
 
-void llama_kv_cache_view_update(llama_kv_cache_view * view, const llama_kv_cache * kv) {
-    // TODO: rework this in the future, for now quick hack
-    const llama_kv_cache_unified * kvu = dynamic_cast<const llama_kv_cache_unified *>(kv);
-    if (kvu == nullptr) {
-        LLAMA_LOG_ERROR("%s: the kv_cache_view currently works only with llama_kv_cache_unified\n", __func__);
-        return;
-    }
-
-    GGML_UNUSED(view);
-
-    return;
-    // TODO: rework
-
-    //const auto & cells = kvu->cells;
-
-    //if (uint32_t(view->n_cells) < cells->size || view->cells == nullptr) {
-    //    view->n_cells = int32_t(cells->size);
-    //    void * p = realloc(view->cells, sizeof(llama_kv_cache_view_cell) * view->n_cells);
-    //    GGML_ASSERT(p != nullptr && "Failed to alloc kv_cache_view cells");
-    //    view->cells = (llama_kv_cache_view_cell *)p;
-    //    p = realloc(view->cells_sequences, sizeof(llama_seq_id) * view->n_seq_max * view->n_cells);
-    //    GGML_ASSERT(p != nullptr && "Failed to alloc kv_cache_view cells sequences");
-    //    view->cells_sequences = (llama_seq_id *)p;
-    //}
-
-    //const auto & kv_cells = cells;
-    //llama_kv_cache_view_cell * c_curr = view->cells;
-    //llama_seq_id * cs_curr = view->cells_sequences;
-    //int32_t used_cells = 0;
-    //int32_t token_count = 0;
-    //int32_t curr_contig_idx = -1;
-    //uint32_t max_contig = 0;
-    //int32_t max_contig_idx = -1;
-
-    //for (int32_t i = 0; i < int32_t(cells->size); i++, c_curr++, cs_curr += view->n_seq_max) {
-    //    const size_t curr_size = kv_cells[i].seq_id.size();
-    //    token_count += curr_size;
-    //    c_curr->pos = kv_cells[i].pos + kv_cells[i].delta;
-
-    //    if (curr_size > 0) {
-    //        if (curr_contig_idx >= 0 && uint32_t(i - curr_contig_idx) > max_contig) {
-    //            max_contig = i - curr_contig_idx;
-    //            max_contig_idx = curr_contig_idx;
-    //        }
-    //        curr_contig_idx = -1;
-    //    } else if (curr_contig_idx < 0) {
-    //        curr_contig_idx = i;
-    //    }
-
-    //    int seq_idx = 0;
-    //    for (const llama_seq_id it : kv_cells[i].seq_id) {
-    //        if (seq_idx >= view->n_seq_max) {
-    //            break;
-    //        }
-    //        cs_curr[seq_idx] = it;
-    //        seq_idx++;
-    //    }
-    //    if (seq_idx != 0) {
-    //        used_cells++;
-    //    }
-    //    for (; seq_idx < view->n_seq_max; seq_idx++) {
-    //        cs_curr[seq_idx] = -1;
-    //    }
-    //}
-    //if (curr_contig_idx >= 0 && kv_cells.size() - curr_contig_idx > max_contig) {
-    //    max_contig_idx = curr_contig_idx;
-    //    max_contig = kv_cells.size() - curr_contig_idx;
-    //}
-    //view->max_contiguous = max_contig;
-    //view->max_contiguous_idx = max_contig_idx;
-    //view->token_count = token_count;
-    //view->used_cells = used_cells;
-    //if (uint32_t(used_cells) != cells->used) {
-    //    LLAMA_LOG_ERROR("%s: used cells mismatch. kv_cache says %d but we calculated %d\n",
-    //        __func__, cells->used, used_cells);
-    //}
+void llama_kv_cache_view_update(llama_kv_cache_view * , const llama_kv_cache * ) {
+    // TODO: will be removed soon, keep this for now to avoid too many changes in
+    //       https://github.com/ggml-org/llama.cpp/pull/13194
 }

@@ -88,11 +88,11 @@ private:
 // llama_kv_cache_unified
 //
 
-// TODO: add notion of max sequences
 class llama_kv_cache_unified : public llama_kv_cache {
 public:
     static uint32_t get_padding(const llama_cparams & cparams);
 
+    // this callback is used to filter out layers that should not be included in the cache
     using layer_filter_cb = std::function<bool(int32_t il)>;
 
     llama_kv_cache_unified(
@@ -135,7 +135,6 @@ public:
     void set_full() override;
 
     llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-
     llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 
     // updates the cache head
@@ -161,18 +160,19 @@ public:
     //
 
     uint32_t get_n() const;
+    uint32_t get_size() const;
 
+    // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
+    // store k_cur and v_cur in the cache based on the current head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
-    void set_input_kq_mask    (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_kq_mask_swa(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-
-    void set_input_k_shift    (ggml_tensor * dst) const;
-    void set_input_pos_bucket (ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, bool swa) const;
+    void set_input_k_shift   (ggml_tensor * dst) const;
+    void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:
     const llama_model & model;
@@ -214,9 +214,7 @@ private:
 
     bool has_shift = false;
     bool do_defrag = false;
-
     bool v_trans   = true;  // the value tensor is transposed
-    bool can_shift = false;
 
     uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
     uint32_t size = 0; // total number of cells, shared across all sequences
@@ -241,6 +239,7 @@ private:
     std::map<int32_t, int32_t> map_layer_ids;
 
     // pending cell updates that are not yet committed
+    // TODO: improve by keeping information per-sequence
     struct {
         std::vector<slot_range> ranges;
     } pending;
@@ -288,11 +287,90 @@ private:
 };
 
 //
-// llama_kv_cache_unified_swa
+// llama_kv_cache_unified_iswa
 //
 
-class llama_kv_cache_unified_swa : public llama_kv_cache {
+// utilizes two instances of llama_kv_cache_unified
+//   the first instance is for the non-SWA layers of the model and the second instance is for the SWA layers
+//   upon successful commit, the SWA cache removes old tokens outside the n_swa window
+
+class llama_kv_cache_unified_iswa : public llama_kv_cache {
 public:
+    llama_kv_cache_unified_iswa(
+            const llama_model & model,
+                    ggml_type   type_k,
+                    ggml_type   type_v,
+                         bool   v_trans,
+                         bool   offload,
+                     uint32_t   kv_size,
+                     uint32_t   n_seq_max,
+                     uint32_t   n_batch,
+                     uint32_t   padding);
+
+    ~llama_kv_cache_unified_iswa() = default;
+
+    //
+    // llama_memory_i
+    //
+
+    void clear() override;
+
+    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
+    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
+    void seq_keep(llama_seq_id seq_id)                                                          override;
+    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
+    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
+
+    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    //
+    // llama_kv_cache
+    //
+
+    void restore() override;
+    void commit()  override;
+
+    bool update(llama_context & ctx) override;
+
+    void defrag_sched(float thold) override;
+
+    void set_full() override;
+
+    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
+    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
+
+    bool find_slot(const llama_ubatch & batch) override;
+
+    int32_t get_n_tokens()   const override;
+    int32_t get_used_cells() const override;
+
+    // TODO: better data structures to reduce the cost of this operation
+    llama_pos get_pos_max() const override;
+
+    bool get_can_shift() const override;
+
+    // state write/load
+
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+
+    //
+    // llama_kv_cache_unified_iswa specific API
+    //
+
+    llama_kv_cache_unified * get_kv_base() const;
+    llama_kv_cache_unified * get_kv_swa () const;
+
+private:
+    // pending cell updates that are not yet committed
+    struct {
+        std::map<llama_seq_id, llama_pos> pos_max;
+    } pending;
+
+    const llama_hparams & hparams;
+
+    std::unique_ptr<llama_kv_cache_unified> kv_base;
+    std::unique_ptr<llama_kv_cache_unified> kv_swa;
 };
 
 //
@@ -358,7 +436,6 @@ public:
     void set_full() override;
 
     llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-
     llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
 
     bool find_slot(const llama_ubatch & batch) override;
