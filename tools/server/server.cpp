@@ -1862,7 +1862,7 @@ struct server_context {
 
     llama_context_params cparams_dft;
 
-    llama_batch batch;
+    llama_batch batch = {};
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
@@ -1884,8 +1884,6 @@ struct server_context {
 
     common_chat_templates_ptr chat_templates;
 
-    server_context() : batch({}) {
-    }
     ~server_context() {
         mtmd_free(mctx);
 
