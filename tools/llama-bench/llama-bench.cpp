@@ -196,18 +196,28 @@ static std::string pair_str(const std::pair<int, int> & p) {
 }
 
 static std::vector<int> parse_int_range(const std::string & s) {
-    // first[-last[+step]][,first[-last[+step]]...]
-    std::regex range_regex(R"(^(\d+)(?:-(\d+)(?:\+(\d+))?)?(,|$))");
+    // first[-last[(+|*)step]]
+    std::regex range_regex(R"(^(\d+)(?:-(\d+)(?:([\+|\*])(\d+))?)?(?:,|$))");
+
     std::smatch match;
     std::string::const_iterator search_start(s.cbegin());
     std::vector<int> result;
     while (std::regex_search(search_start, s.cend(), match, range_regex)) {
-        int first = std::stoi(match[1]);
-        int last  = match[2].matched ? std::stoi(match[2]) : first;
-        int step  = match[3].matched ? std::stoi(match[3]) : 1;
+        int  first = std::stoi(match[1]);
+        int  last  = match[2].matched ? std::stoi(match[2]) : first;
+        char op    = match[3].matched ? match[3].str()[0] : '+';
+        int  step  = match[4].matched ? std::stoi(match[4]) : 1;
 
-        for (int i = first; i <= last; i += step) {
+        for (int i = first; i <= last;) {
             result.push_back(i);
+
+            if (op == '+') {
+                i += step;
+            } else if (op == '*') {
+                i *= step;
+            } else {
+                throw std::invalid_argument("invalid range format");
+            }
         }
         search_start = match.suffix().first;
     }
@@ -275,7 +285,7 @@ static const cmd_params cmd_params_defaults = {
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { false },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
-    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{{nullptr,nullptr}} },
+    /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
@@ -294,13 +304,29 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help\n");
+    printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
+    printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
+           cmd_params_defaults.reps);
+    printf("  --prio <0|1|2|3>                          process/thread priority (default: %d)\n",
+           cmd_params_defaults.prio);
+    printf("  --delay <0...N> (seconds)                 delay between each test (default: %d)\n",
+           cmd_params_defaults.delay);
+    printf("  -o, --output <csv|json|jsonl|md|sql>      output format printed to stdout (default: %s)\n",
+           output_format_str(cmd_params_defaults.output_format));
+    printf("  -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: %s)\n",
+           output_format_str(cmd_params_defaults.output_format_stderr));
+    printf("  -v, --verbose                             verbose output\n");
+    printf("  --progress                                print test progress indicators\n");
+    printf("\n");
+    printf("test parameters:\n");
     printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
     printf("  -p, --n-prompt <n>                        (default: %s)\n",
            join(cmd_params_defaults.n_prompt, ",").c_str());
     printf("  -n, --n-gen <n>                           (default: %s)\n", join(cmd_params_defaults.n_gen, ",").c_str());
     printf("  -pg <pp,tg>                               (default: %s)\n",
            join(transform_to_str(cmd_params_defaults.n_pg, pair_str), ",").c_str());
-    printf("  -d, --n-depth <n>                         (default: %s)\n", join(cmd_params_defaults.n_depth, ",").c_str());
+    printf("  -d, --n-depth <n>                         (default: %s)\n",
+           join(cmd_params_defaults.n_depth, ",").c_str());
     printf("  -b, --batch-size <n>                      (default: %s)\n",
            join(cmd_params_defaults.n_batch, ",").c_str());
     printf("  -ub, --ubatch-size <n>                    (default: %s)\n",
@@ -332,25 +358,17 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.flash_attn, ",").c_str());
     printf("  -mmp, --mmap <0|1>                        (default: %s)\n",
            join(cmd_params_defaults.use_mmap, ",").c_str());
-    printf("  --numa <distribute|isolate|numactl>       (default: disabled)\n");
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
-    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;... (default: disabled)\n");
-    printf("  -nopo, --no-op-offload <i>                (default: 0)\n");
-    printf("  -r, --repetitions <n>                     (default: %d)\n", cmd_params_defaults.reps);
-    printf("  --prio <0|1|2|3>                          (default: %d)\n", cmd_params_defaults.prio);
-    printf("  --delay <0...N> (seconds)                 (default: %d)\n", cmd_params_defaults.delay);
-    printf("  -o, --output <csv|json|jsonl|md|sql>      (default: %s)\n",
-           output_format_str(cmd_params_defaults.output_format));
-    printf("  -oe, --output-err <csv|json|jsonl|md|sql> (default: %s)\n",
-           output_format_str(cmd_params_defaults.output_format_stderr));
-    printf("  -v, --verbose                             (default: %s)\n", cmd_params_defaults.verbose ? "1" : "0");
-    printf("  --progress                                (default: %s)\n", cmd_params_defaults.progress ? "1" : "0");
+    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;...\n");
+    printf("                                            (default: disabled)\n");
+    printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
     printf("\n");
     printf(
-        "Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter "
-        "multiple times. Ranges can be specified with 'first-last' or 'first-last+step'.\n");
+        "Multiple values can be given for each parameter by separating them with ','\n"
+        "or by specifying the parameter multiple times. Ranges can be given as\n"
+        "'start-end' or 'start-end+step' or 'start-end*mult'.\n");
 }
 
 static ggml_type ggml_type_from_name(const std::string & s) {
@@ -618,13 +636,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.embeddings.insert(params.embeddings.end(), p.begin(), p.end());
-        } else if (arg == "-nopo" || arg == "--no-op-offload") {
-            if (++i >= argc) {
-                invalid_param = true;
-                break;
-            }
-            auto p = string_split<bool>(argv[i], split_delim);
-            params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
+            } else if (arg == "-nopo" || arg == "--no-op-offload") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.no_op_offload.insert(params.no_op_offload.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
