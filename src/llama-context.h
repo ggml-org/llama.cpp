@@ -187,9 +187,6 @@ private:
 
     std::unique_ptr<llama_memory_i> memory;
 
-    // TODO: remove
-    bool logits_all = false;
-
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;

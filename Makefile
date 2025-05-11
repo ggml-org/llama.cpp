@@ -1187,11 +1187,6 @@ llama-cli: tools/main/main.cpp \
 	@echo '====  Run ./llama-cli -h for help.  ===='
 	@echo
 
-llama-infill: examples/infill/infill.cpp \
-	$(OBJ_ALL)
-	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
-	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
-
 llama-run: tools/run/run.cpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
@@ -1394,36 +1389,36 @@ llama-gen-docs: examples/gen-docs/gen-docs.cpp \
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
-libllava.a: tools/llava/llava.cpp \
-	tools/llava/llava.h \
-	tools/llava/clip.cpp \
-	tools/llava/clip.h \
+libllava.a: tools/mtmd/llava.cpp \
+	tools/mtmd/llava.h \
+	tools/mtmd/clip.cpp \
+	tools/mtmd/clip.h \
 	common/stb_image.h \
 	common/base64.hpp \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) -static -fPIC -c $< -o $@ -Wno-cast-qual
 
-llama-llava-cli: tools/llava/llava-cli.cpp \
-	tools/llava/llava.cpp \
-	tools/llava/llava.h \
-	tools/llava/clip.cpp \
-	tools/llava/clip.h \
+llama-llava-cli: tools/mtmd/llava-cli.cpp \
+	tools/mtmd/llava.cpp \
+	tools/mtmd/llava.h \
+	tools/mtmd/clip.cpp \
+	tools/mtmd/clip.h \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) $< $(filter-out %.h $<,$^) -o $@ $(LDFLAGS) -Wno-cast-qual
 
-llama-minicpmv-cli: tools/llava/minicpmv-cli.cpp \
-	tools/llava/llava.cpp \
-	tools/llava/llava.h \
-	tools/llava/clip.cpp \
-	tools/llava/clip.h \
+llama-minicpmv-cli: tools/mtmd/minicpmv-cli.cpp \
+	tools/mtmd/llava.cpp \
+	tools/mtmd/llava.h \
+	tools/mtmd/clip.cpp \
+	tools/mtmd/clip.h \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) $< $(filter-out %.h $<,$^) -o $@ $(LDFLAGS) -Wno-cast-qual
 
-llama-qwen2vl-cli: tools/llava/qwen2vl-cli.cpp \
-	tools/llava/llava.cpp \
-	tools/llava/llava.h \
-	tools/llava/clip.cpp \
-	tools/llava/clip.h \
+llama-qwen2vl-cli: tools/mtmd/qwen2vl-cli.cpp \
+	tools/mtmd/llava.cpp \
+	tools/mtmd/llava.h \
+	tools/mtmd/clip.cpp \
+	tools/mtmd/clip.h \
 	$(OBJ_ALL)
 	$(CXX) $(CXXFLAGS) $< $(filter-out %.h $<,$^) -o $@ $(LDFLAGS) -Wno-cast-qual
 
