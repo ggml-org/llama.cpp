@@ -360,3 +360,29 @@ write_basic_package_version_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
+
+if (MSVC)
+    set(MSVC_WARNING_FLAGS
+        /wd4005  # Macro redefinition
+        /wd4244  # Conversion from one type to another type, possible loss of data
+        /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4996  # Disable POSIX deprecation warnings
+        /wd4702  # Unreachable code warnings
+    )
+    function(disable_msvc_warnings target_name)
+        if(TARGET ${target_name})
+            target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
+        endif()
+    endfunction()
+
+    disable_msvc_warnings(ggml-base)
+    disable_msvc_warnings(ggml)
+    disable_msvc_warnings(ggml-cpu)
+    disable_msvc_warnings(ggml-cpu-x64)
+    disable_msvc_warnings(ggml-cpu-sse42)
+    disable_msvc_warnings(ggml-cpu-sandybridge)
+    disable_msvc_warnings(ggml-cpu-haswell)
+    disable_msvc_warnings(ggml-cpu-skylakex)
+    disable_msvc_warnings(ggml-cpu-icelake)
+    disable_msvc_warnings(ggml-cpu-alderlake)
+endif()

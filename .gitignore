@@ -96,11 +96,11 @@ perf-*.txt
 # Examples
 
 examples/jeopardy/results.txt
-examples/server/*.css.hpp
-examples/server/*.html.hpp
-examples/server/*.js.hpp
-examples/server/*.mjs.hpp
-examples/server/*.gz.hpp
+tools/server/*.css.hpp
+tools/server/*.html.hpp
+tools/server/*.js.hpp
+tools/server/*.mjs.hpp
+tools/server/*.gz.hpp
 !build_64.sh
 !examples/*.bat
 !examples/*/*.kts
@@ -110,7 +110,7 @@ examples/server/*.gz.hpp
 
 # Server Web UI temporary files
 node_modules
-examples/server/webui/dist
+tools/server/webui/dist
 
 # Python
 

@@ -42,6 +42,7 @@ void ggml_sycl_host_free(void* ptr);
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_prioritize_dmmv;
 
 #define GGML_SYCL_DEBUG(...)        \
   do {                              \
@@ -80,10 +81,6 @@ extern int g_ggml_sycl_disable_optimize;
 // max batch size to use MMQ kernels when tensor cores are available
 #define MMQ_MAX_BATCH_SIZE 32
 
-#if defined(_MSC_VER)
-#pragma warning(disable : 4244 4267) // possible loss of data
-#endif
-
 // dmmv = dequantize_mul_mat_vec
 #ifndef GGML_SYCL_DMMV_X
 #define GGML_SYCL_DMMV_X 32
@@ -118,17 +115,12 @@ static void crash() {
   GGML_ABORT("SYCL error");
 }
 
-#define SYCL_CHECK(err)                     \
-  do {                                      \
-    auto err_ = (err);                      \
-    if (err_ != 0)                          \
-      ggml_sycl_error(                      \
-          #err,                             \
-          __func__,                         \
-          __FILE__,                         \
-          __LINE__,                         \
-          "Meet error in this line code!"); \
-  } while (0)
+#define SYCL_CHECK(err)                                                                                    \
+    do {                                                                                                   \
+        auto err_ = (err);                                                                                 \
+        if (err_ != 0)                                                                                     \
+            ggml_sycl_error(#err, __func__, __FILE__, __LINE__, "Exception caught in this line of code."); \
+    } while (0)
 
 #if DPCT_COMPAT_RT_VERSION >= 11100
 #define GGML_SYCL_ASSUME(x) __builtin_assume(x)
@@ -492,6 +484,10 @@ static __dpct_inline__ Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
 }
 
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size);
+
+constexpr size_t ceil_div(const size_t m, const size_t n) {
+    return (m + n - 1) / n;
+}
 
 bool gpu_has_xmx(sycl::device &dev);
 #endif // GGML_SYCL_COMMON_HPP

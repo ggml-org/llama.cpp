@@ -125,7 +125,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
             msgs.push_back(msg);
         }
     } catch (const std::exception & e) {
-        throw std::runtime_error("Failed to parse messages: " + std::string(e.what()) + "; messages = " + messages.dump(2));
+        // @ngxson : disable otherwise it's bloating the API response
+        // printf("%s\n", std::string("; messages = ") + messages.dump(2));
+        throw std::runtime_error("Failed to parse messages: " + std::string(e.what()));
     }
 
     return msgs;

@@ -104,6 +104,7 @@ class Keys:
         EXPERT_WEIGHTS_SCALE              = "{arch}.expert_weights_scale"
         EXPERT_WEIGHTS_NORM               = "{arch}.expert_weights_norm"
         EXPERT_GATING_FUNC                = "{arch}.expert_gating_func"
+        MOE_EVERY_N_LAYERS                = "{arch}.moe_every_n_layers"
         POOLING_TYPE                      = "{arch}.pooling_type"
         LOGIT_SCALE                       = "{arch}.logit_scale"
         DECODER_START_TOKEN_ID            = "{arch}.decoder_start_token_id"
@@ -230,8 +231,10 @@ class Keys:
         BLOCK_COUNT         = "clip.vision.block_count"
         IMAGE_MEAN          = "clip.vision.image_mean"
         IMAGE_STD           = "clip.vision.image_std"
+        SPATIAL_MERGE_SIZE  = "clip.vision.spatial_merge_size"
         USE_GELU            = "clip.use_gelu"
         USE_SILU            = "clip.use_silu"
+        N_WA_PATTERN        = "clip.vision.n_wa_pattern" # used by qwen2.5vl
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
@@ -267,6 +270,7 @@ class MODEL_ARCH(IntEnum):
     REFACT           = auto()
     BERT             = auto()
     NOMIC_BERT       = auto()
+    NOMIC_BERT_MOE   = auto()
     JINA_BERT_V2     = auto()
     BLOOM            = auto()
     STABLELM         = auto()
@@ -479,7 +483,9 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_POS       = auto()
     V_ENC_ATTN_Q         = auto()
+    V_ENC_ATTN_Q_NORM    = auto()
     V_ENC_ATTN_K         = auto()
+    V_ENC_ATTN_K_NORM    = auto()
     V_ENC_ATTN_V         = auto()
     V_ENC_INPUT_NORM     = auto()
     V_ENC_OUTPUT         = auto()
@@ -487,8 +493,11 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_FFN_UP         = auto()
     V_ENC_FFN_GATE       = auto()
     V_ENC_FFN_DOWN       = auto()
+    V_LAYER_SCALE_1      = auto()
+    V_LAYER_SCALE_2      = auto()
     V_PRE_NORM           = auto()
     V_POST_NORM          = auto()
+    V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
     V_MM_SOFT_EMB_NORM   = auto() # gemma3
     V_RESMPL_POS_EMBD_K  = auto() # minicpmv
@@ -503,6 +512,7 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_PROJ        = auto() # minicpmv
     V_RESMPL_QUERY       = auto() # minicpmv
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
+    V_MM_PATCH_MERGER    = auto() # mistral small 3.1
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -521,6 +531,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.REFACT:           "refact",
     MODEL_ARCH.BERT:             "bert",
     MODEL_ARCH.NOMIC_BERT:       "nomic-bert",
+    MODEL_ARCH.NOMIC_BERT_MOE:   "nomic-bert-moe",
     MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
     MODEL_ARCH.BLOOM:            "bloom",
     MODEL_ARCH.STABLELM:         "stablelm",
@@ -733,7 +744,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
+    MODEL_TENSOR.V_ENC_ATTN_Q_NORM:         "v.blk.{bid}.attn_q_norm",
     MODEL_TENSOR.V_ENC_ATTN_K:              "v.blk.{bid}.attn_k",
+    MODEL_TENSOR.V_ENC_ATTN_K_NORM:         "v.blk.{bid}.attn_k_norm",
     MODEL_TENSOR.V_ENC_ATTN_V:              "v.blk.{bid}.attn_v",
     MODEL_TENSOR.V_ENC_INPUT_NORM:          "v.blk.{bid}.ln1",
     MODEL_TENSOR.V_ENC_OUTPUT:              "v.blk.{bid}.attn_out",
@@ -741,9 +754,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
     MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
     MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_LAYER_SCALE_1:           "v.blk.{bid}.ls1",
+    MODEL_TENSOR.V_LAYER_SCALE_2:           "v.blk.{bid}.ls2",
     MODEL_TENSOR.V_PRE_NORM:                "v.pre_ln",
     MODEL_TENSOR.V_POST_NORM:               "v.post_ln",
     MODEL_TENSOR.V_MM_INP_PROJ:             "mm.input_projection",
+    MODEL_TENSOR.V_MM_INP_NORM:             "mm.input_norm",
     MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",
     MODEL_TENSOR.V_RESMPL_POS_EMBD_K:       "resampler.pos_embd_k",
     MODEL_TENSOR.V_RESMPL_ATTN_Q:           "resampler.attn.q",
@@ -757,6 +773,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_PROJ:             "resampler.proj",
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
     MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
+    MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -769,7 +786,9 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_ATTN_Q,
+        MODEL_TENSOR.V_ENC_ATTN_Q_NORM,
         MODEL_TENSOR.V_ENC_ATTN_K,
+        MODEL_TENSOR.V_ENC_ATTN_K_NORM,
         MODEL_TENSOR.V_ENC_ATTN_V,
         MODEL_TENSOR.V_ENC_INPUT_NORM,
         MODEL_TENSOR.V_ENC_OUTPUT,
@@ -777,9 +796,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_FFN_UP,
         MODEL_TENSOR.V_ENC_FFN_GATE,
         MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_LAYER_SCALE_1,
+        MODEL_TENSOR.V_LAYER_SCALE_2,
         MODEL_TENSOR.V_PRE_NORM,
         MODEL_TENSOR.V_POST_NORM,
         MODEL_TENSOR.V_MM_INP_PROJ,
+        MODEL_TENSOR.V_MM_INP_NORM,
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM,
         MODEL_TENSOR.V_RESMPL_POS_EMBD_K,
         MODEL_TENSOR.V_RESMPL_ATTN_Q,
@@ -793,6 +815,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_PROJ,
         MODEL_TENSOR.V_RESMPL_QUERY,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
+        MODEL_TENSOR.V_MM_PATCH_MERGER,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -958,6 +981,22 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.LAYER_OUT_NORM,
+    ],
+    MODEL_ARCH.NOMIC_BERT_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_TYPES,
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.LAYER_OUT_NORM,
     ],
     MODEL_ARCH.JINA_BERT_V2: [
@@ -2006,6 +2045,8 @@ class PoolingType(IntEnum):
     NONE = 0
     MEAN = 1
     CLS  = 2
+    LAST = 3
+    RANK = 4
 
 
 class GGMLQuantizationType(IntEnum):
@@ -2136,6 +2177,9 @@ class VisionProjectorType:
     GEMMA3 = "gemma3"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"
+    QWEN2VL = "qwen2vl_merger"
+    QWEN25VL = "qwen2.5vl_merger"
+    INTERNVL = "internvl"
 
 
 # Items here are (block size, type size)

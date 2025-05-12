@@ -599,6 +599,22 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
+        "maxItems 0",
+        R"""({
+            "items": {
+                "type": "boolean"
+            },
+            "maxItems": 0
+        })""",
+        R"""(
+            boolean ::= ("true" | "false") space
+            root ::= "[" space  "]" space
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "maxItems 1",
         R"""({
             "items": {
