@@ -20,7 +20,7 @@ Performance testing tool for llama.cpp.
 ## Syntax
 
 ```
-usage: build/bin/llama-bench [options]
+usage: llama-bench [options]
 
 options:
   -h, --help
