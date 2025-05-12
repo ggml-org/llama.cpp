@@ -117,6 +117,7 @@ setup_framework_structure() {
     # Copy all required headers (common for all platforms)
     cp include/llama.h             ${header_path}
     cp ggml/include/ggml.h         ${header_path}
+    cp ggml/include/ggml-opt.h     ${header_path}
     cp ggml/include/ggml-alloc.h   ${header_path}
     cp ggml/include/ggml-backend.h ${header_path}
     cp ggml/include/ggml-metal.h   ${header_path}
