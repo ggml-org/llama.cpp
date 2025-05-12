@@ -22,14 +22,14 @@ except ImportError as e:
 logger = logging.getLogger("compare-llama-bench")
 
 # All llama-bench SQLite3 fields
-DB_FIELDS = {
+DB_FIELDS = [
     "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
     "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
     "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
     "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
     "use_mmap",     "embeddings",   "no_op_offload",  "n_prompt",   "n_gen",        "n_depth",
     "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
-}
+]
 
 # Properties by which to differentiate results per commit:
 KEY_PROPERTIES = [
@@ -306,7 +306,7 @@ class LlamaBenchDataSQLite3_or_JSONL(LlamaBenchDataSQLite3File):
                 for i, line in enumerate(fp):
                     parsed = json.loads(line)
 
-                    for k in parsed.keys() - DB_FIELDS:
+                    for k in parsed.keys() - set(DB_FIELDS):
                         del parsed[k]
 
                     if (missing_keys := self._check_keys(parsed.keys())):
@@ -326,7 +326,7 @@ class LlamaBenchDataJSON(LlamaBenchDataSQLite3):
                 parsed = json.load(fp)
 
                 for i, entry in enumerate(parsed):
-                    for k in entry.keys() - DB_FIELDS:
+                    for k in entry.keys() - set(DB_FIELDS):
                         del entry[k]
 
                     if (missing_keys := self._check_keys(entry.keys())):
@@ -346,7 +346,7 @@ class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
                 for i, parsed in enumerate(csv.DictReader(fp)):
                     keys = set(parsed.keys())
 
-                    for k in keys - DB_FIELDS:
+                    for k in keys - set(DB_FIELDS):
                         del parsed[k]
 
                     if (missing_keys := self._check_keys(keys)):
