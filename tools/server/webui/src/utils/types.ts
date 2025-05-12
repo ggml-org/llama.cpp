@@ -43,6 +43,7 @@ export interface Message {
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
+  tool_calls?: ToolCall[];
   // node based system for branching
   parent: Message['id'];
   children: Message['id'][];
@@ -77,6 +78,7 @@ export interface ViewingChat {
 
 export type PendingMessage = Omit<Message, 'content'> & {
   content: string | null;
+  tool_calls?: ToolCall[];
 };
 
 export enum CanvasType {

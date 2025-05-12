@@ -10,7 +10,7 @@ export class JSReplAgentTool extends AgentTool {
     super(
       JSReplAgentTool.id,
       () => StorageUtils.getConfig().jsInterpreterToolUse,
-      'Executes JavaScript code in the browser console. The code should be self-contained valid javascript. You can use console.log(variable) to print out intermediate values..',
+      'Executes JavaScript code in the browser console. The code should be self-contained valid javascript. You can use console.log(variable) to print out intermediate values.',
       {
         type: 'object',
         properties: {
