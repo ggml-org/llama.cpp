@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <bitset>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -46,11 +47,22 @@ struct common_control_vector_load_info;
 // CPU utils
 //
 
+struct cpu_info {
+    bool is_hybrid  =  false;
+    int num_logical_cores = 0;
+    int num_physical_cores = 0;
+    int num_p_cores = 0;
+    int num_e_cores = 0;
+    std::bitset<GGML_MAX_N_THREADS> e_core_affinity_mask;
+    std::bitset<GGML_MAX_N_THREADS> p_core_affinity_mask;
+};
+
 struct cpu_params {
     int      n_threads                   = -1;
     bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
     bool     mask_valid                  = false;   // Default: any CPU
     enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
+    enum ggml_cpu_pnp_strategy cpu_pnp_strategy = GGML_CPU_PNP_STRATEGY_DISABLED; // CPU power and performance strategy
     bool     strict_cpu                  = false;   // Use strict CPU placement
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
 };
