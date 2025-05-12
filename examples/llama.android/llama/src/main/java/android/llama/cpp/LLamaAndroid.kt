@@ -240,7 +240,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
         private val TAG = LLamaAndroid::class.simpleName
 
         // TODO-han.yin: replace with dynamic loader
-        private const val LIB_LLAMA_ANDROID = "llama_android"
+        private const val LIB_LLAMA_ANDROID = "llama_android_t4"
 
         // Enforce only one instance of Llm.
         private val _instance: LLamaAndroid = LLamaAndroid()
