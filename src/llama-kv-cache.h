@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-io.h"
+#include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-memory.h"
 
@@ -13,8 +14,6 @@
 
 struct llama_cparams;
 struct llama_hparams;
-struct llama_ubatch;
-struct llama_sbatch;
 struct llama_model;
 struct llama_context;
 
@@ -178,16 +177,11 @@ private:
     const llama_model & model;
     const llama_hparams & hparams;
 
-    // commit/restore cache
-    struct slot_range {
-        uint32_t c0 = 0; // note: these are cell indices, not sequence positions
-        uint32_t c1 = 0;
-    };
-
     struct kv_cell {
         llama_pos pos   = -1;
         llama_pos delta =  0;
 
+        // TODO: replace with bitset uint64_t
         std::set<llama_seq_id> seq_id;
 
         bool has_seq_id(const llama_seq_id & id) const {
@@ -238,10 +232,20 @@ private:
     // model layer id -> KV cache layer id
     std::map<int32_t, int32_t> map_layer_ids;
 
+    struct ubatch_info {
+        uint32_t head;
+
+        llama_ubatch data;
+    };
+
     // pending cell updates that are not yet committed
-    // TODO: improve by keeping information per-sequence
     struct {
-        std::vector<slot_range> ranges;
+        void clear() {
+            ubatches.clear();
+        }
+
+        // upon batch processing failure, we revert these ubatches from the KV cells
+        std::vector<ubatch_info> ubatches;
     } pending;
 
     // defrag
@@ -362,12 +366,12 @@ public:
     llama_kv_cache_unified * get_kv_swa () const;
 
 private:
+    const llama_hparams & hparams;
+
     // pending cell updates that are not yet committed
     struct {
         std::map<llama_seq_id, llama_pos> pos_max;
     } pending;
-
-    const llama_hparams & hparams;
 
     std::unique_ptr<llama_kv_cache_unified> kv_base;
     std::unique_ptr<llama_kv_cache_unified> kv_swa;

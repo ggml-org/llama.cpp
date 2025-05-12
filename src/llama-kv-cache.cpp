@@ -331,43 +331,44 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 void llama_kv_cache_unified::restore() {
-    if (pending.ranges.empty()) {
+    if (pending.ubatches.empty()) {
         return;
     }
 
-    // TODO: here we assume that all sequences should be removed from the cache which is not always the case
-    //       need to start keeping more detailed pending information per-sequence
-
     uint32_t new_head = size;
 
-    for (auto & range : pending.ranges) {
-        for (uint32_t i = range.c0; i < range.c1; ++i) {
-            cells[i].seq_id.clear();
+    for (const auto & ubatch : pending.ubatches) {
+        for (uint32_t i = 0; i < ubatch.data.n_tokens; ++i) {
+            for (int s = 0; s < ubatch.data.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = ubatch.data.seq_id[i][s];
 
-            // keep count of the number of used cells
-            if (cells[i].pos >= 0) {
-                used--;
+                cells[ubatch.head + i].seq_id.erase(seq_id);
+                if (cells[ubatch.head + i].seq_id.empty()) {
+                    used--;
+
+                    new_head = std::min(new_head, ubatch.head + i);
+                }
+
+                cells[ubatch.head + i].pos = -1;
             }
-
-            cells[i].pos = -1;
         }
-
-        new_head = std::min(new_head, range.c0);
     }
 
     if (new_head != size && new_head < head) {
         head = new_head;
     }
+
+    pending.clear();
 }
 
 void llama_kv_cache_unified::commit() {
-    if (pending.ranges.empty()) {
+    if (pending.ubatches.empty()) {
         LLAMA_LOG_WARN("%s: no pending KV cache updates to commit - might indicate a bug (ref: %s)\n",
                 __func__, "https://github.com/ggml-org/llama.cpp/pull/12695");
         return;
     }
 
-    pending.ranges.clear();
+    pending.clear();
 }
 
 bool llama_kv_cache_unified::update(llama_context & lctx) {
@@ -526,7 +527,7 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
 
     used += n_tokens;
 
-    pending.ranges.push_back({head, head + n_tokens});
+    pending.ubatches.push_back({ head, ubatch });
 
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // after enough generations, the benefit from this heuristic disappears
@@ -1636,11 +1637,14 @@ void llama_kv_cache_unified_iswa::restore() {
 }
 
 void llama_kv_cache_unified_iswa::commit() {
+    kv_base->commit();
+    kv_swa ->commit();
+
     if (pending.pos_max.empty()) {
         return;
     }
 
-    // slide the window, forgetting old tokens
+    // slide the attention window, forgetting/pruning old tokens that are outside the window
     for (const auto & [seq_id, pos_max] : pending.pos_max) {
         if (pos_max <= (llama_pos) hparams.n_swa) {
             continue;
@@ -1650,9 +1654,6 @@ void llama_kv_cache_unified_iswa::commit() {
     }
 
     pending.pos_max.clear();
-
-    kv_base->commit();
-    kv_swa ->commit();
 }
 
 bool llama_kv_cache_unified_iswa::update(llama_context & lctx) {
@@ -1675,7 +1676,6 @@ void llama_kv_cache_unified_iswa::set_full() {
 }
 
 llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch, bool logits_all) {
-    // this will be used upon successful decode, during commit, to remove old SWA tokens
     for (int i = 0; i < batch.n_tokens; ++i) {
         for (int s = 0; s < batch.n_seq_id[i]; ++s) {
             const llama_seq_id seq_id = batch.seq_id[i][s];
@@ -1685,11 +1685,12 @@ llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch,
         }
     }
 
-    return kv_base->sbatch_init(batch, logits_all);
+    return llama_sbatch(batch, hparams.n_embd, true, logits_all);
 }
 
 llama_ubatch llama_kv_cache_unified_iswa::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
-    return kv_base->ubatch_next(sbatch, n_ubatch, embd_pooled);
+    GGML_UNUSED(embd_pooled);
+    return sbatch.split_simple(n_ubatch);
 }
 
 bool llama_kv_cache_unified_iswa::find_slot(const llama_ubatch & batch) {
