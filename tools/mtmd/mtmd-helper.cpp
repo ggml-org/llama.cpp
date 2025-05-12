@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <vector>
 
+#define LOG_DBG(...) fprintf(stderr, __VA_ARGS__)
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 
@@ -187,7 +188,7 @@ int32_t mtmd_helper_decode_image_chunk(
         int n_tokens_batch = std::min(n_batch, n_tokens - pos_offset);
         llama_batch batch_embd_view = batch_embd.get_view(pos_offset, n_tokens_batch);
 
-        LOG_INF("decoding image batch %d/%d, n_tokens_batch = %d\n", i_batch+1, n_img_batches, n_tokens_batch);
+        LOG_DBG("decoding image batch %d/%d, n_tokens_batch = %d\n", i_batch+1, n_img_batches, n_tokens_batch);
 
         int64_t t1 = ggml_time_ms();
         int32_t ret = llama_decode(lctx, batch_embd_view);
@@ -197,7 +198,7 @@ int32_t mtmd_helper_decode_image_chunk(
             return ret;
         }
 
-        LOG_INF("image decoded (batch %d/%d) in %" PRId64 " ms\n", i_batch+1, n_img_batches, ggml_time_ms() - t1);
+        LOG_DBG("image decoded (batch %d/%d) in %" PRId64 " ms\n", i_batch+1, n_img_batches, ggml_time_ms() - t1);
 
         i_batch++;
     }
@@ -226,7 +227,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
     if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
-        // LOG_INF("decoding text chunk, n_tokens = %zu\n", n_tokens);
+        // LOG_DBG("decoding text chunk, n_tokens = %zu\n", n_tokens);
         size_t i = 0;
         while (i < n_tokens) { // split into batches
             text_batch.n_tokens = 0; // clear the batch
@@ -255,7 +256,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         const auto image_tokens = mtmd_input_chunk_get_tokens_image(chunk);
         int64_t t0 = ggml_time_ms();
 
-        LOG_INF("encoding image or slice...\n");
+        LOG_DBG("encoding image or slice...\n");
 
         ret = mtmd_encode(ctx, image_tokens);
         if (ret != 0) {
@@ -264,7 +265,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
             return ret;
         }
 
-        LOG_INF("image/slice encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
+        LOG_DBG("image/slice encoded in %" PRId64 " ms\n", ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);

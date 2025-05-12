@@ -232,7 +232,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_
 
     ctx.n_past = new_n_past;
 
-    LOG("\n");
+    LOG_DBG("\n");
 
     return 0;
 }
@@ -256,7 +256,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_cli_context ctx(params);
-    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
+    LOG_DBG("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 
@@ -364,7 +364,7 @@ int main(int argc, char ** argv) {
         }
     }
     if (g_is_interrupted) LOG("\nInterrupted by user\n");
-    LOG("\n\n");
+    LOG_DBG("\n\n");
     llama_perf_context_print(ctx.lctx);
     return g_is_interrupted ? 130 : 0;
 }
