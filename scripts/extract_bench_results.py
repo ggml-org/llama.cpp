@@ -11,7 +11,7 @@ from volcenginesdkarkruntime import Ark
 def get_markdown_files(directory):
     """Get all markdown benchmark files in the specified directory."""
     # 尝试通过相对或绝对路径查找文件
-    files = glob.glob(f"{directory}/prefill_decode_CPU_*.md")
+    files = glob.glob(f"{directory}/prefill_decode_*.md")
     
     # 如果没有找到文件，检查是否需要添加repo根目录
     if not files:
