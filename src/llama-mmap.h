@@ -19,6 +19,7 @@ struct llama_file {
     size_t tell() const;
     size_t size() const;
 
+    const char * fname() const;
     int file_id() const; // fileno overload
 
     void seek(size_t offset, int whence) const;
@@ -28,7 +29,6 @@ struct llama_file {
 
     void write_raw(const void * ptr, size_t len) const;
     void write_u32(uint32_t val) const;
-    const char * fname;
 
 private:
     struct impl;

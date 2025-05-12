@@ -1039,7 +1039,7 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 const auto & file = files.at(weight->idx);
-                if (!load_tensor(cur, file->fname, weight->offs, 0, n_size)) {
+                if (!load_tensor(cur, file->fname(), weight->offs, 0, n_size)) {
                     ggml_backend_tensor_set(cur, data, 0, n_size);
                 }
             }
