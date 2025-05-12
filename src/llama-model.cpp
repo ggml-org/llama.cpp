@@ -856,19 +856,33 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // for backward compatibility ; see: https://github.com/ggerganov/llama.cpp/pull/8931
                 if ((hparams.n_layer == 32 || hparams.n_layer == 40) && hparams.n_ctx_train == 4096) {
                     // default value for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct
+                    LLAMA_LOG_WARN("%s: assuming n_swa = 2047 for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct\n", __func__);
+
                     hparams.n_swa = 2047;
                 } else if (hparams.n_layer == 32 && hparams.n_head_kv(0) == 32 && hparams.n_ctx_train == 131072) {
                     // default value for Phi-3-mini-128k-instruct
-                    // note: this seems incorrect because the window is bigger than the train context?
-                    hparams.n_swa = 262144;
+                    LLAMA_LOG_WARN("%s: assuming n_swa = n_ctx_train for Phi-3-mini-128k-instruct\n", __func__);
+
+                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.n_swa_pattern = 1;
                 } else if (hparams.n_layer == 40 && hparams.n_ctx_train == 131072) {
                     // default value for Phi-3-medium-128k-instruct
-                    // note: this seems incorrect because the window is equal to the train context?
-                    hparams.n_swa = 131072;
+                    LLAMA_LOG_WARN("%s: assuming n_swa = n_ctx_train for Phi-3-medium-128k-instruct\n", __func__);
+
+                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.n_swa_pattern = 1;
                 }
+
                 bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 if (!found_swa && hparams.n_swa == 0) {
                     throw std::runtime_error("invalid value for sliding_window");
+                }
+
+                if (hparams.n_swa > hparams.n_ctx_train) {
+                    LLAMA_LOG_WARN("%s: unexpected n_swa: %d >= %d, setting to 0\n", __func__, hparams.n_swa, hparams.n_ctx_train);
+
+                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.n_swa_pattern = 1;
                 }
             } break;
         case LLM_ARCH_PHIMOE:

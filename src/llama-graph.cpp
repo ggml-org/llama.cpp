@@ -1316,9 +1316,8 @@ llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unif
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
     }
 
-    {
-        GGML_ASSERT(hparams.n_swa_pattern > 1 && "Use llama_kv_cache_unified for non-SWA");
-        GGML_ASSERT(hparams.n_swa > 0         && "Use llama_kv_cache_unified for non-SWA");
+    if (hparams.n_swa_pattern > 1) {
+        GGML_ASSERT(hparams.n_swa > 0          && "Use llama_kv_cache_unified for non-SWA");
 
         const auto n_kv = kv_self->get_kv_swa()->get_n();
 
