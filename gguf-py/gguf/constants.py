@@ -177,6 +177,14 @@ class Keys:
         EMBEDDING_LENGTH = "{arch}.convnext.embedding_length"
         BLOCK_COUNT      = "{arch}.convnext.block_count"
 
+    class Whisper:
+        N_MEL_BINS       = "{arch}.n_mel_bins"
+
+    class MM:
+        STACK_FACTOR  = "{arch}.mm.stack_factor" # for ultravox projector
+        EMBD_DIM      = "{arch}.mm.embd_dim"     # for ultravox projector
+        OUTPUT_DIM    = "{arch}.mm.output_dim"   # for ultravox projector
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -323,6 +331,7 @@ class MODEL_ARCH(IntEnum):
     WAVTOKENIZER_DEC = auto()
     PLM              = auto()
     BAILINGMOE       = auto()
+    ULTRAVOX_ENC     = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -474,6 +483,13 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    WHISPER_CONV1        = auto()
+    WHISPER_CONV2        = auto()
+    WHISPER_MEL_FILTERS  = auto()
+    MM_PROJ_MLP_1        = auto() # ultravox
+    MM_PROJ_MLP_2        = auto() # ultravox
+    MM_PROJ_NORM_MID     = auto() # ultravox
+    MM_PROJ_NORM_PRE     = auto() # ultravox
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -584,6 +600,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
     MODEL_ARCH.BAILINGMOE:       "bailingmoe",
+    MODEL_ARCH.ULTRAVOX_ENC:     "ultravox-enc",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -735,6 +752,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POSNET_ATTN_K:             "posnet.{bid}.attn_k",
     MODEL_TENSOR.POSNET_ATTN_V:             "posnet.{bid}.attn_v",
     MODEL_TENSOR.POSNET_ATTN_OUT:           "posnet.{bid}.attn_output",
+    MODEL_TENSOR.WHISPER_CONV1:             "whisper.conv1",
+    MODEL_TENSOR.WHISPER_CONV2:             "whisper.conv2",
+    MODEL_TENSOR.WHISPER_MEL_FILTERS:       "whisper.mel_filters",
+    MODEL_TENSOR.MM_PROJ_MLP_1:             "mm.proj.mlp_1",
+    MODEL_TENSOR.MM_PROJ_MLP_2:             "mm.proj.mlp_2",
+    MODEL_TENSOR.MM_PROJ_NORM_MID:          "mm.proj.norm_mid",
+    MODEL_TENSOR.MM_PROJ_NORM_PRE:          "mm.proj.norm_pre",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
@@ -1962,6 +1986,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.ULTRAVOX_ENC: [
+        MODEL_TENSOR.POS_EMBD,
+        MODEL_TENSOR.WHISPER_CONV1,
+        MODEL_TENSOR.WHISPER_CONV2,
+        MODEL_TENSOR.WHISPER_MEL_FILTERS,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.MM_PROJ_MLP_1, # ultravox
+        MODEL_TENSOR.MM_PROJ_MLP_2, # ultravox
+        MODEL_TENSOR.MM_PROJ_NORM_MID, # ultravox
+        MODEL_TENSOR.MM_PROJ_NORM_PRE, # ultravox
     ],
     # TODO
 }

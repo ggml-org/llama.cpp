@@ -899,6 +899,18 @@ class GGUFWriter:
     def add_precompiled_charsmap(self, charsmap: Sequence[bytes]) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
+    def add_n_mel_bins(self, value: int) -> None:
+        self.add_uint32(Keys.Whisper.N_MEL_BINS.format(arch=self.arch), value)
+
+    def add_mm_stack_factor(self, value: int) -> None:
+        self.add_uint32(Keys.MM.STACK_FACTOR.format(arch=self.arch), value)
+
+    def add_mm_embd_dim(self, value: int) -> None:
+        self.add_uint32(Keys.MM.EMBD_DIM.format(arch=self.arch), value)
+
+    def add_mm_output_dim(self, value: int) -> None:
+        self.add_uint32(Keys.MM.OUTPUT_DIM.format(arch=self.arch), value)
+
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]]) -> None:
         if not isinstance(value, str):
             template_default = None

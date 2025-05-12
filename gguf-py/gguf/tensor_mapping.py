@@ -56,6 +56,7 @@ class TensorNameMap:
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
+            "audio_tower.embed_positions",     # ultravox
         ),
 
         # Output
@@ -91,6 +92,7 @@ class TensorNameMap:
             "rwkv.ln_out",                             # rwkv6
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
+            "audio_tower.layer_norm",                  # ultravox
             "language_model.model.norm",               # llama4
         ),
 
@@ -105,6 +107,28 @@ class TensorNameMap:
 
         MODEL_TENSOR.CONV1D: (
             "backbone.embed", # roberta
+        ),
+
+        MODEL_TENSOR.WHISPER_CONV1: (
+            "audio_tower.conv1",
+        ),
+        MODEL_TENSOR.WHISPER_CONV2: (
+            "audio_tower.conv2",
+        ),
+        MODEL_TENSOR.MM_PROJ_MLP_1: (
+            "multi_modal_projector.linear_1", # ultravox
+        ),
+        MODEL_TENSOR.MM_PROJ_MLP_2: (
+            "multi_modal_projector.linear_2", # ultravox
+        ),
+        MODEL_TENSOR.MM_PROJ_NORM_MID: (
+            "multi_modal_projector.ln_mid", # ultravox
+        ),
+        MODEL_TENSOR.MM_PROJ_NORM_PRE: (
+            "multi_modal_projector.ln_pre", # ultravox
+        ),
+        MODEL_TENSOR.WHISPER_MEL_FILTERS: (
+            "mel_filters",
         ),
     }
 
@@ -213,6 +237,7 @@ class TensorNameMap:
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.out_proj"   ,                     # ultravox
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert

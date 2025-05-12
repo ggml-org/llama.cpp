@@ -39,6 +39,7 @@
 using json = nlohmann::ordered_json;
 
 std::initializer_list<enum llama_example> mmproj_examples = {
+    LLAMA_EXAMPLE_ASR,
     LLAMA_EXAMPLE_LLAVA,
     LLAMA_EXAMPLE_SERVER,
 };
@@ -1520,7 +1521,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.in_files.push_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_ASR}));
     add_opt(common_arg(
         {"-bf", "--binary-file"}, "FNAME",
         "binary file containing the prompt (default: none)",

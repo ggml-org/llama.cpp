@@ -1,0 +1,5 @@
+set(TARGET llama-asr-ultravox)
+add_executable(${TARGET} asr-ultravox.cpp whisper-preprocessor.h dr_wav.h)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama common ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)

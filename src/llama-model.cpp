@@ -1420,6 +1420,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_ULTRAVOX_ENC:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
+                ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn);
+                ml.get_key(LLM_KV_WHISPER_N_MEL_BINS,      hparams.n_mel_bins);
+                ml.get_key(LLM_KV_MM_STACK_FACTOR,         hparams.mm_stack_factor);
+                ml.get_key(LLM_KV_MM_EMBD_DIM,             hparams.mm_embd_dim);
+                ml.get_key(LLM_KV_MM_OUTPUT_DIM,           hparams.mm_output_dim);
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
@@ -4089,6 +4098,56 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {        n_ff_exp * n_expert_shared, n_embd}, 0);
                         layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
+                    }
+                } break;
+            case LLM_ARCH_ULTRAVOX_ENC:
+                {
+                    mel_filters = create_tensor(tn(LLM_TENSOR_WHISPER_MEL_FILTERS), {201, 128}, 0);
+                    pos_embd    = create_tensor(tn(LLM_TENSOR_POS_EMBD, "weight"), {n_embd, n_ctx_train}, 0);
+
+                    // output
+                    output_norm   = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output_norm_b = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "bias"),   {n_embd}, 0);
+
+                    // conv1d
+                    conv1d_1_w  = create_tensor(tn(LLM_TENSOR_WHISPER_CONV1, "weight"), {3, 128, n_embd}, 0);
+                    conv1d_1_b  = create_tensor(tn(LLM_TENSOR_WHISPER_CONV1, "bias"  ), {1, n_embd}, 0);
+                    conv1d_2_w  = create_tensor(tn(LLM_TENSOR_WHISPER_CONV2, "weight"), {3, n_embd, n_embd}, 0);
+                    conv1d_2_b  = create_tensor(tn(LLM_TENSOR_WHISPER_CONV2, "bias"  ), {1, n_embd}, 0);
+
+                    // mm projector
+                    // https://huggingface.co/fixie-ai/ultravox-v0_5-llama-3_2-1b/blob/main/ultravox_model.py#L553
+                    const int64_t in_dim = n_embd * hparams.mm_stack_factor;
+                    const int64_t dim_mid = hparams.mm_embd_dim / 2;
+                    mm_proj_mlp_1    = create_tensor(tn(LLM_TENSOR_MM_PROJ_MLP_1,    "weight"), {in_dim, hparams.mm_embd_dim}, 0);
+                    mm_proj_mlp_2    = create_tensor(tn(LLM_TENSOR_MM_PROJ_MLP_2,    "weight"), {dim_mid, hparams.mm_output_dim}, 0);
+                    mm_proj_norm_pre = create_tensor(tn(LLM_TENSOR_MM_PROJ_NORM_PRE, "weight"), {in_dim}, 0);
+                    mm_proj_norm_mid = create_tensor(tn(LLM_TENSOR_MM_PROJ_NORM_MID, "weight"), {dim_mid}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "bias",   i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+
+                        // bias
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i), {n_embd}, 0);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd}, 0);
+                        layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+                        // bias
+                        layer.ffn_norm_b = create_tensor(tn(LLM_TENSOR_FFN_NORM, "bias", i), {n_embd}, 0);
+                        layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, 0);
+                        layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, 0);
                     }
                 } break;
             default:
@@ -12861,6 +12920,151 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
+struct llm_build_ultravox_enc : public llm_graph_context {
+    llm_build_ultravox_enc(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+
+        GGML_ASSERT(n_head == n_head_kv);
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        auto inp = std::make_unique<llm_graph_input_embd>();
+        if (!ubatch.embd) {
+            // hacky solution to ignore input token
+            inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+            inpL = ggml_get_rows(ctx0, model.pos_embd, inp->tokens);
+            ggml_set_input(inp->tokens);
+        } else {
+            GGML_ASSERT(ubatch.embd);
+
+            inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+            ggml_set_input(inp->embd);
+            inpL = inp->embd;
+            cb(inpL, "inp_embd", -1);
+        }
+        res->add_input(std::move(inp));
+
+        if (ubatch.embd) {
+            // reshape to [2*n_ctx, n_mel]
+            cur = ggml_view_2d(ctx0, inpL, 2*hparams.n_ctx_train, hparams.n_mel_bins,
+                                ggml_row_size(inpL->type, 2*hparams.n_ctx_train), 0);
+
+            // convolution + gelu
+            cur = ggml_conv_1d_ph(ctx0, model.conv1d_1_w, cur, 1, 1);
+            cur = ggml_add(ctx0, cur, model.conv1d_1_b);
+
+            cur = ggml_gelu(ctx0, cur);
+
+            cur = ggml_conv_1d_ph(ctx0, model.conv1d_2_w, cur, 2, 1);
+            cur = ggml_add(ctx0, cur, model.conv1d_2_b);
+
+            cur = ggml_gelu(ctx0, cur);
+            // transpose
+            inpL = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+        }
+
+        // add position embeddings
+        ggml_tensor * pos_embd_selected = ggml_view_2d(ctx0, model.pos_embd,
+                                                    model.pos_embd->ne[0], ubatch.n_tokens,
+                                                    model.pos_embd->nb[0], 0);
+        inpL = ggml_add(ctx0, inpL, pos_embd_selected);
+
+        auto * inp_attn = build_attn_inp_no_cache();
+
+        // iterate layers
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * cur = inpL;
+
+            cur = build_norm(cur, model.layers[il].attn_norm, model.layers[il].attn_norm_b, LLM_NORM, il);
+
+            ggml_tensor * Qcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wq, cur), model.layers[il].bq);
+            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur); // no bias for key
+            ggml_tensor * Vcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wv, cur), model.layers[il].bv);
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+            cb(Vcur, "Vcur", il);
+
+            cur = build_attn(inp_attn, gf,
+                    model.layers[il].wo, model.layers[il].bo,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+            cb(cur, "kqv_out", il);
+
+            // re-add the layer input
+            cur = ggml_add(ctx0, cur, inpL);
+
+            ggml_tensor * ffn_inp = cur;
+            cb(ffn_inp, "ffn_inp", il);
+
+            cur = build_norm(cur, model.layers[il].ffn_norm, model.layers[il].ffn_norm_b, LLM_NORM, il);
+            cb(ffn_inp, "ffn_inp_normed", il);
+
+            // feed-forward network
+            cur = build_ffn(cur,
+                model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
+                NULL,                      NULL,                        NULL,
+                model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                NULL,
+                LLM_FFN_GELU, LLM_FFN_PAR, il);
+            cb(cur, "ffn_out", il);
+
+            // attentions bypass the intermediate layer
+            cur = ggml_add(ctx0, cur, ffn_inp);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        // output norm
+        cur = build_norm(cur, model.output_norm, model.output_norm_b, LLM_NORM, -1);
+
+        // pad ans stack
+        // https://huggingface.co/fixie-ai/ultravox-v0_5-llama-3_2-1b/blob/main/ultravox_model.py#L520
+        {
+            int64_t stride = n_embd * hparams.mm_stack_factor;
+            int64_t padded_len = GGML_PAD(ggml_nelements(cur), stride);
+            int64_t pad = ggml_nelements(cur) - padded_len;
+            if (pad > 0) {
+                cur = ggml_view_1d(ctx0, cur, ggml_nelements(cur), 0);
+                cur = ggml_pad(ctx0, cur, pad, 0, 0, 0);
+            }
+            cur = ggml_view_2d(ctx0, cur, stride, padded_len / stride,
+                                ggml_row_size(cur->type, stride), 0);
+        }
+
+        // projection
+        {
+            cur = build_norm(cur, model.mm_proj_norm_pre, nullptr, LLM_NORM, -1);
+            cur = build_lora_mm(model.mm_proj_mlp_1, cur);
+            // swiglu
+            {
+                // Project to 4h. If using swiglu double the output width, see https://arxiv.org/pdf/2002.05202.pdf
+                int64_t split_point = cur->ne[0] / 2;
+                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
+                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
+
+                x0 = ggml_silu(ctx0, x0);
+                cur = ggml_mul(ctx0, x0, x1);
+            }
+            cur = build_norm(cur, model.mm_proj_norm_mid, nullptr, LLM_NORM, -1);
+            cur = build_lora_mm(model.mm_proj_mlp_2, cur);
+        }
+
+        cb(cur, "result_embd", -1);
+        res->t_embd = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -13165,6 +13369,10 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_bailingmoe>(*this, params, gf);
             } break;
+        case LLM_ARCH_ULTRAVOX_ENC:
+            {
+                llm = std::make_unique<llm_build_ultravox_enc>(*this, params, gf);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -13274,6 +13482,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_RWKV7:
         case LLM_ARCH_ARWKV7:
         case LLM_ARCH_WAVTOKENIZER_DEC:
+        case LLM_ARCH_ULTRAVOX_ENC:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values

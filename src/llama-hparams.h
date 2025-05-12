@@ -117,6 +117,12 @@ struct llama_hparams {
     bool use_alibi     = false;
     bool attn_soft_cap = false;
 
+    // whisper & ultravox
+    uint32_t n_mel_bins      = 0;
+    uint32_t mm_stack_factor = 0;
+    uint32_t mm_embd_dim     = 0;
+    uint32_t mm_output_dim   = 0;
+
     uint32_t n_moe_layer_step        = 0;
     bool     use_kq_norm             = true;
     uint32_t n_attn_chunk            = 0;
