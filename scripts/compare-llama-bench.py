@@ -292,6 +292,7 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
 
         if (connection):
             self.connected_file = True
+            self.connection.close()
             self.connection = connection
             self.cursor = cursor
             self._builds_init()
