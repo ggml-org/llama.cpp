@@ -4588,10 +4588,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    for (int kv : { 4096, 8192, 16384, }) {
+    for (int kv : { 4096, 8192, 16384, 32768, 65536}) {
         for (int hs : { 64, 128, }) {
             for (int nr : { 1, 4, }) {
-                test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, nr, kv, 1, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16));
+                test_cases.emplace_back(new test_flash_attn_ext(
+                //> n_k_head,   n_v_head,   n_head, n_repeat,   n_kv,   n_batch,    mask,   max_bias,   logit_softcap,  prec,           type_KV
+                    hs,         hs,         8,      nr,         kv,     1,          true,   0,          0,              GGML_PREC_F32,  GGML_TYPE_F16
+                ));
+                test_cases.emplace_back(new test_flash_attn_ext(
+                //> n_k_head,   n_v_head,   n_head, n_repeat,   n_kv,   n_batch,    mask,   max_bias,   logit_softcap,  prec,           type_KV
+                    hs,         hs,         8,      nr,         kv,     1,          true,   0,          0,              GGML_PREC_F32,  GGML_TYPE_Q8_0
+                ));
+                test_cases.emplace_back(new test_flash_attn_ext(
+                //> n_k_head,   n_v_head,   n_head, n_repeat,   n_kv,   n_batch,    mask,   max_bias,   logit_softcap,  prec,           type_KV
+                    hs,         hs,         8,      nr,         kv,     1,          true,   0,          0,              GGML_PREC_F32,  GGML_TYPE_Q4_0
+                ));
             }
         }
     }
