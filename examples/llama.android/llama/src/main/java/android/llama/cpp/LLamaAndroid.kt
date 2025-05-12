@@ -76,6 +76,7 @@ class LLamaAndroid private constructor() : InferenceEngine {
                 }
 
                 _state.value = State.Initializing
+                Log.i(TAG, "Loading native library $LIB_LLAMA_ANDROID")
                 System.loadLibrary(LIB_LLAMA_ANDROID)
                 init()
                 _state.value = State.Initialized
@@ -238,8 +239,8 @@ class LLamaAndroid private constructor() : InferenceEngine {
     companion object {
         private val TAG = LLamaAndroid::class.simpleName
 
-        private const val LIB_LLAMA_ANDROID = "llama-android"
-        private const val DEFAULT_PREDICT_LENGTH = 64
+        // TODO-han.yin: replace with dynamic loader
+        private const val LIB_LLAMA_ANDROID = "llama_android"
 
         // Enforce only one instance of Llm.
         private val _instance: LLamaAndroid = LLamaAndroid()

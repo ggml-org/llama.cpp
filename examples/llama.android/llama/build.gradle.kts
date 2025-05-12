@@ -21,19 +21,8 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += "-DCMAKE_BUILD_TYPE=Release"
-                arguments += "-DCMAKE_C_FLAGS=\"-march=armv8.7a+dotprod+i8mm+sve\""
-                arguments += "-DCMAKE_CXX_FLAGS=\"-march=armv8.7a+dotprod+i8mm+sve\""
-
-                arguments += "-DGGML_CPU_KLEIDIAI=ON"
-                arguments += "-DGGML_LLAMAFILE=OFF"
-
-                arguments += "-DLLAMA_BUILD_COMMON=ON"
-                arguments += "-DLLAMA_CURL=OFF"
-
-                cppFlags += listOf()
-                arguments += listOf()
-
-                cppFlags("")
+                arguments += "-DCMAKE_MESSAGE_LOG_LEVEL=DEBUG"
+                arguments += "-DCMAKE_VERBOSE_MAKEFILE=ON"
             }
         }
     }
