@@ -644,7 +644,7 @@ static json oaicompat_completion_params_parse(
     }
     for (auto & msg : messages) {
         json & content = msg.at("content");
-        if (content.is_string()) {
+        if (content.is_string() || content.is_null()) {
             continue;
         }
 
