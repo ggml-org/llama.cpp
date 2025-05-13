@@ -32,6 +32,16 @@ DB_FIELDS = [
     "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",     "stddev_ts",
 ]
 
+DB_TYPES = [
+    "TEXT",    "INTEGER", "TEXT",    "TEXT",    "TEXT",    "TEXT",
+    "TEXT",    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
+    "TEXT",    "INTEGER", "INTEGER", "TEXT",    "TEXT",    "INTEGER",
+    "TEXT",    "INTEGER", "INTEGER", "INTEGER", "TEXT",    "TEXT",
+    "REAL",
+    "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
+    "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",
+]
+
 # Properties by which to differentiate results per commit:
 KEY_PROPERTIES = [
     "cpu_info", "gpu_info", "backends", "n_gpu_layers", "tensor_buft_overrides", "model_filename", "model_type",
@@ -240,7 +250,7 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
         super().__init__()
         self.connection = sqlite3.connect(":memory:")
         self.cursor = self.connection.cursor()
-        self.cursor.execute(f"CREATE TABLE test({', '.join(DB_FIELDS)});")
+        self.cursor.execute(f"CREATE TABLE test({', '.join(' '.join(x) for x in zip(DB_FIELDS, DB_TYPES))});")
 
     def _builds_init(self):
         if self.connection:
@@ -354,7 +364,6 @@ class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
                     if (missing_keys := self._check_keys(keys)):
                         raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
 
-                    # FIXME: Convert float/int columns from str!
                     self.cursor.execute(f"INSERT INTO test({', '.join(parsed.keys())}) VALUES({', '.join('?' * len(parsed))});", tuple(parsed.values()))
 
         self._builds_init()
