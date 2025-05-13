@@ -13,6 +13,10 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #define likely(x) __builtin_expect(!!(x), 1)
 
+#ifndef UNUSED
+#define UNUSED(x) (void)(x)
+#endif
+
 /** Checks is a value is a power of two. Does not handle zero. */
 #define IS_POT(v) (((v) & ((v) - 1)) == 0)
 

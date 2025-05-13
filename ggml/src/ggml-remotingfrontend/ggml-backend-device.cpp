@@ -1,19 +1,19 @@
 #include "ggml-remoting.h"
 
-static const char * ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
-  UNUSED(dev);
+static const char *ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
+  IMPLEMENTED;
 
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
 
-  return "API Remoting";
+  return apir_get_device_name(gpu);
 }
 
-static const char * ggml_backend_remoting_device_get_description(ggml_backend_dev_t dev) {
-  UNUSED(dev);
+static const char *ggml_backend_remoting_device_get_description(ggml_backend_dev_t dev) {
+  IMPLEMENTED;
 
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
 
-  return "API Remoting device";
+  return apir_get_device_description(gpu);
 }
 
 static enum ggml_backend_dev_type ggml_backend_remoting_device_get_type(ggml_backend_dev_t dev) {

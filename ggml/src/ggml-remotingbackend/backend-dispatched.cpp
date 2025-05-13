@@ -8,6 +8,7 @@
 #include "ggml-remoting-backend.h"
 
 static ggml_backend_reg_t reg = NULL;
+static ggml_backend_dev_t dev = NULL;
 
 uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p) {
   if (reg != NULL) {
@@ -16,6 +17,9 @@ uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p) {
   ggml_backend_reg_t (* ggml_backend_reg_fct)(void) = (ggml_backend_reg_t (*)()) ggml_backend_reg_fct_p;
 
   reg = ggml_backend_reg_fct();
+  if (reg->iface.get_device_count(reg)) {
+    dev = reg->iface.get_device(reg, 0);
+  }
 
   return APIR_BACKEND_INITIALIZE_SUCCESSS;
 
@@ -63,6 +67,32 @@ uint32_t backend_reg_get_device_count(struct vn_cs_encoder *enc, struct vn_cs_de
 
   int32_t dev_count = reg->iface.get_device_count(reg);
   vn_encode_int32_t(enc, &dev_count);
+
+  return 0;
+}
+
+uint32_t backend_device_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  const char *string = dev->iface.get_name(dev);
+
+  const size_t string_size = strlen(string) + 1;
+  vn_encode_array_size(enc, string_size);
+  vn_encode_char_array(enc, string, string_size);
+
+  return 0;
+}
+
+
+uint32_t
+backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  const char *string = dev->iface.get_description(dev);
+
+  const size_t string_size = strlen(string) + 1;
+  vn_encode_array_size(enc, string_size);
+  vn_encode_char_array(enc, string, string_size);
 
   return 0;
 }

@@ -33,3 +33,75 @@ apir_get_device_count(struct virtgpu *gpu) {
 
   return dev_count;
 }
+
+
+const char *
+apir_get_device_name(struct virtgpu *gpu) {
+  static int32_t dev_count = -1;
+  if (dev_count != -1) {
+    CACHED;
+    return "Nothing";
+  }
+
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_NAME;
+  struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  struct vn_cs_decoder *decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  const size_t string_size = vn_decode_array_size_unchecked(decoder);
+  char *string = (char *) vn_cs_decoder_alloc_array(decoder, sizeof(char), string_size);
+  if (!string) {
+    FATAL("%s: Could not allocate the device name buffer", __func__);
+  }
+  vn_decode_char_array(decoder, string, string_size);
+
+  INFO("%s: Forward DEV NAME --> %s", __func__, string);
+
+  int32_t ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
+  }
+
+  return string;
+}
+
+const char *
+apir_get_device_description(struct virtgpu *gpu) {
+  static int32_t dev_count = -1;
+  if (dev_count != -1) {
+    CACHED;
+    return "Nothing";
+  }
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION;
+  struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  struct vn_cs_decoder *decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  const size_t string_size = vn_decode_array_size_unchecked(decoder);
+  char *string = (char *) vn_cs_decoder_alloc_array(decoder, sizeof(char), string_size);
+  if (!string) {
+    FATAL("%s: Could not allocate the device description buffer", __func__);
+  }
+  vn_decode_char_array(decoder, string, string_size);
+
+  INFO("%s: Forward DEV DESCR --> %s", __func__, string);
+
+  int32_t ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
+  }
+
+  return string;
+}

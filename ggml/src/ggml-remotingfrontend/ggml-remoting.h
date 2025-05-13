@@ -10,13 +10,11 @@
 #include "ggml-backend.h"
 #include "virtgpu.h"
 
-#define UNUSED GGML_UNUSED
-
 #define NOT_IMPLEMENTED \
   printf("WARN: ### reached unimplemented function %s\n", __func__)
 
-#define IMPLEMENTED \
-  printf("INFO: ### reached implemented function %s\n", __func__)
+#define IMPLEMENTED
+//  printf("INFO: ### reached implemented function %s\n", __func__)
 
 #define RMT_LOG_DEBUG(msg) std::cerr << msg << std::endl
 

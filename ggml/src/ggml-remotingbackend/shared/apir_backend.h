@@ -24,6 +24,8 @@ typedef uint32_t (*apir_backend_dispatch_t)(uint32_t cmd_type,
 
 typedef enum ApirBackendCommandType {
     APIR_COMMAND_TYPE_GET_DEVICE_COUNT = 0,
-} ApirBackendCommandType;
+    APIR_COMMAND_TYPE_GET_DEVICE_NAME = 1,
+    APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION = 2,
 
-#define APIR_BACKEND_DISPATCH_TABLE_COUNT 1 // last command_type index + 1
+    APIR_BACKEND_DISPATCH_TABLE_COUNT = 3, // last command_type index + 1
+} ApirBackendCommandType;
