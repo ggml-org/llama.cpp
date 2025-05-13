@@ -5669,34 +5669,10 @@ class GraniteModel(LlamaModel):
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
 
-@ModelBase.register("GraniteMoeForCausalLM")
+@ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE_MOE
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        """In modeling_granitemoe, the JetMoe implementation of parallel experts
-        is used. This essentially merges w1 and w3 into a single tensor with 2x
-        the hidden size that is then split during forward. To keep compatibility
-        with existing mixtral support, we pull them apart here.
-        """
-
-        if name.endswith("block_sparse_moe.input_linear.weight"):
-            ffn_dim = self.hparams["intermediate_size"]
-            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
-            gate, up = data_torch[..., :ffn_dim, :], data_torch[..., ffn_dim:, :]
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
-            ]
-
-        return super().modify_tensors(data_torch, name, bid)
-
-
-@ModelBase.register("GraniteMoeSharedForCausalLM")
-class GraniteMoeSharedModel(GraniteMoeModel):
-    """Conversion for IBM's GraniteMoeSharedForCausalLM"""
-    model_arch = gguf.MODEL_ARCH.GRANITE_MOE_SHARED
 
     def set_gguf_parameters(self):
         """GraniteMoeShared uses GraniteMoe parameters plus the following:
@@ -5708,11 +5684,20 @@ class GraniteMoeSharedModel(GraniteMoeModel):
             logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        """In modeling_granitemoeshared, the implementation of parallel experts
+        """In modeling_granitemoe, the JetMoe implementation of parallel experts
         is used. This essentially merges w1 and w3 into a single tensor with 2x
         the hidden size that is then split during forward. To keep compatibility
-        with existing shared expert support, we pull them apart here.
+        with existing mixtral support, we pull them apart here.
         """
+
+        if name.endswith("block_sparse_moe.input_linear.weight"):
+            ffn_dim = self.hparams["intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
+            ]
 
         if name.endswith("shared_mlp.input_linear.weight"):
             ffn_dim = self.hparams["shared_intermediate_size"]
