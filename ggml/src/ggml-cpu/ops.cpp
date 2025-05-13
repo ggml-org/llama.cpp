@@ -4965,6 +4965,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_I32:
         case GGML_TYPE_I64:
         case GGML_TYPE_F64:
+#ifdef GGML_USE_TMAC
         case GGML_TYPE_TMAC_BN_0:
         case GGML_TYPE_TMAC_W2G64_0:
         case GGML_TYPE_TMAC_W2G64_1:
@@ -4974,6 +4975,7 @@ void ggml_compute_forward_clamp(
         case GGML_TYPE_TMAC_W4G64_1:
         case GGML_TYPE_TMAC_W4G128_0:
         case GGML_TYPE_TMAC_W4G128_1:
+#endif
         case GGML_TYPE_COUNT:
             {
                 GGML_ABORT("fatal error");

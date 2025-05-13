@@ -388,6 +388,7 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_4 = 36,
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
+#ifdef GGML_USE_TMAC
         GGML_TYPE_TMAC_BN_0         = 39,
         GGML_TYPE_TMAC_W2G64_0      = 40,
         GGML_TYPE_TMAC_W2G64_1      = 41,
@@ -397,6 +398,7 @@ extern "C" {
         GGML_TYPE_TMAC_W4G64_1      = 45,
         GGML_TYPE_TMAC_W4G128_0     = 46,
         GGML_TYPE_TMAC_W4G128_1     = 47,
+#endif
         GGML_TYPE_COUNT   = 48,
     };
 

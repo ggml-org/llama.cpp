@@ -5,7 +5,7 @@
 
 // GGML internal header
 
-#define GGML_USE_TMAC
+// #define GGML_USE_TMAC
 #if defined(GGML_USE_TMAC)
 
 #ifdef  __cplusplus

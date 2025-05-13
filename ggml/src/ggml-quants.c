@@ -5221,6 +5221,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_I64:
             // nothing to validate
             break;
+#ifdef GGML_USE_TMAC
         case GGML_TYPE_TMAC_BN_0:
         case GGML_TYPE_TMAC_W2G64_0:
         case GGML_TYPE_TMAC_W2G64_1:
@@ -5232,6 +5233,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_TMAC_W4G128_1:
             // nothing to validate
             break;
+#endif
         default:
             {
                 fprintf(stderr, "%s: invalid type %d\n", __func__, type);

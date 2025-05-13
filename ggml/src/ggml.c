@@ -530,6 +530,7 @@ static void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp1
 static void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * GGML_RESTRICT x, size_t bx, ggml_bf16_t * GGML_RESTRICT y, size_t by, int nrc);
 
 static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
+#ifdef GGML_USE_TMAC
     [GGML_TYPE_TMAC_BN_0] = {
         .type_name                = "tmac_bn_0",
         .blck_size                = 64,
@@ -584,6 +585,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 4 + 4 + 128 * 4 / 8,
         .is_quantized             = false,
     },
+#endif
     [GGML_TYPE_I8] = {
         .type_name                = "i8",
         .blck_size                = 1,
@@ -1186,10 +1188,12 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
 
+#ifdef GGML_USE_TMAC
     if (tensor->type == GGML_TYPE_TMAC_BN_0) {
         // One scale will not exceed one alignment boundary, so we can just add one alignment to the size.
         nbytes += GGUF_DEFAULT_ALIGNMENT;
     }
+#endif
     
 
     return nbytes;

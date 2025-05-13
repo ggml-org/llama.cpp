@@ -22,14 +22,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/amx/amx.h
         ggml-cpu/amx/mmq.cpp
         ggml-cpu/amx/mmq.h
-        ggml-cpu/tmac/tmac.cpp
-        ggml-cpu/tmac/tmac.h
-        ggml-cpu/tmac/lut_mul_mat.cpp
-        ggml-cpu/tmac/lut_mul_mat.h
-        ggml-cpu/tmac/lut_ctor.cpp
-        ggml-cpu/tmac/lut_ctor.h
-        ggml-cpu/tmac/tbl.cpp
-        ggml-cpu/tmac/tbl.h
         ggml-cpu/ggml-cpu-impl.h
         ggml-cpu/common.h
         ggml-cpu/binary-ops.h
@@ -83,22 +75,21 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     if (GGML_TMAC)
         target_compile_definitions(${GGML_CPU_NAME} PUBLIC GGML_USE_TMAC)
         target_include_directories(${GGML_CPU_NAME} PUBLIC ggml-cpu/tmac)
+        
+        # Add TMAC source files only when GGML_TMAC is enabled
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/tmac/tmac.cpp
+            ggml-cpu/tmac/tmac.h
+            ggml-cpu/tmac/lut_mul_mat.cpp
+            ggml-cpu/tmac/lut_mul_mat.h
+            ggml-cpu/tmac/lut_ctor.cpp
+            ggml-cpu/tmac/lut_ctor.h
+            ggml-cpu/tmac/tbl.cpp
+            ggml-cpu/tmac/tbl.h
+        )
+        
         get_target_property(cdefs ${GGML_CPU_NAME} COMPILE_DEFINITIONS)
         message(STATUS "GGML_CPU_NAME: ${GGML_CPU_NAME} COMPILE_DEFINITIONS: ${cdefs}")
-
-        # set(GGML_HEADERS_TMAC
-        #     ggml-cpu/tmac/lut_ctor.h
-        #     ggml-cpu/tmac/tbl.h
-        #     ggml-cpu/tmac/ggml-tmac.h
-        #     ../../common/log.h
-        #     )
-        # set(GGML_SOURCES_TMAC
-        #     ggml-cpu/tmac/lut_ctor.cpp
-        #     ggml-cpu/tmac/tbl.cpp
-        #     ggml-cpu/tmac/ggml-tmac.cpp
-        #     ../../common/log.cpp
-        #     )
-        # list (APPEND GGML_CPU_SOURCES ${GGML_SOURCES_TMAC} ${GGML_HEADERS_TMAC})
 
         if ((NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang") OR
             (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
@@ -188,6 +179,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 # We need fullfp16 for T-MAC
                 # TODO: check_cxx_source_compiles
                 list(APPEND ARCH_FLAGS -march=armv8.2a+fp16)
+                # Enable FP16 vector arithmetic feature
+                list(APPEND ARCH_DEFINITIONS __ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
             endif()
 
             # show enabled features
@@ -380,9 +373,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             # based on arm64-windows-llvm.cmake
             list(APPEND ARCH_FLAGS -march=armv8.7-a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only)
             add_compile_definitions(__ARM_FEATURE_MATMUL_INT8)
+            list(APPEND ARCH_DEFINITIONS __ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
         else ()
             # Jetson AGX Orin, Raspberry Pi 5
             list(APPEND ARCH_FLAGS -march=armv8.2a+fp16)
+            list(APPEND ARCH_DEFINITIONS __ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
         endif ()
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         message(STATUS "loongarch64 detected")
