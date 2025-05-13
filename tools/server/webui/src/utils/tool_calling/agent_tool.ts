@@ -18,11 +18,21 @@ export abstract class AgentTool {
    * @param call The tool call object from the API response.
    * @returns The tool call output or undefined if the tool is not enabled.
    */
-  public processCall(call: ToolCallRequest): ToolCallOutput | undefined {
+  public async processCall(
+    call: ToolCallRequest
+  ): Promise<ToolCallOutput | undefined> {
     if (this.enabled) {
-      return this._process(call);
+      try {
+        return await this._process(call);
+      } catch (error) {
+        console.error(`Error processing tool call for ${this.id}:`, error);
+        return {
+          type: 'function_call_output',
+          call_id: call.call_id,
+          output: `Error during tool execution: ${(error as Error).message}`,
+        } as ToolCallOutput;
+      }
     }
-
     return undefined;
   }
 
@@ -55,5 +65,5 @@ export abstract class AgentTool {
    * The actual tool call processing logic.
    * @param call: The tool call object from the API response.
    */
-  protected abstract _process(call: ToolCallRequest): ToolCallOutput;
+  protected abstract _process(call: ToolCallRequest): Promise<ToolCallOutput>;
 }

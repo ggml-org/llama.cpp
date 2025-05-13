@@ -5,7 +5,7 @@ import {
   Conversation,
   Message,
   PendingMessage,
-  ToolCall,
+  ToolCallRequest,
   ViewingChat,
 } from './types';
 import StorageUtils from './storage';
@@ -276,14 +276,12 @@ export const AppContextProvider = ({
         }
       } else {
         const responseData = await fetchResponse.json();
-        if (isDev) console.log({ responseData });
         if (responseData.error) {
           throw new Error(responseData.error?.message || 'Unknown error');
         }
 
         const choice = responseData.choices[0];
         const messageFromAPI = choice.message;
-        console.log({ messageFromAPI });
         let newContent = '';
 
         if (messageFromAPI.content) {
@@ -296,21 +294,21 @@ export const AppContextProvider = ({
           // Store the raw tool calls in the pendingMsg
           pendingMsg = {
             ...pendingMsg,
-            tool_calls: messageFromAPI.tool_calls as ToolCall[],
+            tool_calls: messageFromAPI.tool_calls as ToolCallRequest[],
           };
 
           for (let i = 0; i < messageFromAPI.tool_calls.length; i++) {
-            const tc = messageFromAPI.tool_calls[i] as ToolCall;
-            if (tc) {
+            const toolCall = messageFromAPI.tool_calls[i] as ToolCallRequest;
+            if (toolCall) {
               // Set up call id
-              tc.call_id ??= `call_${i}`;
+              toolCall.call_id ??= `call_${i}`;
 
-              if (isDev) console.log({ tc });
+              if (isDev) console.log({ tc: toolCall });
 
               // Process tool call
-              const toolResult = AVAILABLE_TOOLS.get(
-                tc.function.name
-              )?.processCall(tc);
+              const toolResult = await AVAILABLE_TOOLS.get(
+                toolCall.function.name
+              )?.processCall(toolCall);
 
               const toolMsg: PendingMessage = {
                 id: lastMsgId + 1,
@@ -368,13 +366,7 @@ export const AppContextProvider = ({
       // if message ended due to "finish_reason": "tool_calls"
       // resend it to assistant to process the result.
       if (shouldContinueChain) {
-        console.log('Generating followup message!');
         lastMsgId = await generateMessage(convId, lastMsgId, onChunk);
-        console.log('Generating - done!');
-
-        // Fetch messages from DB for debug
-        const savedMsgs = await StorageUtils.getMessages(convId);
-        console.log({ savedMsgs });
       }
 
       setPending(convId, null);

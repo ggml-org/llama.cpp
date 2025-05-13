@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+  <head>
+    <title>JS Sandbox</title>
+    <script>
+      // Capture console.log output within the iframe
+      const iframeConsole = {
+        _buffer: [],
+        log: function (...args) {
+          this._buffer.push(args.map(String).join(' '));
+        },
+        getOutput: function () {
+          const output = this._buffer.join('\n');
+          this._buffer = [];
+          return output;
+        },
+        clear: function () {
+          this._buffer = [];
+        },
+      };
+      // Redirect the iframe's console.log
+      const originalConsoleLog = console.log; // Keep a reference if needed
+      console.log = iframeConsole.log.bind(iframeConsole);
+
+      window.addEventListener('message', (event) => {
+        if (!event.data || !event.source || !event.source.postMessage) {
+          return;
+        }
+
+        if (event.data.command === 'executeCode') {
+          const { code, call_id } = event.data;
+          let result = '';
+          let error = null;
+          iframeConsole.clear();
+
+          try {
+            result = eval(code);
+            if (result !== undefined && result !== null) {
+              try {
+                result = JSON.stringify(result, null, 2);
+              } catch (e) {
+                result = String(result);
+              }
+            } else {
+              result = '';
+            }
+          } catch (e) {
+            error = e.message || String(e);
+          }
+
+          const consoleOutput = iframeConsole.getOutput();
+          const finalOutput = consoleOutput
+            ? consoleOutput + (result && consoleOutput ? '\n' : '') + result
+            : result;
+
+          event.source.postMessage(
+            {
+              call_id: call_id,
+              output: finalOutput,
+              error: error,
+            },
+            event.origin === 'null' ? '*' : event.origin
+          );
+        }
+      });
+
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage(
+          { command: 'iframeReady', call_id: 'initial_ready' },
+          '*'
+        );
+      }
+    </script>
+  </head>
+  <body>
+    <p>JavaScript Execution Sandbox</p>
+  </body>
+</html>
