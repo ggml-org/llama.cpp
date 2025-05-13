@@ -424,6 +424,21 @@ public:
         const llama_hparams            & hparams,
               std::vector<child_cache>   children);
 
+    // getters for specific child cache type
+    // NOTE: This will fail if there are multiple of the given type
+    template<typename child_t>
+    const child_t * get_child_cache() const {
+        const child_t * child = nullptr;
+        for (const auto & child_cache : m_children) {
+            const child_t * child_cast = dynamic_cast<const child_t *>(child_cache.get());
+            if (child_cast) {
+                GGML_ASSERT(!child);
+                child = child_cast;
+            }
+        }
+        return child;
+    }
+
     //
     // llama_memory_i
     //
