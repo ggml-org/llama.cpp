@@ -1,19 +1,18 @@
-#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/concat.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
+#include <openvino/op/matmul.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/slice.hpp>
+#include <openvino/op/transpose.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/concat.hpp"
-#include "openvino/op/constant.hpp"
-#include "openvino/op/convert_like.hpp"
-#include "openvino/op/matmul.hpp"
-#include "openvino/op/reshape.hpp"
-#include "openvino/op/slice.hpp"
-#include "openvino/op/transpose.hpp"
 
 namespace ov {
 namespace frontend {
@@ -25,9 +24,10 @@ OutputVector translate_mulmat(const NodeContext& context) {
 
     bool continuous = context.check_if_continuous();
     if (continuous) {
-        auto src1 = context.get_input(1);
-        auto src0_converted = std::make_shared<ov::op::v1::ConvertLike>(context.get_input(0), src1);
-        auto result = std::make_shared<ov::op::v0::MatMul>(src1, src0_converted, false, true);
+        auto src0 = context.get_input(0);
+        auto src1 = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
+        auto result_lp = std::make_shared<ov::op::v0::MatMul>(src1, src0, false, true);
+        auto result = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
         return {result};
     } else {
         /*
@@ -94,8 +94,7 @@ OutputVector translate_mulmat(const NodeContext& context) {
             B = src0_slice;
         }
 
-        A = context.get_input(1);
-        B = std::make_shared<ov::op::v1::ConvertLike>(B, A);
+        A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
 
         int64_t num_heads = context.get_input_shape(1).to_shape()[0];
         int64_t num_heads_kv = src0_shape[0];
@@ -116,10 +115,12 @@ OutputVector translate_mulmat(const NodeContext& context) {
             B = std::make_shared<ov::op::v1::Reshape>(B, new_B_shape, false);
         }
 
-        auto result = std::make_shared<ov::op::v0::MatMul>(A, B, false, true);
+        auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, true);
+        auto result = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
+
         return {result};
     }
-};
+}
 
 }  // namespace op
 }  // namespace ggml

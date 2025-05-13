@@ -33,7 +33,7 @@ public:
         return m_decoder->get_input_size();
     }
 
-    Any get_input_type(size_t index) const {
+    ov::element::Type get_input_type(size_t index) const {
         return m_decoder->get_input_type(m_input_names[index]);
     }
 
