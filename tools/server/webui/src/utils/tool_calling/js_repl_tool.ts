@@ -37,6 +37,9 @@ export class JSReplAgentTool extends AgentTool {
     try {
       // Evaluate the provided agent code
       result = eval(args.code);
+      if (!result) {
+        result = '';
+      }
     } catch (err) {
       result = String(err);
     }

@@ -199,10 +199,27 @@ export default function ChatMessage({
                       </details>
                     )}
 
-                    <MarkdownDisplay
-                      content={content}
-                      isGenerating={isPending}
-                    />
+                    {msg.role === 'tool' ? (
+                      <details
+                        className="collapse bg-base-200 collapse-arrow mb-4"
+                        open={true}
+                      >
+                        <summary className="collapse-title">
+                          <b>Tool call result</b>
+                        </summary>
+                        <div className="collapse-content">
+                          <MarkdownDisplay
+                            content={content}
+                            isGenerating={false} // Tool results are not "generating"
+                          />
+                        </div>
+                      </details>
+                    ) : (
+                      <MarkdownDisplay
+                        content={content}
+                        isGenerating={isPending}
+                      />
+                    )}
                   </div>
                 </>
               )}
