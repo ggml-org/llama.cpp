@@ -37,19 +37,19 @@ git clone https://huggingface.co/openai/clip-vit-large-patch14-336
 2. Install the required Python packages:
 
 ```sh
-pip install -r examples/llava/requirements.txt
+pip install -r tools/mtmd/requirements.txt
 ```
 
 3. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
 
 ```sh
-python ./examples/llava/llava_surgery.py -m ../llava-v1.5-7b
+python ./tools/mtmd/llava_surgery.py -m ../llava-v1.5-7b
 ```
 
 4. Use `convert_image_encoder_to_gguf.py` to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./examples/llava/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
+python ./tools/mtmd/convert_image_encoder_to_gguf.py -m ../clip-vit-large-patch14-336 --llava-projector ../llava-v1.5-7b/llava.projector --output-dir ../llava-v1.5-7b
 ```
 
 5. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
@@ -69,12 +69,12 @@ git clone https://huggingface.co/liuhaotian/llava-v1.6-vicuna-7b
 2) Install the required Python packages:
 
 ```sh
-pip install -r examples/llava/requirements.txt
+pip install -r tools/mtmd/requirements.txt
 ```
 
 3) Use `llava_surgery_v2.py` which also supports llava-1.5 variants pytorch as well as safetensor models:
 ```console
-python examples/llava/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
+python tools/mtmd/llava_surgery_v2.py -C -m ../llava-v1.6-vicuna-7b/
 ```
 - you will find a llava.projector and a llava.clip file in your model directory
 
@@ -88,7 +88,7 @@ curl -s -q https://huggingface.co/cmp-nct/llava-1.6-gguf/raw/main/config_vit.jso
 
 5) Create the visual gguf model:
 ```console
-python ./examples/llava/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
+python ./tools/mtmd/convert_image_encoder_to_gguf.py -m vit --llava-projector vit/llava.projector --output-dir vit --clip-model-is-vision
 ```
 - This is similar to llava-1.5, the difference is that we tell the encoder that we are working with the pure vision model part of CLIP
 

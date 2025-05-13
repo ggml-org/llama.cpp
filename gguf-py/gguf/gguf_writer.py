@@ -972,6 +972,9 @@ class GGUFWriter:
     def add_vision_image_std(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_STD, values)
 
+    def add_vision_spatial_merge_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
+
     def add_vision_use_gelu(self, value: bool) -> None:
         self.add_bool(Keys.ClipVision.USE_GELU, value)
 
@@ -980,6 +983,9 @@ class GGUFWriter:
 
     def add_vision_projector_scale_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Projector.SCALE_FACTOR, value)
+
+    def add_vision_n_wa_pattern(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
 
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''

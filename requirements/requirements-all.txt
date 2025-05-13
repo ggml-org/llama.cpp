@@ -1,6 +1,6 @@
--r ../examples/llava/requirements.txt
--r ../examples/server/bench/requirements.txt
--r ../examples/server/tests/requirements.txt
+-r ../tools/mtmd/requirements.txt
+-r ../tools/server/bench/requirements.txt
+-r ../tools/server/tests/requirements.txt
 
 -r ./requirements-compare-llama-bench.txt
 -r ./requirements-pydantic.txt

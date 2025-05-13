@@ -16,6 +16,7 @@ from pathlib import Path
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
 from itertools import chain
+from transformers import AutoConfig
 
 import math
 import numpy as np
@@ -66,8 +67,6 @@ class ModelBase:
     part_names: list[str]
     is_safetensors: bool
     hparams: dict[str, Any]
-    block_count: int
-    tensor_map: gguf.TensorNameMap
     tensor_names: set[str] | None
     gguf_writer: gguf.GGUFWriter
     model_name: str | None
@@ -77,6 +76,10 @@ class ModelBase:
 
     # subclasses should define this!
     model_arch: gguf.MODEL_ARCH
+
+    # subclasses should initialize this!
+    block_count: int
+    tensor_map: gguf.TensorNameMap
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
@@ -113,8 +116,6 @@ class ModelBase:
             if not self.is_safetensors:
                 self.part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
         self.hparams = ModelBase.load_hparams(self.dir_model) if hparams is None else hparams
-        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
         self.tensor_names = None
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -417,15 +418,19 @@ class ModelBase:
 
     @staticmethod
     def load_hparams(dir_model: Path):
-        with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-            hparams = json.load(f)
-            architectures = hparams.get("architectures")
-            if "text_config" in hparams:
-                hparams = {**hparams, **hparams["text_config"]}
-            if architectures is not None:
-                # preserve "architectures" from root level config
-                hparams["architectures"] = architectures
-            return hparams
+        try:
+            # for security reason, we don't allow loading remote code by default
+            # if a model need remote code, we will fallback to config.json
+            return AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
+        except Exception as e:
+            logger.warning(f"Failed to load model config from {dir_model}: {e}")
+            logger.warning("Trying to load config.json instead")
+            with open(dir_model / "config.json", "r", encoding="utf-8") as f:
+                config = json.load(f)
+                if "llm_config" in config:
+                    # rename for InternVL
+                    config["text_config"] = config["llm_config"]
+                return config
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -454,6 +459,27 @@ class ModelBase:
 
 
 class TextModel(ModelBase):
+    model_type = ModelType.TEXT
+    hf_arch: str
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hf_arch = get_model_architecture(self.hparams, self.model_type)
+
+        if "text_config" in self.hparams:
+            # move the text_config to the root level
+            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+
+        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    @classmethod
+    def __init_subclass__(cls):
+        # can't use an abstract property, because overriding it without type errors
+        # would require using decorated functions instead of simply defining the property
+        if "model_arch" not in cls.__dict__:
+            raise TypeError(f"Missing property 'model_arch' for {cls.__name__!r}")
+
     def set_vocab(self):
         self._set_vocab_gpt2()
 
@@ -488,7 +514,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -772,6 +798,9 @@ class TextModel(ModelBase):
         if chkhsh == "0e9433cbbb161f89e264eb32e8e64bfe69e834973ffca5d41d3948a604a3e2a3":
             # ref: https://huggingface.co/mistral-community/pixtral-12b
             res = "pixtral"
+        if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
+            # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
+            res = "seed-coder"
 
         if res is None:
             logger.warning("\n")
@@ -1057,10 +1086,36 @@ class TextModel(ModelBase):
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
 
+    def _try_set_pooling_type(self) -> None:
+        # get pooling path
+        pooling_path = None
+        module_path = self.dir_model / "modules.json"
+        if module_path.is_file():
+            with open(module_path, encoding="utf-8") as f:
+                modules = json.load(f)
+            for mod in modules:
+                if mod["type"] == "sentence_transformers.models.Pooling":
+                    pooling_path = mod["path"]
+                    break
+
+        # get pooling type
+        if pooling_path is not None:
+            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
+                pooling = json.load(f)
+            if pooling["pooling_mode_mean_tokens"]:
+                pooling_type = gguf.PoolingType.MEAN
+            elif pooling["pooling_mode_cls_token"]:
+                pooling_type = gguf.PoolingType.CLS
+            elif pooling["pooling_mode_lasttoken"]:
+                pooling_type = gguf.PoolingType.LAST
+            else:
+                raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
+            self.gguf_writer.add_pooling_type(pooling_type)
+
 
 class VisionModel(ModelBase):
+    model_type = ModelType.VISION
     model_arch = gguf.MODEL_ARCH.CLIP_VISION
-    n_text_embd = 0
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
 
@@ -1070,9 +1125,11 @@ class VisionModel(ModelBase):
         if self.model_arch != gguf.MODEL_ARCH.CLIP_VISION:
             raise TypeError("VisionModel must be subclassed with model_arch = gguf.MODEL_ARCH.CLIP_VISION")
 
-        # small hack to correct the number of layers
-        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, 128)
-        self.n_embd_text = self.find_hparam(["hidden_size", "n_embd"])
+        # get n_embd of the text model
+        if "text_config" not in self.hparams:
+            self.hparams["text_config"] = {}
+        text_config = {**self.hparams, **self.hparams["text_config"]}
+        self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
         if "vision_config" not in self.hparams:
@@ -1080,6 +1137,9 @@ class VisionModel(ModelBase):
         # move vision config to the top level, while preserving the original hparams in global_config
         self.global_config = self.hparams
         self.hparams = self.hparams["vision_config"]
+
+        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"])
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, self.block_count)
 
         # load preprocessor config
         with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
@@ -1098,12 +1158,12 @@ class VisionModel(ModelBase):
         self.gguf_writer.add_vision_patch_size(self.find_hparam(["patch_size"]))
         self.gguf_writer.add_vision_embedding_length(self.find_hparam(["hidden_size"]))
         self.gguf_writer.add_vision_feed_forward_length(self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_vision_block_count(self.find_hparam(["num_hidden_layers"]))
+        self.gguf_writer.add_vision_block_count(self.block_count)
         self.gguf_writer.add_vision_head_count(self.find_hparam(["num_attention_heads"]))
 
         # preprocessor config
         self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
-        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_mean"])
+        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
 
     def write_vocab(self):
         raise ValueError("VisionModel does not support vocab writing")
@@ -1335,10 +1395,10 @@ class BaichuanModel(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
         self.gguf_writer.add_file_type(self.ftype)
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         head_count = self.hparams["num_attention_heads"]
@@ -1459,10 +1519,10 @@ class XverseModel(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
         self.gguf_writer.add_file_type(self.ftype)
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -1719,8 +1779,7 @@ class StableLMModel(TextModel):
     "LlamaForCausalLM",
     "MistralForCausalLM",
     "MixtralForCausalLM",
-    "Idefics3ForConditionalGeneration",
-    "SmolVLMForConditionalGeneration",
+    "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -1729,11 +1788,7 @@ class LlamaModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # fix for SmolVLM2, missing `num_attention_heads` in config.json
-        if self.hparams["architectures"][0] == "SmolVLMForConditionalGeneration":
-            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
-        # fix for Pixtral, missing `num_attention_heads` in config.json
-        if self.hparams["architectures"][0] == "LlavaForConditionalGeneration" \
-                and self.hparams.get("model_type") == "mistral":
+        if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def set_vocab(self):
@@ -1780,10 +1835,10 @@ class LlamaModel(TextModel):
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
@@ -1891,31 +1946,50 @@ class LlamaModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("LlavaForConditionalGeneration")
+@ModelBase.register(
+    "LlavaForConditionalGeneration", # pixtral
+    "Mistral3ForConditionalGeneration", # mistral small 3.1
+)
 class LlavaVisionModel(VisionModel):
     img_break_tok_id = -1
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.hparams["model_type"] == "pixtral":
-            # fix missing config.json values
-            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 16)
-            self.hparams["num_hidden_layers"] = self.hparams.get("num_hidden_layers", 24)
-            self.hparams["intermediate_size"] = self.hparams.get("intermediate_size", 4096)
-            self.hparams["hidden_size"] = self.hparams.get("hidden_size", 1024)
+            # layer_norm_eps is not in config.json, it is hard-coded in modeling_pixtral.py
             self.hparams["layer_norm_eps"] = self.hparams.get("layer_norm_eps", 1e-5)
-            self.img_break_tok_id = 12 # see tokenizer_config.json
+            self.img_break_tok_id = self.get_token_id("[IMG_BREAK]")
+            logger.info(f"Image break token id: {self.img_break_tok_id}")
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
+
+    def get_token_id(self, token: str) -> int:
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+            added_tokens_decoder = json.load(f)['added_tokens_decoder']
+            for id_, token_data in added_tokens_decoder.items():
+                if token_data["content"] == token:
+                    return int(id_)
+        raise ValueError(f"Token '{token}' not found in tokenizer config.")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
         if hparams["model_type"] == "pixtral":
             self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.PIXTRAL)
-            # default values below are taken from HF tranformers code
             self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
-            self.gguf_writer.add_vision_use_silu(True)
+
+            # hidden_act
+            if hparams["hidden_act"] == "silu":
+                self.gguf_writer.add_vision_use_silu(True)
+            elif hparams["hidden_act"] == "gelu":
+                self.gguf_writer.add_vision_use_gelu(True)
+            else:
+                raise ValueError(f"Unsupported hidden_act: {hparams['hidden_act']}")
+
+            # spatial_merge_size
+            if "spatial_merge_size" in self.global_config:
+                self.gguf_writer.add_vision_spatial_merge_size(self.global_config["spatial_merge_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -1944,13 +2018,12 @@ class LlavaVisionModel(VisionModel):
 class SmolVLMModel(VisionModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # fix for SmolVLM2, missing some keys in config.json
-        # default values are taken from transformers code
         if self.hparams["model_type"] == "smolvlm_vision":
+            # fix for SmolVLM2, missing some keys in config.json
+            # default values are taken from transformers code
             self.hparams["hidden_size"] = self.hparams.get("hidden_size", 1152)
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 16)
             self.hparams["intermediate_size"] = self.hparams.get("intermediate_size", 3072)
-            self.hparams["num_hidden_layers"] = self.hparams.get("num_hidden_layers", 12)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2063,6 +2136,9 @@ class DeciModel(TextModel):
             # if n_heads_in_group is not None, then
             # _num_kv_heads[il] is num_attention_head // n_heads_in_group and
             # _num_heads[il] is num_attention_head
+            # ***dummy layer*** for nemotron 253B
+            # if n_heads_in_group is None and ffn_mult is None
+            # then _num_kv_heads[il] is 0 and _num_heads[il] is 0 and _ffn_dims is 0
             for il in range(len(_block_configs)):
                 if _block_configs[il]["attention"]["n_heads_in_group"] is None:
                     if _block_configs[il]["attention"]["replace_with_linear"] is True:
@@ -2074,7 +2150,10 @@ class DeciModel(TextModel):
                 else:
                     self._num_kv_heads.append(self.hparams["num_attention_heads"] // _block_configs[il]["attention"]["n_heads_in_group"])
                     self._num_heads.append(self.hparams["num_attention_heads"])
-                _ffn_multipliers.append(_block_configs[il]["ffn"]["ffn_mult"])
+                if _block_configs[il]["ffn"]["ffn_mult"] is None: # dummy layer
+                    _ffn_multipliers.append(0.0)
+                else:
+                    _ffn_multipliers.append(_block_configs[il]["ffn"]["ffn_mult"])
             assert self.block_count == len(self._num_kv_heads)
             assert self.block_count == len(self._num_heads)
             assert self.block_count == len(_ffn_multipliers)
@@ -2134,10 +2213,10 @@ class DeciModel(TextModel):
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
@@ -2377,10 +2456,10 @@ class MiniCPMModel(TextModel):
         logit_scale = self.hparams["hidden_size"] / self.hparams["dim_model_base"]
         self.gguf_writer.add_logit_scale(logit_scale)
         logger.info(f"gguf: (minicpm) logit_scale = {logit_scale}")
-        if self.hparams.get("rope_scaling") is not None:
-            if self.hparams["rope_scaling"].get("type") == "longrope":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LONGROPE)
-                logger.info(f"gguf: (minicpm) rope_scaling_type = {gguf.RopeScalingType.LONGROPE}")
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "longrope":
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LONGROPE)
+            logger.info(f"gguf: (minicpm) rope_scaling_type = {gguf.RopeScalingType.LONGROPE}")
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         rope_dims = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
@@ -2512,7 +2591,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2ForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -2524,11 +2603,22 @@ class Qwen2Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "yarn":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
-                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+        self._try_set_pooling_type()
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if self.hf_arch == "Qwen2Model":
+            name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
+        if "language_model." in name:
+            name = name.replace("language_model.", "") # for InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
@@ -2553,6 +2643,138 @@ class Qwen2VLModel(TextModel):
             # skip visual tensors
             return []
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+class Qwen2VLVisionModel(VisionModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["image_size"] = self.hparams.get("image_size", 560)
+        # rename config.json values
+        self.hparams["num_attention_heads"] = self.hparams.get("num_heads")
+        self.hparams["num_hidden_layers"] = self.hparams.get("depth")
+        if "embed_dim" in self.hparams: # qwen2vl
+            self.hparams["intermediate_size"] = self.hparams.get("hidden_size")
+            self.hparams["hidden_size"] = self.hparams.get("embed_dim")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        if self.global_config['model_type'] == 'qwen2_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN2VL)
+        elif self.global_config['model_type'] == 'qwen2_5_vl':
+            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN25VL)
+            self.gguf_writer.add_vision_use_silu(True)
+            # find n_wa_pattern (window attention pattern)
+            fullatt_block_indexes = hparams.get("fullatt_block_indexes")
+            assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for qwen2_5_vl"
+            n_wa_pattern = fullatt_block_indexes[0] + 1
+            # validate n_wa_pattern
+            for i in range(1, len(fullatt_block_indexes)):
+                if fullatt_block_indexes[i] - fullatt_block_indexes[i - 1] != n_wa_pattern:
+                    raise ValueError(f"Invalid fullatt_block_indexes: {fullatt_block_indexes}")
+            self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+        else:
+            raise ValueError(f"Unknown QwenVL model type: {self.global_config['model_type']}")
+        # default values below are taken from HF tranformers code
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd." in new_name:
+            return gguf.GGMLQuantizationType.F16
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("visual."):
+            # process visual tensors
+            # split QKV tensors if needed
+            if ".qkv." in name:
+                if data_torch.ndim == 2: # weight
+                    c3, _ = data_torch.shape
+                else: # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("qkv", "q")), wq),
+                    (self.map_tensor_name(name.replace("qkv", "k")), wk),
+                    (self.map_tensor_name(name.replace("qkv", "v")), wv),
+                ]
+            elif 'patch_embed.proj.weight' in name:
+                # split Conv3D into Conv2Ds
+                c1, c2, kt, kh, kw = data_torch.shape
+                del c1, c2, kh, kw  # unused
+                assert kt == 2, "Current implmentation only support temporal_patch_size of 2"
+                return [
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight"  , data_torch[:, :, 0, ...]),
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                ]
+            else:
+                return [(self.map_tensor_name(name), data_torch)]
+        return [] # skip other tensors
+
+
+@ModelBase.register("InternVisionModel")
+class InternVisionModel(VisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.INTERNVL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
+        # hidden_act
+        if hparams["hidden_act"] == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        elif hparams["hidden_act"] == "gelu":
+            self.gguf_writer.add_vision_use_gelu(True)
+        else:
+            raise ValueError(f"Unsupported hidden_act: {hparams['hidden_act']}")
+        # downsample_ratio
+        downsample_ratio = self.global_config.get("downsample_ratio")
+        assert downsample_ratio is not None
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd." in new_name:
+            return gguf.GGMLQuantizationType.F16
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("vision_model") or name.startswith("mlp"):
+            # process visual tensors
+            # correct name
+            if name.startswith("vision_model"):
+                name = "vision_tower." + name
+            if (".ls" in name or "position_embedding" in name) and not name.endswith(".weight"):
+                name += ".weight"
+            # split QKV tensors if needed
+            if ".qkv." in name:
+                if data_torch.ndim == 2: # weight
+                    c3, _ = data_torch.shape
+                else: # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.q_proj")), wq),
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.k_proj")), wk),
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.v_proj")), wv),
+                ]
+            return [(self.map_tensor_name(name), data_torch)]
+        return [] # skip other tensors
 
 
 @ModelBase.register("WavTokenizerDec")
@@ -2607,6 +2829,13 @@ class Qwen2MoeModel(TextModel):
         if (shared_expert_intermediate_size := self.hparams.get('shared_expert_intermediate_size')) is not None:
             self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
             logger.info(f"gguf: expert shared feed forward length = {shared_expert_intermediate_size}")
+        # YaRN is not enabled by default
+        # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -2874,7 +3103,7 @@ class Phi3MiniModel(TextModel):
 
         scale = max_pos_embds / orig_max_pos_embds
 
-        rope_scaling_type = rope_scaling.get('type', '').lower()
+        rope_scaling_type = rope_scaling.get('rope_type', rope_scaling.get('type', '')).lower()
         if len(rope_scaling_type) == 0:
             raise KeyError('Missing the required key rope_scaling.type')
 
@@ -3186,10 +3415,10 @@ class InternLM2Model(TextModel):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
         self.gguf_writer.add_file_type(self.ftype)
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_heads = self.hparams["num_attention_heads"]
@@ -3198,6 +3427,11 @@ class InternLM2Model(TextModel):
         q_per_kv = num_heads // num_kv_heads
         head_dim = n_embd // num_heads
         num_groups = num_heads // q_per_kv
+
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
 
         if bid is not None and f"model.layers.{bid}.attention.wqkv" in name:
             qkv = data_torch
@@ -3264,14 +3498,18 @@ class InternLM3Model(TextModel):
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "linear" or self.hparams["rope_scaling"].get("rope_type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
         if name.endswith(("q_proj.weight", "q_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):
@@ -3290,29 +3528,7 @@ class BertModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_causal_attention(False)
-
-        # get pooling path
-        pooling_path = None
-        module_path = self.dir_model / "modules.json"
-        if module_path.is_file():
-            with open(module_path, encoding="utf-8") as f:
-                modules = json.load(f)
-            for mod in modules:
-                if mod["type"] == "sentence_transformers.models.Pooling":
-                    pooling_path = mod["path"]
-                    break
-
-        # get pooling type
-        if pooling_path is not None:
-            with open(self.dir_model / pooling_path / "config.json", encoding="utf-8") as f:
-                pooling = json.load(f)
-            if pooling["pooling_mode_mean_tokens"]:
-                pooling_type = gguf.PoolingType.MEAN
-            elif pooling["pooling_mode_cls_token"]:
-                pooling_type = gguf.PoolingType.CLS
-            else:
-                raise NotImplementedError("Only MEAN and CLS pooling types supported")
-            self.gguf_writer.add_pooling_type(pooling_type)
+        self._try_set_pooling_type()
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -3505,6 +3721,8 @@ class RobertaModel(BertModel):
 
 @ModelBase.register("NomicBertModel")
 class NomicBertModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
@@ -3519,8 +3737,13 @@ class NomicBertModel(BertModel):
         if self._tokenizer_is_xlmroberta:
             self._xlmroberta_tokenizer_init()
 
-        # the HF config claims n_ctx=8192, but it uses RoPE scaling
-        self.hparams["n_ctx"] = 2048
+        npos, mtp = self.hparams["n_positions"], self.hparams.get("max_trained_positions", 2048)
+        if npos == 8192 and mtp == 2048:
+            self.hparams["n_positions"] = 2048  # nomic-embed-text v1 and v1.5 are trained for 2048 tokens.
+        elif npos == 2048 and mtp == 2048:
+            self.hparams["n_positions"] = 512   # nomic-embed-text-v2-moe is trained for 512 tokens.
+        else:
+            raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
 
         assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
 
@@ -3769,6 +3992,16 @@ class Gemma3VisionModel(VisionModel):
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
+        # calculate proj_scale_factor (used by tinygemma3 test model)
+        image_seq_length = self.preprocessor_config.get("image_seq_length", 256)
+        n_per_side = int(image_seq_length ** 0.5)
+        image_size = self.hparams["image_size"]
+        patch_size = self.hparams["patch_size"]
+        proj_scale_factor = (image_size // patch_size) // n_per_side
+        if proj_scale_factor > 0 and proj_scale_factor != 4:
+            # we only need to write this if it's not the default value
+            # in this case, we are converting a test model
+            self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, new_name, n_dims  # unused
@@ -3781,6 +4014,9 @@ class Gemma3VisionModel(VisionModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
+
+        if "vision_model.head." in name:
+            return [] # skip redundant tensors for tinygemma3
 
         if name.startswith("multi_modal_projector.") or name.startswith("vision_tower.") \
                 or name.startswith("multimodal_projector.") or name.startswith("vision_model."):
@@ -4707,12 +4943,12 @@ class DeepseekV2Model(TextModel):
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "yarn":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
-                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
-                self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * hparams["rope_scaling"]["mscale_all_dim"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+            self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_scaling["mscale_all_dim"])
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -5204,11 +5440,11 @@ class Glm4Model(TextModel):
         super().set_gguf_parameters()
         rope_dim = self.hparams["head_dim"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
-        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
-            if self.hparams["rope_scaling"].get("type") == "yarn":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
-                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
 
 
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
@@ -5441,10 +5677,10 @@ class ExaoneModel(TextModel):
         rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"], optional=True)
         rotary_factor = rotary_factor if rotary_factor is not None else 1.0
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
-        if hparams.get("rope_scaling") is not None and "factor" in hparams["rope_scaling"]:
-            if hparams["rope_scaling"].get("type") == "linear":
-                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-                self.gguf_writer.add_rope_scaling_factor(hparams["rope_scaling"]["factor"])
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
@@ -5547,7 +5783,13 @@ class BailingMoeModel(TextModel):
         rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
-        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        else:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
@@ -5849,6 +6091,18 @@ def split_str_to_n_bytes(split_str: str) -> int:
     return n
 
 
+def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
+    text_config = hparams.get("text_config", {})
+    vision_config = hparams.get("vision_config", {})
+    arch = hparams["architectures"][0]
+    # if "architectures" is found in the sub-config, use that instead
+    if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
+        arch = text_config["architectures"][0]
+    elif model_type == ModelType.VISION and vision_config.get("architectures") is not None:
+        arch = vision_config["architectures"][0]
+    return arch
+
+
 def main() -> None:
     args = parse_args()
 
@@ -5901,16 +6155,16 @@ def main() -> None:
 
     logger.info(f"Loading model: {dir_model.name}")
 
-    hparams = ModelBase.load_hparams(dir_model)
-
     if args.mmproj:
         if "mmproj" not in fname_out.name:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
-        model_architecture = hparams["architectures"][0]
         model_type = ModelType.VISION if args.mmproj else ModelType.TEXT
+        hparams = ModelBase.load_hparams(dir_model)
+        model_architecture = get_model_architecture(hparams, model_type)
+        logger.info(f"Model architecture: {model_architecture}")
         try:
             model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
         except NotImplementedError:
