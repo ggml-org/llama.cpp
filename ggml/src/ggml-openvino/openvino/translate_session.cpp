@@ -1,8 +1,5 @@
 #include "translate_session.hpp"
 
-#include <exception>
-#include <fstream>
-
 #include "input_model.hpp"
 
 namespace ov {
@@ -22,37 +19,7 @@ std::shared_ptr<Model> TranslateSession::get_converted_model() {
         return m_ov_model;
     }
     m_ov_model = translate_graph(m_input_model);
-    // print_model_topology();
     return m_ov_model;
-}
-
-void TranslateSession::print_model_topology() {
-    try {
-        std::ofstream outfile("model_topology.txt", std::ios::out | std::ios::app);
-        if (!outfile.is_open()) {
-            throw std::runtime_error("Failed to open file for writing model topology.");
-        }
-
-        outfile << "============ Model ============" << std::endl;
-        for (const auto& op : m_ov_model->get_ordered_ops()) {
-            outfile << "Operation: " << op->get_friendly_name() << std::endl;
-            outfile << "  Inputs:" << std::endl;
-            for (const auto& input : op->inputs()) {
-                outfile << "    " << input.get_node()->get_friendly_name() << " -> " << input.get_element_type() << " "
-                        << input.get_shape() << std::endl;
-            }
-            outfile << "  Outputs:" << std::endl;
-            for (const auto& output : op->outputs()) {
-                outfile << "    " << output.get_node()->get_friendly_name() << " -> " << output.get_element_type()
-                        << " " << output.get_shape() << std::endl;
-            }
-            outfile << std::endl;
-        }
-        outfile << "===============================" << std::endl;
-        outfile.close();
-    } catch (const std::exception& ex) {
-        std::cout << ex.what() << std::endl;
-    }
 }
 
 std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputModel::Ptr& input_model) {
@@ -86,16 +53,12 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         auto operation_type = node->get_op_type();
         ov::OutputVector converted_outputs;
         auto it = m_translator_map.find(operation_type);
-        if (it != m_translator_map.end()) {
-            try {
-                NodeContext node_context(node, tensor_map, this);
-                converted_outputs = it->second(node_context);
-            } catch (const std::exception& ex) {
-                std::cout << ex.what() << std::endl;
-            }
-        } else {
-            // TODO
-        }
+        FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(),
+                                      "Translation for operation type ",
+                                      operation_type,
+                                      " is not implemented.");
+        NodeContext node_context(node, tensor_map, this);
+        converted_outputs = it->second(node_context);
 
         const auto& node_output_names = node->get_output_names();
         FRONT_END_OP_CONVERSION_CHECK(node_output_names.size() == converted_outputs.size(),
@@ -122,7 +85,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
                                 "Output name not found in tensor map: ",
                                 name);
         auto result = std::make_shared<v0::Result>(tensor_map->at(name));
-        // result->set_friendly_name(it);
+        result->set_friendly_name(name);
         results.push_back(result);
     }
 

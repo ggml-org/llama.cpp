@@ -37,7 +37,7 @@ GGML_OP_CONVERTER(translate_view);
 
 }  // namespace op
 
-const std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
+std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
     return {{"GGML_OP_ADD", op::translate_1to1_match_2_inputs<v1::Add>},
             {"GGML_OP_ADD1", op::translate_1to1_match_2_inputs<v1::Add>},
             {"GGML_OP_CONT", op::translate_cont},
