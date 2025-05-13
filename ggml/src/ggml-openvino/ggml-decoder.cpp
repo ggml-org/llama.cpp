@@ -14,6 +14,7 @@
 #include <openvino/core/node.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/parameter.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
@@ -278,8 +279,7 @@ void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph) {
              << std::setw(5) << node->ne[2] << ", "
              << std::setw(5) << node->ne[3] << "] "
              << std::left << std::setw(20) << ggml_op_name(node->op) << std::right << " "
-             << std::left << std::setw(44) << node->name << std::right
-             << ((node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" : node->grad ? "g" : " ")
+             << std::left << std::setw(45) << node->name << std::right
              << std::setw(2) << "[ "
              << std::setw(0) << node->nb[0] << ", "
              << std::setw(5) << node->nb[1] << ", "
