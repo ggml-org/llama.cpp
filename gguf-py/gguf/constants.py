@@ -167,6 +167,9 @@ class Keys:
         GROUP_COUNT    = "{arch}.ssm.group_count"
         DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
+    class HybridAttention:
+        ATTN_LAYER_INDICES = "{arch}.attention.layer_indices"
+
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
 
@@ -322,6 +325,7 @@ class MODEL_ARCH(IntEnum):
     ARWKV7           = auto()
     MAMBA            = auto()
     MAMBA2           = auto()
+    BAMBA            = auto()
     XVERSE           = auto()
     COMMAND_R        = auto()
     COHERE2          = auto()
@@ -607,6 +611,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ARWKV7:           "arwkv7",
     MODEL_ARCH.MAMBA:            "mamba",
     MODEL_ARCH.MAMBA2:           "mamba2",
+    MODEL_ARCH.BAMBA:            "bamba",
     MODEL_ARCH.XVERSE:           "xverse",
     MODEL_ARCH.COMMAND_R:        "command-r",
     MODEL_ARCH.COHERE2:          "cohere2",
@@ -1654,6 +1659,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_D,
         MODEL_TENSOR.SSM_NORM,
         MODEL_TENSOR.SSM_OUT,
+    ],
+    MODEL_ARCH.BAMBA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
     ],
     MODEL_ARCH.XVERSE: [
         MODEL_TENSOR.TOKEN_EMBD,
