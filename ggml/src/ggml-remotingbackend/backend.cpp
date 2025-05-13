@@ -64,8 +64,6 @@ extern "C" {
 				   char *dec_cur, const char *dec_end,
 				   char *enc_cur, const char *enc_end,
 				   char **enc_cur_after) {
-    INFO("%s: --> %d | %p | %p ", __func__, cmd_type, dec_cur, enc_cur);
-
     struct vn_cs_encoder _enc = {
       .cur = enc_cur,
       .end = enc_end,
