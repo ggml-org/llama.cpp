@@ -1,12 +1,9 @@
-#include <cstdint>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/multiply.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/constant.hpp"
-#include "openvino/op/multiply.hpp"
 
 namespace ov {
 namespace frontend {
@@ -23,7 +20,7 @@ OutputVector translate_scale(const NodeContext& context) {
     auto res = std::make_shared<ov::op::v1::Multiply>(context.get_input(0), scale_node);
 
     return {res};
-};
+}
 
 }  // namespace op
 }  // namespace ggml

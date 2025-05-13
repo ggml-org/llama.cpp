@@ -1,12 +1,9 @@
-#include <cstdint>
-#include <vector>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/multiply.hpp>
+#include <openvino/op/sigmoid.hpp>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/multiply.hpp"
-#include "openvino/op/sigmoid.hpp"
 
 namespace ov {
 namespace frontend {
@@ -21,7 +18,7 @@ OutputVector translate_unary_silu(const NodeContext& context) {
     auto res = std::make_shared<ov::op::v1::Multiply>(input, sigmoid);
 
     return {res};
-};
+}
 
 }  // namespace op
 }  // namespace ggml
