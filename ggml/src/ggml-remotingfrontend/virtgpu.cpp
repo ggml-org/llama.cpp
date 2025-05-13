@@ -410,10 +410,6 @@ remote_call_prepare(
   uint32_t reply_res_id = gpu->reply_shmem->res_id;
   vn_encode_uint32_t(&enc, &reply_res_id);
 
-  printf("%s: prepare %s(flags=0x%x, reply_buf=%d)\n", __func__,
-	 api_remoting_command_name(cmd_type),
-	 cmd_flags, reply_res_id);
-
   return &enc;
 }
 
