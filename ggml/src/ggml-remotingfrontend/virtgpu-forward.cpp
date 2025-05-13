@@ -1,5 +1,7 @@
+#include "ggml.h"
 #include "virtgpu.h"
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/apir_backend.h"
+#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/venus_cs_ggml.h"
 
 #define CACHED
 //  printf("INFO: ### found response in the cache %s\n", __func__)
@@ -178,4 +180,33 @@ apir_device_get_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
   }
 
   return;
+}
+
+bool
+apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op) {
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP;
+
+  struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  vn_encode_ggml_tensor(encoder, op);
+
+  struct vn_cs_decoder *decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  bool supports_op;
+  vn_decode_bool_t(decoder, &supports_op);
+
+  /* *** */
+
+  int32_t ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
+  }
+
+  return supports_op;
 }

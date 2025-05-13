@@ -53,6 +53,18 @@ vn_cs_decoder_peek(const struct vn_cs_decoder *dec,
   vn_cs_decoder_peek_internal(dec, size, val, val_size);
 }
 
+static inline const void *
+vn_cs_decoder_use_inplace(struct vn_cs_decoder *dec,
+			  size_t size)
+{
+  if (unlikely(size > (size_t) (dec->end - dec->cur))) {
+    FATAL("READING TOO MUCH FROM THE DECODER :/");
+  }
+  const void *addr = dec->cur;
+  dec->cur += size;
+
+  return addr;
+}
 /*
  * read/write
  */
@@ -425,4 +437,18 @@ vn_cs_decoder_alloc_array(struct vn_cs_decoder *dec, size_t size, size_t count)
 {
   struct vkr_cs_decoder *d = (struct vkr_cs_decoder *)dec;
   return vkr_cs_decoder_alloc_array(d, size, count);
+}
+
+/* bool */
+
+static inline void
+vn_encode_bool_t(struct vn_cs_encoder *enc, const bool *val)
+{
+  vn_encode(enc, sizeof(int), val, sizeof(int));
+}
+
+static inline void
+vn_decode_bool_t(struct vn_cs_decoder *dec, bool *val)
+{
+  vn_decode(dec, sizeof(int), val, sizeof(int));
 }

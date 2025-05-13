@@ -33,10 +33,11 @@ static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size
 }
 
 static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  UNUSED(dev);
-  UNUSED(op);
+  IMPLEMENTED;
 
-  return true;
+  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+
+  return apir_device_supports_op(gpu, op);
 }
 
 static bool ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
