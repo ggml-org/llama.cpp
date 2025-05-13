@@ -2454,7 +2454,8 @@ llama_kv_cache_hybrid::llama_kv_cache_hybrid(
             }
         }
     }
-    GGML_ASSERT(max_layer == seen_layers.size());
+    LLAMA_LOG_DEBUG("max_layer=%d, seen_layers.size()=%d\n", max_layer, seen_layers.size());
+    GGML_ASSERT(max_layer + 1 == seen_layers.size());
 }
 
 void llama_kv_cache_hybrid::clear() {
