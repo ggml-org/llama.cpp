@@ -32,6 +32,7 @@ else()
     add_subdirectory(speculative)
     add_subdirectory(speculative-simple)
     add_subdirectory(gen-docs)
+    add_subdirectory(training)
     if (NOT GGML_BACKEND_DL)
         add_subdirectory(convert-llama2c-to-ggml)
         # these examples use the backends directly and cannot be built with dynamic loading

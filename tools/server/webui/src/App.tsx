@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import { AppContextProvider, useAppContext } from './utils/app.context';
 import ChatScreen from './components/ChatScreen';
 import SettingDialog from './components/SettingDialog';
+import { Toaster } from 'react-hot-toast';
 
 function App() {
   return (
@@ -40,6 +41,7 @@ function AppLayout() {
           onClose={() => setShowSettings(false)}
         />
       }
+      <Toaster />
     </>
   );
 }

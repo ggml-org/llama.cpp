@@ -905,6 +905,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
             "model.mm_projector.mlp.mlp.{bid}",
+            "mlp1.{bid}", # InternVL
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -937,12 +938,20 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
         ),
 
+        MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.q_norm", # InternVL
+        ),
+
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.k_norm", # InternVL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
@@ -955,6 +964,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
+            "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
@@ -963,6 +973,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_OUTPUT: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
@@ -971,6 +982,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_OUTPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
+            "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
             "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
@@ -998,6 +1010,14 @@ class TensorNameMap:
             "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
+        ),
+
+        MODEL_TENSOR.V_LAYER_SCALE_1: (
+            "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
+        ),
+
+        MODEL_TENSOR.V_LAYER_SCALE_2: (
+            "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
