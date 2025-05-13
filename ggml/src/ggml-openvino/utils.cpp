@@ -69,10 +69,13 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     std::shared_ptr<ov::Model> model;
     ov::CompiledModel compiled_model;
+    int64_t decoder_end_time;
     int64_t conversion_end_time;
     int64_t compile_end_time;
 
     auto ggml_decoder = get_ggml_decoder(cgraph);
+    decoder_end_time = ggml_time_us();
+
     auto it = compiled_cache.find(cgraph);
     if (it != compiled_cache.end()) {
         model = it->second.first;
@@ -147,7 +150,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     if (getenv("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("GGML OpenVINO Backend: \n");
-        GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - start_time) / 1000);
+        GGML_LOG_INFO("  - Graph decoder Time: %ld ms \n", (decoder_end_time - start_time) / 1000);
+        GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
         GGML_LOG_INFO("  - Graph compile Time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
         GGML_LOG_INFO("  - Graph Input Time: %ld ms \n", (input_end_time - compile_end_time) / 1000);
         GGML_LOG_INFO("  - Graph Inference Time: %ld ms \n", (infer_end_time - input_end_time) / 1000);

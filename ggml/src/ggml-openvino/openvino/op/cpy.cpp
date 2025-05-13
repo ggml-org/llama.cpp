@@ -1,19 +1,19 @@
 #include <cstdint>
 #include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/add.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/convert_like.hpp>
+#include <openvino/op/range.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/scatter_nd_update.hpp>
+#include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/add.hpp"
-#include "openvino/op/constant.hpp"
-#include "openvino/op/convert_like.hpp"
-#include "openvino/op/range.hpp"
-#include "openvino/op/reshape.hpp"
-#include "openvino/op/scatter_nd_update.hpp"
-#include "openvino/op/transpose.hpp"
-#include "openvino/op/unsqueeze.hpp"
 
 namespace ov {
 namespace frontend {
@@ -98,7 +98,7 @@ OutputVector translate_cpy(const NodeContext& context) {
             false);
         return {reshaped_res};
     }
-};
+}
 
 }  // namespace op
 }  // namespace ggml
