@@ -66,10 +66,16 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
 
     newContent += msg.content;
 
-    return {
+    const apiMsg = {
       role: msg.role,
       content: newContent,
-    };
+    } as APIMessage;
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      apiMsg.tool_calls = msg.tool_calls;
+    }
+
+    return apiMsg;
   }) as APIMessage[];
 }
 
@@ -78,13 +84,19 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
  */
 export function filterThoughtFromMsgs(messages: APIMessage[]) {
   return messages.map((msg) => {
-    return {
+    const filteredMessage: APIMessage = {
       role: msg.role,
       content:
         msg.role === 'assistant'
           ? msg.content.split('</think>').at(-1)!.trim()
           : msg.content,
-    } as APIMessage;
+    };
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      filteredMessage.tool_calls = msg.tool_calls;
+    }
+
+    return filteredMessage;
   });
 }
 

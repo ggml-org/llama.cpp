@@ -136,8 +136,6 @@ const StorageUtils = {
   ): Promise<void> {
     if (messages.length === 0) return;
 
-    console.log('Saving messges! ' + JSON.stringify(messages));
-
     const { convId } = messages[0];
 
     // Verify conversation exists
@@ -196,14 +194,10 @@ const StorageUtils = {
           currNode: lastMsgId,
         });
       });
-
-      console.log(`Successfully saved chain of ${messages.length} messages`);
     } catch (error) {
       console.error('Error saving message chain:', error);
       throw error;
     }
-
-    if (isDev) console.log('Updated conversation:', convId);
 
     dispatchConversationChange(convId);
   },

@@ -62,7 +62,7 @@ export interface MessageExtraContext {
   content: string;
 }
 
-export type APIMessage = Pick<Message, 'role' | 'content'>;
+export type APIMessage = Pick<Message, 'role' | 'content' | 'tool_calls'>;
 
 export interface Conversation {
   id: string; // format: `conv-{timestamp}`
