@@ -13244,7 +13244,10 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
-llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
+llama_memory_i * llama_model::create_memory(
+    const llama_memory_params & params,
+          llama_cparams       & cparams,
+    const llama_hparams       & hparams) const {
     llama_memory_i * res;
 
     switch (arch) {
@@ -13268,6 +13271,53 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         GGML_TYPE_F32,
                         cparams.offload_kqv,
                         std::max((uint32_t) 1, cparams.n_seq_max));
+            } break;
+        case LLM_ARCH_BAMBA:
+            {
+                // make vectors of recurrent and non-recurrent layer indices
+                std::vector<size_t> recurrent_layers;
+                std::vector<size_t> unified_layers;
+                for (auto il = 0u; il < hparams.n_layer; ++il) {
+                    if (hparams.recurrent_layer(il)) {
+                        recurrent_layers.push_back(il);
+                    } else {
+                        unified_layers.push_back(il);
+                    }
+                }
+
+                const auto padding = llama_kv_cache_unified::get_padding(cparams);
+                cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
+                // initialize the children
+                std::vector<llama_kv_cache_hybrid::child_cache> children;
+                children.emplace_back(
+                    std::unique_ptr<llama_kv_cache>(
+                        new llama_kv_cache_recurrent(
+                            *this,
+                            GGML_TYPE_F32,
+                            GGML_TYPE_F32,
+                            cparams.offload_kqv,
+                            std::max((uint32_t) 1, cparams.n_seq_max))
+                    ),
+                    std::move(recurrent_layers)
+                );
+                children.emplace_back(
+                    std::unique_ptr<llama_kv_cache>(
+                        new llama_kv_cache_unified(
+                            *this,
+                            params.type_k,
+                            params.type_v,
+                            !cparams.flash_attn,
+                            cparams.offload_kqv,
+                            cparams.n_ctx,
+                            padding)
+                    ),
+                    std::move(unified_layers)
+                );
+
+                // initialize the hybrid cache with both children
+                res = new llama_kv_cache_hybrid(hparams, std::move(children));
             } break;
         default:
             {

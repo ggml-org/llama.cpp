@@ -180,7 +180,7 @@ llama_context::llama_context(
             /*.type_v =*/ params.type_v,
         };
 
-        memory.reset(model.create_memory(params_mem, cparams));
+        memory.reset(model.create_memory(params_mem, cparams, hparams));
     }
 
     // init backends
