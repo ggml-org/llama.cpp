@@ -9,8 +9,6 @@ interface SplitMessage {
   content: PendingMessage['content'];
   thought?: string;
   isThinking?: boolean;
-  toolOutput?: string;
-  toolTitle?: string;
 }
 
 export default function ChatMessage({
@@ -51,70 +49,39 @@ export default function ChatMessage({
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
   // for reasoning model, we split the message into content, thought, and tool output
-  const { content, thought, isThinking, toolOutput, toolTitle }: SplitMessage =
-    useMemo(() => {
-      if (msg.content === null || msg.role !== 'assistant') {
-        return { content: msg.content };
+  const { content, thought, isThinking }: SplitMessage = useMemo(() => {
+    if (
+      msg.content === null ||
+      (msg.role !== 'assistant' && msg.role !== 'tool')
+    ) {
+      return { content: msg.content };
+    }
+
+    let actualContent = '';
+    let thought = '';
+    let isThinking = false;
+    let thinkSplit = msg.content.split('<think>', 2);
+
+    actualContent += thinkSplit[0];
+
+    while (thinkSplit[1] !== undefined) {
+      // <think> tag found
+      thinkSplit = thinkSplit[1].split('</think>', 2);
+      thought += thinkSplit[0];
+      isThinking = true;
+      if (thinkSplit[1] !== undefined) {
+        // </think> closing tag found
+        isThinking = false;
+        thinkSplit = thinkSplit[1].split('<think>', 2);
+        actualContent += thinkSplit[0];
       }
-      let currentContent = msg.content;
-      let extractedThought: string | undefined = undefined;
-      let isCurrentlyThinking = false;
-      let extractedToolOutput: string | undefined = undefined;
-      let extractedToolTitle: string | undefined = 'Tool Output';
+    }
 
-      // Process <think> tags
-      const thinkParts = currentContent.split('<think>');
-      currentContent = thinkParts[0];
-      if (thinkParts.length > 1) {
-        isCurrentlyThinking = true;
-        const tempThoughtArray: string[] = [];
-        for (let i = 1; i < thinkParts.length; i++) {
-          const thinkSegment = thinkParts[i].split('</think>');
-          tempThoughtArray.push(thinkSegment[0]);
-          if (thinkSegment.length > 1) {
-            isCurrentlyThinking = false; // Closing tag found
-            currentContent += thinkSegment[1];
-          }
-        }
-        extractedThought = tempThoughtArray.join('\n');
-      }
-
-      // Process <tool> tags (after thoughts are processed)
-      const toolParts = currentContent.split('<tool>');
-      currentContent = toolParts[0];
-      if (toolParts.length > 1) {
-        const tempToolOutputArray: string[] = [];
-        for (let i = 1; i < toolParts.length; i++) {
-          const toolSegment = toolParts[i].split('</tool>');
-          const toolContent = toolSegment[0].trim();
-
-          const firstLineEnd = toolContent.indexOf('\n');
-          if (firstLineEnd !== -1) {
-            extractedToolTitle = toolContent.substring(0, firstLineEnd);
-            tempToolOutputArray.push(
-              toolContent.substring(firstLineEnd + 1).trim()
-            );
-          } else {
-            // If no newline, extractedToolTitle keeps its default; toolContent is pushed as is.
-            tempToolOutputArray.push(toolContent);
-          }
-
-          if (toolSegment.length > 1) {
-            currentContent += toolSegment[1];
-          }
-        }
-        extractedToolOutput = tempToolOutputArray.join('\n\n');
-      }
-
-      return {
-        content: currentContent.trim(),
-        thought: extractedThought,
-        isThinking: isCurrentlyThinking,
-        toolOutput: extractedToolOutput,
-        toolTitle: extractedToolTitle,
-      };
-    }, [msg]);
+    return { content: actualContent, thought, isThinking };
+  }, [msg]);
   if (!viewingChat) return null;
+
+  const toolCalls = msg.tool_calls ?? null;
 
   return (
     <div className="group" id={id}>
@@ -165,8 +132,12 @@ export default function ChatMessage({
             <>
               {content === null ? (
                 <>
-                  {/* show loading dots for pending message */}
-                  <span className="loading loading-dots loading-md"></span>
+                  {toolCalls ? null : (
+                    <>
+                      {/* show loading dots for pending message */}
+                      <span className="loading loading-dots loading-md"></span>
+                    </>
+                  )}
                 </>
               ) : (
                 <>
@@ -232,27 +203,32 @@ export default function ChatMessage({
                       content={content}
                       isGenerating={isPending}
                     />
-
-                    {toolOutput && (
-                      <details
-                        className="collapse bg-base-200 collapse-arrow mb-4"
-                        open={true} // todo: make this configurable like showThoughtInProgress
-                      >
-                        <summary className="collapse-title">
-                          <b>{toolTitle || 'Tool Output'}</b>
-                        </summary>
-                        <div className="collapse-content">
-                          <MarkdownDisplay
-                            content={toolOutput}
-                            // Tool output is not "generating" in the same way
-                            isGenerating={false}
-                          />
-                        </div>
-                      </details>
-                    )}
                   </div>
                 </>
               )}
+              {toolCalls &&
+                toolCalls.map((toolCall, i) => (
+                  <details
+                    key={i}
+                    className="collapse bg-base-200 collapse-arrow mb-4"
+                    open={false} // todo: make this configurable like showThoughtInProgress
+                  >
+                    <summary className="collapse-title">
+                      <b>Tool call:</b> {toolCall.function.name}
+                    </summary>
+
+                    <div className="collapse-content">
+                      <div className="font-bold mb-1">Arguments:</div>
+                      <pre className="whitespace-pre-wrap bg-base-300 p-2 rounded">
+                        {JSON.stringify(
+                          JSON.parse(toolCall.function.arguments),
+                          null,
+                          2
+                        )}
+                      </pre>
+                    </div>
+                  </details>
+                ))}
               {/* render timings if enabled */}
               {timings && config.showTokensPerSecond && (
                 <div className="dropdown dropdown-hover dropdown-top mt-2">

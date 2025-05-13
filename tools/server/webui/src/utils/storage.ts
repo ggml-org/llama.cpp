@@ -1,7 +1,7 @@
 // coversations is stored in localStorage
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 
-import { CONFIG_DEFAULT } from '../Config';
+import { CONFIG_DEFAULT, isDev } from '../Config';
 import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
 
@@ -123,39 +123,91 @@ const StorageUtils = {
     msg: Exclude<Message, 'parent' | 'children'>,
     parentNodeId: Message['id']
   ): Promise<void> {
-    if (msg.content === null) return;
-    const { convId } = msg;
-    await db.transaction('rw', db.conversations, db.messages, async () => {
-      const conv = await StorageUtils.getOneConversation(convId);
-      const parentMsg = await db.messages
-        .where({ convId, id: parentNodeId })
-        .first();
-      // update the currNode of conversation
-      if (!conv) {
-        throw new Error(`Conversation ${convId} does not exist`);
-      }
-      if (!parentMsg) {
-        throw new Error(
-          `Parent message ID ${parentNodeId} does not exist in conversation ${convId}`
-        );
-      }
-      await db.conversations.update(convId, {
-        lastModified: Date.now(),
-        currNode: msg.id,
+    await this.appendMsgChain([msg], parentNodeId);
+  },
+
+  /**
+   * Adds chain of messages to the DB, usually
+   * produced by tool calling.
+   */
+  async appendMsgChain(
+    messages: Exclude<Message, 'parent' | 'children'>[],
+    parentNodeId: Message['id']
+  ): Promise<void> {
+    if (messages.length === 0) return;
+
+    console.log('Saving messges! ' + JSON.stringify(messages));
+
+    const { convId } = messages[0];
+
+    // Verify conversation exists
+    const conv = await this.getOneConversation(convId);
+    if (!conv) {
+      throw new Error(`Conversation ${convId} does not exist`);
+    }
+
+    // Verify starting parent exists
+    const startParent = await db.messages
+      .where({ convId, id: parentNodeId })
+      .first();
+    if (!startParent) {
+      throw new Error(
+        `Starting parent message ${parentNodeId} does not exist in conversation ${convId}`
+      );
+    }
+
+    // Get the last message ID for updating the conversation
+    const lastMsgId = messages[messages.length - 1].id;
+
+    try {
+      // Process all messages in a single transaction
+      await db.transaction('rw', db.messages, db.conversations, () => {
+        // First message connects to startParentId
+        let parentId = parentNodeId;
+        const parentChildren = [...startParent.children];
+
+        for (let i = 0; i < messages.length; i++) {
+          const msg = messages[i];
+
+          // Add this message to its parent's children
+          if (i === 0) {
+            // First message - update the starting parent
+            parentChildren.push(msg.id);
+            db.messages.update(parentId, { children: parentChildren });
+          } else {
+            // Other messages - previous message is the parent
+            db.messages.update(parentId, { children: [msg.id] });
+          }
+
+          // Add the message
+          db.messages.add({
+            ...msg,
+            parent: parentId,
+            children: [], // Will be updated if this message has children
+          });
+
+          // Next message's parent is this message
+          parentId = msg.id;
+        }
+
+        // Update the conversation
+        db.conversations.update(convId, {
+          lastModified: Date.now(),
+          currNode: lastMsgId,
+        });
       });
-      // update parent
-      await db.messages.update(parentNodeId, {
-        children: [...parentMsg.children, msg.id],
-      });
-      // create message
-      await db.messages.add({
-        ...msg,
-        parent: parentNodeId,
-        children: [],
-      });
-    });
+
+      console.log(`Successfully saved chain of ${messages.length} messages`);
+    } catch (error) {
+      console.error('Error saving message chain:', error);
+      throw error;
+    }
+
+    if (isDev) console.log('Updated conversation:', convId);
+
     dispatchConversationChange(convId);
   },
+
   /**
    * remove conversation by id
    */

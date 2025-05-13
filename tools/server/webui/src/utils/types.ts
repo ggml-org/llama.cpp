@@ -78,7 +78,6 @@ export interface ViewingChat {
 
 export type PendingMessage = Omit<Message, 'content'> & {
   content: string | null;
-  tool_calls?: ToolCall[];
 };
 
 export enum CanvasType {
