@@ -113,7 +113,7 @@ parser.add_argument("-o", "--output", help=help_o, default="pipe")
 help_s = (
     "Columns to add to the table. "
     "Accepts a comma-separated list of values. "
-    f"Legal values: {', '.join(KEY_PROPERTIES[:-2])}. "
+    f"Legal values: {', '.join(KEY_PROPERTIES[:-3])}. "
     "Defaults to model name (model_type) and CPU and/or GPU name (cpu_info, gpu_info) "
     "plus any column where not all data points are the same. "
     "If the columns are manually specified, then the results for each unique combination of the "
@@ -505,7 +505,7 @@ if known_args.show is not None:
     show = known_args.show.split(",")
     unknown_cols = []
     for prop in show:
-        if prop not in KEY_PROPERTIES[:-2]:  # Last two values are n_prompt, n_gen.
+        if prop not in KEY_PROPERTIES[:-3]:  # Last three values are n_prompt, n_gen, n_depth.
             unknown_cols.append(prop)
     if unknown_cols:
         logger.error(f"Unknown values for --show: {', '.join(unknown_cols)}")
