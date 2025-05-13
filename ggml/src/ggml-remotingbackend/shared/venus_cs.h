@@ -306,6 +306,57 @@ vn_decode_uint32_t_array(struct vn_cs_decoder *dec, uint32_t *val, uint32_t coun
   vn_decode(dec, size, val, size);
 }
 
+/* size_t */
+
+static inline size_t
+vn_sizeof_size_t(const size_t *val)
+{
+    return sizeof(*val);
+}
+
+static inline void
+vn_encode_size_t(struct vn_cs_encoder *enc, const size_t *val)
+{
+    const uint64_t tmp = *val;
+    vn_encode_uint64_t(enc, &tmp);
+}
+
+static inline void
+vn_decode_size_t(struct vn_cs_decoder *dec, size_t *val)
+{
+    uint64_t tmp;
+    vn_decode_uint64_t(dec, &tmp);
+    *val = tmp;
+}
+
+static inline size_t
+vn_sizeof_size_t_array(const size_t *val, uint32_t count)
+{
+    return vn_sizeof_size_t(val) * count;
+}
+
+static inline void
+vn_encode_size_t_array(struct vn_cs_encoder *enc, const size_t *val, uint32_t count)
+{
+    if (sizeof(size_t) == sizeof(uint64_t)) {
+        vn_encode_uint64_t_array(enc, (const uint64_t *)val, count);
+    } else {
+        for (uint32_t i = 0; i < count; i++)
+            vn_encode_size_t(enc, &val[i]);
+    }
+}
+
+static inline void
+vn_decode_size_t_array(struct vn_cs_decoder *dec, size_t *val, uint32_t count)
+{
+    if (sizeof(size_t) == sizeof(uint64_t)) {
+        vn_decode_uint64_t_array(dec, (uint64_t *)val, count);
+    } else {
+        for (uint32_t i = 0; i < count; i++)
+            vn_decode_size_t(dec, &val[i]);
+    }
+}
+
 /* opaque blob */
 
 static inline size_t
