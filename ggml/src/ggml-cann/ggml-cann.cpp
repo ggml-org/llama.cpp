@@ -31,6 +31,8 @@
 #include <mutex>
 #include <queue>
 #include <chrono>
+#include <set>
+#include <optional>
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
@@ -93,15 +95,23 @@ int32_t ggml_cann_get_device() {
 }
 
 /**
- * @brief Convert the value obtained from getenv to a lowercase std::string.
- *
- * @param env_var C-style string(char*)
- * @return A string of type std::string.
+ * @brief Get the value of the specified environment variable (name).
+ *        if not empty, return a std::string object
  */
-static std::string to_lower_case(const char* env_var){
-    std::string mem_pool_type(env_var ? env_var : "");
-    std::transform(mem_pool_type.begin(), mem_pool_type.end(), mem_pool_type.begin(), ::tolower);
-    return mem_pool_type;
+std::optional<std::string> get_env(const std::string& name) {
+    const char* val = std::getenv(name.c_str());
+    if (!val) return std::nullopt;
+    return std::string(val);
+}
+
+/**
+ * @brief Verify whether the environment variable is a valid value.
+ */
+bool parse_bool(const std::string& value) {
+    std::string res = value;
+    std::transform(res.begin(), res.end(), res.begin(), ::tolower);
+    std::set<std::string> valid_values = {"on", "1", "yes", "y", "enable", "true"};
+    return valid_values.find(res) != valid_values.end();
 }
 
 /**
@@ -225,7 +235,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf_prio(int device) : device(device) {
-        disable_clean = getenv("GGML_CANN_POOL_DISABLE_CLEAN") != nullptr;
+        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -421,7 +431,7 @@ struct ggml_cann_pool_buf : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf(int device) : device(device) {
-        disable_clean = getenv("GGML_CANN_POOL_DISABLE_CLEAN") != nullptr;
+        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -742,20 +752,17 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
  */
 std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(
     int device) {
-    const char* env_var = getenv("GGML_CANN_MEM_POOL");
-    std::string mem_pool_type = to_lower_case(env_var);
+    std::string mem_pool_type = get_env("GGML_CANN_MEM_POOL").value_or("");
+    std::transform(mem_pool_type.begin(), mem_pool_type.end(), mem_pool_type.begin(), ::tolower);
 
     if (mem_pool_type == "prio") {
         GGML_LOG_INFO("%s: device %d use buffer pool with priority queue\n", __func__, device);
         return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_buf_prio(device));
     }
 
-    if (mem_pool_type.empty() && ggml_cann_info().devices[device].vmm) {
+    if (ggml_cann_info().devices[device].vmm && mem_pool_type != "leg") {
         GGML_LOG_INFO("%s: device %d use vmm pool\n", __func__, device);
         return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_vmm(device));
-    }else{
-        GGML_LOG_INFO("%s: device %d use buffer pool\n", __func__, device);
-        return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_buf(device));
     }
 
     GGML_LOG_INFO("%s: device %d use buffer pool\n", __func__, device);
