@@ -12,6 +12,7 @@
 
 #define GGML_BACKEND_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-metal.dylib"
 #define GGML_BACKEND_REG_FCT_NAME "ggml_backend_metal_reg"
+#define GGML_BACKEND_INIT_FCT_NAME "ggml_backend_metal_init"
 
 static void *backend_library_handle = NULL;
 
@@ -28,6 +29,8 @@ extern "C" {
   }
 
   uint32_t apir_backend_initialize() {
+    const char* dlsym_error;
+
     INFO("%s: hello :wave: \\o/", __func__);
 
     backend_library_handle = dlopen(GGML_BACKEND_LIBRARY_PATH, RTLD_LAZY);
@@ -39,14 +42,22 @@ extern "C" {
     }
 
     void *ggml_backend_reg_fct = dlsym(backend_library_handle, GGML_BACKEND_REG_FCT_NAME);
-    const char* dlsym_error = dlerror();
+    dlsym_error = dlerror();
     if (dlsym_error) {
       ERROR("Cannot load symbol: %s\n", dlsym_error);
 
       return APIR_BACKEND_INITIALIZE_MISSING_GGML_SYMBOLS;
     }
 
-    return backend_dispatch_initialize(ggml_backend_reg_fct);
+    void *ggml_backend_init_fct = dlsym(backend_library_handle, GGML_BACKEND_INIT_FCT_NAME);
+    dlsym_error = dlerror();
+    if (dlsym_error) {
+      ERROR("Cannot load symbol: %s\n", dlsym_error);
+
+      return APIR_BACKEND_INITIALIZE_MISSING_GGML_SYMBOLS;
+    }
+
+    return backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
   }
 
   uint32_t apir_backend_dispatcher(uint32_t cmd_type,

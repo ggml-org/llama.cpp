@@ -9,7 +9,7 @@
 #include "shared/venus_cs.h"
 #include "shared/apir_backend.h"
 
-uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p);
+uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_backend_init_fct_p);
 
 typedef uint32_t (*backend_dispatch_t)(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
 
