@@ -5,6 +5,7 @@
 #pragma once
 
 #include <functional>
+#include <variant>
 #include "ggml.h"
 
 enum cpu_feature {
