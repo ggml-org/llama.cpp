@@ -21,7 +21,7 @@ except ImportError as e:
 
 logger = logging.getLogger("compare-llama-bench")
 
-# All llama-bench SQLite3 fields
+# All llama-bench SQL fields
 DB_FIELDS = [
     "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
     "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
@@ -41,6 +41,7 @@ DB_TYPES = [
     "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER", "INTEGER",
     "TEXT",    "INTEGER", "INTEGER", "REAL",    "REAL",
 ]
+assert len(DB_FIELDS) == len(DB_TYPES)
 
 # Properties by which to differentiate results per commit:
 KEY_PROPERTIES = [
@@ -95,8 +96,8 @@ help_c = (
 )
 parser.add_argument("-c", "--compare", help=help_c)
 help_i = (
-    "Input JSONL/SQLite file or JSON/CSV files for comparing commits. "
-    "Specify this argument multiple times for multiple files. "
+    "JSON/JSONL/SQLite/CSV files for comparing commits. "
+    "Specify multiple times to use multiple input files (JSON/CSV only). "
     "Defaults to 'llama-bench.sqlite' in the current working directory. "
     "If no such file is found and there is exactly one .sqlite file in the current directory, "
     "that file is instead used as input."
@@ -289,6 +290,7 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
     def __init__(self, data_file: str):
         super().__init__()
 
+        self.connection.close()
         self.connection = sqlite3.connect(data_file)
         self.cursor = self.connection.cursor()
         self._builds_init()
@@ -416,8 +418,12 @@ bench_data = None
 if len(input_file) == 1:
     if LlamaBenchDataSQLite3File.valid_format(input_file[0]):
         bench_data = LlamaBenchDataSQLite3File(input_file[0])
+    elif LlamaBenchDataJSON.valid_format(input_file):
+        bench_data = LlamaBenchDataJSON(input_file)
     elif LlamaBenchDataJSONL.valid_format(input_file[0]):
         bench_data = LlamaBenchDataJSONL(input_file[0])
+    elif LlamaBenchDataCSV.valid_format(input_file):
+        bench_data = LlamaBenchDataCSV(input_file)
 else:
     if LlamaBenchDataJSON.valid_format(input_file):
         bench_data = LlamaBenchDataJSON(input_file)
