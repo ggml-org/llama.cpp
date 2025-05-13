@@ -2419,15 +2419,15 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 // llama_kv_cache_hybrid
 //
 llama_kv_cache_hybrid::llama_kv_cache_hybrid(
-    const llama_hparams & hparams,
-    const std::vector<child_cache> & children) :
+    const llama_hparams            & hparams,
+          std::vector<child_cache>   children) :
     m_hparams(hparams),
     m_layer_cache_map(
         [](const std::vector<child_cache>& caches) -> std::unordered_map<size_t, llama_kv_cache*> {
             std::unordered_map<size_t, llama_kv_cache*> map;
             for (const auto & cache : caches) {
                 for (size_t layer_id : cache.layer_ids) {
-                    map[layer_id] = cache.child;
+                    map[layer_id] = cache.child.get();
                 }
             }
 
@@ -2435,7 +2435,7 @@ llama_kv_cache_hybrid::llama_kv_cache_hybrid(
         }(children)
     ),
     m_children(
-        [](std::vector<child_cache> caches) -> std::set<llama_kv_cache*> {
+        [](std::vector<child_cache>& caches) -> std::set<std::unique_ptr<llama_kv_cache>> {
             // Sort the caches by the lowest layer ID so the order is repeatable
             for (auto & cache : caches) {
                 GGML_ASSERT(cache.layer_ids.size() > 0);
@@ -2444,22 +2444,22 @@ llama_kv_cache_hybrid::llama_kv_cache_hybrid(
             std::sort(caches.begin(), caches.end(), [](const child_cache & a, const child_cache & b) {
                 return a.layer_ids[0] < b.layer_ids[0];
             });
-            std::set<llama_kv_cache*> unique_caches;
-            for (const auto & cache : caches) {
-                unique_caches.insert(cache.child);
+            std::set<std::unique_ptr<llama_kv_cache>> unique_caches;
+            for (auto & cache : caches) {
+                unique_caches.emplace(cache.child.release());
             }
             return unique_caches;
         }(children)
     ),
     m_has_recurrent(
-        [](const std::vector<child_cache>& caches) -> bool {
+        [](const std::set<std::unique_ptr<llama_kv_cache>> & caches) -> bool {
             for (const auto & cache : caches) {
-                if (dynamic_cast<llama_kv_cache_recurrent *>(cache.child)) {
+                if (dynamic_cast<llama_kv_cache_recurrent *>(cache.get())) {
                     return true;
                 }
             }
             return false;
-        }(children)
+        }(m_children)
     )
 {
     // Ensure at least one child

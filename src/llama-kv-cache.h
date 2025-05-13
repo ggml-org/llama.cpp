@@ -413,13 +413,16 @@ class llama_kv_cache_hybrid : public llama_kv_cache {
 public:
 
     struct child_cache {
-        llama_kv_cache * child;
-        std::vector<size_t> layer_ids;
+        std::unique_ptr<llama_kv_cache> child;
+        std::vector<size_t>             layer_ids;
+
+        child_cache(std::unique_ptr<llama_kv_cache> child_, std::vector<size_t> layer_ids_)
+            : child(std::move(child_)), layer_ids(std::move(layer_ids_)) {}
     };
 
     llama_kv_cache_hybrid(
         const llama_hparams            & hparams,
-        const std::vector<child_cache> & children);
+              std::vector<child_cache>   children);
 
     //
     // llama_memory_i
@@ -476,7 +479,7 @@ private:
 
     const llama_hparams                                & m_hparams;
     const std::unordered_map<size_t, llama_kv_cache *>   m_layer_cache_map;
-    const std::set<llama_kv_cache *>                     m_children; // Ordered for state IO
+    const std::set<std::unique_ptr<llama_kv_cache>>      m_children; // Ordered for state IO
     const bool                                           m_has_recurrent;
 };
 
