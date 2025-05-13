@@ -1,14 +1,13 @@
-#include <cstdint>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
+#include <openvino/op/gather.hpp>
+#include <openvino/op/reshape.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/constant.hpp"
-#include "openvino/op/convert.hpp"
-#include "openvino/op/gather.hpp"
-#include "openvino/op/reshape.hpp"
 
 namespace ov {
 namespace frontend {
@@ -32,7 +31,7 @@ OutputVector translate_get_rows(const NodeContext& context) {
     }
 
     return {res};
-};
+}
 
 }  // namespace op
 }  // namespace ggml

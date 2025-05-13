@@ -1,4 +1,4 @@
-#include "openvino/op/transpose.hpp"
+#include <openvino/op/transpose.hpp>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
@@ -15,7 +15,7 @@ OutputVector translate_transpose(const NodeContext& context) {
     auto res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
                                                        ov::op::v0::Constant::create(ov::element::i64, {3}, perm));
     return {res};
-};
+}
 
 }  // namespace op
 }  // namespace ggml
