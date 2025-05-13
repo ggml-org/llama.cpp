@@ -1,4 +1,4 @@
-#include "openvino/op/add.hpp"
+#include <openvino/op/add.hpp>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
@@ -15,7 +15,7 @@ OutputVector translate_add(const NodeContext& context) {
     auto rhs = context.get_input(1);
     auto add = std::make_shared<ov::op::v1::Add>(lhs, rhs);
     return {add};
-};
+}
 
 }  // namespace op
 }  // namespace ggml

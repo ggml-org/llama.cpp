@@ -1,27 +1,27 @@
 
 #include <cstdint>
 #include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/add.hpp>
+#include <openvino/op/broadcast.hpp>
+#include <openvino/op/concat.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
+#include <openvino/op/cos.hpp>
+#include <openvino/op/divide.hpp>
+#include <openvino/op/multiply.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/shape_of.hpp>
+#include <openvino/op/sin.hpp>
+#include <openvino/op/slice.hpp>
+#include <openvino/op/split.hpp>
+#include <openvino/op/subtract.hpp>
+#include <openvino/op/transpose.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/add.hpp"
-#include "openvino/op/broadcast.hpp"
-#include "openvino/op/concat.hpp"
-#include "openvino/op/constant.hpp"
-#include "openvino/op/convert.hpp"
-#include "openvino/op/cos.hpp"
-#include "openvino/op/divide.hpp"
-#include "openvino/op/multiply.hpp"
-#include "openvino/op/reshape.hpp"
-#include "openvino/op/shape_of.hpp"
-#include "openvino/op/sin.hpp"
-#include "openvino/op/slice.hpp"
-#include "openvino/op/split.hpp"
-#include "openvino/op/subtract.hpp"
-#include "openvino/op/transpose.hpp"
 
 #define GGML_ROPE_TYPE_NEOX 2
 
@@ -163,7 +163,7 @@ OutputVector translate_rope(const NodeContext& context) {
         auto res_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 2);
         return {res_node};
     }
-};
+}
 
 }  // namespace op
 }  // namespace ggml

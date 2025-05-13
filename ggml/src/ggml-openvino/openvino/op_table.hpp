@@ -6,7 +6,7 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 
-const std::unordered_map<std::string, CreatorFunction> get_supported_ops();
+std::unordered_map<std::string, CreatorFunction> get_supported_ops();
 
 }  // namespace ggml
 }  // namespace frontend
