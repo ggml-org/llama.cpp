@@ -63,7 +63,7 @@ static bool ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, cons
 static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
   UNUSED(dev);
 
-  // NOT_IMPLEMENTED; // too chatty
+  IMPLEMENTED;
 
   return ggml_backend_remoting_host_buffer_type();
 }
