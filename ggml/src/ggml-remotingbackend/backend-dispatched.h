@@ -24,19 +24,19 @@ uint32_t backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decod
 static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
 {
     switch (type) {
-    case APIR_COMMAND_TYPE_GET_DEVICE_COUNT: return "backend_reg__get_device_count";
-    case APIR_COMMAND_TYPE_GET_DEVICE_NAME: return "backend_reg__get_device_name";
-    case APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION: return "backend_reg__get_device_description";
-    case APIR_COMMAND_TYPE_GET_DEVICE_TYPE: return "backend_reg__get_device_type";
-    case APIR_COMMAND_TYPE_GET_DEVICE_MEMORY: return "backend_reg__get_device_memory";
+    case APIR_COMMAND_TYPE_DEVICE_GET_COUNT: return "backend_get_device_count";
+    case APIR_COMMAND_TYPE_DEVICE_GET_NAME: return "backend_get_device_name";
+    case APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION: return "backend_get_device_description";
+    case APIR_COMMAND_TYPE_DEVICE_GET_TYPE: return "backend_device_get_type";
+    case APIR_COMMAND_TYPE_DEVICE_GET_MEMORY: return "backend_get_device_memory";
     default: return "unknown";
     }
 }
 
 static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATCH_TABLE_COUNT] = {
-    [APIR_COMMAND_TYPE_GET_DEVICE_COUNT] = backend_reg_get_device_count,
-    [APIR_COMMAND_TYPE_GET_DEVICE_NAME] = backend_device_get_name,
-    [APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION] = backend_device_get_description,
-    [APIR_COMMAND_TYPE_GET_DEVICE_TYPE] = backend_device_get_type,
-    [APIR_COMMAND_TYPE_GET_DEVICE_MEMORY] = backend_device_get_memory,
+    [APIR_COMMAND_TYPE_DEVICE_GET_COUNT] = backend_reg_get_device_count,
+    [APIR_COMMAND_TYPE_DEVICE_GET_NAME] = backend_device_get_name,
+    [APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION] = backend_device_get_description,
+    [APIR_COMMAND_TYPE_DEVICE_GET_TYPE] = backend_device_get_type,
+    [APIR_COMMAND_TYPE_DEVICE_GET_MEMORY] = backend_device_get_memory,
 };

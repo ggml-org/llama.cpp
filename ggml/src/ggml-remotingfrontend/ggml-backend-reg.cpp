@@ -32,7 +32,7 @@ static int ggml_backend_remoting_get_device_count() {
     return 0;
   }
 
-  return apir_get_device_count(gpu);
+  return apir_device_get_count(gpu);
 }
 
 static size_t ggml_backend_remoting_reg_get_device_count(ggml_backend_reg_t reg) {
@@ -46,7 +46,7 @@ static size_t ggml_backend_remoting_reg_get_device_count(ggml_backend_reg_t reg)
     return 0;
   }
 
-  return apir_get_device_count(gpu);
+  return apir_device_get_count(gpu);
 }
 
 static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_t reg, size_t device) {

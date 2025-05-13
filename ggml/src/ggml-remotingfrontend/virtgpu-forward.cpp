@@ -5,13 +5,13 @@
 //  printf("INFO: ### found response in the cache %s\n", __func__)
 
 int
-apir_get_device_count(struct virtgpu *gpu) {
+apir_device_get_count(struct virtgpu *gpu) {
   static int32_t dev_count = -1;
   if (dev_count != -1) {
     CACHED;
     return dev_count;
   }
-  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_COUNT;
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_GET_COUNT;
   struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
   if (!encoder) {
     FATAL("%s: failed to prepare the remote call encoder :/", __func__);
@@ -36,14 +36,14 @@ apir_get_device_count(struct virtgpu *gpu) {
 
 
 const char *
-apir_get_device_name(struct virtgpu *gpu) {
+apir_device_get_name(struct virtgpu *gpu) {
   static int32_t dev_count = -1;
   if (dev_count != -1) {
     CACHED;
     return "Nothing";
   }
 
-  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_NAME;
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_GET_NAME;
   struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
   if (!encoder) {
     FATAL("%s: failed to prepare the remote call encoder :/", __func__);
@@ -72,13 +72,13 @@ apir_get_device_name(struct virtgpu *gpu) {
 }
 
 const char *
-apir_get_device_description(struct virtgpu *gpu) {
+apir_device_get_description(struct virtgpu *gpu) {
   static int32_t dev_count = -1;
   if (dev_count != -1) {
     CACHED;
     return "Nothing";
   }
-  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION;
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION;
   struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
   if (!encoder) {
     FATAL("%s: failed to prepare the remote call encoder :/", __func__);
@@ -107,13 +107,13 @@ apir_get_device_description(struct virtgpu *gpu) {
 }
 
 uint32_t
-apir_get_device_type(struct virtgpu *gpu) {
+apir_device_get_type(struct virtgpu *gpu) {
   static uint32_t dev_type = 255;
   if (dev_type != 255) {
     CACHED;
     return dev_type;
   }
-  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_TYPE;
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_GET_TYPE;
 
   struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
   if (!encoder) {
@@ -138,7 +138,7 @@ apir_get_device_type(struct virtgpu *gpu) {
 }
 
 void
-apir_get_device_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
+apir_device_get_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
   static size_t dev_free = 0;
   static size_t dev_total = 0;
   /*
@@ -151,7 +151,7 @@ apir_get_device_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
     return;
   }
   */
-  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_MEMORY;
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_DEVICE_GET_MEMORY;
 
   struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
   if (!encoder) {
