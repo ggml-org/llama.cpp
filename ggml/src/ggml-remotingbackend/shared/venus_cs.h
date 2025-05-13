@@ -33,7 +33,7 @@ vn_cs_decoder_peek_internal(const struct vn_cs_decoder *dec,
   assert(val_size <= size);
 
   if (unlikely(size > (size_t) (dec->end - dec->cur))) {
-    FATAL("DECODER IS FULL :/");
+    FATAL("READING TOO MUCH FROM THE DECODER :/");
     //vn_cs_decoder_set_fatal(dec);
     memset(val, 0, val_size);
     return false;
