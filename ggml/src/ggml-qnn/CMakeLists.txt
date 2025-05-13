@@ -37,13 +37,6 @@ ggml_add_backend_library(ggml-qnn
 )
 target_link_libraries(ggml-qnn PRIVATE ${COMMON_LINK_LIBRARIES})
 
-if(GGML_QNN_ENABLE_PERFORMANCE_TRACKING)
-    message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING is enabled")
-    target_compile_definitions(ggml-qnn PRIVATE GGML_QNN_ENABLE_PERFORMANCE_TRACKING)
-else()
-    message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING is disabled")
-endif()
-
 add_subdirectory(shared)
 
 if(GGML_HEXAGON_NPU_ONLY)

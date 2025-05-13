@@ -26,6 +26,13 @@ else()
     message("GGML_QNN_ENABLE_CPU_BACKEND is disabled")
 endif()
 
+if(GGML_QNN_ENABLE_PERFORMANCE_TRACKING)
+    message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING is enabled")
+    target_compile_definitions(qnn-backend PUBLIC GGML_QNN_ENABLE_PERFORMANCE_TRACKING)
+else()
+    message("GGML_QNN_ENABLE_PERFORMANCE_TRACKING is disabled")
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Android")
     set(QNN_DEFAULT_LIB_SEARCH_PATH "/data/local/tmp/" CACHE STRING "customized library search path for QNN backend")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
