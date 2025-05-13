@@ -444,6 +444,9 @@ void llama_kv_cache_unified::set_full() {
 }
 
 bool llama_kv_cache_unified::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    GGML_UNUSED(seq_id);
+    GGML_UNUSED(p0);
+    GGML_UNUSED(p1);
     // Unified attention cache can always do a sequence removal
     return true;
 }
