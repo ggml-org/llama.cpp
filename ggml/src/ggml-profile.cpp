@@ -117,8 +117,7 @@ extern "C" void ggml_graph_profile_finish(struct ggml_cgraph *cg, int n_threads)
 
     ggml_profile_output *out = cg->prof->output;
 
-    fprintf(out->stream, "%s| node idx | op name | proc (nsec) | sync (nsec) | total (nsec) | op dims | op types | tensor name |\n", out->prefix);
-    fprintf(out->stream, "%s| -------: | :------ | ----------: | ----------: | -----------: | ------: | -------: | ----------: |\n", out->prefix);
+    fprintf(out->stream, "node_idx,op_name,proc_nsec,sync_nsec,total_nsec,op_dims,op_types,tensor_name\n");
 
     char dims[64 * GGML_MAX_SRC];
     char types[16 * GGML_MAX_SRC];
@@ -144,12 +143,12 @@ extern "C" void ggml_graph_profile_finish(struct ggml_cgraph *cg, int n_threads)
         ggml_profile_format_op_dims(dims, cg->nodes[i]);
         ggml_profile_format_op_types(types, cg->nodes[i]);
 
-        fprintf(out->stream, "%s| %04d | %10s | %10lu | %10lu | %10lu | %46s | %22s | %20s |\n", out->prefix,
+        fprintf(out->stream, "%d,%s,%lu,%lu,%lu,\"%s\",\"%s\",\"%s\"\n",
             i, ggml_op_name(cg->nodes[i]->op),
             (unsigned long) p_nsec, (unsigned long) s_nsec, (unsigned long) t_nsec,
             dims, types, cg->nodes[i]->name);
     }
-    fprintf(out->stream, "%s   \n", out->prefix); // empty line to split tables
+    fprintf(out->stream, "\n"); // empty line to split tables
 }
 
 extern "C" void ggml_graph_profile_free(struct ggml_cgraph *cg)

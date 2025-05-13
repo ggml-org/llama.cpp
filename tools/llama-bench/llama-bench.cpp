@@ -22,6 +22,9 @@
 #include "ggml.h"
 #include "llama.h"
 
+// Global variable to store the GGML_GRAPH_PROFILE setting
+static std::string GGML_GRAPH_PROFILE = "stderr";
+
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
@@ -54,6 +57,26 @@ static void set_graph_profile(const std::string& profile_path = "") {
         setenv("GGML_GRAPH_PROFILE", profile_path.c_str(), 1);
 #endif
     }
+}
+
+// Function to get the current value of GGML_GRAPH_PROFILE environment variable
+static std::string get_graph_profile() {
+    std::string result;
+    const char* env_value = nullptr;
+#ifdef _WIN32
+    char buffer[1024];
+    size_t size = 0;
+    if (_dupenv_s(&env_value, &size, "GGML_GRAPH_PROFILE") == 0 && env_value != nullptr) {
+        result = env_value;
+        free(env_value);
+    }
+#else
+    env_value = getenv("GGML_GRAPH_PROFILE");
+    if (env_value != nullptr) {
+        result = env_value;
+    }
+#endif
+    return result;
 }
 
 static bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
@@ -1676,7 +1699,7 @@ static void test_gen(llama_context * ctx, int n_gen, int n_threads, bool do_prof
 
     for (int i = 0; i < n_gen; i++) {
         if (do_profile && i == n_gen - 1) {
-            set_graph_profile("stderr");
+            set_graph_profile(GGML_GRAPH_PROFILE);
         }
         llama_decode(ctx, llama_batch_get_one(&token, 1));
         llama_synchronize(ctx);
@@ -1768,6 +1791,9 @@ int main(int argc, char ** argv) {
 
     int  params_idx   = 0;
     auto params_count = params_instances.size();
+    
+    GGML_GRAPH_PROFILE = get_graph_profile();
+
     for (const auto & inst : params_instances) {
         params_idx++;
         if (params.progress) {
