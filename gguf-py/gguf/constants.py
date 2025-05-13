@@ -2069,6 +2069,15 @@ class GGMLQuantizationType(IntEnum):
     BF16    = 30
     TQ1_0   = 34
     TQ2_0   = 35
+    TMAC_BN_0       = 39
+    TMAC_W2G64_0    = 40
+    TMAC_W2G64_1    = 41
+    TMAC_W2G128_0   = 42
+    TMAC_W2G128_1   = 43
+    TMAC_W4G64_0    = 44
+    TMAC_W4G64_1    = 45
+    TMAC_W4G128_0   = 46
+    TMAC_W4G128_1   = 47
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -2120,6 +2129,15 @@ class LlamaFileType(IntEnum):
     # MOSTLY_Q4_0_8_8      = 35  # removed from gguf files, use Q4_0 and runtime repack
     MOSTLY_TQ1_0         = 36  # except 1d tensors
     MOSTLY_TQ2_0         = 37  # except 1d tensors
+    MOSTLY_TMAC_BN_0     = 38  # except 1d tensors
+    MOSTLY_TMAC_W2G64_0  = 39  # except 1d tensors
+    MOSTLY_TMAC_W2G64_1  = 40  # except 1d tensors
+    MOSTLY_TMAC_W2G128_0 = 41  # except 1d tensors
+    MOSTLY_TMAC_W2G128_1 = 42  # except 1d tensors
+    MOSTLY_TMAC_W4G64_0  = 43  # except 1d tensors
+    MOSTLY_TMAC_W4G64_1  = 44  # except 1d tensors
+    MOSTLY_TMAC_W4G128_0 = 45  # except 1d tensors
+    MOSTLY_TMAC_W4G128_1 = 46  # except 1d tensors
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -2203,6 +2221,20 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.BF16:    (1, 2),
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
+    # Currently, we use tricks here
+    # - The block size doesn't include scales or zero_points as group_size is changeable
+    # - So the size is slightly smaller than the real size
+    # - The n_bytes in gguf_reader.py is thus inaccurate
+    # - During inference, the accurate nbytes info will be known through ggml_tmac_get_nbytes
+    GGMLQuantizationType.TMAC_BN_0:         (64,  64 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G64_0:      (64,  4 + 64 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G64_1:      (64,  4 + 4 + 64 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G128_0:     (128, 4 + 128 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G128_1:     (128, 4 + 4 + 128 * 2 // 8),
+    GGMLQuantizationType.TMAC_W4G64_0:      (64,  4 + 64 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G64_1:      (64,  4 + 4 + 64 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G128_0:     (128, 4 + 128 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G128_1:     (128, 4 + 4 + 128 * 4 // 8),
 }
 
 

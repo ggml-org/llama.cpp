@@ -7,3 +7,4 @@ from .tensor_mapping import *
 from .vocab import *
 from .utility import *
 from .metadata import *
+from .tmac_utils import *

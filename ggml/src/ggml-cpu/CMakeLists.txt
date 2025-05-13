@@ -22,6 +22,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/amx/amx.h
         ggml-cpu/amx/mmq.cpp
         ggml-cpu/amx/mmq.h
+        ggml-cpu/tmac/tmac.cpp
+        ggml-cpu/tmac/tmac.h
+        ggml-cpu/tmac/lut_mul_mat.cpp
+        ggml-cpu/tmac/lut_mul_mat.h
+        ggml-cpu/tmac/lut_ctor.cpp
+        ggml-cpu/tmac/lut_ctor.h
+        ggml-cpu/tmac/tbl.cpp
+        ggml-cpu/tmac/tbl.h
         ggml-cpu/ggml-cpu-impl.h
         ggml-cpu/common.h
         ggml-cpu/binary-ops.h
@@ -70,6 +78,36 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         list(APPEND GGML_CPU_SOURCES
                     ggml-cpu/llamafile/sgemm.cpp
                     ggml-cpu/llamafile/sgemm.h)
+    endif()
+
+    if (GGML_TMAC)
+        target_compile_definitions(${GGML_CPU_NAME} PUBLIC GGML_USE_TMAC)
+        target_include_directories(${GGML_CPU_NAME} PUBLIC ggml-cpu/tmac)
+        get_target_property(cdefs ${GGML_CPU_NAME} COMPILE_DEFINITIONS)
+        message(STATUS "GGML_CPU_NAME: ${GGML_CPU_NAME} COMPILE_DEFINITIONS: ${cdefs}")
+
+        # set(GGML_HEADERS_TMAC
+        #     ggml-cpu/tmac/lut_ctor.h
+        #     ggml-cpu/tmac/tbl.h
+        #     ggml-cpu/tmac/ggml-tmac.h
+        #     ../../common/log.h
+        #     )
+        # set(GGML_SOURCES_TMAC
+        #     ggml-cpu/tmac/lut_ctor.cpp
+        #     ggml-cpu/tmac/tbl.cpp
+        #     ggml-cpu/tmac/ggml-tmac.cpp
+        #     ../../common/log.cpp
+        #     )
+        # list (APPEND GGML_CPU_SOURCES ${GGML_SOURCES_TMAC} ${GGML_HEADERS_TMAC})
+
+        if ((NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang") OR
+            (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
+            message(FATAL_ERROR "Clang is required for T-MAC compilation")
+        endif()
+
+        if (GGML_TMAC_RECHUNK)
+            target_compile_definitions(${GGML_CPU_NAME} PRIVATE TMAC_RECHUNK)
+        endif()
     endif()
 
     if (GGML_CPU_HBM)
@@ -145,6 +183,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     list(APPEND ARCH_FLAGS -march=${GGML_CPU_ARM_ARCH})
                 endif()
             endif()
+            if (GGML_TMAC)
+                # ARM Windows with LLVM clang GNU interface
+                # We need fullfp16 for T-MAC
+                # TODO: check_cxx_source_compiles
+                list(APPEND ARCH_FLAGS -march=armv8.2a+fp16)
+            endif()
 
             # show enabled features
             if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
@@ -181,7 +225,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             if (GGML_NATIVE)
                 include(ggml-cpu/cmake/FindSIMD.cmake)
             endif ()
-            if (GGML_AVX512)
+            # Can't use GGML_AVX512 with T-MAC and Clang for MSVC
+            # with error: conflicting types for '_m_prefetchw
+            if (GGML_AVX512 AND (NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang") AND (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
                 list(APPEND ARCH_FLAGS /arch:AVX512)
                 # /arch:AVX512 includes: __AVX512F__, __AVX512CD__, __AVX512BW__, __AVX512DQ__, and __AVX512VL__
                 # MSVC has no compile-time flags enabling specific
@@ -325,6 +371,19 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 list(APPEND ARCH_FLAGS -mcpu=${GGML_CPU_POWERPC_CPUTYPE})
             endif()
         endif()
+    elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "aarch64" AND GGML_TMAC)
+        # We need fullfp16 for T-MAC
+        # TODO: we need to simplify this logic through check_cxx_source_compiles or Presets?
+        check_cxx_source_compiles("#include <arm_neon.h>\nint main() { int8x16_t _a, _b; int32x4_t _s = vmlaq_f32(_s, _a, _b); return 0; }" GGML_COMPILER_SUPPORT_MATMUL_INT8)
+        if (GGML_COMPILER_SUPPORT_MATMUL_INT8)
+            # Device with armv8.7a+ cpu, e.g., WSL on Surface Laptop 7
+            # based on arm64-windows-llvm.cmake
+            list(APPEND ARCH_FLAGS -march=armv8.7-a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only)
+            add_compile_definitions(__ARM_FEATURE_MATMUL_INT8)
+        else ()
+            # Jetson AGX Orin, Raspberry Pi 5
+            list(APPEND ARCH_FLAGS -march=armv8.2a+fp16)
+        endif ()
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         message(STATUS "loongarch64 detected")
 

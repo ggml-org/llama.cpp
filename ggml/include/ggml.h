@@ -388,7 +388,16 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_4_4 = 36,
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
-        GGML_TYPE_COUNT   = 39,
+        GGML_TYPE_TMAC_BN_0         = 39,
+        GGML_TYPE_TMAC_W2G64_0      = 40,
+        GGML_TYPE_TMAC_W2G64_1      = 41,
+        GGML_TYPE_TMAC_W2G128_0     = 42,
+        GGML_TYPE_TMAC_W2G128_1     = 43,
+        GGML_TYPE_TMAC_W4G64_0      = 44,
+        GGML_TYPE_TMAC_W4G64_1      = 45,
+        GGML_TYPE_TMAC_W4G128_0     = 46,
+        GGML_TYPE_TMAC_W4G128_1     = 47,
+        GGML_TYPE_COUNT   = 48,
     };
 
     // precision

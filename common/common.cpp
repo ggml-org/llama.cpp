@@ -10,6 +10,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cinttypes>
 #include <climits>
 #include <cmath>

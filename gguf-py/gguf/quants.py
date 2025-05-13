@@ -54,12 +54,16 @@ _type_traits: dict[GGMLQuantizationType, type[__Quant]] = {}
 
 
 def quantize(data: np.ndarray, qtype: GGMLQuantizationType) -> np.ndarray:
+    from gguf.tmac_utils import is_tmac_dtype
     if qtype == GGMLQuantizationType.F32:
         return data.astype(np.float32, copy=False)
     elif qtype == GGMLQuantizationType.F16:
         return data.astype(np.float16, copy=False)
     elif (q := _type_traits.get(qtype)) is not None:
         return q.quantize(data)
+    # Do nothing for I1/2/3/4, as they are already quantized
+    elif is_tmac_dtype(qtype):
+        return data
     else:
         raise NotImplementedError(f"Quantization for {qtype.name} is not yet implemented")
 

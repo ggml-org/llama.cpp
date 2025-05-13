@@ -5,6 +5,7 @@
 #include "ggml-cpu-traits.h"
 #include "ggml-impl.h"
 #include "amx/amx.h"
+#include "tmac/tmac.h"
 
 #include <cctype>
 #include <string>
@@ -42,6 +43,12 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
         if (ggml_backend_amx_buffer_type()) {
             bufts.push_back(ggml_backend_amx_buffer_type());
+        }
+#endif
+
+#ifdef GGML_USE_TMAC
+        if (ggml_backend_tmac_buffer_type()) {
+            bufts.push_back(ggml_backend_tmac_buffer_type());
         }
 #endif
 

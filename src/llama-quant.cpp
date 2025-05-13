@@ -813,7 +813,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (params->output_tensor_type < GGML_TYPE_COUNT && strcmp(tensor->name, "output.weight") == 0) {
                 new_type = params->output_tensor_type;
             }
-
+            if (tensor->type == GGML_TYPE_TMAC_BN_0 ||
+                tensor->type == GGML_TYPE_TMAC_W2G64_0 ||
+                tensor->type == GGML_TYPE_TMAC_W2G64_1 ||
+                tensor->type == GGML_TYPE_TMAC_W2G128_0 ||
+                tensor->type == GGML_TYPE_TMAC_W2G128_1 ||
+                tensor->type == GGML_TYPE_TMAC_W4G64_0 ||
+                tensor->type == GGML_TYPE_TMAC_W4G64_1 ||
+                tensor->type == GGML_TYPE_TMAC_W4G128_0 ||
+                tensor->type == GGML_TYPE_TMAC_W4G128_1) {
+                // no need quantize for iN
+                new_type = tensor->type;
+            }
+            
             // If we've decided to quantize to the same type the tensor is already
             // in then there's nothing to do.
             quantize = tensor->type != new_type;
