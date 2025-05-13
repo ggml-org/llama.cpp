@@ -36,6 +36,26 @@ static uint64_t get_time_ns() {
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
 }
 
+// Function to enable or disable GGML graph profiling
+static void set_graph_profile(const std::string& profile_path = "") {
+    if (profile_path.empty()) {
+        // Disable profiling by unsetting the environment variable
+#ifdef _WIN32
+        _putenv_s("GGML_GRAPH_PROFILE", "");
+#else
+        unsetenv("GGML_GRAPH_PROFILE");
+#endif
+    } else {
+        // Enable profiling by setting the environment variable to the specified path
+        // or to "stderr" for stderr output
+#ifdef _WIN32
+        _putenv_s("GGML_GRAPH_PROFILE", profile_path.c_str());
+#else
+        setenv("GGML_GRAPH_PROFILE", profile_path.c_str(), 1);
+#endif
+    }
+}
+
 static bool tensor_buft_override_equal(const llama_model_tensor_buft_override& a, const llama_model_tensor_buft_override& b) {
     if (a.pattern != b.pattern) {
         // cString comparison that may be null
@@ -1645,7 +1665,7 @@ static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     llama_synchronize(ctx);
 }
 
-static void test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static void test_gen(llama_context * ctx, int n_gen, int n_threads, bool do_profile=false) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -1655,10 +1675,14 @@ static void test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
 
     for (int i = 0; i < n_gen; i++) {
+        if (do_profile && i == n_gen - 1) {
+            set_graph_profile("stderr");
+        }
         llama_decode(ctx, llama_batch_get_one(&token, 1));
         llama_synchronize(ctx);
         token = std::rand() % n_vocab;
     }
+    set_graph_profile("");
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
@@ -1796,6 +1820,7 @@ int main(int argc, char ** argv) {
 
         llama_attach_threadpool(ctx, threadpool, NULL);
 
+        set_graph_profile("");
         // warmup run
         if (t.n_prompt > 0) {
             if (params.progress) {
@@ -1808,12 +1833,13 @@ int main(int argc, char ** argv) {
             if (params.progress) {
                 fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
             }
-            test_gen(ctx, 1, t.n_threads);
+            test_gen(ctx, 1, t.n_threads, false);
         }
 
         for (int i = 0; i < params.reps; i++) {
             llama_kv_self_clear(ctx);
 
+            set_graph_profile("");
             if (t.n_depth > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
@@ -1831,12 +1857,13 @@ int main(int argc, char ** argv) {
                 }
                 test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
             }
+
             if (t.n_gen > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                test_gen(ctx, t.n_gen, t.n_threads);
+                test_gen(ctx, t.n_gen, t.n_threads, true);
             }
 
             uint64_t t_ns = get_time_ns() - t_start;
