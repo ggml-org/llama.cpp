@@ -46,17 +46,11 @@ static const char * ggml_backend_openvino_get_name(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
-static ggml_backend_buffer_type_t ggml_backend_openvino_get_default_buffer_type(ggml_backend_t backend) {
-    return ggml_backend_cpu_buffer_type();
-    GGML_UNUSED(backend);
-}
-
 static enum ggml_status
 ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph *cgraph) {
     openvino_frontend_compute(backend, cgraph);
 
     return GGML_STATUS_SUCCESS;
-    GGML_UNUSED(backend);
 }
 
 static const ggml_backend_i ggml_backend_openvino_interface = {
@@ -108,14 +102,14 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
 }
 
 GGML_BACKEND_API bool ggml_backend_is_openvino(ggml_backend_t backend) {
-    GGML_ASSERT(backend->context != nullptr);
-    return true;
+    return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_openvino_guid());
 }
 
 // device buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(int device) {
     GGML_ASSERT(device >= 0);
-    return nullptr;
+    return ggml_backend_cpu_buffer_type();
+    GGML_UNUSED(device);
 }
 
 // split tensor buffer that splits matrices by rows across multiple devices
@@ -184,8 +178,7 @@ static void ggml_backend_openvino_device_get_memory(ggml_backend_dev_t dev, size
 
 static enum ggml_backend_dev_type ggml_backend_openvino_device_get_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_CPU;
-    // return GGML_BACKEND_DEVICE_TYPE_GPU_FULL;
+    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
 }
 
 static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
