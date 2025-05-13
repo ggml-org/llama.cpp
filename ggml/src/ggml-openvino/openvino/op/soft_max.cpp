@@ -49,7 +49,7 @@ OutputVector translate_soft_max(const NodeContext& context) {
     if (context.get_input_size() == 2) {
         // Calculate mask then softmax
         auto mask_node = context.get_input(1);
-        ov::element::Type mask_type = (context.get_input_type(1)).as<ov::element::Type>();
+        ov::element::Type mask_type = context.get_input_type(1);
         if (mask_type == ov::element::f16) {
             // Convert f16 to f32
             mask_node = std::make_shared<ov::op::v0::Convert>(mask_node, ov::element::f32);
@@ -80,7 +80,7 @@ OutputVector translate_soft_max(const NodeContext& context) {
         auto res = std::make_shared<ov::op::v8::Softmax>(input_node, 0);
         return {res};
     }
-};
+}
 
 }  // namespace op
 }  // namespace ggml
