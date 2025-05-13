@@ -136,8 +136,8 @@ export const AppContextProvider = ({
     convId: string,
     leafNodeId: Message['id'],
     onChunk: CallbackGeneratedChunk
-  ) => {
-    if (isGenerating(convId)) return;
+  ): Promise<Message['id']> => {
+    if (isGenerating(convId)) return leafNodeId;
 
     const config = StorageUtils.getConfig();
     const currConversation = await StorageUtils.getOneConversation(convId);
@@ -188,8 +188,8 @@ export const AppContextProvider = ({
         AVAILABLE_TOOLS,
         ([_name, tool], _index) => tool
       )
-        .filter((tool) => tool.enabled())
-        .map((tool) => tool.specs());
+        .filter((tool) => tool.enabled)
+        .map((tool) => tool.specs);
 
       // stream does not support tool-use (yet?)
       const streamResponse = enabledTools.length === 0;
@@ -336,8 +336,6 @@ export const AppContextProvider = ({
         }
 
         // Handle timings from the non-streaming response
-        // The exact location of 'timings' in responseData might vary by API.
-        // Assuming responseData.timings similar to streaming chunk for now.
         const apiTimings = responseData.timings;
         if (apiTimings && config.showTokensPerSecond) {
           pendingMsg.timings = {
@@ -349,11 +347,9 @@ export const AppContextProvider = ({
         }
 
         for (const pendMsg of pendingMessages) {
-          console.log('Setting pending message', pendMsg.id);
           setPending(convId, pendMsg);
+          onChunk(pendMsg.id); // Update UI to show the processed message
         }
-
-        onChunk(); // Update UI to show the processed message
 
         shouldContinueChain = choice.finish_reason === 'tool_calls';
       }
@@ -367,13 +363,28 @@ export const AppContextProvider = ({
           pendingMessages as Message[],
           leafNodeId
         );
-
-        // if message ended due to "finish_reason": "tool_calls"
-        // resend it to assistant to process the result.
-        if (shouldContinueChain) {
-          await generateMessage(convId, lastMsgId, onChunk);
-        }
       }
+
+      // if message ended due to "finish_reason": "tool_calls"
+      // resend it to assistant to process the result.
+      if (shouldContinueChain) {
+        console.log('Generating followup message!');
+        lastMsgId = await generateMessage(convId, lastMsgId, onChunk);
+        console.log('Generating - done!');
+
+        // Fetch messages from DB for debug
+        const savedMsgs = await StorageUtils.getMessages(convId);
+        console.log({ savedMsgs });
+      }
+
+      setPending(convId, null);
+      onChunk(lastMsgId); // trigger scroll to bottom and switch to the last node
+
+      // Fetch messages from DB
+      const savedMsgs = await StorageUtils.getMessages(convId);
+      console.log({ savedMsgs });
+
+      return lastMsgId;
     } catch (err) {
       setPending(convId, null);
       if ((err as Error).name === 'AbortError') {
@@ -387,8 +398,7 @@ export const AppContextProvider = ({
       }
     }
 
-    setPending(convId, null);
-    onChunk(pendingId); // trigger scroll to bottom and switch to the last node
+    return pendingId;
   };
 
   const sendMessage = async (

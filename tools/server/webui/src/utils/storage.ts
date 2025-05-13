@@ -1,7 +1,7 @@
 // coversations is stored in localStorage
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 
-import { CONFIG_DEFAULT, isDev } from '../Config';
+import { CONFIG_DEFAULT } from '../Config';
 import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
 

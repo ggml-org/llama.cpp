@@ -1,14 +1,14 @@
 import StorageUtils from '../storage';
-import { ToolCall, ToolCallOutput, ToolCallParameters } from '../types';
+import { ToolCallRequest, ToolCallOutput, ToolCallParameters } from '../types';
 import { AgentTool } from './agent_tool';
 
 export class JSReplAgentTool extends AgentTool {
-  private static readonly id = 'javascript_interpreter';
+  private static readonly ID = 'javascript_interpreter';
   private fakeLogger: FakeConsoleLog;
 
   constructor() {
     super(
-      JSReplAgentTool.id,
+      JSReplAgentTool.ID,
       () => StorageUtils.getConfig().jsInterpreterToolUse,
       'Executes JavaScript code in the browser console. The code should be self-contained valid javascript. You can use console.log(variable) to print out intermediate values.',
       {
@@ -25,7 +25,7 @@ export class JSReplAgentTool extends AgentTool {
     this.fakeLogger = new FakeConsoleLog();
   }
 
-  _process(tc: ToolCall): ToolCallOutput {
+  _process(tc: ToolCallRequest): ToolCallOutput {
     const args = JSON.parse(tc.function.arguments);
 
     // Redirect console.log which agent will use to
@@ -37,7 +37,9 @@ export class JSReplAgentTool extends AgentTool {
     try {
       // Evaluate the provided agent code
       result = eval(args.code);
-      if (!result) {
+      if (result) {
+        result = JSON.stringify(result, null, 2);
+      } else {
         result = '';
       }
     } catch (err) {

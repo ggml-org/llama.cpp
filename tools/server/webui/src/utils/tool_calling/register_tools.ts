@@ -8,12 +8,13 @@ import { JSReplAgentTool } from './js_repl_tool';
  */
 export const AVAILABLE_TOOLS = new Map<string, AgentTool>();
 
-function registerTool(tool: AgentTool): AgentTool {
+function registerTool<T extends AgentTool>(tool: T): T {
   AVAILABLE_TOOLS.set(tool.id, tool);
-  if (isDev)
+  if (isDev) {
     console.log(
-      `Successfully registered tool: ${tool.id}, enabled: ${tool.isEnabled()}`
+      `Successfully registered tool: ${tool.id}, enabled: ${tool.enabled}`
     );
+  }
   return tool;
 }
 

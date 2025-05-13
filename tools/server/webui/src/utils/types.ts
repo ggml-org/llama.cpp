@@ -43,7 +43,7 @@ export interface Message {
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
-  tool_calls?: ToolCall[];
+  tool_calls?: ToolCallRequest[];
   // node based system for branching
   parent: Message['id'];
   children: Message['id'][];
@@ -91,7 +91,7 @@ export interface CanvasPyInterpreter {
 
 export type CanvasData = CanvasPyInterpreter;
 
-export interface ToolCall {
+export interface ToolCallRequest {
   id: string;
   type: 'function';
   call_id: string;
