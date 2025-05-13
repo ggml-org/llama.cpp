@@ -6,6 +6,7 @@
 #include "ggml-threading.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
+#include "ggml-profile.h"
 
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
@@ -5933,6 +5934,7 @@ struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t siz
         /*.size         =*/ size,
         /*.n_nodes      =*/ 0,
         /*.n_leafs      =*/ 0,
+        /*.prof         =*/ NULL,
         /*.nodes        =*/ nodes_ptr,
         /*.grads        =*/ grads_ptr,
         /*.grad_accs    =*/ grad_accs_ptr,
@@ -5959,6 +5961,7 @@ struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1)
         /*.size             =*/ 0,
         /*.n_nodes          =*/ i1 - i0,
         /*.n_leafs          =*/ 0,
+        /*.prof             =*/ NULL,
         /*.nodes            =*/ cgraph0->nodes + i0,
         /*.grads            =*/ NULL, // gradients would need visited_hash_set
         /*.grad_accs        =*/ NULL,
