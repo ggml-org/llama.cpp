@@ -10,8 +10,14 @@
 #include "ggml-backend.h"
 #include "virtgpu.h"
 
-#define NOT_IMPLEMENTED \
-  printf("WARN: ### reached unimplemented function %s\n", __func__)
+#define NOT_IMPLEMENTED							\
+  do {									\
+    static bool first = true;						\
+    if (first) {							\
+      printf("\nWARN: ###\nWARN: ### reached unimplemented function %s\nWARN: ###\n\n", __func__); \
+      first = false;							\
+    }									\
+  } while(0)
 
 #define IMPLEMENTED
 //  printf("INFO: ### reached implemented function %s\n", __func__)
