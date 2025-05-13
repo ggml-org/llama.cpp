@@ -428,6 +428,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.down_proj",  # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.down_proj", # deepseek deepseek2
             "language_model.model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
+            "model.layers.{bid}.shared_mlp.output_linear",     # granitemoe
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (

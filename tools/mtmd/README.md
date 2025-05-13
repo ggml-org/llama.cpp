@@ -41,8 +41,8 @@ Built upon `clip.cpp` (similar to `llava.cpp`), `libmtmd` offers several advanta
 
 Multimodal projector (`mmproj`) files are specific to each model architecture.
 
-For the following models, you can use `convert_hf_to_gguf.py`with `--mmproj` flag to get the `mmproj` file:
-- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) - Note: 1B variant does not have vision support
+For the following models, you can use `convert_hf_to_gguf.py` with `--mmproj` flag to get the `mmproj` file:
+- [Gemma 3](https://huggingface.co/collections/google/gemma-3-release-67c6c6f89c4f76621268bb6d) ; See the guide [here](../../docs/multimodal/gemma3.md) - Note: 1B variant does not have vision support
 - SmolVLM (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - SmolVLM2 (from [HuggingFaceTB](https://huggingface.co/HuggingFaceTB))
 - [Pixtral 12B](https://huggingface.co/mistral-community/pixtral-12b) - only works with `transformers`-compatible checkpoint
@@ -52,6 +52,8 @@ For the following models, you can use `convert_hf_to_gguf.py`with `--mmproj` fla
 
 For older models, please refer to the relevant guide for instructions on how to obtain or create them:
 
+NOTE: conversion scripts are located under `tools/mtmd/legacy-models`
+
 - [LLaVA](../../docs/multimodal/llava.md)
 - [MobileVLM](../../docs/multimodal/MobileVLM.md)
 - [GLM-Edge](../../docs/multimodal/glmedge.md)
@@ -59,4 +61,3 @@ For older models, please refer to the relevant guide for instructions on how to 
 - [MiniCPM-V 2.6](../../docs/multimodal/minicpmv2.6.md)
 - [MiniCPM-o 2.6](../../docs/multimodal/minicpmo2.6.md)
 - [IBM Granite Vision](../../docs/multimodal/granitevision.md)
-- [Google Gemma 3](../../docs/multimodal/gemma3.md)

@@ -117,6 +117,10 @@ static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_
     { LLAMA_ROPE_SCALING_TYPE_LONGROPE,   "longrope"   },
 };
 
+std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type) {
+    return LLAMA_ROPE_SCALING_TYPES.at(rope_scaling_type);
+}
+
 static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::string & name) {
     for (const auto & kv : LLAMA_ROPE_SCALING_TYPES) {
         if (kv.second == name) {
@@ -1385,6 +1389,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     // Add additional layer/vocab/etc checks here for other model sizes
                     default: type = LLM_TYPE_UNKNOWN;
                 }
+
+                // For Granite MoE Shared
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
             } break;
         case LLM_ARCH_CHAMELEON:
             {
@@ -1768,6 +1775,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, TENSOR_NOT_REQUIRED);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
+
+                            // For Granite MoE Shared
+                            if (hparams.n_ff_shexp > 0) {
+                                layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
+                                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
+                                layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
+                            }
                         }
                     }
                 } break;
@@ -4264,7 +4278,7 @@ uint64_t llama_model::n_elements() const {
 }
 
 void llama_model::print_info() const {
-    const char * rope_scaling_type = LLAMA_ROPE_SCALING_TYPES.at(hparams.rope_scaling_type_train);
+    const std::string rope_scaling_type = llama_rope_scaling_type_name(hparams.rope_scaling_type_train);
 
     auto print_f = [](const std::function<uint32_t(uint32_t)> & f, uint32_t n) {
         bool is_var = false;
@@ -4325,7 +4339,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: causal attn      = %d\n",     __func__, hparams.causal_attn);
         LLAMA_LOG_INFO("%s: pooling type     = %d\n",     __func__, hparams.pooling_type);
         LLAMA_LOG_INFO("%s: rope type        = %d\n",     __func__, hparams.rope_type);
-        LLAMA_LOG_INFO("%s: rope scaling     = %s\n",     __func__, rope_scaling_type);
+        LLAMA_LOG_INFO("%s: rope scaling     = %s\n",     __func__, rope_scaling_type.c_str());
         LLAMA_LOG_INFO("%s: freq_base_train  = %.1f\n",   __func__, hparams.rope_freq_base_train);
         LLAMA_LOG_INFO("%s: freq_scale_train = %g\n",     __func__, hparams.rope_freq_scale_train);
         LLAMA_LOG_INFO("%s: n_ctx_orig_yarn  = %u\n",     __func__, hparams.n_ctx_orig_yarn);
@@ -4381,10 +4395,13 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
     }
 
-    if (arch == LLM_ARCH_MINICPM || arch == LLM_ARCH_GRANITE || arch == LLM_ARCH_GRANITE_MOE) {
+    if (arch == LLM_ARCH_MINICPM ||
+        arch == LLM_ARCH_GRANITE ||
+        arch == LLM_ARCH_GRANITE_MOE) {
         LLAMA_LOG_INFO("%s: f_embedding_scale = %f\n", __func__, hparams.f_embedding_scale);
         LLAMA_LOG_INFO("%s: f_residual_scale  = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
+        LLAMA_LOG_INFO("%s: n_ff_shexp        = %d\n", __func__, hparams.n_ff_shexp);
     }
 
     if (arch == LLM_ARCH_BAILINGMOE) {
@@ -4594,11 +4611,6 @@ struct llm_build_llama : public llm_graph_context {
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
 
-            // For Granite architecture
-            if (hparams.f_residual_scale) {
-                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
-            }
-
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -4670,11 +4682,6 @@ struct llm_build_llama : public llm_graph_context {
                 cb(cur, "ffn_moe_out", il);
             }
 
-            // For Granite architecture
-            if (hparams.f_residual_scale) {
-                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
-            }
-
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
 
@@ -4696,11 +4703,6 @@ struct llm_build_llama : public llm_graph_context {
 
         // lm_head
         cur = build_lora_mm(model.output, cur);
-
-        // For Granite architecture
-        if (hparams.f_logit_scale) {
-            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
-        }
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;
@@ -4812,11 +4814,6 @@ struct llm_build_deci : public llm_graph_context {
                 continue;
             }
 
-            // For Granite architecture
-            if (hparams.f_residual_scale) {
-                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
-            }
-
             // modified to support attention-free layer of Llama-3_1-Nemotron-51B
             ggml_tensor * ffn_inp = cur;
             if (n_head > 0) {
@@ -4840,11 +4837,6 @@ struct llm_build_deci : public llm_graph_context {
                 cb(cur, "ffn_out", il);
             }
 
-            // For Granite architecture
-            if (hparams.f_residual_scale) {
-                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
-            }
-
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
 
@@ -4866,11 +4858,6 @@ struct llm_build_deci : public llm_graph_context {
 
         // lm_head
         cur = build_lora_mm(model.output, cur);
-
-        // For Granite architecture
-        if (hparams.f_logit_scale) {
-            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
-        }
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;
@@ -12210,6 +12197,195 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
     }
 };
 
+
+struct llm_build_granite : public llm_graph_context {
+    llm_build_granite(
+        const llama_model & model,
+        const llm_graph_params & params,
+        ggml_cgraph * gf,
+        const bool use_rope = true)
+        : llm_graph_context(params) {
+
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - built only if rope enabled
+        ggml_tensor * inp_pos = nullptr;
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
+        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention
+            {
+                // compute Q and K and (optionally) RoPE them
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                if (use_rope) {
+
+                    if (!inp_pos) {
+                        inp_pos = build_inp_pos();
+                    }
+                    ggml_tensor * rope_factors = model.get_rope_factors(n_ctx_per_seq, il);
+                    Qcur = ggml_rope_ext(
+                            ctx0, Qcur, inp_pos, rope_factors,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+
+                    Kcur = ggml_rope_ext(
+                            ctx0, Kcur, inp_pos, rope_factors,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+                }
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(inp_attn, gf,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
+
+            if (il == n_layer - 1) {
+                // skip computing output for unused tokens
+                ggml_tensor * inp_out_ids = build_inp_out_ids();
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            // For Granite architectures - scale residual
+            cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward network (non-MoE)
+            if (model.layers[il].ffn_gate_inp == nullptr) {
+
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
+                        model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
+
+            } else {
+                // MoE branch
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                ggml_tensor * moe_out = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, true,
+                        false, 0.0,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il);
+                cb(moe_out, "ffn_moe_out", il);
+
+                // For Granite MoE Shared
+                if (hparams.n_ff_shexp > 0) {
+                    ggml_tensor * ffn_shexp = build_ffn(cur,
+                        model.layers[il].ffn_up_shexp,   NULL, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL, NULL,
+                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                    cb(ffn_shexp, "ffn_shexp", il);
+
+                    cur = ggml_add(ctx0, moe_out, ffn_shexp);
+                    cb(cur, "ffn_out", il);
+                } else {
+                    cur = moe_out;
+                }
+            }
+
+            // For Granite architectures - scale residual
+            cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "ffn_out", il);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        // For Granite architectures - scale logits
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
 // ref: https://github.com/facebookresearch/chameleon
 // based on the original build_llama() function, changes:
 //   * qk-norm
@@ -12917,8 +13093,6 @@ llm_graph_result_ptr llama_model::build_graph(
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_MINICPM:
-        case LLM_ARCH_GRANITE:
-        case LLM_ARCH_GRANITE_MOE:
             {
                 llm = std::make_unique<llm_build_llama>(*this, params, gf);
             } break;
@@ -13148,6 +13322,11 @@ llm_graph_result_ptr llama_model::build_graph(
         case LLM_ARCH_ARWKV7:
             {
                 llm = std::make_unique<llm_build_arwkv7>(*this, params, gf);
+            } break;
+        case LLM_ARCH_GRANITE:
+        case LLM_ARCH_GRANITE_MOE:
+            {
+                llm = std::make_unique<llm_build_granite>(*this, params, gf);
             } break;
         case LLM_ARCH_CHAMELEON:
             {

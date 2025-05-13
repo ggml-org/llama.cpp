@@ -879,9 +879,15 @@ struct clip_graph {
         // add CLS token
         inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
 
+        // The larger models use a different ViT, which uses RMS norm instead of layer norm
+        // ref: https://github.com/ggml-org/llama.cpp/pull/13443#issuecomment-2869786188
+        norm_type norm_t = (hparams.n_embd == 3200 && hparams.n_layer == 45)
+            ? NORM_TYPE_RMS // 6B ViT (Used by InternVL 2.5/3 - 26B, 38B, 78B)
+            : NORM_TYPE_NORMAL; // 300M ViT (Used by all smaller InternVL models)
+
         ggml_tensor * cur = build_vit(
                                 inp, n_pos,
-                                NORM_TYPE_NORMAL,
+                                norm_t,
                                 hparams.ffn_op,
                                 model.position_embeddings,
                                 nullptr);
@@ -1903,16 +1909,20 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_QWEN2VL:
                     {
-                        // max image size = sqrt(max_pixels)
-                        // https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct/blob/main/preprocessor_config.json
-                        hparams.image_size = 3584;
+                        // max image size = sqrt(max_pixels) = 3584
+                        // ref: https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct/blob/main/preprocessor_config.json
+                        // however, the model use unreasonable memory past 1024 size, we force it to 1024 otherwise it's unusable
+                        // ref: https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
+                        hparams.image_size = 1024;
                         hparams.warmup_image_size = hparams.patch_size * 8;
                     } break;
                 case PROJECTOR_TYPE_QWEN25VL:
                     {
                         // max image size = sqrt(max_pixels)
                         // https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
-                        hparams.image_size = 3584;
+                        // however, the model use unreasonable memory past 1024 size, we force it to 1024 otherwise it's unusable
+                        // ref: https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct/discussions/10
+                        hparams.image_size = 1024;
                         hparams.warmup_image_size = hparams.patch_size * 8;
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern);
                     } break;
@@ -2298,14 +2308,6 @@ struct clip_model_loader {
         }
     }
 };
-
-// read and create ggml_context containing the tensors and their data
-struct clip_ctx * clip_model_load(const char * fname, const int verbosity) {
-    return clip_init(fname, clip_context_params{
-        /* use_gpu */   true,
-        /* verbosity */ static_cast<ggml_log_level>(verbosity),
-    });
-}
 
 struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_params) {
     g_logger_state.verbosity_thold = ctx_params.verbosity;
@@ -3075,19 +3077,6 @@ size_t get_clip_image_grid_size(const struct clip_ctx * ctx) {
     return ctx->vision_model.hparams.image_grid_pinpoints.size();
 }
 
-// deprecated
-int clip_n_patches(const struct clip_ctx * ctx) {
-    clip_image_f32 img;
-    img.nx = ctx->vision_model.hparams.image_size;
-    img.ny = ctx->vision_model.hparams.image_size;
-    return clip_n_output_tokens(ctx, &img);
-}
-
-// deprecated
-int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
-    return clip_n_output_tokens(ctx, img);
-}
-
 int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
     const auto & params = ctx->vision_model.hparams;
     const int n_total = clip_n_output_tokens(ctx, img);
@@ -3572,141 +3561,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // copy the embeddings to the location passed by the user
     ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
-
-    return true;
-}
-
-bool clip_model_quantize(const char * fname_inp, const char * fname_out, const int itype) {
-    assert(itype < GGML_TYPE_COUNT);
-    ggml_type type = static_cast<ggml_type>(itype);
-
-    auto * ctx_clip = clip_init(fname_inp, clip_context_params{
-        /* use_gpu */   false,
-        /* verbosity */ GGML_LOG_LEVEL_ERROR,
-    });
-
-    const auto & ctx_src = ctx_clip->ctx_gguf.get();
-    const auto & ctx_data = ctx_clip->ctx_data.get();
-
-    auto * ctx_out = gguf_init_empty();
-    gguf_set_kv(ctx_out, ctx_src);
-    gguf_set_val_u32(ctx_out, "general.quantization_version", GGML_QNT_VERSION);
-    gguf_set_val_u32(ctx_out, "general.file_type", itype);
-
-    auto fout = std::ofstream(fname_out, std::ios::binary);
-
-    const int n_tensors = gguf_get_n_tensors(ctx_src);
-
-    for (int i = 0; i < n_tensors; ++i) {
-        const char * name = gguf_get_tensor_name(ctx_src, i);
-        ggml_tensor * cur = ggml_get_tensor(ctx_data, name);
-        gguf_add_tensor(ctx_out, cur);
-    }
-
-    const size_t meta_size = gguf_get_meta_size(ctx_out);
-    for (size_t i = 0; i < meta_size; ++i) {
-        fout.put(0);
-    }
-
-    // regexes of tensor names to be quantized
-    const std::vector<std::string> k_names = {
-        ".*weight",
-    };
-
-    std::vector<uint8_t> work(512);
-    std::vector<float> conv_buf(512);
-    size_t total_size_org = 0;
-    size_t total_size_new = 0;
-
-    for (int i = 0; i < n_tensors; ++i) {
-        const std::string name = gguf_get_tensor_name(ctx_src, i);
-        ggml_tensor * cur = ggml_get_tensor(ctx_data, name.c_str());
-
-        enum ggml_type new_type;
-        void * new_data;
-        size_t new_size;
-
-        bool quantize = false;
-        for (const auto & s : k_names) {
-            if (std::regex_match(name, std::regex(s))) {
-                quantize = true;
-                break;
-            }
-        }
-
-        // quantize only 2D tensors and bigger than block size
-        quantize &= (ggml_n_dims(cur) == 2) && cur->ne[0] > ggml_blck_size(type);
-
-        if (quantize) {
-            new_type = type;
-            if (new_type >= GGML_TYPE_Q2_K && name.find("embd") != std::string::npos) {
-                new_type = GGML_TYPE_Q8_0; // ggml_get_rows needs non K type
-                // LOG_ERR("%s: quantizing %s to %s\n", __func__, name.c_str(), ggml_type_name(new_type));
-            }
-            const size_t n_elms = ggml_nelements(cur);
-            float * f32_data;
-
-            switch (cur->type) {
-            case GGML_TYPE_F32:
-                f32_data = (float *)cur->data;
-                break;
-            case GGML_TYPE_F16:
-                if (conv_buf.size() < n_elms) {
-                    conv_buf.resize(n_elms);
-                }
-                for (size_t j = 0; j < n_elms; ++j) {
-                    conv_buf[j] = ggml_fp16_to_fp32(((ggml_fp16_t *)cur->data)[j]);
-                }
-                f32_data = (float *)conv_buf.data();
-                break;
-            default:
-                LOG_ERR("%s: Please use an input file in f32 or f16\n", __func__);
-                gguf_free(ctx_out);
-                return false;
-            }
-
-            if (work.size() < n_elms * 4) {
-                work.resize(n_elms * 4);
-            }
-            new_data = work.data();
-
-            new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, n_elms/cur->ne[0], cur->ne[0], nullptr);
-        } else {
-            new_type = cur->type;
-            new_data = cur->data;
-            new_size = ggml_nbytes(cur);
-        }
-        const size_t orig_size = ggml_nbytes(cur);
-        total_size_org += orig_size;
-        total_size_new += new_size;
-        gguf_set_tensor_type(ctx_out, name.c_str(), new_type);
-        GGML_ASSERT(gguf_get_tensor_size(ctx_out, gguf_find_tensor(ctx_out, name.c_str())) == new_size);
-        gguf_set_tensor_data(ctx_out, name.c_str(), new_data);
-        fout.write((const char *)new_data, new_size);
-        size_t pad = GGML_PAD(new_size, gguf_get_alignment(ctx_out)) - new_size;
-        for (size_t j = 0; j < pad; ++j) {
-            fout.put(0);
-        }
-
-        LOG_INF("%s: n_dims = %d | quantize=%d | size = %f MB -> %f MB\n", name.c_str(), ggml_n_dims(cur), quantize,
-               orig_size / 1024.0 / 1024.0, new_size / 1024.0 / 1024.0);
-    }
-
-    // go back to beginning of file and write the updated metadata
-    fout.seekp(0, std::ios::beg);
-    std::vector<uint8_t> meta(meta_size);
-    gguf_get_meta_data(ctx_out, meta.data());
-    fout.write((const char *)meta.data(), meta_size);
-
-    fout.close();
-
-    clip_free(ctx_clip);
-    gguf_free(ctx_out);
-
-    {
-        LOG_INF("%s: original  size = %8.2f MB\n", __func__, total_size_org / 1024.0 / 1024.0);
-        LOG_INF("%s: quantized size = %8.2f MB\n", __func__, total_size_new / 1024.0 / 1024.0);
-    }
 
     return true;
 }
