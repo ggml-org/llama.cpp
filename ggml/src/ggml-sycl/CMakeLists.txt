@@ -104,8 +104,9 @@ if (GGML_SYCL_GRAPH)
 endif()
 
 # Link against Intel oneMKL or oneMath
-if (GGML_SYCL_TARGET STREQUAL "INTEL")
-    # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
+find_package(oneMath)
+if (WIN32 AND NOT oneMath_FOUND AND GGML_SYCL_TARGET STREQUAL "INTEL")
+    # Intel devices on WIN32 use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
     # See https://github.com/uxlfoundation/oneMath/issues/654
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(SYCL_COMPILER ON)
@@ -114,7 +115,6 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
 else()
-    find_package(oneMath QUIET)
     if (NOT oneMath_FOUND)
         message(STATUS "oneMath not found: oneMath will be automatically downloaded")
         # Use FetchContent to automatically pull and build oneMath
