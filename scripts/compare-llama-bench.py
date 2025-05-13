@@ -369,7 +369,6 @@ class LlamaBenchDataJSON(LlamaBenchDataSQLite3):
             try:
                 with open(data_file, "r", encoding="utf-8") as fp:
                     json.load(fp)
-                    continue
             except Exception as e:
                 logger.debug(f'"{data_file}" is not a valid JSON file.', exc_info=e)
                 return False
@@ -404,8 +403,8 @@ class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
         for data_file in data_files:
             try:
                 with open(data_file, "r", encoding="utf-8") as fp:
-                    csv.DictReader(fp)
-                    continue
+                    for parsed in csv.DictReader(fp):
+                        break
             except Exception as e:
                 logger.debug(f'"{data_file}" is not a valid CSV file.', exc_info=e)
                 return False
