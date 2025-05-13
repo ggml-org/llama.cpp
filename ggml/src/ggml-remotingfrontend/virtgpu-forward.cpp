@@ -1,8 +1,8 @@
 #include "virtgpu.h"
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/apir_backend.h"
 
-#define CACHED \
-  printf("INFO: ### found response in the cache %s\n", __func__)
+#define CACHED
+//  printf("INFO: ### found response in the cache %s\n", __func__)
 
 int
 apir_get_device_count(struct virtgpu *gpu) {
