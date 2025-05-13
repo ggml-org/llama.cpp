@@ -27,6 +27,8 @@ typedef enum ApirBackendCommandType {
     APIR_COMMAND_TYPE_GET_DEVICE_COUNT = 0,
     APIR_COMMAND_TYPE_GET_DEVICE_NAME = 1,
     APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION = 2,
+    APIR_COMMAND_TYPE_GET_DEVICE_TYPE = 3,
+    APIR_COMMAND_TYPE_GET_DEVICE_MEMORY = 4,
 
-    APIR_BACKEND_DISPATCH_TABLE_COUNT = 3, // last command_type index + 1
+    APIR_BACKEND_DISPATCH_TABLE_COUNT = 5, // last command_type index + 1
 } ApirBackendCommandType;

@@ -105,3 +105,77 @@ apir_get_device_description(struct virtgpu *gpu) {
 
   return string;
 }
+
+uint32_t
+apir_get_device_type(struct virtgpu *gpu) {
+  static uint32_t dev_type = 255;
+  if (dev_type != 255) {
+    CACHED;
+    return dev_type;
+  }
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_TYPE;
+
+  struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  struct vn_cs_decoder *decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  vn_decode_uint32_t(decoder, &dev_type);
+
+  INFO("%s: Forward DEV TYPE --> %d ", __func__, dev_type);
+
+  int32_t ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
+  }
+
+  return dev_type;
+}
+
+void
+apir_get_device_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
+  static size_t dev_free = 0;
+  static size_t dev_total = 0;
+  /*
+  if (dev_total != 0) {
+    WARNING("Not sure if llama.cpp expects fresh information for the free memory ...");
+    *free = dev_free;
+    *total = dev_total;
+
+    CACHED;
+    return;
+  }
+  */
+  int32_t forward_flag = (int32_t) APIR_COMMAND_TYPE_GET_DEVICE_MEMORY;
+
+  struct vn_cs_encoder *encoder = remote_call_prepare(gpu, VIRGL_APIR_COMMAND_TYPE_Forward, forward_flag);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+
+  struct vn_cs_decoder *decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  vn_decode_size_t(decoder, &dev_free);
+  vn_decode_size_t(decoder, &dev_total);
+
+  *free = dev_free;
+  *total = dev_total;
+
+  INFO("%s: Forward DEV FREE  mem --> %zu MB", __func__, dev_free / 1024 / 1024);
+  INFO("%s: Forward DEV TOTAL mem --> %zu MB", __func__, dev_total / 1024 / 1024);
+
+  int32_t ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to forward the API call (code=%d):/", __func__, ret);
+  }
+
+  return;
+}

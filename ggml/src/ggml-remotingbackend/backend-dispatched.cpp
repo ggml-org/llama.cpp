@@ -97,7 +97,6 @@ uint32_t backend_device_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder
   return 0;
 }
 
-
 uint32_t
 backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
   UNUSED(dec);
@@ -107,6 +106,29 @@ backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *
   const size_t string_size = strlen(string) + 1;
   vn_encode_array_size(enc, string_size);
   vn_encode_char_array(enc, string, string_size);
+
+  return 0;
+}
+
+uint32_t
+backend_device_get_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  uint32_t type = dev->iface.get_type(dev);
+  vn_encode_uint32_t(enc, &type);
+
+  return 0;
+}
+
+uint32_t
+backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  size_t free, total;
+  dev->iface.get_memory(dev, &free, &total);
+
+  vn_encode_size_t(enc, &free);
+  vn_encode_size_t(enc, &total);
 
   return 0;
 }

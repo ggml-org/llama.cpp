@@ -17,20 +17,19 @@ static const char *ggml_backend_remoting_device_get_description(ggml_backend_dev
 }
 
 static enum ggml_backend_dev_type ggml_backend_remoting_device_get_type(ggml_backend_dev_t dev) {
-  UNUSED(dev);
+  IMPLEMENTED;
 
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
 
-  return GGML_BACKEND_DEVICE_TYPE_GPU;
+  return (enum ggml_backend_dev_type) apir_get_device_type(gpu);
 }
 
-static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
-  UNUSED(device);
+static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+  IMPLEMENTED;
 
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
 
-  *total = 1024*1024*1024;
-  *free = *total;
+  return apir_get_device_memory(gpu, free, total);
 }
 
 static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {

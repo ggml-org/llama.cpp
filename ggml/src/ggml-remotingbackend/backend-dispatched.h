@@ -18,6 +18,8 @@ typedef uint32_t (*backend_dispatch_t)(struct vn_cs_encoder *enc, struct vn_cs_d
 uint32_t backend_reg_get_device_count(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
 uint32_t backend_device_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
 uint32_t backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_device_get_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
 
 static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
 {
@@ -25,6 +27,8 @@ static inline const char *backend_dispatch_command_name(ApirBackendCommandType t
     case APIR_COMMAND_TYPE_GET_DEVICE_COUNT: return "backend_reg__get_device_count";
     case APIR_COMMAND_TYPE_GET_DEVICE_NAME: return "backend_reg__get_device_name";
     case APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION: return "backend_reg__get_device_description";
+    case APIR_COMMAND_TYPE_GET_DEVICE_TYPE: return "backend_reg__get_device_type";
+    case APIR_COMMAND_TYPE_GET_DEVICE_MEMORY: return "backend_reg__get_device_memory";
     default: return "unknown";
     }
 }
@@ -33,4 +37,6 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
     [APIR_COMMAND_TYPE_GET_DEVICE_COUNT] = backend_reg_get_device_count,
     [APIR_COMMAND_TYPE_GET_DEVICE_NAME] = backend_device_get_name,
     [APIR_COMMAND_TYPE_GET_DEVICE_DESCRIPTION] = backend_device_get_description,
+    [APIR_COMMAND_TYPE_GET_DEVICE_TYPE] = backend_device_get_type,
+    [APIR_COMMAND_TYPE_GET_DEVICE_MEMORY] = backend_device_get_memory,
 };
