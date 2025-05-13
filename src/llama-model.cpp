@@ -1372,7 +1372,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
-        case LLM_ARCH_GRANITE_MOE_SHARED:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
@@ -1720,7 +1719,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_MINICPM:
             case LLM_ARCH_GRANITE:
             case LLM_ARCH_GRANITE_MOE:
-            case LLM_ARCH_GRANITE_MOE_SHARED:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -4395,8 +4393,7 @@ void llama_model::print_info() const {
 
     if (arch == LLM_ARCH_MINICPM ||
         arch == LLM_ARCH_GRANITE ||
-        arch == LLM_ARCH_GRANITE_MOE ||
-        arch == LLM_ARCH_GRANITE_MOE_SHARED) {
+        arch == LLM_ARCH_GRANITE_MOE) {
         LLAMA_LOG_INFO("%s: f_embedding_scale = %f\n", __func__, hparams.f_embedding_scale);
         LLAMA_LOG_INFO("%s: f_residual_scale  = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
@@ -13324,7 +13321,6 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
-        case LLM_ARCH_GRANITE_MOE_SHARED:
             {
                 llm = std::make_unique<llm_build_granite>(*this, params, gf);
             } break;
@@ -13475,7 +13471,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM4:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
-        case LLM_ARCH_GRANITE_MOE_SHARED:
         case LLM_ARCH_CHAMELEON:
         case LLM_ARCH_BAILINGMOE:
             return LLAMA_ROPE_TYPE_NORM;
