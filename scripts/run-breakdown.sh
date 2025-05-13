@@ -26,6 +26,8 @@ FORCED_ALIGNMENT="${FORCED_ALIGNMENT:-1}"
 N_PROMPT="${N_PROMPT:-0}"
 # Number of GPU layers
 NUM_GPU_LAYERS="${NUM_GPU_LAYERS:-0}"
+# Flag to skip data processing
+SKIP_ANALYSIS="${SKIP_ANALYSIS:-false}"
 
 # Display help information
 show_help() {
@@ -42,6 +44,7 @@ show_help() {
     echo "  -p, --n-prompt N        Prompt length in tokens (default: $N_PROMPT, 0 means use depth as prompt length)"
     echo "  -f, --forced-alignment N   Force KV cache alignment (default: $FORCED_ALIGNMENT)"
     echo "  -ngl, --num-gpu-layers N   Number of GPU layers (default: $NUM_GPU_LAYERS)"
+    echo "  --skip-analysis         Skip data analysis step (default: $SKIP_ANALYSIS)"
     echo "  -h, --help              Show this help message"
     echo
     echo "Example:"
@@ -84,6 +87,10 @@ while [ $# -gt 0 ]; do
         NUM_GPU_LAYERS="$2"
         shift 2
         ;;
+    --skip-analysis)
+        SKIP_ANALYSIS=true
+        shift
+        ;;
     -h | --help)
         show_help
         exit 0
@@ -95,6 +102,17 @@ while [ $# -gt 0 ]; do
         ;;
     esac
 done
+
+# 检查Python依赖
+check_python_deps() {
+    python -c "import pandas, matplotlib" 2>/dev/null
+    if [ $? -ne 0 ]; then
+        echo "Warning: pandas or matplotlib is not installed. Data analysis will be skipped."
+        echo "To install dependencies, run: pip install pandas matplotlib"
+        return 1
+    fi
+    return 0
+}
 
 # Extract model name for folder creation
 MODEL_BASENAME=$(basename "$MODEL")
@@ -109,10 +127,6 @@ echo "Creating model directory: $MODEL_OUTPUT_DIR"
 # Clean/create the model-specific directory
 rm -rf "$MODEL_OUTPUT_DIR"
 mkdir -p "$MODEL_OUTPUT_DIR"
-
-# Generate timestamp for unique filenames
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-echo "Using timestamp: $TIMESTAMP"
 
 # Convert depths string to array
 IFS=',' read -r -a DEPTHS_ARRAY <<<"$DEPTHS"
@@ -142,12 +156,6 @@ for DEPTH in "${DEPTHS_ARRAY[@]}"; do
     
     # Create results file for this depth
     RESULTS_FILE="${MODEL_OUTPUT_DIR}/breakdown_${DEPTH}.csv"
-    
-    # Set prompt length equal to depth if N_PROMPT is 0
-    PROMPT_LENGTH="$N_PROMPT"
-    if [ "$PROMPT_LENGTH" -eq 0 ]; then
-        PROMPT_LENGTH="$DEPTH"
-    fi
     
     echo "Running profile with the following parameters:"
     echo "  Model: $MODEL"
@@ -179,6 +187,33 @@ done
 
 echo "=== Profiling Complete ==="
 echo "Results saved to $MODEL_OUTPUT_DIR as CSV files:"
-ls -la "$MODEL_OUTPUT_DIR"/breakdown_*_${TIMESTAMP}.csv
+ls -la "$MODEL_OUTPUT_DIR"/breakdown_*.csv
+
+# 运行分析脚本
+if [ "$SKIP_ANALYSIS" = "false" ]; then
+    echo "=== Running Data Analysis ==="
+    ANALYSIS_SCRIPT="${SCRIPT_DIR}/analyze_breakdown.py"
+    
+    if [ -f "$ANALYSIS_SCRIPT" ]; then
+        if check_python_deps; then
+            echo "Running breakdown analysis using $ANALYSIS_SCRIPT"
+            python "$ANALYSIS_SCRIPT" --dir "$MODEL_OUTPUT_DIR" --compare
+            
+            if [ $? -eq 0 ]; then
+                echo "=== Data Analysis Complete ==="
+                echo "Generated analysis files in: $MODEL_OUTPUT_DIR"
+            else
+                echo "ERROR: Data analysis failed"
+            fi
+        else
+            echo "Skipping data analysis due to missing Python dependencies."
+        fi
+    else
+        echo "Warning: Analysis script not found at $ANALYSIS_SCRIPT"
+        echo "Please make sure scripts/analyze_breakdown.py exists."
+    fi
+else
+    echo "Skipping data analysis as requested."
+fi
 
 echo "=== All Operations Complete ===" 
