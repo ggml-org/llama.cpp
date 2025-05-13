@@ -2036,7 +2036,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     # - So the size is slightly smaller than the real size
     # - The n_bytes in gguf_reader.py is thus inaccurate
     # - During inference, the accurate nbytes info will be known through ggml_tmac_get_nbytes
-    GGMLQuantizationType.TMAC_BN_0:         (256, 4 + 256 * 2 // 8),
+    GGMLQuantizationType.TMAC_BN_0:         (64,  64 * 2 // 8),
     GGMLQuantizationType.TMAC_W2G64_0:      (64,  4 + 64 * 2 // 8),
     GGMLQuantizationType.TMAC_W2G64_1:      (64,  4 + 4 + 64 * 2 // 8),
     GGMLQuantizationType.TMAC_W2G128_0:     (128, 4 + 128 * 2 // 8),

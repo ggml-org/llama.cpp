@@ -299,7 +299,7 @@ class Model:
     # Repack and merge qweight, scales, and qzeros into a single tensor
     # Currently, this logic is nearly impossible to be implemented in quants.py
     def _modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if not self.enable_t_mac:
+        if not self.enable_t_mac or isinstance(self, BitnetModel):
             return self.modify_tensors(data_torch, name, bid)
 
         self._t_mac_raw_shape = None        # reset to make sure old values don't leak into new tensors case
@@ -2270,6 +2270,7 @@ class BitnetModel(Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         new_name = self.map_tensor_name(name)
 
+        self._t_mac_raw_shape = None
         if any(self.match_model_tensor_name(new_name, key, bid) for key in [
             gguf.MODEL_TENSOR.ATTN_Q,
             gguf.MODEL_TENSOR.ATTN_K,
@@ -2291,7 +2292,7 @@ class BitnetModel(Model):
                 w = np.round(data / scale + 2).astype(np.uint8)
                 data_torch = torch.from_numpy(preprocess_for_t_mac(w, scale.reshape(1), bits=2))
                 self.quantization_config["bits"] = 2
-                # self.quantization_config["group_size"] = 256
+                self.quantization_config["group_size"] = -1
                 self.quantization_config["sym"] = True
                 self.quantization_config["quant_method"] = "bitnet"
                 self._t_mac_raw_shape = w.shape
@@ -5632,6 +5633,7 @@ class LazyTorchTensor(gguf.LazyBase):
     _dtype_map: dict[torch.dtype, type] = {
         torch.float16: np.float16,
         torch.float32: np.float32,
+        torch.bfloat16: np.float32,
     }
 
     # used for safetensors slices

@@ -231,7 +231,7 @@ static void aligned_free(void * ptr) {
 
 
 /****** T-MAC meta model info ******/
-static void init_tmac_kernel_config_from_tensor_type(enum ggml_type type, struct tmac_kernel_config * kernel_config) {
+static void init_tmac_kernel_config_from_tensor_type(enum ggml_type type, int M, struct tmac_kernel_config * kernel_config) {
     kernel_config->bits = get_type_bits(type);
     kernel_config->q_group_size = get_type_group_size(type);
     kernel_config->has_zero_point = get_type_has_zero_point(type);
@@ -241,6 +241,22 @@ static void init_tmac_kernel_config_from_tensor_type(enum ggml_type type, struct
     kernel_config->has_scale = true;
     kernel_config->g = 4;
     kernel_config->ngroups_per_elem = 8 / kernel_config->g;
+
+    // Decide q_group_size for BN_0
+    if (kernel_config->q_group_size == -1) {
+        if (M % 256 == 0) {
+            kernel_config->q_group_size = 64;
+        } else if (M % 128 == 0) {
+            kernel_config->q_group_size = 64;
+        } else if (M % 64 == 0) {
+            kernel_config->q_group_size = 64;
+        } else if (M % 32 == 0) {
+            kernel_config->q_group_size = 32;
+        } else {
+            GGML_LOG_ERROR("Unsupported M value. Expected multiple of 32, got %d. Please check all of the model weight shapes.\n", M);
+        }
+    }
+
     if (kernel_config->q_group_size % 64 == 0) {
         kernel_config->act_group_size = 64;
     } else if (kernel_config->q_group_size % 32 == 0) {
@@ -377,7 +393,7 @@ static void ggml_tmac_tune_kernel_config(const struct ggml_tensor * tensor, int 
     }
 
     struct tmac_kernel_config kernel_config;
-    init_tmac_kernel_config_from_tensor_type(tensor->type, &kernel_config);
+    init_tmac_kernel_config_from_tensor_type(tensor->type, M, &kernel_config);
 
     // TODO: add more choices for prefilling?
     int N = 1;
@@ -480,6 +496,7 @@ size_t ggml_tmac_get_nbytes(const struct ggml_tensor * tensor) {
     const int scales_size = ggml_tmac_get_scales_size(kernel_config, m, k);
     // Currently, always uses float to store scales or zero points
     size_t nbytes = k * m / 8 * bits + scales_size * sizeof(float);
+    nbytes = GGML_PAD(nbytes, GGUF_DEFAULT_ALIGNMENT);
     // printf("ggml_tmac_get_nbytes: %s --- k=%d, m=%d, w=%d, sc=%d, nbytes: %zu\n", tensor->name, k, m, k * m / 8 * bits, scales_size, nbytes);
     return nbytes;
 }
