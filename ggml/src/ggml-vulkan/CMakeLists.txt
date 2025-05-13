@@ -21,29 +21,23 @@ endfunction()
 #  TEST_SHADER_FILE - Path to the test shader file
 #  RESULT_VARIABLE - Name of the variable to set (ON/OFF) based on test result
 function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VARIABLE)
-    # Compile the test shader to determine whether the extension is supported
     execute_process(
         COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}"
         OUTPUT_VARIABLE glslc_output
         ERROR_VARIABLE glslc_error
     )
 
-    # Check if error message contains extension not supported
     if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
         message(STATUS "${EXTENSION_NAME} not supported by glslc")
         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
-
-        # Append to the shader extensions definitions file
-        file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
-             "set(${RESULT_VARIABLE} OFF)\n")
     else()
         message(STATUS "${EXTENSION_NAME} supported by glslc")
         set(${RESULT_VARIABLE} ON PARENT_SCOPE)
         add_compile_definitions(${RESULT_VARIABLE})
 
-        # Append to the shader extensions definitions file
-        file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
-             "set(${RESULT_VARIABLE} ON)\nadd_compile_definitions(${RESULT_VARIABLE})\n")
+        # Ensure the extension support is forwarded to vulkan-shaders-gen
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -D${RESULT_VARIABLE}=ON)
+        set(VULKAN_SHADER_GEN_CMAKE_ARGS "${VULKAN_SHADER_GEN_CMAKE_ARGS}" PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -55,9 +49,10 @@ if (Vulkan_FOUND)
                              ../../include/ggml-vulkan.h
                             )
 
-    # Create the shader extensions definitions file
-    file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
-         "# Auto-generated file with Vulkan shader extension support definitions\n\n")
+    set(VULKAN_SHADER_GEN_CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
+        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
 
     # Test all shader extensions
     test_shader_extension_support(
@@ -142,13 +137,6 @@ if (Vulkan_FOUND)
 
     # Always use ExternalProject_Add approach
     include(ExternalProject)
-
-    # Construct CMake arguments
-    set(VULKAN_SHADER_GEN_CMAKE_ARGS
-        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
-        -DVULKAN_SHADER_EXTENSIONS_FILE=${CMAKE_CURRENT_BINARY_DIR}/vulkan-shader-extension-defs.cmake
-        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-    )
 
     # Add toolchain file if cross-compiling
     if (CMAKE_CROSSCOMPILING)
