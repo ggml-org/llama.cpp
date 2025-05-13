@@ -8,6 +8,9 @@
 
 #import <Metal/Metal.h>
 
+#undef GGML_LOG_DEBUG
+#define GGML_LOG_DEBUG(...)
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -776,8 +779,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
                 GGML_LOG_ERROR("%s: error: load pipeline error: %s\n", __func__, [[error description] UTF8String]); \
                 return NULL; \
             } \
-        } else { \
-            GGML_LOG_WARN("%s: skipping %-40s (not supported)\n", __func__, "kernel_"#name); \
         }
 
         const bool has_simdgroup_mm        = ctx_dev->has_simdgroup_mm;
