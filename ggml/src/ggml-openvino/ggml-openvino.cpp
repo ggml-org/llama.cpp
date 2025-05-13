@@ -62,7 +62,6 @@ ggml_backend_openvino_graph_compute(ggml_backend_t backend, struct ggml_cgraph *
 static const ggml_backend_i ggml_backend_openvino_interface = {
     /* .get_name                = */ ggml_backend_openvino_get_name,
     /* .free                    = */ ggml_backend_openvino_free,
-    /* .get_default_buffer_type = */ ggml_backend_openvino_get_default_buffer_type,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
@@ -72,9 +71,6 @@ static const ggml_backend_i ggml_backend_openvino_interface = {
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_openvino_graph_compute,
-    /* .supports_op             = */ NULL,
-    /* .supports_buft           = */ NULL,
-    /* .offload_op              = */ NULL,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
 };
@@ -89,7 +85,7 @@ static ggml_guid_t ggml_backend_openvino_guid(void) {
 }
 
 // backend API
-GGML_API ggml_backend_t ggml_backend_openvino_init(int device) {
+GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device) {
     if (device < 0 || device >= ggml_backend_openvino_get_device_count()) {
         GGML_LOG_ERROR("%s: invalid device %d\n", __func__, device);
         return nullptr;
@@ -111,30 +107,28 @@ GGML_API ggml_backend_t ggml_backend_openvino_init(int device) {
     return openvino_backend;
 }
 
-GGML_API bool ggml_backend_is_openvino(ggml_backend_t backend) {
+GGML_BACKEND_API bool ggml_backend_is_openvino(ggml_backend_t backend) {
     GGML_ASSERT(backend->context != nullptr);
     return true;
 }
 
 // device buffer
-GGML_API ggml_backend_buffer_type_t
-ggml_backend_openvino_buffer_type(int device) {
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(int device) {
     GGML_ASSERT(device >= 0);
     return nullptr;
 }
 
 // split tensor buffer that splits matrices by rows across multiple devices
-GGML_API ggml_backend_buffer_type_t
-ggml_backend_openvino_split_buffer_type(const float *tensor_split) {
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_split_buffer_type(const float * tensor_split) {
     GGML_ASSERT(tensor_split != nullptr);
     return nullptr;
 }
 
 // pinned host buffer for use with the CPU backend for faster copies between CPU
 // and GPU
-GGML_API ggml_backend_buffer_type_t
-ggml_backend_openvino_host_buffer_type(void) { return nullptr;}
-
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_type(void) {
+    return nullptr;
+}
 
 struct ggml_backend_openvino_buffer_type_context {
     int device;
@@ -367,7 +361,7 @@ const ggml_openvino_device_info & ggml_openvino_info() {
     return info;
 }
 
-GGML_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
+GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
     static ggml_backend_reg reg;
 
     static bool initialized = false;
@@ -394,10 +388,9 @@ GGML_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
                 ctx->devices.push_back(dev);
             }
 
-            reg = ggml_backend_reg {
-                /* .interface = */ ggml_backend_openvino_reg_interface,
-                /* .context   = */ ctx
-            };
+            reg = ggml_backend_reg{ /* .api_version = */ GGML_BACKEND_API_VERSION,
+                                    /* .iface       = */ ggml_backend_openvino_reg_interface,
+                                    /* .context     = */ ctx };
         }
 
         initialized = true;
