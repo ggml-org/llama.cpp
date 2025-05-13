@@ -1,13 +1,12 @@
-#include "openvino/op/reshape.hpp"
-
 #include <cstdint>
+#include <openvino/core/node.hpp>
+#include <openvino/core/node_output.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/reshape.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/core/node.hpp"
-#include "openvino/core/node_output.hpp"
-#include "openvino/op/constant.hpp"
 
 namespace ov {
 namespace frontend {
@@ -27,7 +26,7 @@ OutputVector translate_reshape(const NodeContext& context) {
                                      std::vector<int64_t>{-1, (int64_t)output_shape[1], (int64_t)output_shape[2]});
     Output<Node> res = std::make_shared<ov::op::v1::Reshape>(context.get_input(0), new_shape_node, false);
     return {res};
-};
+}
 
 }  // namespace op
 }  // namespace ggml

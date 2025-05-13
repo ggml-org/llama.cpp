@@ -2,12 +2,12 @@
 #include <climits>
 #include <cstdint>
 #include <memory>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/slice.hpp>
 #include <vector>
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
-#include "openvino/op/reshape.hpp"
-#include "openvino/op/slice.hpp"
 
 namespace ov {
 namespace frontend {
@@ -48,7 +48,7 @@ OutputVector translate_cont(const NodeContext& context) {
 
         return {slice};
     }
-};
+}
 
 }  // namespace op
 }  // namespace ggml
