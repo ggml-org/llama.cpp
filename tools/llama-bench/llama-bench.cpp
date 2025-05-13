@@ -1664,7 +1664,7 @@ struct sql_printer : public printer {
     }
 };
 
-static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
+static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, bool do_profile=false) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -1681,9 +1681,19 @@ static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
         for (int i = 1; i < n_tokens; i++) {
             tokens[i] = std::rand() % n_vocab;
         }
+        // TODO: profile more batch.
+        if (do_profile && n_prompt - n_processed <= n_batch) {
+            // If GGML_GRAPH_PROFILE ends with .csv, insert "prefill" before the extension
+            std::string profile_path = GGML_GRAPH_PROFILE;
+            if (profile_path.size() > 4 && profile_path.substr(profile_path.size() - 4) == ".csv") {
+                profile_path.insert(profile_path.size() - 4, "_prefill");
+            }
+            set_graph_profile(profile_path);
+        }
         llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
         n_processed += n_tokens;
     }
+    set_graph_profile("");
 
     llama_synchronize(ctx);
 }
@@ -1699,7 +1709,12 @@ static void test_gen(llama_context * ctx, int n_gen, int n_threads, bool do_prof
 
     for (int i = 0; i < n_gen; i++) {
         if (do_profile && i == n_gen - 1) {
-            set_graph_profile(GGML_GRAPH_PROFILE);
+            // If GGML_GRAPH_PROFILE ends with .csv, insert "decode" before the extension
+            std::string profile_path = GGML_GRAPH_PROFILE;
+            if (profile_path.size() > 4 && profile_path.substr(profile_path.size() - 4) == ".csv") {
+                profile_path.insert(profile_path.size() - 4, "_decode");
+            }
+            set_graph_profile(profile_path);
         }
         llama_decode(ctx, llama_batch_get_one(&token, 1));
         llama_synchronize(ctx);
