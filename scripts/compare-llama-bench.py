@@ -67,7 +67,7 @@ DEFAULT_HIDE = ["model_filename"]  # Always hide these properties by default.
 GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon "]  # Strip prefixes for smaller tables.
 MODEL_SUFFIX_REPLACE = {" - Small": "_S", " - Medium": "_M", " - Large": "_L"}
 
-DESCRIPTION = """Creates tables from llama-bench data written to a JSONL file or SQLite database. Example usage (Linux):
+DESCRIPTION = """Creates tables from llama-bench data written to multiple JSON/CSV files, a single JSONL file or SQLite database. Example usage (Linux):
 
 $ git checkout master
 $ make clean && make llama-bench
@@ -95,12 +95,13 @@ help_c = (
 )
 parser.add_argument("-c", "--compare", help=help_c)
 help_i = (
-    "Input JSONL/SQLite file for comparing commits. "
+    "Input JSONL/SQLite file or JSON/CSV files for comparing commits. "
+    "Specify this argument multiple times for multiple files. "
     "Defaults to 'llama-bench.sqlite' in the current working directory. "
     "If no such file is found and there is exactly one .sqlite file in the current directory, "
     "that file is instead used as input."
 )
-parser.add_argument("-i", "--input", help=help_i)
+parser.add_argument("-i", "--input", action="append", help=help_i)
 help_o = (
     "Output format for the table. "
     "Defaults to 'pipe' (GitHub compatible). "
@@ -135,14 +136,14 @@ if unknown_args:
     sys.exit(1)
 
 input_file = known_args.input
-if input_file is None and os.path.exists("./llama-bench.sqlite"):
-    input_file = "llama-bench.sqlite"
-if input_file is None:
+if not input_file and os.path.exists("./llama-bench.sqlite"):
+    input_file = ["llama-bench.sqlite"]
+if not input_file:
     sqlite_files = glob("*.sqlite")
     if len(sqlite_files) == 1:
-        input_file = sqlite_files[0]
+        input_file = sqlite_files
 
-if input_file is None:
+if not input_file:
     logger.error("Cannot find a suitable input file, please provide one.\n")
     parser.print_help()
     sys.exit(1)
@@ -285,48 +286,59 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
 
 
 class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
-    connected_file = False
-
     def __init__(self, data_file: str):
         super().__init__()
 
+        self.connection = sqlite3.connect(data_file)
+        self.cursor = self.connection.cursor()
+        self._builds_init()
+
+    @staticmethod
+    def valid_format(data_file: str) -> bool:
         connection = sqlite3.connect(data_file)
         cursor = connection.cursor()
 
-        # Test if data_file is a valid SQLite database
         try:
             if cursor.execute("PRAGMA schema_version;").fetchone()[0] == 0:
-                raise RuntimeError("The provided input file does not exist or is empty.")
-        except sqlite3.DatabaseError:
-            connection.close()
-            connection = None
+                raise sqlite3.DatabaseError("The provided input file does not exist or is empty.")
+        except sqlite3.DatabaseError as e:
+            logger.debug(f'"{data_file}" is not a valid SQLite3 file.', exc_info=e)
+            cursor = None
 
-        if (connection):
-            self.connected_file = True
-            self.connection.close()
-            self.connection = connection
-            self.cursor = cursor
-            self._builds_init()
+        connection.close()
+        return True if cursor else False
 
 
-class LlamaBenchDataSQLite3_or_JSONL(LlamaBenchDataSQLite3File):
+class LlamaBenchDataJSONL(LlamaBenchDataSQLite3):
     def __init__(self, data_file: str):
-        super().__init__(data_file)
+        super().__init__()
 
-        if not self.connected_file:
+        with open(data_file, "r", encoding="utf-8") as fp:
+            for i, line in enumerate(fp):
+                parsed = json.loads(line)
+
+                for k in parsed.keys() - set(DB_FIELDS):
+                    del parsed[k]
+
+                if (missing_keys := self._check_keys(parsed.keys())):
+                    raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
+
+                self.cursor.execute(f"INSERT INTO test({', '.join(parsed.keys())}) VALUES({', '.join('?' * len(parsed))});", tuple(parsed.values()))
+
+        self._builds_init()
+
+    @staticmethod
+    def valid_format(data_file: str) -> bool:
+        try:
             with open(data_file, "r", encoding="utf-8") as fp:
-                for i, line in enumerate(fp):
-                    parsed = json.loads(line)
+                for line in fp:
+                    json.loads(line)
+                    break
+        except Exception as e:
+            logger.debug(f'"{data_file}" is not a valid JSONL file.', exc_info=e)
+            return False
 
-                    for k in parsed.keys() - set(DB_FIELDS):
-                        del parsed[k]
-
-                    if (missing_keys := self._check_keys(parsed.keys())):
-                        raise RuntimeError(f"Missing required data key(s) at line {i + 1}: {', '.join(missing_keys)}")
-
-                    self.cursor.execute(f"INSERT INTO test({', '.join(parsed.keys())}) VALUES({', '.join('?' * len(parsed))});", tuple(parsed.values()))
-
-            self._builds_init()
+        return True
 
 
 class LlamaBenchDataJSON(LlamaBenchDataSQLite3):
@@ -348,6 +360,22 @@ class LlamaBenchDataJSON(LlamaBenchDataSQLite3):
 
         self._builds_init()
 
+    @staticmethod
+    def valid_format(data_files: list[str]) -> bool:
+        if not data_files:
+            return False
+
+        for data_file in data_files:
+            try:
+                with open(data_file, "r", encoding="utf-8") as fp:
+                    json.load(fp)
+                    continue
+            except Exception as e:
+                logger.debug(f'"{data_file}" is not a valid JSON file.', exc_info=e)
+                return False
+
+        return True
+
 
 class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
     def __init__(self, data_files: list[str]):
@@ -368,8 +396,37 @@ class LlamaBenchDataCSV(LlamaBenchDataSQLite3):
 
         self._builds_init()
 
+    @staticmethod
+    def valid_format(data_files: list[str]) -> bool:
+        if not data_files:
+            return False
 
-bench_data = LlamaBenchDataSQLite3_or_JSONL(input_file)
+        for data_file in data_files:
+            try:
+                with open(data_file, "r", encoding="utf-8") as fp:
+                    csv.DictReader(fp)
+                    continue
+            except Exception as e:
+                logger.debug(f'"{data_file}" is not a valid CSV file.', exc_info=e)
+                return False
+
+        return True
+
+
+bench_data = None
+if len(input_file) == 1:
+    if LlamaBenchDataSQLite3File.valid_format(input_file[0]):
+        bench_data = LlamaBenchDataSQLite3File(input_file[0])
+    elif LlamaBenchDataJSONL.valid_format(input_file[0]):
+        bench_data = LlamaBenchDataJSONL(input_file[0])
+else:
+    if LlamaBenchDataJSON.valid_format(input_file):
+        bench_data = LlamaBenchDataJSON(input_file)
+    elif LlamaBenchDataCSV.valid_format(input_file):
+        bench_data = LlamaBenchDataCSV(input_file)
+
+if not bench_data:
+    raise RuntimeError("No valid (or some invalid) input files found.")
 
 if not bench_data.builds:
     raise RuntimeError(f"{input_file} does not contain any builds.")
