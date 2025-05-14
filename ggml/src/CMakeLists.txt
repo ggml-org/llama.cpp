@@ -218,7 +218,7 @@ endif()
 add_library(ggml
             ggml-backend-reg.cpp)
 
-# if (GGML_TMAC)
+if (GGML_TMAC)
 #     # set(GGML_HEADERS_TMAC
 #     #     ggml-cpu/tmac/lut_ctor.h
 #     #     ggml-cpu/tmac/tbl.h
@@ -233,13 +233,13 @@ add_library(ggml
 #         )
 #     # list (APPEND GGML_CPU_SOURCES ${GGML_SOURCES_TMAC} ${GGML_HEADERS_TMAC})
 #     target_sources(ggml-base PRIVATE ${GGML_SOURCES_TMAC})
-#     target_compile_definitions(ggml-base PUBLIC GGML_USE_TMAC)
-#     target_include_directories(ggml-base PUBLIC ggml-cpu/tmac)
-#     target_compile_definitions(ggml PUBLIC GGML_USE_TMAC)
-#     target_include_directories(ggml PUBLIC ggml-cpu/tmac)
+    target_compile_definitions(ggml-base PUBLIC GGML_USE_TMAC)
+    target_include_directories(ggml-base PUBLIC ggml-cpu/tmac)
+    target_compile_definitions(ggml PUBLIC GGML_USE_TMAC)
+    target_include_directories(ggml PUBLIC ggml-cpu/tmac)
 #     target_compile_options(ggml-base PUBLIC /arch:AVX2)
 #     target_compile_definitions(ggml-base PUBLIC GGML_AVX2 GGML_FMA GGML_F16C)
-# endif()
+endif()
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
