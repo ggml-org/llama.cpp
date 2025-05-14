@@ -12,6 +12,11 @@ uint32_t apir_device_get_type(struct virtgpu *gpu);
 void apir_device_get_memory(struct virtgpu *gpu, size_t *free, size_t *total);
 bool apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op);
 apir_buffer_type_context_t apir_device_get_buffer_type(struct virtgpu *gpu);
+void apir_device_get_props(struct virtgpu *gpu,
+			   bool *async,
+			   bool *host_buffer,
+			   bool *buffer_from_host_ptr,
+			   bool *events);
 
 /* buffer-type */
 // buffer_type_alloc_buffer

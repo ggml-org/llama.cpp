@@ -9,12 +9,12 @@ ggml_add_backend_library(ggml-remotingfrontend
                          ggml-backend-device.cpp
                          ggml-backend-reg.cpp
                          ggml-buffer-type.cpp
-                         ggml-host-buffer-type.cpp
                          virtgpu.cpp
                          virtgpu-shm.cpp
                          virtgpu-utils.cpp
                          virtgpu-forward-device.cpp
                          virtgpu-forward-buffer-type.cpp
+                         virtgpu-forward-impl.h
                          ../../include/ggml-remoting-frontend.h
                         )
 

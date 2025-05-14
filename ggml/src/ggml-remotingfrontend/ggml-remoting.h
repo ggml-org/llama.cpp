@@ -26,6 +26,9 @@
 
 #define NEXT
 
+#define STOP_HERE \
+  thks_bye()
+
 #define IMPLEMENTED
 //  printf("INFO: ### reached implemented function %s\n", __func__)
 

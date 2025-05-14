@@ -10,7 +10,6 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   BEING_IMPLEMENTED;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
   UNUSED(gpu);
-  /* ... */
 
   void *ctx = NULL;
 
@@ -19,7 +18,7 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
 
 static const char *
 ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-  BEING_IMPLEMENTED;
+  IMPLEMENTED;
 
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
@@ -72,11 +71,12 @@ static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffe
 }
 
 static enum ggml_status ggml_backend_remoting_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+  UNUSED(buffer);
+  UNUSED(tensor);
+
   NEXT;
   NOT_IMPLEMENTED;
-  if (tensor->view_src != nullptr) {
-    GGML_ASSERT(tensor->view_src->buffer->buft == buffer->buft);
-  }
+
   return GGML_STATUS_SUCCESS;
 }
 

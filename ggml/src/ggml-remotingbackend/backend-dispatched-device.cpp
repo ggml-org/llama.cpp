@@ -5,7 +5,6 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
-#include "ggml-remoting-backend.h"
 
 #include "ggml-metal.h"
 
@@ -85,6 +84,21 @@ backend_device_get_buffer_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *
 
   apir_buffer_type_context_t bufft_ctx = (apir_buffer_type_context_t) bufft;
   vn_encode_apir_buffer_type_context_t(enc, &bufft_ctx);
+
+  return 0;
+}
+
+uint32_t
+backend_device_get_props(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  struct ggml_backend_dev_props props;
+  dev->iface.get_props(dev, &props);
+
+  vn_encode_bool_t(enc, &props.caps.async);
+  vn_encode_bool_t(enc, &props.caps.host_buffer);
+  vn_encode_bool_t(enc, &props.caps.buffer_from_host_ptr);
+  vn_encode_bool_t(enc, &props.caps.events);
 
   return 0;
 }

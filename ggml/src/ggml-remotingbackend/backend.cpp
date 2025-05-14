@@ -16,8 +16,6 @@
 
 static void *backend_library_handle = NULL;
 
-
-
 extern "C" {
   void apir_backend_deinit(void) {
     if (backend_library_handle) {

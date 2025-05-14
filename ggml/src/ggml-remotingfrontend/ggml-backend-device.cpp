@@ -70,34 +70,33 @@ ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, const ggml_tenso
   UNUSED(dev);
 }
 
-static ggml_backend_buffer_type_t
-ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
-  UNUSED(dev);
-
-  IMPLEMENTED;
-
-  return ggml_backend_remoting_host_buffer_type();
-}
-
-
 static void
 ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
   IMPLEMENTED;
+
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   props->name        = ggml_backend_remoting_device_get_name(dev);
   props->description = ggml_backend_remoting_device_get_description(dev);
   props->type        = ggml_backend_remoting_device_get_type(dev);
   ggml_backend_remoting_device_get_memory(dev, &props->memory_free, &props->memory_total);
-  props->caps = {
-    /* .async                 = */ false,
-    /* .host_buffer           = */ true,
-    /* .buffer_from_host_ptr  = */ false,
-    /* .events                = */ false,
-  };
+
+  apir_device_get_props(gpu,
+			&props->caps.async,
+			&props->caps.host_buffer,
+			&props->caps.buffer_from_host_ptr,
+			&props->caps.events
+    );
+
+  INFO("%s: async=%d, host_buffer=%d, buffer_from_host_ptr=%d, events=%d",
+    __func__, props->caps.async, props->caps.host_buffer,
+       props->caps.buffer_from_host_ptr, props->caps.events);
 }
 
 ggml_backend_buffer_type_t
 ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
+  IMPLEMENTED;
+
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   apir_buffer_type_context_t ctx = apir_device_get_buffer_type(gpu);
@@ -111,6 +110,18 @@ ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
   return &buft;
 }
 
+static ggml_backend_buffer_t ggml_backend_remoting_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
+  UNUSED(dev);
+  UNUSED(ptr);
+  UNUSED(size);
+  UNUSED(max_tensor_size);
+
+  NOT_IMPLEMENTED;
+  STOP_HERE;
+
+  return nullptr;
+}
+
 const struct ggml_backend_device_i ggml_backend_remoting_device_i = {
   /* .get_name             = */ ggml_backend_remoting_device_get_name,
   /* .get_description      = */ ggml_backend_remoting_device_get_description,
@@ -119,8 +130,8 @@ const struct ggml_backend_device_i ggml_backend_remoting_device_i = {
   /* .get_props            = */ ggml_backend_remoting_device_get_props,
   /* .init_backend         = */ ggml_backend_remoting_device_init,
   /* .get_buffer_type      = */ ggml_backend_remoting_device_get_buffer_type,
-  /* .get_host_buffer_type = */ ggml_backend_remoting_device_get_host_buffer_type,
-  /* .buffer_from_host_ptr = */ NULL,
+  /* .get_host_buffer_type = */ NULL,
+  /* .buffer_from_host_ptr = */ ggml_backend_remoting_device_buffer_from_ptr,
   /* .supports_op          = */ ggml_backend_remoting_device_supports_op,
   /* .supports_buft        = */ ggml_backend_remoting_device_supports_buft,
   /* .offload_op           = */ ggml_backend_remoting_device_offload_op,

@@ -5,7 +5,6 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
-#include "ggml-remoting-backend.h"
 
 #include "ggml-metal.h"
 
