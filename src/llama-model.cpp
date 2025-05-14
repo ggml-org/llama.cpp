@@ -12598,8 +12598,6 @@ struct llm_build_granite : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        const auto * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
-
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -12611,7 +12609,7 @@ struct llm_build_granite : public llm_graph_context {
 
             // self-attention
             cur = build_attention_layer(
-                this, gf, cur, inp_pos, inp_attn, kv_self,
+                this, gf, cur, inp_pos, inp_attn,
                 model, n_embd_head, use_rope, il);
 
             if (il == n_layer - 1) {
@@ -12719,7 +12717,6 @@ struct llm_build_granite : public llm_graph_context {
               ggml_tensor                     * cur,
               ggml_tensor                     * inp_pos,
               llm_graph_input_attn_kv_unified * inp_attn,
-        const llama_kv_cache_unified          * kv_self,
         const llama_model                     & model,
         const int64_t                           n_embd_head,
         const bool                              use_rope,
@@ -12749,9 +12746,9 @@ struct llm_build_granite : public llm_graph_context {
             self->cb(Vcur, "Vcur", il);
         }
 
-        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->n_head,    self->n_tokens);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->n_head_kv, self->n_tokens);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->n_head_kv, self->n_tokens);
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->hparams.n_head(il),    self->n_tokens);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
 
         if (use_rope) {
             ggml_tensor * rope_factors = model.get_rope_factors(self->cparams, il);
