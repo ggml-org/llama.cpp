@@ -19,6 +19,13 @@
     }									\
   } while(0)
 
+#define BEING_IMPLEMENTED							\
+  do {									\
+      printf("\nINFO: ###\nINFO: ### function being implemented: %s\nINFO: ###\n\n", __func__); \
+  } while(0)
+
+#define NEXT
+
 #define IMPLEMENTED
 //  printf("INFO: ### reached implemented function %s\n", __func__)
 
@@ -32,6 +39,7 @@ struct ggml_backend_remoting_device_context {
   struct virtgpu *gpu;
 };
 
+extern const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface;
 extern const struct ggml_backend_device_i ggml_backend_remoting_device_i;
 
 ggml_backend_buffer_type_t ggml_backend_remoting_host_buffer_type();

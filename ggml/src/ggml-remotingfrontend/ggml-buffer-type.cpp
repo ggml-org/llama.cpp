@@ -1,79 +1,70 @@
 #include "ggml-remoting.h"
 
-extern ggml_backend_buffer_i ggml_backend_remoting_buffer_interface;
+#define BUFT_TO_GPU(name) \
+  ((struct ggml_backend_remoting_device_context *) (name)->device->context)->gpu
 
-struct ggml_backend_remoting_buffer_type_context {
-  std::string name;
-};
+extern const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface;
 
+static ggml_backend_buffer_t
+ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+  BEING_IMPLEMENTED;
+  struct virtgpu *gpu = BUFT_TO_GPU(buft);
+  UNUSED(gpu);
+  /* ... */
 
-static const char * ggml_backend_remoting_buffer_type_name(ggml_backend_buffer_type_t buft) {
-  UNUSED(buft);
-
-  NOT_IMPLEMENTED;
-
-  return "Remoting buffer";
-}
-
-static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-  ggml_backend_remoting_buffer_type_context * ctx = (ggml_backend_remoting_buffer_type_context *) buft->context;
-
-  NEXT;
-  NOT_IMPLEMENTED;
+  void *ctx = NULL;
 
   return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, ctx, size);
 }
 
-static size_t ggml_backend_remoting_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-  UNUSED(buft);
+static const char *
+ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+  BEING_IMPLEMENTED;
 
-  NEXT;
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return 4096;
+  return apir_buffer_type_get_name(gpu, buft);
 }
 
-static size_t ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-  UNUSED(buft);
+static size_t
+ggml_backend_remoting_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+  IMPLEMENTED;
 
-  NEXT;
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return 40960;
+  return apir_buffer_type_get_alignment(gpu, buft);
 }
 
-static size_t ggml_backend_remoting_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-  UNUSED(buft);
-  UNUSED(tensor);
+static size_t
+ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+  IMPLEMENTED;
+  struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  NEXT;
-  NOT_IMPLEMENTED;
-
-  return ggml_nbytes(tensor);
+  return apir_buffer_type_get_max_size(gpu, buft);
 }
 
-static ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
-  /* .get_name         = */ ggml_backend_remoting_buffer_type_name,
+static bool
+ggml_backend_remoting_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+  IMPLEMENTED;
+  struct virtgpu *gpu = BUFT_TO_GPU(buft);
+
+  return apir_buffer_type_is_host(gpu, buft);
+}
+
+const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
+  /* .get_name         = */ ggml_backend_remoting_buffer_type_get_name,
   /* .alloc_buffer     = */ ggml_backend_remoting_buffer_type_alloc_buffer,
   /* .get_alignment    = */ ggml_backend_remoting_buffer_type_get_alignment,
   /* .get_max_size     = */ ggml_backend_remoting_buffer_type_get_max_size,
-  /* .get_alloc_size   = */ ggml_backend_remoting_buffer_type_get_alloc_size,
-  /* .is_host          = */ NULL,
+  /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+  /* .is_host          = */ ggml_backend_remoting_buffer_type_is_host,
 };
 
-ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
-
-  static struct ggml_backend_buffer_type buft {
-    /* .iface    = */ ggml_backend_remoting_buffer_type_interface,
-    /* .device   = */ dev,
-    /* .context  = */ new ggml_backend_remoting_buffer_type_context{ "device_name"},
-  };
-
-  return & buft;
-}
+/****************************************************************************************/
 
 static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffer) {
   ggml_backend_remoting_buffer_context * ctx = (ggml_backend_remoting_buffer_context *)buffer->context;
+  NEXT;
   NOT_IMPLEMENTED;
 
   ggml_remoting_destroy_buffer(ctx->dev_buffer);
@@ -183,7 +174,7 @@ static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uin
   ggml_remoting_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
 }
 
-ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
+const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
   /* .free_buffer     = */ ggml_backend_remoting_buffer_free_buffer,
   /* .get_base        = */ ggml_backend_remoting_buffer_get_base,
   /* .init_tensor     = */ ggml_backend_remoting_buffer_init_tensor,

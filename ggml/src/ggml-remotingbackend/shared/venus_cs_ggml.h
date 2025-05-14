@@ -1,4 +1,4 @@
-// needs the ggml.h definition
+// needs the ggml-backend-impl.h definition
 // needs venus_cs.h definition
 
 static inline void
@@ -31,4 +31,21 @@ vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
   }
 
   return op;
+}
+
+static inline void
+vn_encode_ggml_buft(struct vn_cs_encoder *enc, ggml_backend_buffer_type_t buft) {
+  size_t buft_ctx_size = sizeof(buft->context);
+
+  vn_cs_encoder_write(enc, buft_ctx_size, &buft->context, buft_ctx_size);
+}
+
+static inline ggml_backend_buffer_type_t
+vn_decode_ggml_buft(struct vn_cs_decoder *dec) {
+  ggml_backend_buffer_type_t buft;
+  size_t buft_size = sizeof(buft);
+
+  vn_cs_decoder_read(dec, buft_size, &buft, buft_size);
+
+  return buft;
 }

@@ -1,46 +1,55 @@
 #include "ggml-remoting.h"
 
-static const char *ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
+#define DEV_TO_GPU(name) \
+  ((struct ggml_backend_remoting_device_context *) (name)->context)->gpu
+
+static const char *
+ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_get_name(gpu);
 }
 
-static const char *ggml_backend_remoting_device_get_description(ggml_backend_dev_t dev) {
+static const char *
+ggml_backend_remoting_device_get_description(ggml_backend_dev_t dev) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_get_description(gpu);
 }
 
-static enum ggml_backend_dev_type ggml_backend_remoting_device_get_type(ggml_backend_dev_t dev) {
+static enum ggml_backend_dev_type
+ggml_backend_remoting_device_get_type(ggml_backend_dev_t dev) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return (enum ggml_backend_dev_type) apir_device_get_type(gpu);
 }
 
-static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+static void
+ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_get_memory(gpu, free, total);
 }
 
-static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool
+ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = ((struct ggml_backend_remoting_device_context *) dev->context)->gpu;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_supports_op(gpu, op);
 }
 
-static bool ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+static bool
+ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
   UNUSED(dev);
   UNUSED(buft);
 
@@ -49,7 +58,8 @@ static bool ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, g
   return true;
 }
 
-static bool ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool
+ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
   const int min_batch_size = 32;
 
   NOT_IMPLEMENTED;
@@ -60,7 +70,8 @@ static bool ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, cons
   UNUSED(dev);
 }
 
-static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+static ggml_backend_buffer_type_t
+ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
   UNUSED(dev);
 
   IMPLEMENTED;
@@ -69,9 +80,10 @@ static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_t
 }
 
 
-static void ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
-
+static void
+ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
   IMPLEMENTED;
+
   props->name        = ggml_backend_remoting_device_get_name(dev);
   props->description = ggml_backend_remoting_device_get_description(dev);
   props->type        = ggml_backend_remoting_device_get_type(dev);
@@ -82,6 +94,21 @@ static void ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struc
     /* .buffer_from_host_ptr  = */ false,
     /* .events                = */ false,
   };
+}
+
+ggml_backend_buffer_type_t
+ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
+
+  apir_buffer_type_context_t ctx = apir_device_get_buffer_type(gpu);
+
+  static struct ggml_backend_buffer_type buft {
+    /* .iface    = */ ggml_backend_remoting_buffer_type_interface,
+    /* .device   = */ dev,
+    /* .context  = */ ctx,
+  };
+
+  return &buft;
 }
 
 const struct ggml_backend_device_i ggml_backend_remoting_device_i = {

@@ -3,11 +3,15 @@
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
   UNUSED(backend);
 
+  NOT_IMPLEMENTED;
+
   return "API Remoting backend";
 }
 
 static void ggml_backend_remoting_free(ggml_backend_t backend) {
   UNUSED(backend);
+
+  NOT_IMPLEMENTED;
 }
 
 static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -35,12 +39,17 @@ static ggml_backend_i ggml_backend_remoting_interface = {
 
 static ggml_guid_t ggml_backend_remoting_guid() {
   static ggml_guid guid = { 0xb8, 0xf7, 0x4f, 0x86, 0x40, 0x3c, 0xe1, 0x02, 0x91, 0xc8, 0xdd, 0xe9, 0x02, 0x3f, 0xc0, 0x2b };
+
+  NOT_IMPLEMENTED;
+
   return &guid;
 }
 
 
 ggml_backend_t ggml_backend_remoting_device_init(ggml_backend_dev_t dev, const char * params) {
   UNUSED(params);
+  IMPLEMENTED;
+
   ggml_backend_remoting_device_context * ctx = (ggml_backend_remoting_device_context *)dev->context;
 
   ggml_backend_t remoting_backend = new ggml_backend {

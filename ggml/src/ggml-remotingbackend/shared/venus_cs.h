@@ -452,3 +452,17 @@ vn_decode_bool_t(struct vn_cs_decoder *dec, bool *val)
 {
   vn_decode(dec, sizeof(int), val, sizeof(int));
 }
+
+/* apir_buffer_type_context_t */
+
+static inline void
+vn_encode_apir_buffer_type_context_t(struct vn_cs_encoder *enc, const apir_buffer_type_context_t *val)
+{
+  vn_encode(enc, sizeof(apir_buffer_type_context_t), val, sizeof(apir_buffer_type_context_t));
+}
+
+static inline void
+vn_decode_apir_buffer_type_context_t(struct vn_cs_decoder *dec, apir_buffer_type_context_t *val)
+{
+  vn_decode(dec, sizeof(apir_buffer_type_context_t), val, sizeof(apir_buffer_type_context_t));
+}

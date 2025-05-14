@@ -14,22 +14,33 @@
 
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
+typedef void * apir_buffer_type_context_t;
+
 typedef uint32_t (*apir_backend_initialize_t)(void);
 typedef void (*apir_backend_deinit_t)(void);
 
 typedef uint32_t (*apir_backend_dispatch_t)(uint32_t cmd_type,
-					    char *dec_cur, const char *dec_end,
-					    char *enc_cur, const char *enc_end,
-					    char **enc_cur_after
+                                            char *dec_cur, const char *dec_end,
+                                            char *enc_cur, const char *enc_end,
+                                            char **enc_cur_after
   );
 
 typedef enum ApirBackendCommandType {
-    APIR_COMMAND_TYPE_DEVICE_GET_COUNT = 0,
-    APIR_COMMAND_TYPE_DEVICE_GET_NAME = 1,
-    APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION = 2,
-    APIR_COMMAND_TYPE_DEVICE_GET_TYPE = 3,
-    APIR_COMMAND_TYPE_DEVICE_GET_MEMORY = 4,
-    APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP = 5,
+  /* device */
+  APIR_COMMAND_TYPE_DEVICE_GET_COUNT = 0,
+  APIR_COMMAND_TYPE_DEVICE_GET_NAME = 1,
+  APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION = 2,
+  APIR_COMMAND_TYPE_DEVICE_GET_TYPE = 3,
+  APIR_COMMAND_TYPE_DEVICE_GET_MEMORY = 4,
+  APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP = 5,
+  APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE = 6,
 
-    APIR_BACKEND_DISPATCH_TABLE_COUNT = 6, // last command_type index + 1
+  /* buffer-type */
+  APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME = 7,
+  APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT = 8,
+  APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE = 9,
+  APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST = 10,
+
+  // last command_type index + 1
+  APIR_BACKEND_DISPATCH_TABLE_COUNT = 11,
 } ApirBackendCommandType;

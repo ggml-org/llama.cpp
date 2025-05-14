@@ -6,6 +6,8 @@ message(STATUS "Enable API Remoting backend")
 ggml_add_backend_library(ggml-remotingbackend
                          backend.cpp
                          backend-dispatched.cpp
+                         backend-dispatched-device.cpp
+                         backend-dispatched-buffer-type.cpp
                          backend-utils.cpp
                          shared/api_remoting.h
                          shared/apir_backend.h
