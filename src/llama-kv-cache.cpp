@@ -34,8 +34,6 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
     const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
 
-    is_mla_with_fa = model.arch != LLM_ARCH_DEEPSEEK2 || v_trans
-
     has_shift = false;
     can_shift = !is_mla || v_trans; // TODO: allow context shifting for MLA with flash attention
 
