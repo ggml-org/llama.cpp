@@ -796,7 +796,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
   | The model is too big and requires more memory than what is available.|Choose a smaller model or change to a smaller quantization, like Q5 -> Q4;<br>Alternatively, use more than one device to load model.|
 
 ### **GitHub contribution**:
-Please add the **SYCL :** prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
+Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
 
 ## TODO
 
