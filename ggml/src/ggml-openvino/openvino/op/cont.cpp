@@ -17,11 +17,13 @@ namespace op {
 OutputVector translate_cont(const NodeContext& context) {
     num_inputs_check(context, 1, 1);
 
+    int op_case = context.get_op_case();
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported CONT case");
+
     auto src_shape = context.get_input_shape(0).to_shape();
     auto dst_shape = context.get_output_shape(0).to_shape();
 
-    bool continuous = context.check_if_continuous();
-    if (continuous) {
+    if (op_case == 1) {
         // The input comes from a PERMUTE
         dst_shape[1] = -1;
         auto result = std::make_shared<ov::op::v1::Reshape>(

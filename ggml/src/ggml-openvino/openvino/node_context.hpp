@@ -81,8 +81,8 @@ public:
         return m_decoder->get_attribute(name);
     }
 
-    bool check_if_continuous() const {
-        return m_decoder->check_if_continuous();
+    int get_op_case() const {
+        return m_decoder->get_op_case();
     }
 
 private:

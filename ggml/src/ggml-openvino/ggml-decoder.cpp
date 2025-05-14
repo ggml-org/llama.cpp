@@ -38,6 +38,10 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
             printed = true;
         }
 
+        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+            dump_cgraph(m_cgraph);
+        }
+
         set_max_token_len();
         for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
             auto* cur_node = m_cgraph->nodes[node_n];
@@ -47,10 +51,6 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
         m_model_weights = model_weights;
 
         add_extra_inputs();
-
-        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-            dump_cgraph(m_cgraph);
-        }
     }
 }
 
@@ -142,17 +142,40 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
 
     if (m_node) {
         switch (node->op) {
+        case GGML_OP_RESHAPE: {
+            if (node->ne[0] * node->ne[1] == node->src[0]->ne[0]) {
+                m_op_case = 1;
+            } else if (node->src[0]->ne[0] * node->src[0]->ne[1] == node->ne[0]) {
+                m_op_case = 2;
+            }
+            break;
+        }
         case GGML_OP_CONT: {
-            // Currently only two cases, either the input comes from a VIEW which is subtensor or from a PERMUTE
-            m_continuous = ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src);
+            if (ggml_nelements(node->src[0]) == ggml_nelements(node->src[0]->view_src)) {
+                // The input comes from a PERMUTE
+                m_op_case = 1;
+            } else {
+                // The input comes from a VIEW which is subtensor
+                m_op_case = 2;
+            }
             break;
         }
         case GGML_OP_CPY: {
-            m_continuous = ggml_is_contiguous(node);
+            if (ggml_is_contiguous(node)) {
+                // Write K to cache_k
+                m_op_case = 1;
+            } else {
+                // Write V to cache_v
+                m_op_case = 2;
+            }
             break;
         }
         case GGML_OP_MUL_MAT: {
-            m_continuous = node->src[0]->view_src == nullptr;
+            if (node->src[0]->view_src == nullptr) {
+                m_op_case = 1;
+            } else {
+                m_op_case = 2;
+            }
             break;
         }
         default:
