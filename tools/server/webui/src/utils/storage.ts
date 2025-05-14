@@ -213,6 +213,22 @@ const StorageUtils = {
       localStorage.setItem('theme', theme);
     }
   },
+  async getMessage(
+    convId: string,
+    messageId: Message['id']
+  ): Promise<Message | undefined> {
+    return await db.messages.where({ convId, id: messageId }).first();
+  },
+  async updateMessage(updatedMessage: Message): Promise<void> {
+    await db.transaction('rw', db.conversations, db.messages, async () => {
+      await db.messages.put(updatedMessage);
+      await db.conversations.update(updatedMessage.convId, {
+        lastModified: Date.now(),
+        currNode: updatedMessage.id,
+      });
+    });
+    dispatchConversationChange(updatedMessage.convId);
+  },
 };
 
 export default StorageUtils;
