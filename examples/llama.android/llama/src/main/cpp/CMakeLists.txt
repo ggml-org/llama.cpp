@@ -31,6 +31,13 @@ function(build_llama_tier tier march)
     # ---------- 2.1  configure & build core code in an external project -----
     set(build_dir ${CMAKE_BINARY_DIR}/llama_build_${tier})
 
+    # KleidiAI requires dotprod and i8mm
+    if(${tier} STREQUAL "t0" OR ${tier} STREQUAL "t1")
+        set(kleidi OFF)
+    else()
+        set(kleidi ON)
+    endif()
+
     ExternalProject_Add(llama_build_${tier}
         SOURCE_DIR   ${LLAMA_SRC}
         BINARY_DIR   ${build_dir}
@@ -42,6 +49,7 @@ function(build_llama_tier tier march)
             -DANDROID_STL=${ANDROID_STL}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             # ---- llama / ggml feature switches ----------------------------
+            -DGGML_CPU_KLEIDIAI=${kleidi}
             -DGGML_LLAMAFILE=OFF
             -DGGML_OPENMP=OFF
             -DLLAMA_BUILD_COMMON=ON
@@ -128,12 +136,12 @@ build_llama_tier(t0 "armv8-a+simd")
 build_llama_tier(t1 "armv8.2-a+dotprod")
 build_llama_tier(t2 "armv8.6-a+dotprod+i8mm")
 build_llama_tier(t3 "armv9-a+dotprod+i8mm+sve+sve2")
-build_llama_tier(t4 "armv9.2-a+dotprod+i8mm+sve+sve2+sme")
+#build_llama_tier(t4 "armv9.2-a+dotprod+i8mm+sve+sve2+sme")
 
 add_dependencies(llama_build_t1 llama_build_t0)
 add_dependencies(llama_build_t2 llama_build_t1)
 add_dependencies(llama_build_t3 llama_build_t2)
-add_dependencies(llama_build_t4 llama_build_t3)
+#add_dependencies(llama_build_t4 llama_build_t3)
 
 # --------------------------------------------------------------------------
 # 4.  Default variant when Gradle hasn’t told us (keeps IDE happy)
