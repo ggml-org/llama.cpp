@@ -17,11 +17,6 @@ set(CMAKE_CXX_STANDARD 17  CACHE STRING "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # --------------------------------------------------------------------------
-# 0.b  —  Make the LLVM OpenMP runtime available
-# --------------------------------------------------------------------------
-find_package(OpenMP REQUIRED)        # NDK’s clang ships libomp.a
-
-# --------------------------------------------------------------------------
 # 1. Locate the root of the llama.cpp source tree
 #    (six levels up from this CMakeLists.txt).
 # --------------------------------------------------------------------------
@@ -48,6 +43,7 @@ function(build_llama_tier tier march)
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
             # ---- llama / ggml feature switches ----------------------------
             -DGGML_LLAMAFILE=OFF
+            -DGGML_OPENMP=OFF
             -DLLAMA_BUILD_COMMON=ON
             -DLLAMA_CURL=OFF
             -DBUILD_SHARED_LIBS=OFF       # we want static libs to embed
@@ -117,7 +113,6 @@ function(build_llama_tier tier march)
         ggml_core_${tier}        # umbrella (brings in few weak deps)
         ggml_cpu_core_${tier}    # back-end & scheduler
         ggml_base_core_${tier}   # core math
-        OpenMP::OpenMP_CXX
         android
         log)
 
