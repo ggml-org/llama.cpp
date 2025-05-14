@@ -1431,7 +1431,6 @@ const llama_kv_cache_recurrent * llm_graph_context::get_recurrent_cache() const 
     if (!kv_self) {
         const llama_kv_cache_hybrid * kv_hybrid = dynamic_cast<const llama_kv_cache_hybrid *>(memory);
         if (kv_hybrid) {
-            LLAMA_LOG_INFO("%s: Using hybrid cache recurrent child\n", __func__);
             kv_self = kv_hybrid->get_child_cache<llama_kv_cache_recurrent>();
         }
     }
