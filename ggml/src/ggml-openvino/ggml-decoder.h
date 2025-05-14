@@ -69,8 +69,8 @@ public:
         return m_outputs.at(name);
     }
 
-    virtual bool check_if_continuous() const override {
-        return m_continuous;
+    virtual int get_op_case() const override {
+        return m_op_case;
     }
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const override {
@@ -110,7 +110,7 @@ private:
     std::vector<ggml_tensor*> m_nodes;
     std::string m_op_name;
     mutable std::string m_name;
-    bool m_continuous;
+    int m_op_case;
     std::vector<std::pair<std::string, std::string>> m_op_node_name;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;
