@@ -3711,6 +3711,9 @@ int main(int argc, char ** argv) {
             if (req.path == "/" || tmp.back() == "html") {
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
                 res.status = 503;
+            } else if (req.path == "/models" || req.path == "/v1/models") {
+                // allow the models endpoint to be accessed during loading
+                return true;
             } else {
                 res_error(res, format_error_response("Loading model", ERROR_TYPE_UNAVAILABLE));
             }
@@ -4369,7 +4372,13 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "prompt", std::move(data.at("prompt")) }});
     };
 
-    const auto handle_models = [&params, &ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_models = [&params, &ctx_server, &state, &res_ok](const httplib::Request &, httplib::Response & res) {
+        server_state current_state = state.load();
+        json model_meta = nullptr;
+        if (current_state == SERVER_STATE_READY) {
+            model_meta = ctx_server.model_meta();
+        }
+
         json models = {
             {"object", "list"},
             {"data", {
@@ -4378,7 +4387,7 @@ int main(int argc, char ** argv) {
                     {"object",   "model"},
                     {"created",  std::time(0)},
                     {"owned_by", "llamacpp"},
-                    {"meta",     ctx_server.model_meta()}
+                    {"meta",     model_meta},
                 },
              }}
         };
