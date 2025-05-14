@@ -6284,10 +6284,6 @@ class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
     SSM layers"""
     model_arch = gguf.MODEL_ARCH.GRANITE_MOE_HYBRID
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._transformer_model_class = GraniteMoeModel
-
     def get_attn_layres(self):
         if layer_types := self.hparams.get("layer_types"):
             return [
@@ -6299,51 +6295,16 @@ class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
-
-        # In GraniteMoeHybrid, the mamba layers also have an MoE + Shared expert
-        if name.endswith("block_sparse_moe.input_linear.weight"):
-            ffn_dim = self.hparams["intermediate_size"]
-            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
-            gate, up = data_torch[..., :ffn_dim, :], data_torch[..., ffn_dim:, :]
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
-            ]
-        if name.endswith("shared_mlp.input_linear.weight"):
-            ffn_dim = self.hparams["shared_intermediate_size"]
-            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
-            gate, up = data_torch.split(ffn_dim, dim=-2)
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
-            ]
-
+        if (
+            name.endswith("block_sparse_moe.input_linear.weight") or
+            name.endswith("shared_mlp.input_linear.weight")
+        ):
+            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
         return super().modify_tensors(data_torch, name, bid)
 
-
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        if attention_scale := self.hparams.get("attention_multiplier"):
-            self.gguf_writer.add_attention_scale(attention_scale)
-            logger.info("gguf: (granite) attention_scale = %s", attention_scale)
-        if embedding_scale := self.hparams.get("embedding_multiplier"):
-            self.gguf_writer.add_embedding_scale(embedding_scale)
-            logger.info("gguf: (granite) embedding_scale = %s", embedding_scale)
-        if residual_scale := self.hparams.get("residual_multiplier"):
-            self.gguf_writer.add_residual_scale(residual_scale)
-            logger.info("gguf: (granite) residual_scale = %s", residual_scale)
-        if logits_scale := self.hparams.get("logits_scaling"):
-            self.gguf_writer.add_logit_scale(logits_scale)
-            logger.info("gguf: (granite) logits_scale = %s", logits_scale)
-        if shared_feed_forward_length := self.hparams.get("shared_intermediate_size"):
-            self.gguf_writer.add_expert_shared_feed_forward_length(shared_feed_forward_length)
-            logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
-        if (n_experts := self.hparams.get("num_local_experts")) is not None:
-            self.gguf_writer.add_expert_count(n_experts)
-            logger.info(f"gguf: expert count = {n_experts}")
-        if (n_experts_used := self.hparams.get("num_experts_per_tok")) is not None:
-            self.gguf_writer.add_expert_used_count(n_experts_used)
-            logger.info(f"gguf: experts used count = {n_experts_used}")
+        GraniteMoeModel.set_gguf_parameters(self)
+        BambaModel.set_gguf_parameters(self)
 
     def set_vocab(self):
         self.hparams["pad_vocab_size_multiple"] = 8
