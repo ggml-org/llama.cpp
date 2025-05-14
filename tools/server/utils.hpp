@@ -643,6 +643,10 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("Expected 'messages' to be an array");
     }
     for (auto & msg : messages) {
+        if (!msg.contains("content")) {
+            continue;
+        }
+
         json & content = msg.at("content");
         if (content.is_string() || content.is_null()) {
             continue;
