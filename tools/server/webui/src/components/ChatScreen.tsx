@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { ClipboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { CallbackGeneratedChunk, useAppContext } from '../utils/app.context';
 import ChatMessage from './ChatMessage';
 import { CanvasType, Message, PendingMessage } from '../utils/types';
@@ -328,6 +328,17 @@ function ChatInput({
         {({ getRootProps, getInputProps }) => (
           <div
             className="flex flex-col rounded-xl border-1 border-base-content/30 p-3 w-full"
+            onPasteCapture={(e: ClipboardEvent<HTMLInputElement>) => {
+              const files = Array.from(e.clipboardData.items)
+                .filter((item) => item.kind === 'file')
+                .map((item) => item.getAsFile())
+                .filter((file) => file !== null);
+
+              if (files.length > 0) {
+                e.preventDefault();
+                extraContext.onFileAdded(files);
+              }
+            }}
             {...getRootProps()}
           >
             {!isGenerating && (
