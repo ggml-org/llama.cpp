@@ -1474,7 +1474,6 @@ ggml_tensor * llm_graph_context::build_attn(
                 0);
     //cb(k, "k", il);
 
-    // note: MLA with flash attention now uses the last 512 elements of K-cache in place of a V-cache
     ggml_tensor * v = nullptr;
 
     if (v_trans) {
@@ -1489,6 +1488,13 @@ ggml_tensor * llm_graph_context::build_attn(
                 ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
                 ggml_row_size(kv_self->v_l[il]->type, n_embd_head_v),
                 0);
+    } else {
+        // note: MLA with flash attention now uses the last 512 elements of K-cache in place of a V-cache
+        v = ggml_view_3d(ctx0, kv_self->k_l[il],
+                n_embd_head_v, n_kv, n_head_kv,
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_head_k),
+                n_embd_head_k-n_embd_head_v); // offset by n_rot elements
     }
 
     ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, v_trans, kq_scale);
