@@ -8928,7 +8928,12 @@ struct llm_build_starcoder2 : public llm_graph_context {
 struct llm_build_mamba : public llm_graph_context {
     const llama_model & model;
 
-    llm_build_mamba(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params), model(model) {
+    llm_build_mamba(
+        const llama_model & model,
+        const llm_graph_params & params,
+        ggml_cgraph * gf,
+        const bool use_mamba2
+    ) : llm_graph_context(params), model(model) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -8944,8 +8949,8 @@ struct llm_build_mamba : public llm_graph_context {
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            if (model.arch == LLM_ARCH_MAMBA2) {
                 cur = build_mamba2_layer(gf, cur, state_copy, ubatch, il);
+            if (use_mamba2) {
             } else {
                 cur = build_mamba_layer(gf, cur, state_copy, ubatch, il);
             }
@@ -13620,9 +13625,12 @@ llm_graph_result_ptr llama_model::build_graph(
                 llm = std::make_unique<llm_build_starcoder2>(*this, params, gf);
             } break;
         case LLM_ARCH_MAMBA:
+            {
+                llm = std::make_unique<llm_build_mamba>(*this, params, gf, false);
+            } break;
         case LLM_ARCH_MAMBA2:
             {
-                llm = std::make_unique<llm_build_mamba>(*this, params, gf);
+                llm = std::make_unique<llm_build_mamba>(*this, params, gf, true);
             } break;
         case LLM_ARCH_XVERSE:
             {
