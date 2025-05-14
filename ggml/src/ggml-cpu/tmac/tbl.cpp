@@ -852,6 +852,15 @@ void qgemm_lut_int8_g4(
         } else if (has_scale && kfactor == 16 && bits == 2 && actk == 16 && has_zero_point && !one_scale) {
             tbl_g4_int8_float_update_impl<true, 16, 2, 16, false, true, false>(
                 (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 8 && bits == 2 && actk == 8 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 8, 2, 8, false, false, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 16 && bits == 2 && actk == 8 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 16, 2, 8, false, false, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 16 && bits == 2 && actk == 16 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 16, 2, 16, false, false, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
         } else if (has_scale && kfactor == 8 && bits == 2 && actk == 8 && !has_zero_point && one_scale) {
             tbl_g4_int8_float_update_impl<true, 8, 2, 8, false, false, true>(
                 (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
@@ -871,6 +880,15 @@ void qgemm_lut_int8_g4(
                 (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
         } else if (has_scale && kfactor == 16 && bits == 4 && actk == 16 && has_zero_point && !one_scale) {
             tbl_g4_int8_float_update_impl<true, 16, 4, 16, false, true, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 8 && bits == 4 && actk == 8 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 8, 4, 8, false, false, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 16 && bits == 4 && actk == 8 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 16, 4, 8, false, false, false>(
+                (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
+        } else if (has_scale && kfactor == 16 && bits == 4 && actk == 16 && !has_zero_point && !one_scale) {
+            tbl_g4_int8_float_update_impl<true, 16, 4, 16, false, false, false>(
                 (int32_t)bm, CBits, lut, a, scales, lut_scales, lut_biases);
         } else if (has_scale && kfactor == 8 && bits == 4 && actk == 8 && !has_zero_point && one_scale) {
             tbl_g4_int8_float_update_impl<true, 8, 4, 8, false, false, true>(
