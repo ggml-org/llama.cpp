@@ -45,6 +45,8 @@
 #include <aclnnop/aclnn_cos.h>
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_sign.h>
+#include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
+#include <aclnnop/aclnn_isneginf.h>
 #include "acl_tensor.h"
 #include "common.h"
 
@@ -713,6 +715,21 @@ void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  *            dst->op is expected to be `GGML_OP_STEP`.
  */
 void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Performs the Flash Attention extended operator using the CANN backend.
+ *
+ * @details This function implements the memory-efficient Flash Attention algorithm
+ *          for computing scaled dot-product attention with hardware acceleration.
+ *          The result is stored in the destination tensor `dst`.
+ *          
+ *          This operation is accelerated using the CANN backend to improve runtime performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result will be stored.
+ *            dst->op is expected to be `GGML_OP_FLASH_ATTN_EXT`.
+ */
+void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /*
  * @brief A generic wrapper for ACL resources with custom deleter support.

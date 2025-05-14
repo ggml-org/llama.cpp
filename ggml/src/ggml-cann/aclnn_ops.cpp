@@ -2587,3 +2587,163 @@ void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
     ggml_cann_release_resources(ctx, acl_src, acl_dst, alpha);
 }
+
+void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
+    
+    ggml_tensor* src0 = dst->src[0]; // q, fp32
+    ggml_tensor* src1 = dst->src[1]; // k, fp16
+    ggml_tensor* src2 = dst->src[2]; // v, fp16
+    ggml_tensor* src3 = dst->src[3]; // mask, fp16
+
+    size_t faElemSize = sizeof(uint16_t);
+    
+    // Step 1: cast the src0 (Query) to fp16
+    aclTensor* acl_src0_f16_tensor = nullptr;
+    
+    ggml_cann_pool_alloc src0_f16_allocator(ctx.pool());
+    void* src0_f16_buffer = nullptr;
+
+    if(src0->type != GGML_TYPE_F16){
+        aclTensor* acl_src0_f32_tensor = ggml_cann_create_tensor(src0);
+
+        src0_f16_allocator.alloc(ggml_nelements(src0) * faElemSize);
+        src0_f16_buffer = src0_f16_allocator.get();
+
+        int64_t* src0_f16_ne = src0->ne;
+        size_t   src0_f16_nb[GGML_MAX_DIMS];        
+        src0_f16_nb[0] = sizeof(uint16_t);
+        for(int i = 1; i < GGML_MAX_DIMS; ++i){
+            src0_f16_nb[i] = src0_f16_nb[i - 1] * src0_f16_ne[i - 1];
+        }
+
+        acl_src0_f16_tensor = ggml_cann_create_tensor(
+            src0_f16_buffer, ACL_FLOAT16, faElemSize, 
+            src0_f16_ne, src0_f16_nb, GGML_MAX_DIMS
+        );
+        aclnn_cast(ctx, acl_src0_f32_tensor, acl_src0_f16_tensor, ACL_FLOAT16);
+        ggml_cann_release_resources(ctx, acl_src0_f32_tensor);
+    }else{
+        acl_src0_f16_tensor = ggml_cann_create_tensor(src0);
+    }
+
+    // Step 2: genetates mask with ACL_BOOL
+    size_t maskElemSize = sizeof(char);
+    ggml_cann_pool_alloc src3_bool_allocator(ctx.pool());
+    src3_bool_allocator.alloc(ggml_nelements(src3) * maskElemSize);
+    void* src3_bool_buffer = src3_bool_allocator.get();
+    
+    int64_t* src3_bool_ne = src3->ne;
+    size_t   src3_bool_nb[GGML_MAX_DIMS];
+    src3_bool_nb[0] = maskElemSize;
+    for(int i = 1; i < GGML_MAX_DIMS; ++i){
+        src3_bool_nb[i] = src3_bool_nb[i - 1] * src3_bool_ne[i - 1];
+    }
+
+    aclTensor* acl_mask_f16_tensor = ggml_cann_create_tensor(src3);
+    aclTensor* acl_mask_bool_tensor = ggml_cann_create_tensor(
+        src3_bool_buffer, ACL_BOOL, maskElemSize, 
+        src3_bool_ne, src3_bool_nb, GGML_MAX_DIMS);
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, IsNegInf, acl_mask_f16_tensor, acl_mask_bool_tensor);
+    ggml_cann_release_resources(ctx, acl_mask_f16_tensor);
+
+    // Step 3: generates the output tensor directly from FA kernel
+    ggml_cann_pool_alloc out_f16_allocator(ctx.pool());
+    out_f16_allocator.alloc(ggml_nelements(dst) * faElemSize);
+    void* out_f16_buffer = out_f16_allocator.get();
+
+    int64_t* out_f16_ne = src0->ne;
+    size_t out_f16_nb[GGML_MAX_DIMS];
+    out_f16_nb[0] = faElemSize;
+    for(int i = 1; i < GGML_MAX_DIMS; ++i){
+        out_f16_nb[i] = out_f16_nb[i - 1] * out_f16_ne[i - 1];
+    }
+
+    aclTensor* acl_out_f16_tensor = ggml_cann_create_tensor(
+        out_f16_buffer, ACL_FLOAT16, faElemSize, 
+        out_f16_ne, out_f16_nb, GGML_MAX_DIMS
+    );
+
+    // Step 4: Performs the f16 Flash Attention kernel
+
+    int kvTensorNum = 1;
+    aclTensor* acl_q_tensor = acl_src0_f16_tensor;
+    aclTensor* acl_k_tensors[] = {ggml_cann_create_tensor(src1)};
+    aclTensor* acl_v_tensors[] = {ggml_cann_create_tensor(src2)};
+    auto acl_k_tensor_list = aclCreateTensorList(acl_k_tensors, kvTensorNum);
+    auto acl_v_tensor_list = aclCreateTensorList(acl_v_tensors, kvTensorNum);
+    aclTensor* acl_out_tensor = acl_out_f16_tensor;
+
+
+    int64_t numHeads = src0->ne[2]; // N
+    int64_t numKeyValueHeads = src1->ne[2];
+    double  scaleValue = 1 / sqrt(src0->ne[0]); // 1/sqrt(d)
+    int64_t preTokens = 65535;
+    int64_t nextTokens = 65535;
+    char layout[5] = {'B', 'N', 'S', 'D', 0};
+    int64_t sparseMode = 0;
+    int64_t innerPrecise = 1;
+    int64_t blockSize = 0;
+    int64_t antiquantMode = 0;
+    bool softmaxLseFlag = false;
+    int64_t keyAntiquantMode = 0;
+    int64_t valueAntiquantMode = 0;
+
+    // Refer to https://gitee.com/ascend/cann-ops-adv/blob/master/docs/FusedInferAttentionScoreV2.md
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, FusedInferAttentionScoreV2,
+        acl_q_tensor, acl_k_tensor_list, acl_v_tensor_list, // q, k, v
+        nullptr, acl_mask_bool_tensor, // pse, mask
+        nullptr, nullptr, // actSeqLen, actSeqLenkv
+        nullptr, nullptr, // deqScale1, quantScale1
+        nullptr, nullptr, nullptr, // deqScale2, quantScale2, quantOffset2
+        nullptr, nullptr, // antiquantScale, antiquantOffset
+        nullptr, // blockTable
+        nullptr, nullptr, // qPadSize, kvPadSize
+        nullptr, nullptr, // kAntiquantScale, kAntiQuantOffset
+        nullptr, nullptr, // vAntiquantScale, vAntiQuantOffset
+        nullptr, nullptr, nullptr, // kSharedPrefix, vSharedPrefix, actSharedLen
+        numHeads, scaleValue, // heads, scaleValue
+        preTokens, nextTokens, // preTokens, nextTokens
+        layout, // inputLayout
+        numKeyValueHeads, // numKVHeads
+        sparseMode, innerPrecise, // sparseMode, innerPrecise
+        blockSize, antiquantMode, // blockSize, antiquantMode
+        softmaxLseFlag, // softmaxLseFlag
+        keyAntiquantMode, valueAntiquantMode, // keyAntiqMode, valueAntiqMode
+        acl_out_tensor, // attentionOut
+        nullptr // softmaxLse
+    );
+
+    // Step 5: post-processing, permute and cast to f32
+    int64_t new_dim[] = {0, 2, 1, 3};
+    aclTensor* acl_dst_tensor = ggml_cann_create_tensor(dst);
+
+    if(dst->type != GGML_TYPE_F16){
+        ggml_cann_pool_alloc perm_out_f16_allocator(ctx.pool());
+        perm_out_f16_allocator.alloc(ggml_nelements(dst) * faElemSize);
+        void* perm_out_f16_buffer = perm_out_f16_allocator.get();
+
+        int64_t* perm_out_f16_ne = dst->ne;
+        size_t  perm_out_f16_nb[GGML_MAX_DIMS];
+        perm_out_f16_nb[0] = faElemSize;
+        for(int i = 1; i < GGML_MAX_DIMS; ++i){
+            perm_out_f16_nb[i] = perm_out_f16_nb[i - 1] * perm_out_f16_ne[i - 1];
+        }
+        aclTensor* acl_perm_out_f16_tensor = ggml_cann_create_tensor(
+            perm_out_f16_buffer, ACL_FLOAT16, faElemSize, 
+            perm_out_f16_ne, perm_out_f16_nb, GGML_MAX_DIMS);
+        aclnn_permute(ctx, acl_out_tensor, acl_perm_out_f16_tensor, new_dim, GGML_MAX_DIMS);
+        aclnn_cast(ctx, 
+            acl_perm_out_f16_tensor, acl_dst_tensor, ggml_cann_type_mapping(dst->type));
+        ggml_cann_release_resources(ctx, acl_perm_out_f16_tensor);
+    }else{
+        // only need to permute
+        aclnn_permute(ctx, acl_out_tensor, acl_dst_tensor, new_dim, GGML_MAX_DIMS);
+    }
+
+    ggml_cann_release_resources(ctx, acl_q_tensor, acl_k_tensor_list, acl_v_tensor_list, 
+                                acl_mask_bool_tensor, acl_out_f16_tensor, 
+                                acl_dst_tensor);
+
+}
