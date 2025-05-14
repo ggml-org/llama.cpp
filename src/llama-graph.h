@@ -591,6 +591,10 @@ struct llm_graph_context {
     // recurrent
     //
 
+    // Getters to support hybrid cache
+    const llama_kv_cache_recurrent * get_recurrent_cache() const;
+    const llama_kv_cache_unified   * get_unified_cache() const;
+
     ggml_tensor * build_recurrent_state(
              ggml_cgraph * gf,
              ggml_tensor * s,
