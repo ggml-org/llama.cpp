@@ -1491,8 +1491,8 @@ ggml_tensor * llm_graph_context::build_attn(
         // note: MLA with flash attention now uses the last 512 elements of K in place of V
         v = ggml_view_3d(ctx0, kv_self->k_l[il],
                 n_embd_head_v, n_kv, n_head_kv,
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_k_gqa),
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_head_k),
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
+                ggml_row_size(kv_self->k_l[il]->type, n_embd_head_k),
                 n_embd_head_k-n_embd_head_v); // offset by n_rot elements
     }
 
