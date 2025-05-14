@@ -1432,21 +1432,24 @@ ggml_tensor * llm_graph_context::build_attn(
 
         v_cur = ggml_reshape_2d(ctx0, v_cur, n_embd_v_gqa, n_tokens);
 
-        ggml_tensor * v_cache_view = nullptr;
+        // note: MLA flash attention now uses the last 512 elements of K in place of V
+        if (v_trans || !v_mla) {
+            ggml_tensor * v_cache_view = nullptr;
 
-        if (!v_trans) {
-            v_cache_view = ggml_view_1d(ctx0, kv_self->v_l[il], n_tokens*n_embd_v_gqa, ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa)*kv_head);
-        } else {
-            // note: the V cache is transposed when not using flash attention
-            v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il], n_tokens, n_embd_v_gqa,
-                    (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
-                    (kv_head)*ggml_element_size(kv_self->v_l[il]));
+            if (!v_trans) {
+                v_cache_view = ggml_view_1d(ctx0, kv_self->v_l[il], n_tokens*n_embd_v_gqa, ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa)*kv_head);
+            } else {
+                // note: the V cache is transposed when not using flash attention
+                v_cache_view = ggml_view_2d(ctx0, kv_self->v_l[il], n_tokens, n_embd_v_gqa,
+                        (  n_ctx)*ggml_element_size(kv_self->v_l[il]),
+                        (kv_head)*ggml_element_size(kv_self->v_l[il]));
 
-            v_cur = ggml_transpose(ctx0, v_cur);
+                v_cur = ggml_transpose(ctx0, v_cur);
+            }
+            //cb(v_cache_view, "v_cache_view", il);
+
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
         }
-        //cb(v_cache_view, "v_cache_view", il);
-
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
     }
 
     const bool is_swa = hparams.is_swa(il);
@@ -1471,17 +1474,27 @@ ggml_tensor * llm_graph_context::build_attn(
                 0);
     //cb(k, "k", il);
 
-    ggml_tensor * v = !v_trans ?
-        ggml_view_3d(ctx0, kv_self->v_l[il],
-                n_embd_head_v, n_kv, n_head_kv,
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
-                ggml_row_size(kv_self->v_l[il]->type, n_embd_head_v),
-                0) :
-        ggml_view_3d(ctx0, kv_self->v_l[il],
+    ggml_tensor * v = nullptr;
+    if (v_trans) {
+        v = ggml_view_3d(ctx0, kv_self->v_l[il],
                 n_kv, n_embd_head_v, n_head_kv,
                 ggml_element_size(kv_self->v_l[il])*n_ctx,
                 ggml_element_size(kv_self->v_l[il])*n_ctx*n_embd_head_v,
                 0);
+    } else if (!v_mla) {
+        v = ggml_view_3d(ctx0, kv_self->v_l[il],
+                n_embd_head_v, n_kv, n_head_kv,
+                ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
+                ggml_row_size(kv_self->v_l[il]->type, n_embd_head_v),
+                0);
+    } else {
+        // note: MLA flash attention now uses the last 512 elements of K in place of V
+        v = ggml_view_3d(ctx0, kv_self->k_l[il],
+                n_embd_head_v, n_kv, n_head_kv,
+                ggml_row_size(kv_self->v_l[il]->type, n_embd_v_gqa),
+                ggml_row_size(kv_self->v_l[il]->type, n_embd_head_v),
+                n_embd_head_k-n_embd_head_v); // offset by n_rot elements
+    }
 
     ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, v_trans, kq_scale);
     cb(cur, "kqv_out", il);
