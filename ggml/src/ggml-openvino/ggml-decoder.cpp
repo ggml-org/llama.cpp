@@ -3,9 +3,11 @@
 #include <ggml-impl.h>
 #include <ggml.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
+#include <execution>
 #include <fstream>
 #include <iomanip>
 #include <map>
@@ -40,6 +42,12 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
 
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
             dump_cgraph(m_cgraph);
+        }
+
+        static bool weight_created = false;
+        if (!getenv("GGML_OPENVINO_WEIGHT_AS_INPUT") && !weight_created) {
+            add_weight_const_parallel(model_weights);
+            weight_created = true;
         }
 
         set_max_token_len();
@@ -233,6 +241,43 @@ void GgmlOvDecoder::add_extra_inputs() {
             break;
         }
     }
+}
+
+void GgmlOvDecoder::add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
+    static std::mutex weights_mutex;
+    auto* nodes = m_cgraph->nodes;
+    auto n_nodes = m_cgraph->n_nodes;
+    std::for_each(std::execution::par, nodes, nodes + n_nodes, [&](ggml_tensor* node) {
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            auto* src = node->src[i];
+            if (src == nullptr) {
+                continue;
+            }
+
+            std::string src_name(src->name);
+            if (!src->view_src) {
+                ggml_backend_buffer* buffer = src->buffer;
+                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                    bool should_create = false;
+                    {
+                        std::lock_guard<std::mutex> lock(weights_mutex);
+                        if (model_weights.find(src_name) == model_weights.end()) {
+                            model_weights[src_name] = nullptr;
+                            should_create = true;
+                        }
+                    }
+                    if (should_create) {
+                        auto weight_node = create_weight_node(src);
+                        weight_node->set_friendly_name(src_name);
+                        {
+                            std::lock_guard<std::mutex> lock(weights_mutex);
+                            model_weights[src_name] = weight_node;
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
