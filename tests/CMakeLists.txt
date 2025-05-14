@@ -162,6 +162,7 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-barrier.cpp)
     llama_build_and_test(test-quantize-fns.cpp)
     llama_build_and_test(test-quantize-perf.cpp)
+    llama_build_and_test(test-quantize-accuracy.cpp)
     llama_build_and_test(test-rope.cpp)
 endif()
 
