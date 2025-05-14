@@ -31,10 +31,6 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     const auto& ggml_model = std::dynamic_pointer_cast<InputModel>(input_model);
     std::shared_ptr<GgmlDecoder> ggml_model_decoder = ggml_model->get_model_decoder();
 
-    FRONT_END_GENERAL_CHECK(ggml_model, "nullptr for InputModel is given for translation into OV Model");
-    const auto& model_inputs = ggml_model->get_inputs();
-    const auto& model_outputs = ggml_model->get_outputs();
-
     for (const auto& it : ggml_model_decoder->get_model_inputs()) {
         params.push_back(std::dynamic_pointer_cast<ov::op::v0::Parameter>(it.second));
         (*tensor_map)[it.first] = it.second;
