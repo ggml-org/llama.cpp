@@ -1705,7 +1705,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
     }
 
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
-    
+
     if (kv_self != nullptr) {
         LLAMA_LOG_DEBUG("%s: - writing KV self\n", __func__);
         kv_self->state_write(io);
