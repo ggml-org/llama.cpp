@@ -786,7 +786,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   It's same for other projects including llama.cpp SYCL backend.
 
-- `Native API failed. Native API returns: -6 (UR_RESULT_ERROR_OUT_OF_HOST_MEMORY)` or `failed to allocate SYCL0 buffer`
+- `Native API failed. Native API returns: 39 (UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY)`, `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 3503030272 Bytes of memory on device`, or `failed to allocate SYCL0 buffer`
 
   You are running out of Device Memory.
 
