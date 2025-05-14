@@ -1494,6 +1494,7 @@ ggml_tensor * llm_graph_context::build_attn(
                 ggml_row_size(kv_self->k_l[il]->type, n_embd_k_gqa),
                 ggml_row_size(kv_self->k_l[il]->type, n_embd_head_k),
                 n_embd_head_k-n_embd_head_v); // offset by n_rot elements
+        v = ggml_cont(ctx0, v);
     }
 
     ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, v_trans, kq_scale);
