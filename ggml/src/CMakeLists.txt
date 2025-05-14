@@ -241,6 +241,13 @@ if (GGML_TMAC)
 #     target_compile_definitions(ggml-base PUBLIC GGML_AVX2 GGML_FMA GGML_F16C)
 endif()
 
+if (GGML_QLUTATTN)
+    target_compile_definitions(ggml-base PUBLIC GGML_USE_QLUTATTN)
+    target_include_directories(ggml-base PUBLIC ggml-cpu/qlutattn)
+    target_compile_definitions(ggml PUBLIC GGML_USE_QLUTATTN)
+    target_include_directories(ggml PUBLIC ggml-cpu/qlutattn)
+endif()
+
 target_link_libraries(ggml PUBLIC ggml-base)
 
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")

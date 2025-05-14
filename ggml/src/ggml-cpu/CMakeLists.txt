@@ -100,6 +100,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             target_compile_definitions(${GGML_CPU_NAME} PRIVATE TMAC_RECHUNK)
         endif()
     endif()
+    
+    if (GGML_QLUTATTN)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_QLUTATTN)
+        target_include_directories(${GGML_CPU_NAME} PRIVATE ggml-cpu/qlutattn)
+    endif()
 
     if (GGML_CPU_HBM)
         find_library(memkind memkind REQUIRED)

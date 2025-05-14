@@ -210,6 +210,7 @@ set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
 option(GGML_TMAC                            "ggml: use TMAC"                                  OFF)
+option(GGML_QLUTATTN                        "ggml: use QlutAttn"                              OFF)
 
 # extra artifacts
 option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
@@ -220,7 +221,7 @@ option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
 #
 
 set(CMAKE_C_STANDARD 11)
-if (GGML_TMAC)
+if (GGML_TMAC OR GGML_QLUTATTN)
     set(CMAKE_C_STANDARD 17)
 endif()
 set(CMAKE_C_STANDARD_REQUIRED true)
