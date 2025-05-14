@@ -49,7 +49,7 @@ public:
 
     virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const = 0;
 
-    virtual bool check_if_continuous() const = 0;
+    virtual int get_op_case() const = 0;
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_extra_inputs() const = 0;

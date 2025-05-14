@@ -22,13 +22,16 @@ namespace op {
 
 OutputVector translate_cpy(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
+
+    int op_case = context.get_op_case();
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported CPY case");
+
     auto src0 = context.get_input(0);
     auto src1 = context.get_input(1);
     auto past_token_len = context.get_input("past_token_len");
 
     auto src0_shape = context.get_input_shape(0).to_shape();
     auto output_shape = context.get_output_shape(0).to_shape();
-    bool continuous = context.check_if_continuous();
 
     std::vector<size_t> input0_strides = context.get_input_stride(0);
     std::vector<size_t> output_strides = context.get_output_stride(0);
@@ -36,7 +39,7 @@ OutputVector translate_cpy(const NodeContext& context) {
     auto one = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1});
 
     src0 = std::make_shared<ov::op::v1::ConvertLike>(src0, src1);
-    if (continuous) {
+    if (op_case == 1) {
         // Write K to cache_k
         int64_t head_size = src0_shape[2];
         int64_t num_heads = src0_shape[1];

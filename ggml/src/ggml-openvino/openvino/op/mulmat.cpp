@@ -22,8 +22,10 @@ namespace op {
 OutputVector translate_mulmat(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
 
-    bool continuous = context.check_if_continuous();
-    if (continuous) {
+    int op_case = context.get_op_case();
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported MULMAT case");
+
+    if (op_case == 1) {
         auto src0 = context.get_input(0);
         auto src1 = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
         auto result_lp = std::make_shared<ov::op::v0::MatMul>(src1, src0, false, true);
