@@ -196,6 +196,18 @@ def test_cache_vs_nocache_prompt():
     assert res_cache.body["content"] == res_no_cache.body["content"]
 
 
+def test_nocache_long_input_prompt():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is"*32,
+        "seed": 42,
+        "temperature": 1.0,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+
+
 def test_completion_with_tokens_input():
     global server
     server.temperature = 0.0

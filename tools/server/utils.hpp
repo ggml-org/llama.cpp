@@ -1153,7 +1153,7 @@ public:
         tokens.clear();
     }
 
-    void resize(size_t n) {
+    void keep_first(size_t n) {
         GGML_ASSERT(n <= tokens.size());
         if (has_mtmd) {
             // we throw an error if we try to remove a token in the middle of an image

@@ -2955,7 +2955,8 @@ struct server_context {
                 llama_kv_self_seq_rm (ctx, slot.id, n_keep            , n_keep + n_discard);
                 llama_kv_self_seq_add(ctx, slot.id, n_keep + n_discard, slot.n_past,        -n_discard);
 
-                if (slot.params.cache_prompt) {
+                // add generated tokens to cache
+                {
                     llama_tokens new_tokens = slot.cache_tokens.get_text_tokens(); // copy
                     for (size_t i = n_keep + n_discard; i < new_tokens.size(); i++) {
                         new_tokens[i - n_discard] = new_tokens[i];
@@ -3000,10 +3001,7 @@ struct server_context {
             common_batch_add(batch, slot.sampled, slot.n_past, { slot.id }, true);
 
             slot.n_past += 1;
-
-            if (slot.params.cache_prompt) {
-                slot.cache_tokens.push_back(slot.sampled);
-            }
+            slot.cache_tokens.push_back(slot.sampled);
 
             SLT_DBG(slot, "slot decode token, n_ctx = %d, n_past = %d, n_cache_tokens = %d, truncated = %d\n",
                     slot.n_ctx, slot.n_past, (int) slot.cache_tokens.size(), slot.truncated);
@@ -3175,6 +3173,11 @@ struct server_context {
 
                                     SLT_DBG(slot, "after context reuse, new slot.n_past = %d\n", slot.n_past);
                                 }
+                            } else {
+                                // if we don't cache the prompt, we have to remove the entire KV cache
+                                llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
+                                slot.n_past = 0;
+                                slot.cache_tokens.clear();
                             }
                         }
 
@@ -3208,7 +3211,7 @@ struct server_context {
                     SLT_INF(slot, "kv cache rm [%d, end)\n", slot.n_past);
 
                     // remove the non-common part from the cache
-                    slot.cache_tokens.resize(slot.n_past);
+                    slot.cache_tokens.keep_first(slot.n_past);
 
                     // check if we should process the image
                     if (slot.n_past < slot.n_prompt_tokens
@@ -3225,7 +3228,8 @@ struct server_context {
                             continue;
                         }
 
-                        if (slot.params.cache_prompt) {
+                        // add the image chunk to cache
+                        {
                             const auto & chunk = slot.prompt_tokens.find_chunk(slot.n_past);
                             slot.cache_tokens.push_back(chunk.get()); // copy
                         }
@@ -3246,9 +3250,7 @@ struct server_context {
                         const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING && llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE;
 
                         common_batch_add(batch, cur_tok, slot.n_past, { slot.id }, need_embd);
-                        if (slot.params.cache_prompt) {
-                            slot.cache_tokens.push_back(cur_tok);
-                        }
+                        slot.cache_tokens.push_back(cur_tok);
 
                         slot.n_prompt_tokens_processed++;
                         slot.n_past++;
