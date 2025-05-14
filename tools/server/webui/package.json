@@ -47,6 +47,7 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.16",
+    "fflate": "^0.8.2",
     "globals": "^15.14.0",
     "prettier": "^3.4.2",
     "sass-embedded": "^1.83.4",
