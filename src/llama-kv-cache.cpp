@@ -32,7 +32,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                  uint32_t   padding) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding) {
     const int32_t n_layer = hparams.n_layer;
 
-    const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
+    const bool is_mla = model.arch == LLM_ARCH_DEEPSEEK2 && hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0;
 
     has_shift = false;
     can_shift = !is_mla || v_trans; // TODO: allow context shifting for MLA with flash attention
