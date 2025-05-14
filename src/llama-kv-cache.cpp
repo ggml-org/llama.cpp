@@ -32,8 +32,12 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                  uint32_t   padding) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding) {
     const int32_t n_layer = hparams.n_layer;
 
+    const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
+
+    is_mla_with_fa = model.arch != LLM_ARCH_DEEPSEEK2 || v_trans
+
     has_shift = false;
-    can_shift = model.arch != LLM_ARCH_DEEPSEEK2 || v_trans; // TODO: allow context shifting for MLA with flash attention
+    can_shift = !is_mla || v_trans; // TODO: allow context shifting for MLA with flash attention
 
     LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d, can_shift = %d, padding = %d\n",
             __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer, can_shift, padding);
@@ -100,9 +104,9 @@ llama_kv_cache_unified::llama_kv_cache_unified(
             throw std::runtime_error("failed to create ggml context for kv cache");
         }
 
-        // note: MLA with flash attention now uses the last 512 elements of K in place of V
+        // note: MLA with flash attention now uses the last 512 elements of K-cache in place of a V-cache
         ggml_tensor * k = ggml_new_tensor_1d(ctx, type_k, n_embd_k_gqa*kv_size);
-        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, model.arch != LLM_ARCH_DEEPSEEK2 || v_trans ? n_embd_v_gqa*kv_size : 0);
+        ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, !is_mla || v_trans ? n_embd_v_gqa*kv_size : 0);
         ggml_format_name(k, "cache_k_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
         k_l.push_back(k);
