@@ -441,6 +441,12 @@ void llama_kv_cache_unified::defrag_sched(float thold) {
 
 void llama_kv_cache_unified::set_full() {
     n = size;
+
+    // when simulating a full KV cache, the specific value of the "head" pointer is not important because we are not
+    //   going to write any data - we just want to measure the memory needed by the graph in such state.
+    //   we should only guarantee that the head position won't cause out-of-bounds view of the K, V tensors, so
+    //   setting it to 0 is the simplest way to achieve that
+    // ref: https://github.com/ggml-org/llama.cpp/issues/13359
     head = 0;
 }
 
