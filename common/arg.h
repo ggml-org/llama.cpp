@@ -80,6 +80,9 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 bool common_has_curl();
 
+// handle model and download
+void common_params_handle_models(enum llama_example cur_ex, common_params & params);
+
 struct common_remote_params {
     std::vector<std::string> headers;
     long timeout = 0; // CURLOPT_TIMEOUT, in seconds ; 0 means no timeout

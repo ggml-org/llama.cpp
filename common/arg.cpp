@@ -834,6 +834,26 @@ static std::string get_all_kv_cache_types() {
 // CLI argument parsing functions
 //
 
+// handle model and download
+void common_params_handle_models(enum llama_example cur_ex, common_params & params) {
+    auto res = common_params_handle_model(params.model, params.hf_token, "");
+    if (params.no_mmproj) {
+        params.mmproj = {};
+    } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+        // optionally, handle mmproj model when -hf is specified
+        params.mmproj = res.mmproj;
+    }
+    // only download mmproj if the current example is using it
+    for (auto & ex : mmproj_examples) {
+        if (cur_ex == ex) {
+            common_params_handle_model(params.mmproj,    params.hf_token, "");
+            break;
+        }
+    }
+    common_params_handle_model(params.speculative.model, params.hf_token, "");
+    common_params_handle_model(params.vocoder.model,     params.hf_token, "");
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     std::string arg;
     const std::string arg_prefix = "--";
@@ -933,24 +953,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     // handle model and download
-    {
-        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH);
-        if (params.no_mmproj) {
-            params.mmproj = {};
-        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
-            // optionally, handle mmproj model when -hf is specified
-            params.mmproj = res.mmproj;
-        }
-        // only download mmproj if the current example is using it
-        for (auto & ex : mmproj_examples) {
-            if (ctx_arg.ex == ex) {
-                common_params_handle_model(params.mmproj,    params.hf_token, "");
-                break;
-            }
-        }
-        common_params_handle_model(params.speculative.model, params.hf_token, "");
-        common_params_handle_model(params.vocoder.model,     params.hf_token, "");
-    }
+    common_params_handle_models(ctx_arg.ex, params);
 
     if (params.escape) {
         string_process_escapes(params.prompt);
@@ -2494,10 +2497,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-m", "--model"}, "FNAME",
         ex == LLAMA_EXAMPLE_EXPORT_LORA
             ? std::string("model path from which to load base model")
-            : string_format(
-                "model path (default: `models/$filename` with filename from `--hf-file` "
-                "or `--model-url` if set, otherwise %s)", DEFAULT_MODEL_PATH
-            ),
+            : "model path (default: `models/$filename` with filename from `--hf-file` or `--model-url` if set)",
         [](common_params & params, const std::string & value) {
             params.model.path = value;
         }

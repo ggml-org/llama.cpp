@@ -3559,18 +3559,137 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
-int main(int argc, char ** argv) {
-    // own arguments required by this example
-    common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
-        return 1;
+//
+// HTTP server
+//
+
+static void res_error(httplib::Response & res, const json & error_data) {
+    json final_response {{"error", error_data}};
+    res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
+    res.status = json_value(error_data, "code", 500);
+}
+
+static void res_ok(httplib::Response & res, const json & data) {
+    res.set_content(safe_json_to_str(data), MIMETYPE_JSON);
+    res.status = 200;
+}
+
+struct server_http {
+    std::unique_ptr<httplib::Server> svr;
+    std::unique_ptr<std::thread> http_thread;
+
+    server_http(const common_params & params) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+        if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
+            LOG_INF("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
+            svr.reset(
+                new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
+            );
+        } else {
+            LOG_INF("Running without SSL\n");
+            svr.reset(new httplib::Server());
+        }
+#else
+        if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
+            LOG_ERR("Server is built without SSL support\n");
+            exit(1);
+        }
+        svr.reset(new httplib::Server());
+#endif
+
+        svr->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
+            std::string message;
+            try {
+                std::rethrow_exception(ep);
+            } catch (const std::exception & e) {
+                message = e.what();
+            } catch (...) {
+                message = "Unknown Exception";
+            }
+
+            try {
+                json formatted_error = format_error_response(message, ERROR_TYPE_SERVER);
+                LOG_WRN("got exception: %s\n", formatted_error.dump().c_str());
+                res_error(res, formatted_error);
+            } catch (const std::exception & e) {
+                LOG_ERR("got another exception: %s | while hanlding exception: %s\n", e.what(), message.c_str());
+            }
+        });
     }
 
-    common_init();
+    bool start(const common_params & params) {
+        if (http_thread) {
+            GGML_ABORT("HTTP server is already running");
+        }
 
+        int n_threads_http = params.n_threads_http;
+        if (n_threads_http < 1) {
+            // +2 threads for monitoring endpoints
+            n_threads_http = std::max(params.n_parallel + 2, (int32_t) std::thread::hardware_concurrency() - 1);
+        }
+        LOG_INF("%s: n_threads_http = %d\n", __func__, n_threads_http);
+        svr->new_task_queue = [&n_threads_http] { return new httplib::ThreadPool(n_threads_http); };
+
+        bool was_bound = false;
+        if (string_ends_with(std::string(params.hostname), ".sock")) {
+            LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
+            svr->set_address_family(AF_UNIX);
+            // bind_to_port requires a second arg, any value other than 0 should
+            // simply get ignored
+            was_bound = svr->bind_to_port(params.hostname, 8080);
+        } else {
+            LOG_INF("%s: binding port with default address family\n", __func__);
+            // bind HTTP listen port
+            if (params.port <= 0) {
+                LOG_ERR("%s: port number %d is invalid\n", __func__, params.port);
+                return false;
+            } else {
+                was_bound = svr->bind_to_port(params.hostname, params.port);
+            }
+        }
+
+        if (!was_bound) {
+            LOG_ERR("%s: couldn't bind HTTP server socket, hostname: %s, port: %d\n", __func__, params.hostname.c_str(), params.port);
+            return false;
+        }
+
+        // run the HTTP server in a thread
+        http_thread.reset(new std::thread([&]() { svr->listen_after_bind(); }));
+        svr->wait_until_ready();
+
+        LOG_INF("%s: HTTP server started, hostname: %s, port: %d, n_threads_http = %d\n", __func__, params.hostname.c_str(), params.port, n_threads_http);
+
+        return true;
+    }
+
+    void stop() {
+        LOG_INF("%s: stopping HTTP server\n", __func__);
+        if (svr) {
+            svr->stop();
+            if (http_thread) {
+                http_thread->join();
+                http_thread.reset();
+            }
+            svr.reset();
+        }
+    }
+
+    httplib::Server * operator ->() {
+        return svr.get();
+    }
+
+    operator bool() {
+        return svr != nullptr;
+    }
+};
+
+// main server
+static int run_main_server(common_params & params) {
     // struct that contains llama context and inference
     server_context ctx_server;
+    server_http    svr(params);
+    std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -3580,42 +3699,7 @@ int main(int argc, char ** argv) {
     LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     LOG_INF("\n");
 
-    std::unique_ptr<httplib::Server> svr;
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_INF("Running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
-        svr.reset(
-            new httplib::SSLServer(params.ssl_file_cert.c_str(), params.ssl_file_key.c_str())
-        );
-    } else {
-        LOG_INF("Running without SSL\n");
-        svr.reset(new httplib::Server());
-    }
-#else
-    if (params.ssl_file_key != "" && params.ssl_file_cert != "") {
-        LOG_ERR("Server is built without SSL support\n");
-        return 1;
-    }
-    svr.reset(new httplib::Server());
-#endif
-
-    std::atomic<server_state> state{SERVER_STATE_LOADING_MODEL};
-
-    svr->set_default_headers({{"Server", "llama.cpp"}});
-    svr->set_logger(log_server_request);
-
-    auto res_error = [](httplib::Response & res, const json & error_data) {
-        json final_response {{"error", error_data}};
-        res.set_content(safe_json_to_str(final_response), MIMETYPE_JSON);
-        res.status = json_value(error_data, "code", 500);
-    };
-
-    auto res_ok = [](httplib::Response & res, const json & data) {
-        res.set_content(safe_json_to_str(data), MIMETYPE_JSON);
-        res.status = 200;
-    };
-
-    svr->set_exception_handler([&res_error](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
+    svr->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
         std::string message;
         try {
             std::rethrow_exception(ep);
@@ -3634,7 +3718,7 @@ int main(int argc, char ** argv) {
         }
     });
 
-    svr->set_error_handler([&res_error](const httplib::Request &, httplib::Response & res) {
+    svr->set_error_handler([](const httplib::Request &, httplib::Response & res) {
         if (res.status == 404) {
             res_error(res, format_error_response("File Not Found", ERROR_TYPE_NOT_FOUND));
         }
@@ -3664,7 +3748,7 @@ int main(int argc, char ** argv) {
     // Middlewares
     //
 
-    auto middleware_validate_api_key = [&params, &res_error](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_validate_api_key = [&params](const httplib::Request & req, httplib::Response & res) {
         static const std::unordered_set<std::string> public_endpoints = {
             "/health",
             "/models",
@@ -3700,7 +3784,7 @@ int main(int argc, char ** argv) {
         return false;
     };
 
-    auto middleware_server_state = [&res_error, &state](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_server_state = [&state](const httplib::Request & req, httplib::Response & res) {
         server_state current_state = state.load();
         if (current_state == SERVER_STATE_LOADING_MODEL) {
             auto tmp = string_split<std::string>(req.path, '.');
@@ -3889,7 +3973,7 @@ int main(int argc, char ** argv) {
         res.status = 200; // HTTP OK
     };
 
-    const auto handle_slots_save = [&ctx_server, &res_error, &res_ok, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
+    const auto handle_slots_save = [&ctx_server, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
         json request_data = json::parse(req.body);
         std::string filename = request_data.at("filename");
         if (!fs_validate_filename(filename)) {
@@ -3921,7 +4005,7 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
-    const auto handle_slots_restore = [&ctx_server, &res_error, &res_ok, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
+    const auto handle_slots_restore = [&ctx_server, &params](const httplib::Request & req, httplib::Response & res, int id_slot) {
         json request_data = json::parse(req.body);
         std::string filename = request_data.at("filename");
         if (!fs_validate_filename(filename)) {
@@ -3954,7 +4038,7 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
-    const auto handle_slots_erase = [&ctx_server, &res_error, &res_ok](const httplib::Request & /* req */, httplib::Response & res, int id_slot) {
+    const auto handle_slots_erase = [&ctx_server](const httplib::Request & /* req */, httplib::Response & res, int id_slot) {
         int task_id = ctx_server.queue_tasks.get_new_id();
         {
             server_task task(SERVER_TASK_TYPE_SLOT_ERASE);
@@ -3977,7 +4061,7 @@ int main(int argc, char ** argv) {
         res_ok(res, result->to_json());
     };
 
-    const auto handle_slots_action = [&params, &res_error, &handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_slots_action = [&params, &handle_slots_save, &handle_slots_restore, &handle_slots_erase](const httplib::Request & req, httplib::Response & res) {
         if (params.slot_save_path.empty()) {
             res_error(res, format_error_response("This server does not support slots action. Start it with `--slot-save-path`", ERROR_TYPE_NOT_SUPPORTED));
             return;
@@ -4006,7 +4090,7 @@ int main(int argc, char ** argv) {
         }
     };
 
-    const auto handle_props = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_props = [&ctx_server](const httplib::Request &, httplib::Response & res) {
         // this endpoint is publicly available, please only return what is safe to be exposed
         json data = {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
@@ -4027,7 +4111,7 @@ int main(int argc, char ** argv) {
         res_ok(res, data);
     };
 
-    const auto handle_props_change = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_props_change = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         if (!ctx_server.params_base.endpoint_props) {
             res_error(res, format_error_response("This server does not support changing global properties. Start it with `--props`", ERROR_TYPE_NOT_SUPPORTED));
             return;
@@ -4040,7 +4124,7 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "success", true }});
     };
 
-    const auto handle_api_show = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_api_show = [&ctx_server](const httplib::Request &, httplib::Response & res) {
         json data = {
             {
                 "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -4057,7 +4141,7 @@ int main(int argc, char ** argv) {
 
     // handle completion-like requests (completion, chat, infill)
     // we can optionally provide a custom format for partial results and final results
-    const auto handle_completions_impl = [&ctx_server, &res_error, &res_ok](
+    const auto handle_completions_impl = [&ctx_server](
             server_task_type type,
             json & data,
             const std::vector<raw_buffer> & files,
@@ -4246,7 +4330,7 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_COMPLETION);
     };
 
-    const auto handle_infill = [&ctx_server, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_infill = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         // check model compatibility
         std::string err;
         if (llama_vocab_fim_pre(ctx_server.vocab) == LLAMA_TOKEN_NULL) {
@@ -4325,7 +4409,7 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_chat_completions = [&ctx_server, &params, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_chat_completions = [&ctx_server, &params, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         LOG_DBG("request: %s\n", req.body.c_str());
         if (ctx_server.params_base.embedding) {
             res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
@@ -4352,7 +4436,7 @@ int main(int argc, char ** argv) {
     };
 
     // same with handle_chat_completions, but without inference part
-    const auto handle_apply_template = [&ctx_server, &params, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_apply_template = [&ctx_server, &params](const httplib::Request & req, httplib::Response & res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
         json data = oaicompat_completion_params_parse(
@@ -4365,7 +4449,7 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "prompt", std::move(data.at("prompt")) }});
     };
 
-    const auto handle_models = [&params, &ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_models = [&params, &ctx_server](const httplib::Request &, httplib::Response & res) {
         json models = {
             {"object", "list"},
             {"data", {
@@ -4382,7 +4466,7 @@ int main(int argc, char ** argv) {
         res_ok(res, models);
     };
 
-    const auto handle_tokenize = [&ctx_server, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_tokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
 
         json tokens_response = json::array();
@@ -4422,7 +4506,7 @@ int main(int argc, char ** argv) {
         res_ok(res, data);
     };
 
-    const auto handle_detokenize = [&ctx_server, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_detokenize = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
 
         std::string content;
@@ -4435,7 +4519,7 @@ int main(int argc, char ** argv) {
         res_ok(res, data);
     };
 
-    const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res, oaicompat_type oaicompat) {
+    const auto handle_embeddings_impl = [&ctx_server](const httplib::Request & req, httplib::Response & res, oaicompat_type oaicompat) {
         const json body = json::parse(req.body);
 
         if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
@@ -4531,7 +4615,7 @@ int main(int argc, char ** argv) {
         handle_embeddings_impl(req, res, OAICOMPAT_TYPE_EMBEDDING);
     };
 
-    const auto handle_rerank = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_rerank = [&ctx_server](const httplib::Request & req, httplib::Response & res) {
         if (!ctx_server.params_base.reranking || ctx_server.params_base.embedding) {
             res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking` and without `--embedding`", ERROR_TYPE_NOT_SUPPORTED));
             return;
@@ -4730,12 +4814,6 @@ int main(int argc, char ** argv) {
     //
     // Start the server
     //
-    if (params.n_threads_http < 1) {
-        // +2 threads for monitoring endpoints
-        params.n_threads_http = std::max(params.n_parallel + 2, (int32_t) std::thread::hardware_concurrency() - 1);
-    }
-    log_data["n_threads_http"] =  std::to_string(params.n_threads_http);
-    svr->new_task_queue = [&params] { return new httplib::ThreadPool(params.n_threads_http); };
 
     // clean up function, to be called before exit
     auto clean_up = [&svr, &ctx_server]() {
@@ -4745,44 +4823,18 @@ int main(int argc, char ** argv) {
         llama_backend_free();
     };
 
-    bool was_bound = false;
-    if (string_ends_with(std::string(params.hostname), ".sock")) {
-        LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
-        svr->set_address_family(AF_UNIX);
-        // bind_to_port requires a second arg, any value other than 0 should
-        // simply get ignored
-        was_bound = svr->bind_to_port(params.hostname, 8080);
-    } else {
-        LOG_INF("%s: binding port with default address family\n", __func__);
-        // bind HTTP listen port
-        if (params.port == 0) {
-            int bound_port = svr->bind_to_any_port(params.hostname);
-            if ((was_bound = (bound_port >= 0))) {
-                params.port = bound_port;
-            }
-        } else {
-            was_bound = svr->bind_to_port(params.hostname, params.port);
-        }
-    }
-
-    if (!was_bound) {
-        LOG_ERR("%s: couldn't bind HTTP server socket, hostname: %s, port: %d\n", __func__, params.hostname.c_str(), params.port);
+    if (!svr.start(params)) {
         clean_up();
+        svr.stop();
         return 1;
     }
-
-    // run the HTTP server in a thread
-    std::thread t([&]() { svr->listen_after_bind(); });
-    svr->wait_until_ready();
-
-    LOG_INF("%s: HTTP server is listening, hostname: %s, port: %d, http threads: %d\n", __func__, params.hostname.c_str(), params.port, params.n_threads_http);
 
     // load the model
     LOG_INF("%s: loading model\n", __func__);
 
     if (!ctx_server.load_model(params)) {
         clean_up();
-        t.join();
+        svr.stop();
         LOG_ERR("%s: exiting due to model loading error\n", __func__);
         return 1;
     }
@@ -4830,7 +4882,81 @@ int main(int argc, char ** argv) {
     ctx_server.queue_tasks.start_loop();
 
     clean_up();
-    t.join();
+    svr.stop();
 
     return 0;
+}
+
+// interim server allowing to list and select models
+static int run_interim_server(const common_params & params) {
+    server_http svr(params);
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool is_params_set = false;
+    common_params load_params;
+
+    svr->Post("/load", [&](const httplib::Request & req, httplib::Response & res) {
+        std::unique_lock<std::mutex> lock(mutex);
+        json data = json::parse(req.body);
+        std::string hf_repo = data["hf_repo"];
+
+        if (is_params_set) {
+            res_error(res, format_error_response("Model is being downloaded", ERROR_TYPE_UNAVAILABLE));
+            return;
+        }
+
+        if (hf_repo.empty()) {
+            res_error(res, format_error_response("Missing hf_repo parameter", ERROR_TYPE_INVALID_REQUEST));
+            return;
+        }
+
+        // Load the model
+        load_params = params; // copy
+        load_params.model.hf_repo = hf_repo;
+        is_params_set = true;
+        cv.notify_all();
+    });
+
+    if (!svr.start(params)) {
+        return 1;
+    }
+    LOG_INF("Interim server started\n");
+
+    // Wait for the model to be set
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        cv.wait(lock, [&is_params_set] { return is_params_set; });
+        // make sure model is downloaded
+        common_params_handle_models(LLAMA_EXAMPLE_SERVER, load_params);
+    }
+
+    // Launch the main server with the new parameters
+    svr.stop();
+    return run_main_server(load_params);
+}
+
+int main(int argc, char ** argv) {
+    // own arguments required by this example
+    common_params params;
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
+        return 1;
+    }
+
+    common_init();
+
+    if (params.model.path.empty()) {
+        // no model path provided, start the interim server
+        LOG_INF("No model path provided, starting interim server\n");
+        while (true) {
+            int res = run_interim_server(params);
+            if (res != 0) {
+                return res;
+            }
+        }
+    } else {
+        // model path provided, start the main server
+        return run_main_server(params);
+    }
 }
