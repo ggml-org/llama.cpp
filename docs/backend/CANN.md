@@ -56,17 +56,17 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ## Model Supports
 
-| Model Name                  | FP16  | Q8_0 | Q4_0 |
+| Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
 | Llama-2                     |   √   |   √  |   √  |
 | Llama-3                     |   √   |   √  |   √  |
 | Mistral-7B                  |   √   |   √  |   √  |
 | Mistral MOE                 |   √   |   √  |   √  |
-| DBRX                        |   ?   |   ?  |   ?  |
+| DBRX                        |   -   |   -  |   -  |
 | Falcon                      |   √   |   √  |   √  |
 | Chinese LLaMA/Alpaca        |   √   |   √  |   √  |
 | Vigogne(French)             |   √   |   √  |   √  |
-| BERT                        |   √   |   √  |   √  |
+| BERT                        |   x   |   x  |   x  |
 | Koala                       |   √   |   √  |   √  |
 | Baichuan                    |   √   |   √  |   √  |
 | Aquila 1 & 2                |   √   |   √  |   √  |
@@ -80,7 +80,7 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 | Qwen models                 |   √   |   √  |   √  |
 | PLaMo-13B                   |   √   |   √  |   √  |
 | Phi models                  |   √   |   √  |   √  |
-| PhiMoE                      |   ?   |   ?  |   ?  |
+| PhiMoE                      |   √   |   √  |   √  |
 | GPT-2                       |   √   |   √  |   √  |
 | Orion                       |   √   |   √  |   √  |
 | InternlLM2                  |   √   |   √  |   √  |
@@ -89,29 +89,29 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 | Mamba                       |   √   |   √  |   √  |
 | Xverse                      |   √   |   √  |   √  |
 | command-r models            |   √   |   √  |   √  |
-| Grok-1                      |   ?   |   ?  |   ?  |
+| Grok-1                      |   -   |   -  |   -  |
 | SEA-LION                    |   √   |   √  |   √  |
 | GritLM-7B                   |   √   |   √  |   √  |
 | OLMo                        |   √   |   √  |   √  |
 | OLMo 2                      |   √   |   √  |   √  |
-| OLMoE                       |   ?   |   ?  |   ?  |
+| OLMoE                       |   √   |   √  |   √  |
 | Granite models              |   √   |   √  |   √  |
-| GPT-NeoX                    |   ?   |   ?  |   ?  |
+| GPT-NeoX                    |   √   |   √  |   √  |
 | Pythia                      |   √   |   √  |   √  |
-| Snowflake-Arctic MoE        |   ?   |   ?  |   ?  |
+| Snowflake-Arctic MoE        |   -   |   -  |   -  |
 | Smaug                       |   √   |   √  |   √  |
 | Poro 34B                    |   √   |   √  |   √  |
 | Bitnet b1.58 models         |   √   |   x  |   x  |
 | Flan-T5                     |   √   |   √  |   √  |
-| Open Elm models             |   x   |   x  |   x  |
+| Open Elm models             |   x   |   √  |   √  |
 | chatGLM3-6B + ChatGLM4-9b +  GLMEdge-1.5b + GLMEdge-4b    |   √   |   √  |   √  |
 | GLM-4-0414                  |   √   |   √  |   √  |
 | SmolLM                      |   √   |   √  |   √  |
 | EXAONE-3.0-7.8B-Instruct    |   √   |   √  |   √  |
 | FalconMamba Models          |   √   |   √  |   √  |
-| Jais Models                 |   ?   |   ?  |   ?  |
+| Jais Models                 |   -   |   x  |   x  |
 | Bielik-11B-v2.3             |   √   |   √  |   √  |
-| RWKV-6                      |   √   |   √  |   √  |
+| RWKV-6                      |   -   |   √  |   √  |
 | QRWKV-6                     |   √   |   √  |   √  |
 | GigaChat-20B-A3B            |   x   |   x  |   x  |
 | Trillion-7B-preview         |   √   |   √  |   √  |
@@ -119,15 +119,15 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 
 **Multimodal**
-| LLaVA 1.5 models, LLaVA 1.6 models      |   ?   |   ?  |   ?  |
-|  BakLLaVA                   |   ?   |   ?  |   ?  |
-|  Obsidian                   |   ?   |   ?  |   ?  |
-|  ShareGPT4V                 |   ?   |   ?  |   ?  |
-|  MobileVLM 1.7B/3B models   |   ?   |   ?  |   ?  |
-|  Yi-VL                      |   ?   |   ?  |   ?  |
+| LLaVA 1.5 models, LLaVA 1.6 models      |   x   |   x  |   x  |
+|  BakLLaVA                   |   √   |   √  |   √  |
+|  Obsidian                   |   √   |   -  |   -  |
+|  ShareGPT4V                 |   x   |   -  |   -  |
+|  MobileVLM 1.7B/3B models   |   -   |   -  |   -  |
+|  Yi-VL                      |   -   |   -  |   -  |
 |  Mini CPM                   |   √   |   √  |   √  |
 |  Moondream                  |   √   |   √  |   √  |
-|  Bunny                      |   ?   |   ?  |   ?  |
+|  Bunny                      |   √   |   -  |   -  |
 |  GLM-EDGE                   |   √   |   √  |   √  |
 |  Qwen2-VL                   |   √   |   √  |   √  |
 
