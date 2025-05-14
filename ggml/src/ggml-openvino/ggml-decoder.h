@@ -101,6 +101,8 @@ private:
     void set_max_token_len();
     int64_t m_max_token_len;
 
+    void add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
+
     struct ggml_cgraph* m_cgraph;
     std::map<std::string, ggml_tensor*> m_inputs;
     std::vector<std::string> m_input_names;
