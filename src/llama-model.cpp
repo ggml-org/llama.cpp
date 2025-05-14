@@ -13252,7 +13252,9 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             }
 
             // For Granite architectures - scale residual
-            cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            if (hparams.f_residual_scale) {
+                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            }
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
             cb(ffn_inp, "ffn_inp", il);
 
@@ -13310,7 +13312,9 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             }
 
             // For Granite architectures - scale residual
-            cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            if (hparams.f_residual_scale) {
+                cur = ggml_scale(ctx0, cur, hparams.f_residual_scale);
+            }
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
 
@@ -13334,7 +13338,9 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
         cur = build_lora_mm(model.output, cur);
 
         // For Granite architectures - scale logits
-        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
+        if (hparams.f_logit_scale) {
+            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
+        }
         cb(cur, "result_output", -1);
         res->t_logits = cur;
 
