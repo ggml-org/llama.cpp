@@ -441,6 +441,7 @@ void llama_kv_cache_unified::defrag_sched(float thold) {
 
 void llama_kv_cache_unified::set_full() {
     n = size;
+    head = 0;
 }
 
 llama_sbatch llama_kv_cache_unified::sbatch_init(
@@ -1712,6 +1713,7 @@ void llama_kv_cache_recurrent::defrag_sched(float thold) {
 
 void llama_kv_cache_recurrent::set_full() {
     n = size;
+    head = 0;
 }
 
 llama_sbatch llama_kv_cache_recurrent::sbatch_init(
