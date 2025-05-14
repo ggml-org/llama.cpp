@@ -6296,8 +6296,8 @@ class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
         self, data_torch: Tensor, name: str, bid: int | None
     ) -> Iterable[tuple[str, Tensor]]:
         if (
-            name.endswith("block_sparse_moe.input_linear.weight") or
-            name.endswith("shared_mlp.input_linear.weight")
+            name.endswith("block_sparse_moe.input_linear.weight")
+            or name.endswith("shared_mlp.input_linear.weight")
         ):
             return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
         return super().modify_tensors(data_torch, name, bid)

@@ -273,8 +273,8 @@ class GGUFWriter:
         # Disallow duplicate keys if they differ by value or type
         if any(
             (
-                key in kv_data and
-                (kv_data[key].value != val or kv_data[key].type != vtype)
+                key in kv_data
+                and (kv_data[key].value != val or kv_data[key].type != vtype)
             )
             for kv_data in self.kv_data
         ):
