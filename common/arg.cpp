@@ -811,6 +811,14 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_TMAC_W2G64_0,
+    GGML_TYPE_TMAC_W2G64_1,
+    GGML_TYPE_TMAC_W2G128_0,
+    GGML_TYPE_TMAC_W2G128_1,
+    GGML_TYPE_TMAC_W4G64_0,
+    GGML_TYPE_TMAC_W4G64_1,
+    GGML_TYPE_TMAC_W4G128_0,
+    GGML_TYPE_TMAC_W4G128_1,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
