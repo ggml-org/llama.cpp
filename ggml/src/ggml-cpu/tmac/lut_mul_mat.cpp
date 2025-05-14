@@ -820,44 +820,62 @@ static inline void ggml_tmac_transform_tensor(struct ggml_tensor * tensor, const
         // w = w.reshape(M // bm, bm // mgroup, simd_n_in, ngroups_per_elem, K // g // kfactor, kfactor).transpose(0, 4, 1, 5, 2, 3)
         // w = sum([(w[:, :, :, :, :, ng] << (ng * g)) for ng in range(ngroups_per_elem)])
         memset(qweights, 0, m * k / g / ngroups_per_elem);
+
+        int c0_fac2 = k / g;
+        int c0_fac1 = simd_n_out * c0_fac2;
+        int c0_fac0 = bits * c0_fac1;
+
+        int c1_nb2 = k / g;
+        int c1_nb1 = simd_n_in * c1_nb2;
+        int c1_nb0 = ngroups_per_elem * c1_nb1;
+        int c1_fac2 = k / g;
+        int c1_fac1 = ngroups_per_elem * c1_fac2;
+        int c1_fac0 = simd_n_in * c1_fac1;
+
+
+        int c2_nb4 = kfactor;
+        int c2_nb3 = k / g / kfactor * c2_nb4;
+        int c2_nb2 = ngroups_per_elem * c2_nb3;
+        int c2_nb1 = simd_n_in * c2_nb2;
+        int c2_nb0 = bm / mgroup * c2_nb1;
+        int c2_fac3 = simd_n_in * ngroups_per_elem;
+        int c2_fac2 = kfactor * c2_fac3;
+        int c2_fac1 = bm / mgroup * c2_fac2;
+        int c2_fac0 = k / g / kfactor * c2_fac1;
+
         for (int im = 0; im < m / bits; im++) {
             for (int ib = 0; ib < bits; ib++) {
                 for (int ik = 0; ik < k / g; ik++) {
+                    // w = w.reshape(M // bits // simd_n_out, simd_n_out, bits, K // g).transpose(0, 2, 1, 3)
                     int new_im = im / simd_n_out;
                     int new_isno = im % simd_n_out;
                     int new_ib = ib;
                     int new_ik = ik;
-                    // w = w.reshape(M // bits // simd_n_out, simd_n_out, bits, K // g).transpose(0, 2, 1, 3)
-                    int new_idx = new_im * bits * simd_n_out * k / g + new_ib * simd_n_out * k / g + new_isno * k / g + new_ik;
+                    int new_idx = new_im * c0_fac0 + new_ib * c0_fac1 + new_isno * c0_fac2 + new_ik;
+
                     // w = w.reshape(M // mgroup, ngroups_per_elem, simd_n_in, K // g).transpose(0, 2, 1, 3)
-                    int nb2 = k / g;
-                    int nb1 = simd_n_in * nb2;
-                    int nb0 = ngroups_per_elem * nb1;
-                    new_im = new_idx / nb0;
-                    int new_ing = (new_idx % nb0) / nb1;
-                    int new_isni = (new_idx % nb1) / nb2;
-                    new_ik = (new_idx % nb2);
-                    new_idx = new_im * ngroups_per_elem * simd_n_in * k / g + new_isni * ngroups_per_elem * k / g + new_ing * k / g + new_ik;
+                    new_im = new_idx / c1_nb0;
+                    int new_ing = (new_idx % c1_nb0) / c1_nb1;
+                    int new_isni = (new_idx % c1_nb1) / c1_nb2;
+                    new_ik = (new_idx % c1_nb2);
+                    new_idx = new_im * c1_fac0 + new_isni * c1_fac1 + new_ing * c1_fac2 + new_ik;
+
                     // #             0        1             2             3                 4                  5
                     // w = w.reshape(M // bm, bm // mgroup, simd_n_in, ngroups_per_elem, K // g // kfactor, kfactor).transpose(0, 4, 1, 5, 2, 3)
-                    int nb4 = kfactor;
-                    int nb3 = k / g / kfactor * nb4;
-                    nb2 = ngroups_per_elem * nb3;
-                    nb1 = simd_n_in * nb2;
-                    nb0 = bm / mgroup * nb1;
-                    new_im = new_idx / nb0;
-                    int new_ibm = (new_idx % nb0) / nb1;
-                    new_isni = (new_idx % nb1) / nb2;
-                    new_ing = (new_idx % nb2) / nb3;
-                    new_ik = (new_idx % nb3) / nb4;
-                    int new_ikf = (new_idx % nb4);
-                    new_idx = new_im * k / g / kfactor * bm / mgroup * kfactor * simd_n_in * ngroups_per_elem +
-                            new_ik * bm / mgroup * kfactor * simd_n_in * ngroups_per_elem +
-                            new_ibm * kfactor * simd_n_in * ngroups_per_elem +
-                            new_ikf * simd_n_in * ngroups_per_elem +
+                    new_im = new_idx / c2_nb0;
+                    int new_ibm = (new_idx % c2_nb0) / c2_nb1;
+                    new_isni = (new_idx % c2_nb1) / c2_nb2;
+                    new_ing = (new_idx % c2_nb2) / c2_nb3;
+                    new_ik = (new_idx % c2_nb3) / c2_nb4;
+                    int new_ikf = (new_idx % c2_nb4);
+                    new_idx = new_im * c2_fac0 +
+                            new_ik * c2_fac1 +
+                            new_ibm * c2_fac2 +
+                            new_ikf * c2_fac3 +
                             new_isni * ngroups_per_elem +
                             new_ing;
                     new_idx = new_idx / ngroups_per_elem;
+
                     // w = sum([(w[:, :, :, :, :, ng] << (ng * g)) for ng in range(ngroups_per_elem)])
                     qweights[new_idx] += buf2[im * bits * k / g + ib * k / g + ik] << (new_ing * g);
                 }
