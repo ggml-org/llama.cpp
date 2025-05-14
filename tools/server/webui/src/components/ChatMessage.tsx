@@ -27,6 +27,7 @@ export default function ChatMessage({
   onEditMessage,
   onChangeSibling,
   isPending,
+  onContinueMessage,
 }: {
   msg: Message | PendingMessage;
   siblingLeafNodeIds: Message['id'][];
@@ -34,6 +35,7 @@ export default function ChatMessage({
   id?: string;
   onRegenerateMessage(msg: Message): void;
   onEditMessage(msg: Message, content: string): void;
+  onContinueMessage(msg: Message, content: string): void;
   onChangeSibling(sibling: Message['id']): void;
   isPending?: boolean;
 }) {
@@ -123,7 +125,11 @@ export default function ChatMessage({
                 onClick={() => {
                   if (msg.content !== null) {
                     setEditingContent(null);
-                    onEditMessage(msg as Message, editingContent);
+                    if (msg.role === 'user') {
+                      onEditMessage(msg as Message, editingContent);
+                    } else {
+                      onContinueMessage(msg as Message, editingContent);
+                    }
                   }
                 }}
               >
@@ -248,12 +254,22 @@ export default function ChatMessage({
                   <ArrowPathIcon className="h-4 w-4" />
                 </BtnWithTooltips>
               )}
+              {!isPending && (
+                <BtnWithTooltips
+                  className="btn-mini show-on-hover w-8 h-8"
+                  onClick={() => setEditingContent(msg.content)}
+                  disabled={msg.content === null}
+                  tooltipsContent="Edit message"
+                >
+                  <PencilSquareIcon className="h-4 w-4" />
+                </BtnWithTooltips>
+              )}
+              <CopyButton
+                className="btn-mini show-on-hover w-8 h-8"
+                content={msg.content}
+              />
             </>
           )}
-          <CopyButton
-            className="btn-mini show-on-hover w-8 h-8"
-            content={msg.content}
-          />
         </div>
       )}
     </div>

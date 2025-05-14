@@ -39,6 +39,12 @@ interface AppContextValue {
     extra: Message['extra'],
     onChunk: CallbackGeneratedChunk
   ) => Promise<void>;
+  continueMessageAndGenerate: (
+    convId: string,
+    messageIdToContinue: Message['id'],
+    newContent: string,
+    onChunk: CallbackGeneratedChunk
+  ) => Promise<void>;
 
   // canvas
   canvasData: CanvasData | null;
@@ -156,7 +162,8 @@ export const AppContextProvider = ({
   const generateMessage = async (
     convId: string,
     leafNodeId: Message['id'],
-    onChunk: CallbackGeneratedChunk
+    onChunk: CallbackGeneratedChunk,
+    isContinuation: boolean = false
   ) => {
     if (isGenerating(convId)) return;
 
@@ -179,17 +186,36 @@ export const AppContextProvider = ({
     }
 
     const pendingId = Date.now() + 1;
-    let pendingMsg: PendingMessage = {
-      id: pendingId,
-      convId,
-      type: 'text',
-      timestamp: pendingId,
-      role: 'assistant',
-      content: null,
-      parent: leafNodeId,
-      children: [],
-    };
-    setPending(convId, pendingMsg);
+    let pendingMsg: Message | PendingMessage;
+
+    if (isContinuation) {
+      const existingAsstMsg = await StorageUtils.getMessage(convId, leafNodeId);
+      if (!existingAsstMsg || existingAsstMsg.role !== 'assistant') {
+        toast.error(
+          'Cannot continue: target message not found or not an assistant message.'
+        );
+        throw new Error(
+          'Cannot continue: target message not found or not an assistant message.'
+        );
+      }
+      pendingMsg = {
+        ...existingAsstMsg,
+        content: existingAsstMsg.content || '',
+      };
+      setPending(convId, pendingMsg as PendingMessage);
+    } else {
+      pendingMsg = {
+        id: pendingId,
+        convId,
+        type: 'text',
+        timestamp: pendingId,
+        role: 'assistant',
+        content: null,
+        parent: leafNodeId,
+        children: [],
+      };
+      setPending(convId, pendingMsg as PendingMessage);
+    }
 
     try {
       // prepare messages for API
@@ -272,7 +298,7 @@ export const AppContextProvider = ({
             predicted_ms: timings.predicted_ms,
           };
         }
-        setPending(convId, pendingMsg);
+        setPending(convId, pendingMsg as PendingMessage);
         onChunk(); // don't need to switch node for pending message
       }
     } catch (err) {
@@ -289,10 +315,15 @@ export const AppContextProvider = ({
     }
 
     if (pendingMsg.content !== null) {
-      await StorageUtils.appendMsg(pendingMsg as Message, leafNodeId);
+      if (isContinuation) {
+        await StorageUtils.updateMessage(pendingMsg as Message);
+      } else if (pendingMsg.content.trim().length > 0) {
+        await StorageUtils.appendMsg(pendingMsg as Message, leafNodeId);
+      }
     }
     setPending(convId, null);
-    onChunk(pendingId); // trigger scroll to bottom and switch to the last node
+    const finalNodeId = (pendingMsg as Message).id;
+    onChunk(finalNodeId);
   };
 
   const sendMessage = async (
@@ -333,7 +364,7 @@ export const AppContextProvider = ({
     onChunk(currMsgId);
 
     try {
-      await generateMessage(convId, currMsgId, onChunk);
+      await generateMessage(convId, currMsgId, onChunk, false);
       return true;
     } catch (_) {
       // TODO: rollback
@@ -380,6 +411,47 @@ export const AppContextProvider = ({
     await generateMessage(convId, parentNodeId, onChunk);
   };
 
+  const continueMessageAndGenerate = async (
+    convId: string,
+    messageIdToContinue: Message['id'],
+    newContent: string,
+    onChunk: CallbackGeneratedChunk
+  ) => {
+    if (isGenerating(convId)) return;
+
+    const existingMessage = await StorageUtils.getMessage(
+      convId,
+      messageIdToContinue
+    );
+    if (!existingMessage || existingMessage.role !== 'assistant') {
+      console.error(
+        'Cannot continue non-assistant message or message not found'
+      );
+      toast.error(
+        'Failed to continue message: Not an assistant message or not found.'
+      );
+      return;
+    }
+
+    const updatedAssistantMessage: Message = {
+      ...existingMessage,
+      content: newContent,
+      timestamp: Date.now(),
+      children: [], // Clear existing children to start a new branch of generation
+      extra: existingMessage.extra, // Preserve existing extra data
+    };
+
+    await StorageUtils.updateMessage(updatedAssistantMessage);
+
+    onChunk(messageIdToContinue);
+
+    try {
+      await generateMessage(convId, messageIdToContinue, onChunk, true);
+    } catch (err) {
+      console.error('Error continuing message');
+    }
+  };
+
   const saveConfig = (config: typeof CONFIG_DEFAULT) => {
     StorageUtils.setConfig(config);
     setConfig(config);
@@ -394,6 +466,7 @@ export const AppContextProvider = ({
         sendMessage,
         stopGenerating,
         replaceMessageAndGenerate,
+        continueMessageAndGenerate,
         canvasData,
         setCanvasData,
         config,
