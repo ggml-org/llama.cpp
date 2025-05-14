@@ -1,83 +1,148 @@
+# ============================================================================
+#  Multi-tier Android build for llama.cpp
+#  --------------------------------------
+#  Produces five DSOs, each compiled with an increasingly aggressive
+#  -march string.  At runtime you pick the highest tier the device
+#  supports and call `System.loadLibrary("llama_android_tX")`.
+# ============================================================================
+
 cmake_minimum_required(VERSION 3.22.1)
-project("llama_android" VERSION 1.0.0 LANGUAGES C CXX)
+project("llama_android" LANGUAGES C CXX)
 
-# --------------------------------------------------------------------
-# 0. Global language & toolchain options
-# --------------------------------------------------------------------
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED true)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED true)
+# --------------------------------------------------------------------------
+# 0. Language / toolchain defaults
+# --------------------------------------------------------------------------
+set(CMAKE_C_STANDARD   11  CACHE STRING "" FORCE)
+set(CMAKE_CXX_STANDARD 17  CACHE STRING "" FORCE)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-## ---- ggml / llama feature switches (configure-time) ----------------
-#set(GGML_CPU_KLEIDIAI     ON  CACHE BOOL "" FORCE)
-set(GGML_LLAMAFILE     OFF CACHE BOOL "" FORCE)
-set(LLAMA_BUILD_COMMON ON CACHE BOOL "" FORCE)
-set(LLAMA_CURL         OFF CACHE BOOL "" FORCE)
+# --------------------------------------------------------------------------
+# 0.b  —  Make the LLVM OpenMP runtime available
+# --------------------------------------------------------------------------
+find_package(OpenMP REQUIRED)        # NDK’s clang ships libomp.a
 
-# baseline ISA used for every source that is NOT in a tier wrapper
-string(APPEND CMAKE_C_FLAGS   " -march=armv9.2-a+dotprod+i8mm+sve+sve2+sme")
-string(APPEND CMAKE_CXX_FLAGS " -march=armv9.2-a+dotprod+i8mm+sve+sve2+sme")
-set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}"   CACHE STRING "" FORCE)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}" CACHE STRING "" FORCE)
-
-# NOT NEEDED WHEN CMAKE_BUILD_TYPE PASSED IN BY GRADLE
-#message(DEBUG "CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
-#if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-#    string(APPEND CMAKE_C_FLAGS   " -O3 -DNDEBUG")
-#    string(APPEND CMAKE_CXX_FLAGS " -O3 -DNDEBUG")
-#endif()
-
-# default to Release if Gradle hasn’t set a variant
-if(NOT DEFINED CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
-endif()
-
-### Also provides "common"
-##include(FetchContent)
-##FetchContent_Declare(
-##        llama
-##        GIT_REPOSITORY https://github.com/ggml-org/llama.cpp
-##        GIT_TAG        master
-##)
-##FetchContent_MakeAvailable(llama)
-
-# --------------------------------------------------------------------
-# 1. Pull in llama.cpp (creates targets "llama" and "common")
-# --------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# 1. Locate the root of the llama.cpp source tree
+#    (six levels up from this CMakeLists.txt).
+# --------------------------------------------------------------------------
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../../../)
-add_subdirectory(${LLAMA_SRC} build-llama)
 
-# -----------------------------------------------------------
-# 2.  Helper to create one wrapper .so for a hardware tier
-# -----------------------------------------------------------
+# --------------------------------------------------------------------------
+# 2. Build helper  –  one invocation = one hardware tier
+# --------------------------------------------------------------------------
+include(ExternalProject)
+
 function(build_llama_tier tier march)
-    set(wrapper llama_android_${tier})
-    add_library(${wrapper} SHARED llama-android.cpp)
+    # ---------- 2.1  configure & build core code in an external project -----
+    set(build_dir ${CMAKE_BINARY_DIR}/llama_build_${tier})
 
-    # ISA tuning that belongs only to this tier
-    target_compile_options(${wrapper} PRIVATE "-march=${march}")
+    ExternalProject_Add(llama_build_${tier}
+        SOURCE_DIR   ${LLAMA_SRC}
+        BINARY_DIR   ${build_dir}
+        # ---- pass Android cross-compile context straight through ----------
+        CMAKE_ARGS
+            -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+            -DANDROID_ABI=${ANDROID_ABI}
+            -DANDROID_PLATFORM=${ANDROID_PLATFORM}
+            -DANDROID_STL=${ANDROID_STL}
+            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            # ---- llama / ggml feature switches ----------------------------
+            -DGGML_LLAMAFILE=OFF
+            -DLLAMA_BUILD_COMMON=ON
+            -DLLAMA_CURL=OFF
+            -DBUILD_SHARED_LIBS=OFF       # we want static libs to embed
+            # ---- tier-specific ISA flags ----------------------------------
+            -DCMAKE_C_FLAGS=-march=${march}
+            -DCMAKE_CXX_FLAGS=-march=${march}
+            # ---- put the .a files right in ${build_dir} for easy pick-up --
+            -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY=${build_dir}
 
-# NOT NEEDED!
-#    # sampling.h lives in common/, ggml-impl.h lives in ggml/src
-#    target_include_directories(${wrapper} PRIVATE
-#            ${LLAMA_SRC}/common
-#            ${LLAMA_SRC}/ggml/src)
+        INSTALL_COMMAND ""                # nothing to install
 
-    target_link_libraries(${wrapper} PRIVATE
-            llama
-            common
-            android
-            log)
+        BUILD_BYPRODUCTS
+            ${build_dir}/libllama.a
+            ${build_dir}/libcommon.a
+            ${build_dir}/libggml.a
+            ${build_dir}/libggml-base.a
+            ${build_dir}/libggml-cpu.a
+    )
 
-    set_target_properties(${wrapper} PROPERTIES OUTPUT_NAME ${wrapper})
+    # ---------- 2.2  make the static libs produced above visible ------------
+    set(llama_a   ${build_dir}/libllama.a)
+    set(common_a  ${build_dir}/libcommon.a)
+    set(ggml_a    ${build_dir}/libggml.a)
+    set(ggml_base_a ${build_dir}/libggml-base.a)
+    set(ggml_cpu_a  ${build_dir}/libggml-cpu.a)
+
+    add_library(llama_core_${tier}  STATIC IMPORTED GLOBAL)
+    set_target_properties(llama_core_${tier}  PROPERTIES
+        IMPORTED_LOCATION ${llama_a})
+    add_dependencies(llama_core_${tier} llama_build_${tier})
+
+    add_library(common_core_${tier} STATIC IMPORTED GLOBAL)
+    set_target_properties(common_core_${tier} PROPERTIES
+        IMPORTED_LOCATION ${common_a})
+    add_dependencies(common_core_${tier} llama_build_${tier})
+
+    add_library(ggml_core_${tier}   STATIC IMPORTED GLOBAL)
+    set_target_properties(ggml_core_${tier} PROPERTIES
+        IMPORTED_LOCATION ${ggml_a})
+    add_dependencies(ggml_core_${tier} llama_build_${tier})
+
+    add_library(ggml_base_core_${tier} STATIC IMPORTED GLOBAL)
+    set_target_properties(ggml_base_core_${tier} PROPERTIES
+        IMPORTED_LOCATION ${ggml_base_a})
+    add_dependencies(ggml_base_core_${tier} llama_build_${tier})
+
+    add_library(ggml_cpu_core_${tier}  STATIC IMPORTED GLOBAL)
+    set_target_properties(ggml_cpu_core_${tier} PROPERTIES
+        IMPORTED_LOCATION ${ggml_cpu_a})
+    add_dependencies(ggml_cpu_core_${tier} llama_build_${tier})
+
+    # ---------- 2.3  JNI wrapper DSO ---------------------------------------
+    add_library(llama_android_${tier} SHARED llama-android.cpp)
+
+    target_compile_options(llama_android_${tier} PRIVATE "-march=${march}")
+
+    target_include_directories(llama_android_${tier} PRIVATE
+        ${LLAMA_SRC}
+        ${LLAMA_SRC}/common
+        ${LLAMA_SRC}/include
+        ${LLAMA_SRC}/ggml/include
+        ${LLAMA_SRC}/ggml/src)
+
+    target_link_libraries(llama_android_${tier} PRIVATE
+        llama_core_${tier}
+        common_core_${tier}
+        ggml_core_${tier}        # umbrella (brings in few weak deps)
+        ggml_cpu_core_${tier}    # back-end & scheduler
+        ggml_base_core_${tier}   # core math
+        OpenMP::OpenMP_CXX
+        android
+        log)
+
+    # ---------- 2.4  nice SONAME & filename -------------------------------
+    set_target_properties(llama_android_${tier} PROPERTIES
+        OUTPUT_NAME "llama_android_${tier}")
 endfunction()
 
-# -----------------------------------------------------------
-# 3.  Build the five tiers (no KleidiAI for now)
-# -----------------------------------------------------------
+# --------------------------------------------------------------------------
+# 3.  Build all five tiers
+# --------------------------------------------------------------------------
 build_llama_tier(t0 "armv8-a+simd")
 build_llama_tier(t1 "armv8.2-a+dotprod")
 build_llama_tier(t2 "armv8.6-a+dotprod+i8mm")
 build_llama_tier(t3 "armv9-a+dotprod+i8mm+sve+sve2")
 build_llama_tier(t4 "armv9.2-a+dotprod+i8mm+sve+sve2+sme")
+
+add_dependencies(llama_build_t1 llama_build_t0)
+add_dependencies(llama_build_t2 llama_build_t1)
+add_dependencies(llama_build_t3 llama_build_t2)
+add_dependencies(llama_build_t4 llama_build_t3)
+
+# --------------------------------------------------------------------------
+# 4.  Default variant when Gradle hasn’t told us (keeps IDE happy)
+# --------------------------------------------------------------------------
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
