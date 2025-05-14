@@ -1078,16 +1078,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_s_copy() const {
-    // Get the recurrent cache either directly or from a hybrid parent
-    const llama_kv_cache_recurrent * kv_self = dynamic_cast<const llama_kv_cache_recurrent *>(memory);
-    if (!kv_self) {
-        const llama_kv_cache_hybrid * kv_hybrid = dynamic_cast<const llama_kv_cache_hybrid *>(memory);
-        if (kv_hybrid) {
-            LLAMA_LOG_INFO("%s: Using hybrid cache recurrent child\n", __func__);
-            kv_self = kv_hybrid->get_child_cache<llama_kv_cache_recurrent>();
-        }
-    }
-    GGML_ASSERT(kv_self);
+    const llama_kv_cache_recurrent * kv_self = get_recurrent_cache();
 
     LLAMA_LOG_DEBUG("%s: Making llm_graph_input_s_copy\n", __func__);
     auto inp = std::make_unique<llm_graph_input_s_copy>(kv_self);
@@ -1102,7 +1093,7 @@ ggml_tensor * llm_graph_context::build_inp_s_copy() const {
     ggml_set_input(cur);
 
     res->add_input(std::move(inp));
-    LLAMA_LOG_DEBUG("%s: Done (cur=%d)\n", __func__, cur);
+    LLAMA_LOG_DEBUG("%s: Done (cur=%p)\n", __func__, (void *)cur);
 
     return cur;
 }
@@ -1145,7 +1136,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_unified * kv_self = get_unified_cache();
 
     auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, kv_self);
 
@@ -1361,14 +1352,7 @@ ggml_tensor * llm_graph_context::build_attn(
 }
 
 llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified() const {
-    const llama_kv_cache_unified * kv_self = dynamic_cast<const llama_kv_cache_unified *>(memory);
-    if (!kv_self) {
-        const llama_kv_cache_hybrid * kv_hybrid = dynamic_cast<const llama_kv_cache_hybrid *>(memory);
-        if (kv_hybrid) {
-            kv_self = kv_hybrid->get_child_cache<llama_kv_cache_unified>();
-        }
-    }
-    GGML_ASSERT(kv_self);
+    const llama_kv_cache_unified * kv_self = get_unified_cache();
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, kv_self);
 
@@ -1411,7 +1395,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const llama_kv_cache_unified * kv_self = static_cast<const llama_kv_cache_unified *>(memory);
+    const llama_kv_cache_unified * kv_self = get_unified_cache();
     const auto & n_ctx = cparams.n_ctx;
 
     const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
@@ -1565,6 +1549,32 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+const llama_kv_cache_recurrent * llm_graph_context::get_recurrent_cache() const {
+    const llama_kv_cache_recurrent * kv_self = dynamic_cast<const llama_kv_cache_recurrent *>(memory);
+    if (!kv_self) {
+        const llama_kv_cache_hybrid * kv_hybrid = dynamic_cast<const llama_kv_cache_hybrid *>(memory);
+        if (kv_hybrid) {
+            LLAMA_LOG_INFO("%s: Using hybrid cache recurrent child\n", __func__);
+            kv_self = kv_hybrid->get_child_cache<llama_kv_cache_recurrent>();
+        }
+    }
+    GGML_ASSERT(kv_self);
+    return kv_self;
+}
+
+
+const llama_kv_cache_unified * llm_graph_context::get_unified_cache() const {
+    const llama_kv_cache_unified * kv_self = dynamic_cast<const llama_kv_cache_unified *>(memory);
+    if (!kv_self) {
+        const llama_kv_cache_hybrid * kv_hybrid = dynamic_cast<const llama_kv_cache_hybrid *>(memory);
+        if (kv_hybrid) {
+            kv_self = kv_hybrid->get_child_cache<llama_kv_cache_unified>();
+        }
+    }
+    GGML_ASSERT(kv_self);
+    return kv_self;
+}
+
 ggml_tensor * llm_graph_context::build_recurrent_state(
          ggml_cgraph * gf,
          ggml_tensor * s,
@@ -1572,7 +1582,7 @@ ggml_tensor * llm_graph_context::build_recurrent_state(
              int32_t   n_state,
              int32_t   n_seqs,
                 bool   avoid_copies) const {
-    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
+    const llama_kv_cache_recurrent * kv_self = get_recurrent_cache();
 
     const auto n_kv    = kv_self->n;
     const auto kv_head = kv_self->head;
