@@ -13036,9 +13036,9 @@ struct llm_build_granite : public llm_graph_context {
             self->cb(Vcur, "Vcur", il);
         }
 
-        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->n_head,    self->n_tokens);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->n_head_kv, self->n_tokens);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->n_head_kv, self->n_tokens);
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->hparams.n_head(il),    self->n_tokens);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
 
         if (use_rope) {
             ggml_tensor * rope_factors = model.get_rope_factors(self->cparams, il);
