@@ -1,6 +1,8 @@
 #include <cstdint>
+#include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
+#include <openvino/frontend/exception.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/reshape.hpp>
 #include <vector>
@@ -19,11 +21,22 @@ OutputVector translate_reshape(const NodeContext& context) {
         return {context.get_input(0)};
     }
 
+    int op_case = context.get_op_case();
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported RESHAPE case");
+
     auto output_shape = context.get_output_shape(0).to_shape();
-    auto new_shape_node =
-        ov::op::v0::Constant::create(ov::element::i64,
-                                     {3},
-                                     std::vector<int64_t>{-1, (int64_t)output_shape[1], (int64_t)output_shape[2]});
+    std::shared_ptr<ov::Node> new_shape_node;
+    if (op_case == 1) {
+        new_shape_node =
+            ov::op::v0::Constant::create(ov::element::i64,
+                                         {3},
+                                         std::vector<int64_t>{-1, (int64_t)output_shape[1], (int64_t)output_shape[2]});
+    } else {
+        new_shape_node =
+            ov::op::v0::Constant::create(ov::element::i64,
+                                         {3},
+                                         std::vector<int64_t>{(int64_t)output_shape[0], -1, (int64_t)output_shape[2]});
+    }
     Output<Node> res = std::make_shared<ov::op::v1::Reshape>(context.get_input(0), new_shape_node, false);
     return {res};
 }
