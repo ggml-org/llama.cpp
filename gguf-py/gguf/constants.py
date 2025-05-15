@@ -2032,10 +2032,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
     # Currently, we use tricks here
-    # - The block size doesn't include scales or zero_points as group_size is changeable
-    # - So the size is slightly smaller than the real size
-    # - The n_bytes in gguf_reader.py is thus inaccurate
-    # - During inference, the accurate nbytes info will be known through ggml_tmac_get_nbytes
+    # - Bitnet-style models have only one scale value for the whole tensor,
+    # -   which is not compatible with the "blocking" philosophy of here.
+    # - During inference, the accurate nbytes info will be known through ggml_tmac_get_nbytes.
     GGMLQuantizationType.TMAC_BN_0:         (64,  64 * 2 // 8),
     GGMLQuantizationType.TMAC_W2G64_0:      (64,  4 + 64 * 2 // 8),
     GGMLQuantizationType.TMAC_W2G64_1:      (64,  4 + 4 + 64 * 2 // 8),
