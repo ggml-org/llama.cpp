@@ -2155,7 +2155,7 @@ stbi_inline static int stbi__extend_receive(stbi__jpeg *j, int n)
    unsigned int k;
    int sgn;
    if (j->code_bits < n) stbi__grow_buffer_unsafe(j);
-   if (j->code_bits < n) return 0; // ran out of bits from stream, return 0s intead of continuing
+   if (j->code_bits < n) return 0; // ran out of bits from stream, return 0s instead of continuing
 
    sgn = j->code_buffer >> 31; // sign bit always in MSB; 0 if MSB clear (positive), 1 if MSB set (negative)
    k = stbi_lrot(j->code_buffer, n);
@@ -2170,7 +2170,7 @@ stbi_inline static int stbi__jpeg_get_bits(stbi__jpeg *j, int n)
 {
    unsigned int k;
    if (j->code_bits < n) stbi__grow_buffer_unsafe(j);
-   if (j->code_bits < n) return 0; // ran out of bits from stream, return 0s intead of continuing
+   if (j->code_bits < n) return 0; // ran out of bits from stream, return 0s instead of continuing
    k = stbi_lrot(j->code_buffer, n);
    j->code_buffer = k & ~stbi__bmask[n];
    k &= stbi__bmask[n];
@@ -2182,7 +2182,7 @@ stbi_inline static int stbi__jpeg_get_bit(stbi__jpeg *j)
 {
    unsigned int k;
    if (j->code_bits < 1) stbi__grow_buffer_unsafe(j);
-   if (j->code_bits < 1) return 0; // ran out of bits from stream, return 0s intead of continuing
+   if (j->code_bits < 1) return 0; // ran out of bits from stream, return 0s instead of continuing
    k = j->code_buffer;
    j->code_buffer <<= 1;
    --j->code_bits;
@@ -4961,7 +4961,7 @@ static int stbi__expand_png_palette(stbi__png *a, stbi_uc *palette, int len, int
    p = (stbi_uc *) stbi__malloc_mad2(pixel_count, pal_img_n, 0);
    if (p == NULL) return stbi__err("outofmem", "Out of memory");
 
-   // between here and free(out) below, exitting would leak
+   // between here and free(out) below, exiting would leak
    temp_out = p;
 
    if (pal_img_n == 3) {
@@ -5901,7 +5901,7 @@ static void *stbi__tga_load(stbi__context *s, int *x, int *y, int *comp, int req
    if (tga_height > STBI_MAX_DIMENSIONS) return stbi__errpuc("too large","Very large image (corrupt?)");
    if (tga_width > STBI_MAX_DIMENSIONS) return stbi__errpuc("too large","Very large image (corrupt?)");
 
-   //   do a tiny bit of precessing
+   //   do a tiny bit of processing
    if ( tga_image_type >= 8 )
    {
       tga_image_type -= 8;
@@ -6832,7 +6832,7 @@ static stbi_uc *stbi__gif_load_next(stbi__context *s, stbi__gif *g, int *comp, i
          // 0:  not specified.
       }
 
-      // background is what out is after the undoing of the previou frame;
+      // background is what out is after the undoing of the previous frame;
       memcpy( g->background, g->out, 4 * g->w * g->h );
    }
 
@@ -7865,7 +7865,7 @@ STBIDEF int stbi_is_16_bit_from_callbacks(stbi_io_callbacks const *c, void *user
       1.31  (2011-06-20)
               a few more leak fixes, bug in PNG handling (SpartanJ)
       1.30  (2011-06-11)
-              added ability to load files via callbacks to accomidate custom input streams (Ben Wenger)
+              added ability to load files via callbacks to accommodate custom input streams (Ben Wenger)
               removed deprecated format-specific test/load functions
               removed support for installable file formats (stbi_loader) -- would have been broken for IO callbacks anyway
               error cases in bmp and tga give messages and don't leak (Raymond Barbiero, grisha)
