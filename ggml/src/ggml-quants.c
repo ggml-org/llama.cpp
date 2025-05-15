@@ -4197,7 +4197,7 @@ void quantize_row_q8_K(const float * restrict x, void * restrict y, int64_t k) {
     quantize_row_q8_K_ref(x, y, k);
 }
 
-//===================================== Dot ptoducts =================================
+//===================================== Dot products =================================
 
 //
 // Helper functions
@@ -6018,6 +6018,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * restrict s, size_t bs, const void * r
         }
 
         sumf += sumi*(GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d));
+<<<<<<< HEAD
     }
 
     *s = sumf;
@@ -6512,10 +6513,11 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * restrict s, size_t bs, const void * 
         const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
 
         sumf += (float) sumi * d;
+=======
+>>>>>>> master
     }
 
     *s = sumf;
-#endif
 }
 
 void ggml_vec_dot_q2_K_q8_K(int n, float * restrict s, size_t bs, const void * restrict vx, size_t bx, const void * restrict vy, size_t by, int nrc) {

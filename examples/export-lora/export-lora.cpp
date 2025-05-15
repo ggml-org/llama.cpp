@@ -410,7 +410,11 @@ int main(int argc, char ** argv) {
 
     g_verbose = (params.verbosity == 1);
     try {
+<<<<<<< HEAD
         lora_merge_ctx ctx(params.model, params.lora_adapters, params.lora_outfile, params.cpuparams.n_threads);
+=======
+        lora_merge_ctx ctx(params.model, params.lora_adapters, params.lora_outfile, params.n_threads);
+>>>>>>> master
         ctx.run_merge();
     } catch (const std::exception & err) {
         fprintf(stderr, "%s\n", err.what());

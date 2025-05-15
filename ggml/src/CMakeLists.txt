@@ -1247,7 +1247,11 @@ endif()
 
 # Data types, macros and functions related to controlling CPU affinity and
 # some memory allocation are available on Linux through GNU extensions in libc
+<<<<<<< HEAD
 if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
+=======
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+>>>>>>> master
     add_compile_definitions(_GNU_SOURCE)
 endif()
 
@@ -1295,14 +1299,20 @@ add_library(ggml
             ../include/ggml.h
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
+<<<<<<< HEAD
             ../include/inline_func.h
             ../include/ggml-tmac.h
+=======
+>>>>>>> master
             ggml.c
             ggml-alloc.c
             ggml-backend.c
             ggml-quants.c
             ggml-quants.h
+<<<<<<< HEAD
             ggml-tmac.cpp
+=======
+>>>>>>> master
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}

@@ -76,8 +76,12 @@ int main(int argc, char ** argv) {
     if (params.draft_cpuparams.n_threads > 0) {
         params.cpuparams.n_threads = params.draft_cpuparams.n_threads;
     }
+<<<<<<< HEAD
 
     params.cpuparams_batch.n_threads = params.draft_cpuparams_batch.n_threads;
+=======
+    params.n_threads_batch = params.n_threads_batch_draft;
+>>>>>>> master
     llama_init_result llama_init_dft = llama_init_from_gpt_params(params);
     model_dft = llama_init_dft.model;
     ctx_dft = llama_init_dft.context;

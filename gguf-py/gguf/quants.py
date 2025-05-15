@@ -574,6 +574,7 @@ class Q6_K(__Quant, qtype=GGMLQuantizationType.Q6_K):
         return (d * q).reshape((n_blocks, QK_K))
 
 
+<<<<<<< HEAD
 class TQ1_0(__Quant, qtype=GGMLQuantizationType.TQ1_0):
     @classmethod
     def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
@@ -655,6 +656,8 @@ class TQ2_0(__Quant, qtype=GGMLQuantizationType.TQ2_0):
         return (d * qs.astype(np.float32))
 
 
+=======
+>>>>>>> master
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
     ksigns: bytes = (
         b"\x00\x81\x82\x03\x84\x05\x06\x87\x88\x09\x0a\x8b\x0c\x8d\x8e\x0f"

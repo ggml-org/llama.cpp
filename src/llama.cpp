@@ -214,7 +214,10 @@ enum llm_arch {
     LLM_ARCH_JAIS,
     LLM_ARCH_NEMOTRON,
     LLM_ARCH_EXAONE,
+<<<<<<< HEAD
     LLM_ARCH_RWKV6,
+=======
+>>>>>>> master
     LLM_ARCH_UNKNOWN,
 };
 
@@ -262,7 +265,10 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_JAIS,            "jais"         },
     { LLM_ARCH_NEMOTRON,        "nemotron"     },
     { LLM_ARCH_EXAONE,          "exaone"       },
+<<<<<<< HEAD
     { LLM_ARCH_RWKV6,           "rwkv6"        },
+=======
+>>>>>>> master
     { LLM_ARCH_UNKNOWN,         "(unknown)"    },
 };
 
@@ -299,9 +305,12 @@ enum llm_kv {
     LLM_KV_DECODER_START_TOKEN_ID,
     LLM_KV_ATTN_LOGIT_SOFTCAPPING,
     LLM_KV_FINAL_LOGIT_SOFTCAPPING,
+<<<<<<< HEAD
     LLM_KV_RESCALE_EVERY_N_LAYERS,
     LLM_KV_TIME_MIX_EXTRA_DIM,
     LLM_KV_TIME_DECAY_EXTRA_DIM,
+=======
+>>>>>>> master
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -336,8 +345,11 @@ enum llm_kv {
     LLM_KV_SSM_STATE_SIZE,
     LLM_KV_SSM_TIME_STEP_RANK,
     LLM_KV_SSM_DT_B_C_RMS,
+<<<<<<< HEAD
 
     LLM_KV_WKV_HEAD_SIZE,
+=======
+>>>>>>> master
 
     LLM_KV_TOKENIZER_MODEL,
     LLM_KV_TOKENIZER_PRE,
@@ -403,9 +415,12 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
     { LLM_KV_ATTN_LOGIT_SOFTCAPPING,            "%s.attn_logit_softcapping"            },
     { LLM_KV_FINAL_LOGIT_SOFTCAPPING,           "%s.final_logit_softcapping"           },
+<<<<<<< HEAD
     { LLM_KV_RESCALE_EVERY_N_LAYERS,            "%s.rescale_every_n_layers"            },
     { LLM_KV_TIME_MIX_EXTRA_DIM,                "%s.time_mix_extra_dim"                },
     { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"              },
+=======
+>>>>>>> master
 
     { LLM_KV_ATTENTION_HEAD_COUNT,             "%s.attention.head_count"             },
     { LLM_KV_ATTENTION_HEAD_COUNT_KV,          "%s.attention.head_count_kv"          },
@@ -441,8 +456,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_TIME_STEP_RANK,            "%s.ssm.time_step_rank" },
     { LLM_KV_SSM_DT_B_C_RMS,                "%s.ssm.dt_b_c_rms" },
 
+<<<<<<< HEAD
     { LLM_KV_WKV_HEAD_SIZE,                 "%s.wkv.head_size" },
 
+=======
+>>>>>>> master
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },
@@ -1377,6 +1395,7 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+<<<<<<< HEAD
         LLM_ARCH_RWKV6,
         {
             { LLM_TENSOR_TOKEN_EMBD,                "token_embd" },
@@ -1411,6 +1430,8 @@ static const std::map<llm_arch, std::map<llm_tensor, std::string>> LLM_TENSOR_NA
         },
     },
     {
+=======
+>>>>>>> master
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2216,7 +2237,10 @@ enum e_model {
     MODEL_335M,
     MODEL_410M,
     MODEL_450M,
+<<<<<<< HEAD
     MODEL_700M,
+=======
+>>>>>>> master
     MODEL_770M,
     MODEL_780M,
     MODEL_0_5B,
@@ -2301,12 +2325,15 @@ struct llama_hparams {
     float f_attn_logit_softcapping = 50.0f;
     float f_final_logit_softcapping = 30.0f;
 
+<<<<<<< HEAD
     // for RWKV
     uint32_t rescale_every_n_layers = 0;
     uint32_t time_mix_extra_dim = 0;
     uint32_t time_decay_extra_dim = 0;
     uint32_t wkv_head_size = 0;
 
+=======
+>>>>>>> master
     float    rope_attn_factor = 1.0f;
     float    rope_freq_base_train;
     float    rope_freq_scale_train;
@@ -2370,11 +2397,14 @@ struct llama_hparams {
         if (this->ssm_dt_rank != other.ssm_dt_rank) return true;
         if (this->ssm_dt_b_c_rms != other.ssm_dt_b_c_rms) return true;
 
+<<<<<<< HEAD
         if (this->rescale_every_n_layers != other.rescale_every_n_layers) return true;
         if (this->time_mix_extra_dim     != other.time_mix_extra_dim)     return true;
         if (this->time_decay_extra_dim   != other.time_decay_extra_dim)   return true;
         if (this->wkv_head_size          != other.wkv_head_size)          return true;
 
+=======
+>>>>>>> master
         if (this->dec_start_token_id != other.dec_start_token_id) return true;
 
         const float EPSILON = 1e-9f;
@@ -3215,9 +3245,12 @@ struct llama_context {
 #endif
     ggml_backend_t backend_cpu = nullptr;
 
+<<<<<<< HEAD
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;
 
+=======
+>>>>>>> master
     bool has_evaluated_once = false;
 
     int64_t t_start_us;
@@ -3550,7 +3583,11 @@ static bool llama_kv_cache_find_slot(
     const uint32_t n_seq_tokens = batch.n_seq_tokens;
 
     if (cache.recurrent) {
+<<<<<<< HEAD
         // For recurrent state architectures (like Mamba or RWKV),
+=======
+        // For recurrent state architectures (like Mamba),
+>>>>>>> master
         // each cache cell can store the state for a whole sequence.
         // A slot should be always be contiguous.
 
@@ -4453,8 +4490,11 @@ struct llama_model_loader {
                 case GGML_TYPE_Q4_0_4_4: ftype = LLAMA_FTYPE_MOSTLY_Q4_0_4_4; break;
                 case GGML_TYPE_Q4_0_4_8: ftype = LLAMA_FTYPE_MOSTLY_Q4_0_4_8; break;
                 case GGML_TYPE_Q4_0_8_8: ftype = LLAMA_FTYPE_MOSTLY_Q4_0_8_8; break;
+<<<<<<< HEAD
                 case GGML_TYPE_TL1   :   ftype = LLAMA_FTYPE_MOSTLY_TL1    ;   break;
                 case GGML_TYPE_TL2   :   ftype = LLAMA_FTYPE_MOSTLY_TL2    ;   break;
+=======
+>>>>>>> master
                 default:
                     {
                         LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -5129,8 +5169,11 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
         case LLAMA_FTYPE_MOSTLY_Q5_1:     return "Q5_1";
         case LLAMA_FTYPE_MOSTLY_Q8_0:     return "Q8_0";
+<<<<<<< HEAD
         case LLAMA_FTYPE_MOSTLY_TL1:      return "TL1";
         case LLAMA_FTYPE_MOSTLY_TL2:      return "TL2";
+=======
+>>>>>>> master
         case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:   return "Q3_K - Small";
@@ -5141,9 +5184,12 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_K_S:   return "Q5_K - Small";
         case LLAMA_FTYPE_MOSTLY_Q5_K_M:   return "Q5_K - Medium";
         case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
+<<<<<<< HEAD
         case LLAMA_FTYPE_MOSTLY_TQ1_0:    return "TQ1_0 - 1.69 bpw ternary";
         case LLAMA_FTYPE_MOSTLY_TQ2_0:    return "TQ2_0 - 2.06 bpw ternary";
         case LLAMA_FTYPE_MOSTLY_I2_S:    return "I2_S - 2 bpw ternary";
+=======
+>>>>>>> master
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
@@ -5182,7 +5228,10 @@ static const char * llama_model_type_name(e_model type) {
         case MODEL_335M:          return "335M";
         case MODEL_410M:          return "410M";
         case MODEL_450M:          return "450M";
+<<<<<<< HEAD
         case MODEL_700M:          return "700M";
+=======
+>>>>>>> master
         case MODEL_770M:          return "770M";
         case MODEL_780M:          return "780M";
         case MODEL_0_5B:          return "0.5B";
@@ -5236,7 +5285,10 @@ static const char * llama_model_vocab_type_name(enum llama_vocab_type type){
         case LLAMA_VOCAB_TYPE_BPE:  return "BPE";
         case LLAMA_VOCAB_TYPE_WPM:  return "WPM";
         case LLAMA_VOCAB_TYPE_UGM:  return "UGM";
+<<<<<<< HEAD
         case LLAMA_VOCAB_TYPE_RWKV: return "RWKV";
+=======
+>>>>>>> master
         default:                    return "unknown";
     }
 }
@@ -5862,8 +5914,12 @@ static void llm_load_hparams(
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
+<<<<<<< HEAD
                     case 24: model.type = e_model::MODEL_700M; break; // 1bitLLM/bitnet_b1_58-large
                     case 26: model.type = e_model::MODEL_3B; break;   // 1bitLLM/bitnet_b1_58-3B
+=======
+                    case 26: model.type = e_model::MODEL_3B; break;
+>>>>>>> master
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
@@ -5934,6 +5990,7 @@ static void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+<<<<<<< HEAD
         case LLM_ARCH_RWKV6:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
@@ -5954,6 +6011,8 @@ static void llm_load_hparams(
                     default: model.type = e_model::MODEL_UNKNOWN;
                 }
             } break;
+=======
+>>>>>>> master
         default: (void)0;
     }
 
@@ -6083,6 +6142,7 @@ static void llm_load_vocab(
                 }
 #endif
             }
+<<<<<<< HEAD
         } else if (tokenizer_model == "rwkv") {
             vocab.type = LLAMA_VOCAB_TYPE_RWKV;
 
@@ -6092,6 +6152,8 @@ static void llm_load_vocab(
             vocab.special_unk_id = -1;
             vocab.special_sep_id = -1;
             vocab.special_pad_id = -1;
+=======
+>>>>>>> master
         } else {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
@@ -6223,12 +6285,15 @@ static void llm_load_vocab(
             vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             vocab.tokenizer_add_bos = false;
             vocab.tokenizer_add_eos = true;
+<<<<<<< HEAD
         } else if (vocab.type == LLAMA_VOCAB_TYPE_RWKV) {
             vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             vocab.tokenizer_add_space_prefix = false;
             vocab.tokenizer_clean_spaces = false;
             vocab.tokenizer_add_bos = false;
             vocab.tokenizer_add_eos = false;
+=======
+>>>>>>> master
         } else {
             vocab.type_pre = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
         }
@@ -8127,14 +8192,25 @@ static bool llm_load_tensors(
                         layer.attn_sub_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_SUB_NORM, "weight", i), {n_embd});
 
                         layer.wq       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd});
+<<<<<<< HEAD
                         layer.wk       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
                         layer.wv       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
                         layer.wo       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+=======
+                        layer.wq_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_Q,   "scale",  i), {1});
+                        layer.wk       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa});
+                        layer.wk_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_K,   "scale",  i), {1});
+                        layer.wv       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa});
+                        layer.wv_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_V,   "scale",  i), {1});
+                        layer.wo       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd});
+                        layer.wo_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_ATTN_OUT, "scale",  i), {1});
+>>>>>>> master
 
                         layer.ffn_norm     = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_NORM,     "weight", i), {n_embd});
                         layer.ffn_sub_norm = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_SUB_NORM, "weight", i), {n_ff});
 
                         layer.ffn_gate       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff});
+<<<<<<< HEAD
                         layer.ffn_down       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
                         layer.ffn_up         = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff});
 #if !defined(GGML_BITNET_ARM_TL1) && !defined(GGML_BITNET_X86_TL2)
@@ -8146,6 +8222,13 @@ static bool llm_load_tensors(
                         layer.ffn_down_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_DOWN, "scale",  i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
                         layer.ffn_up_scale   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP,   "scale",  i), {1}, llama_model_loader::TENSOR_NOT_REQUIRED);
 #endif
+=======
+                        layer.ffn_gate_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_GATE, "scale",  i), {1});
+                        layer.ffn_down       = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd});
+                        layer.ffn_down_scale = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_DOWN, "scale",  i), {1});
+                        layer.ffn_up         = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff});
+                        layer.ffn_up_scale   = ml.create_tensor(ctx_layer, tn(LLM_TENSOR_FFN_UP,   "scale",  i), {1});
+>>>>>>> master
                     }
                 } break;
             case LLM_ARCH_T5:
@@ -8385,6 +8468,7 @@ static bool llm_load_tensors(
                         layer.ffn_up   = ml.create_tensor(ctx_split, tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff});
                     }
                 } break;
+<<<<<<< HEAD
             case LLM_ARCH_RWKV6:
                 {
                     model.tok_embd = ml.create_tensor(ctx_input, tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab});
@@ -8447,6 +8531,8 @@ static bool llm_load_tensors(
                     }
 
                 } break;
+=======
+>>>>>>> master
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -9406,6 +9492,7 @@ static struct ggml_tensor * llm_build_mamba(
     return cur;
 }
 
+<<<<<<< HEAD
 static struct ggml_tensor * llm_build_rwkv6_time_mix(
         struct llama_context & lctx,
         struct ggml_context * ctx,
@@ -9571,6 +9658,8 @@ static struct ggml_tensor * llm_build_rwkv6_channel_mix(
     return ggml_mul(ctx, r, llm_build_lora_mm(lctx, ctx, layer->channel_mix_value, k));
 }
 
+=======
+>>>>>>> master
 struct llm_build_context {
     const llama_model    & model;
           llama_context  & lctx;
@@ -14191,9 +14280,13 @@ struct llm_build_context {
             {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+<<<<<<< HEAD
                 if (model.layers[il].wq_scale) {
                     Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_scale);
                 }
+=======
+                Qcur = ggml_mul(ctx0, Qcur, model.layers[il].wq_scale);
+>>>>>>> master
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
@@ -14202,9 +14295,13 @@ struct llm_build_context {
 
                 // B1.K
                 struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+<<<<<<< HEAD
                 if (model.layers[il].wk_scale) {
                     Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_scale);
                 }
+=======
+                Kcur = ggml_mul(ctx0, Kcur, model.layers[il].wk_scale);
+>>>>>>> master
                 cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
@@ -14213,9 +14310,13 @@ struct llm_build_context {
 
                 // B1.V
                 struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+<<<<<<< HEAD
                 if (model.layers[il].wv_scale) {
                     Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_scale);
                 }
+=======
+                Vcur = ggml_mul(ctx0, Vcur, model.layers[il].wv_scale);
+>>>>>>> master
                 cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
@@ -14246,9 +14347,13 @@ struct llm_build_context {
                 cb(cur, "attn_sub_norm", il);
 
                 cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wo, cur);
+<<<<<<< HEAD
                 if (model.layers[il].wo_scale) {
                     cur = ggml_mul(ctx0, cur, model.layers[il].wo_scale);
                 }
+=======
+                cur = ggml_mul(ctx0, cur, model.layers[il].wo_scale);
+>>>>>>> master
                 if (model.layers[il].bo) {
                     cur = ggml_add(ctx0, cur, model.layers[il].bo);
                 }
@@ -14285,9 +14390,13 @@ struct llm_build_context {
             cb(cur, "ffn_sub_norm", il);
 
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_down, cur);
+<<<<<<< HEAD
             if (model.layers[il].ffn_down_scale) {
                 cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
             }
+=======
+            cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
+>>>>>>> master
             cb(cur, "ffn_down", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
@@ -15102,6 +15211,7 @@ struct llm_build_context {
 
         return gf;
     }
+<<<<<<< HEAD
 
     ggml_cgraph * build_rwkv6() {
         ggml_cgraph *gf = ggml_new_graph_custom(ctx0, llama_model_max_nodes(model), false);
@@ -15213,6 +15323,8 @@ struct llm_build_context {
 
         return gf;
     }
+=======
+>>>>>>> master
 };
 
 static struct ggml_cgraph * llama_build_graph_defrag(llama_context & lctx, const std::vector<uint32_t> & ids) {
@@ -15459,10 +15571,13 @@ static struct ggml_cgraph * llama_build_graph(
             {
                 result = llm.build_exaone();
             } break;
+<<<<<<< HEAD
         case LLM_ARCH_RWKV6:
             {
                 result = llm.build_rwkv6();
             } break;
+=======
+>>>>>>> master
         default:
             GGML_ABORT("fatal error");
     }
@@ -16404,9 +16519,13 @@ static int llama_encode_internal(
     lctx.inp_embd_enc = NULL;
     lctx.n_outputs = n_tokens;
 
+<<<<<<< HEAD
     int n_threads = n_tokens == 1 ? cparams.n_threads : cparams.n_threads_batch;
     ggml_threadpool_t threadpool = n_tokens == 1 ? lctx.threadpool : lctx.threadpool_batch;
 
+=======
+    const int n_threads = n_tokens == 1 ? cparams.n_threads : cparams.n_threads_batch;
+>>>>>>> master
     GGML_ASSERT(n_threads > 0);
 
     ggml_backend_sched_reset(lctx.sched);
@@ -16438,7 +16557,11 @@ static int llama_encode_internal(
 
     llama_set_inputs(lctx, ubatch);
 
+<<<<<<< HEAD
     llama_graph_compute(lctx, gf, n_threads, threadpool);
+=======
+    llama_graph_compute(lctx, gf, n_threads);
+>>>>>>> master
 
     // extract embeddings
     if (embd) {
@@ -16964,9 +17087,12 @@ static ggml_type llama_tensor_get_type(quantize_state_internal & qs, ggml_type n
                      new_type == GGML_TYPE_Q4_0_8_8) {
                 new_type = GGML_TYPE_Q4_0;
             }
+<<<<<<< HEAD
             else if (ftype == LLAMA_FTYPE_MOSTLY_TQ1_0 || ftype == LLAMA_FTYPE_MOSTLY_TQ2_0 || ftype == LLAMA_FTYPE_MOSTLY_I2_S) {
                 new_type = GGML_TYPE_F16;
             }
+=======
+>>>>>>> master
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S ||
                ftype == LLAMA_FTYPE_MOSTLY_IQ2_S || ftype == LLAMA_FTYPE_MOSTLY_IQ2_M    || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) {
@@ -17524,11 +17650,14 @@ static void llama_model_quantize_internal(const std::string & fname_inp, const s
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
 
+<<<<<<< HEAD
         // do not quantize RWKV's time_mix_first tensors
         quantize &= name.find("time_mix_first.weight") == std::string::npos;
         quantize &= name.find("time_mix_w1.weight") == std::string::npos;
         quantize &= name.find("time_mix_w2.weight") == std::string::npos;
 
+=======
+>>>>>>> master
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
@@ -18538,7 +18667,10 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
         case LLM_ARCH_JAIS:
+<<<<<<< HEAD
         case LLM_ARCH_RWKV6:
+=======
+>>>>>>> master
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -18707,7 +18839,10 @@ llama_token llama_model_decoder_start_token(const struct llama_model * model) {
 bool llama_model_is_recurrent(const struct llama_model * model) {
     switch (model->arch) {
         case LLM_ARCH_MAMBA:  return true;
+<<<<<<< HEAD
         case LLM_ARCH_RWKV6:  return true;
+=======
+>>>>>>> master
         default:              return false;
     }
 }

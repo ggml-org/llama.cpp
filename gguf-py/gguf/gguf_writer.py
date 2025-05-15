@@ -222,7 +222,11 @@ class GGUFWriter:
         for fout, tensors, kv_data in zip(self.fout, self.tensors, self.kv_data):
             fout.write(self._pack("<I", GGUF_MAGIC, skip_pack_prefix = True))
             fout.write(self._pack("I", GGUF_VERSION))
+<<<<<<< HEAD
             fout.write(self._pack("Q", len([k for k in tensors.keys() if not k.endswith("_scale")])))
+=======
+            fout.write(self._pack("Q", len(tensors)))
+>>>>>>> master
             fout.write(self._pack("Q", len(kv_data)))
             fout.flush()
         self.state = WriterState.HEADER
@@ -254,8 +258,11 @@ class GGUFWriter:
             offset_tensor = 0
 
             for name, ti in tensors.items():
+<<<<<<< HEAD
                 if name.endswith("_scale"):
                     continue
+=======
+>>>>>>> master
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
                 ti_data += self._pack("I", n_dims)
@@ -263,11 +270,15 @@ class GGUFWriter:
                     ti_data += self._pack("Q", ti.shape[n_dims - 1 - j])
                 ti_data += self._pack("I", ti.dtype)
                 ti_data += self._pack("Q", offset_tensor)
+<<<<<<< HEAD
                 dtype = ti.dtype
                 if ti.dtype == GGMLQuantizationType.TL1 or dtype == GGMLQuantizationType.TL2:
                     offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment) + self.data_alignment
                 else:
                     offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
+=======
+                offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
+>>>>>>> master
 
             fout.write(ti_data)
             fout.flush()
@@ -729,9 +740,12 @@ class GGUFWriter:
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
 
+<<<<<<< HEAD
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
 
+=======
+>>>>>>> master
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 

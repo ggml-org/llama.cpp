@@ -18,6 +18,7 @@ WORKDIR /app
 
 COPY . .
 
+<<<<<<< HEAD
 # Use the default CUDA archs if not specified
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
         export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
@@ -25,6 +26,15 @@ RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     cmake -B build -DGGML_CUDA=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
     cmake --build build --config Release --target llama-cli -j$(nproc)
 
+=======
+# Set nvcc architecture
+ENV CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
+# Enable CUDA
+ENV GGML_CUDA=1
+
+RUN make -j$(nproc) llama-cli
+
+>>>>>>> master
 FROM ${BASE_CUDA_RUN_CONTAINER} AS runtime
 
 RUN apt-get update && \

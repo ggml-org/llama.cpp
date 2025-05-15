@@ -411,7 +411,11 @@ void gpt_params_parse_from_env(gpt_params & params) {
     get_env("LLAMA_ARG_MODEL_ALIAS",      params.model_alias);
     get_env("LLAMA_ARG_HF_REPO",          params.hf_repo);
     get_env("LLAMA_ARG_HF_FILE",          params.hf_file);
+<<<<<<< HEAD
     get_env("LLAMA_ARG_THREADS",          params.cpuparams.n_threads);
+=======
+    get_env("LLAMA_ARG_THREADS",          params.n_threads);
+>>>>>>> master
     get_env("LLAMA_ARG_CTX_SIZE",         params.n_ctx);
     get_env("LLAMA_ARG_N_PARALLEL",       params.n_parallel);
     get_env("LLAMA_ARG_BATCH",            params.n_batch);
@@ -448,6 +452,7 @@ bool gpt_params_parse(int argc, char ** argv, gpt_params & params) {
     return true;
 }
 
+<<<<<<< HEAD
 bool parse_cpu_range(const std::string & range, bool (&boolmask)[GGML_MAX_N_THREADS]) {
     size_t dash_loc = range.find('-');
     if (dash_loc == std::string::npos) {
@@ -521,6 +526,8 @@ bool parse_cpu_mask(const std::string & mask, bool (&boolmask)[GGML_MAX_N_THREAD
     return true;
 }
 
+=======
+>>>>>>> master
 #define CHECK_ARG if (++i >= argc) { invalid_param = true; return true; }
 
 bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param) {
@@ -537,9 +544,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-t" || arg == "--threads") {
         CHECK_ARG
+<<<<<<< HEAD
         params.cpuparams.n_threads = std::stoi(argv[i]);
         if (params.cpuparams.n_threads <= 0) {
             params.cpuparams.n_threads = std::thread::hardware_concurrency();
+=======
+        params.n_threads = std::stoi(argv[i]);
+        if (params.n_threads <= 0) {
+            params.n_threads = std::thread::hardware_concurrency();
+>>>>>>> master
         }
         return true;
     }
@@ -574,9 +587,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-tb" || arg == "--threads-batch") {
         CHECK_ARG
+<<<<<<< HEAD
         params.cpuparams_batch.n_threads = std::stoi(argv[i]);
         if (params.cpuparams_batch.n_threads <= 0) {
             params.cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+=======
+        params.n_threads_batch = std::stoi(argv[i]);
+        if (params.n_threads_batch <= 0) {
+            params.n_threads_batch = std::thread::hardware_concurrency();
+>>>>>>> master
         }
         return true;
     }
@@ -610,9 +629,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-td" || arg == "--threads-draft") {
         CHECK_ARG
+<<<<<<< HEAD
         params.draft_cpuparams.n_threads = std::stoi(argv[i]);
         if (params.draft_cpuparams.n_threads <= 0) {
             params.draft_cpuparams.n_threads = std::thread::hardware_concurrency();
+=======
+        params.n_threads_draft = std::stoi(argv[i]);
+        if (params.n_threads_draft <= 0) {
+            params.n_threads_draft = std::thread::hardware_concurrency();
+>>>>>>> master
         }
         return true;
     }
@@ -646,9 +671,15 @@ bool gpt_params_find_arg(int argc, char ** argv, const std::string & arg, gpt_pa
     }
     if (arg == "-tbd" || arg == "--threads-batch-draft") {
         CHECK_ARG
+<<<<<<< HEAD
         params.draft_cpuparams_batch.n_threads = std::stoi(argv[i]);
         if (params.draft_cpuparams_batch.n_threads <= 0) {
             params.draft_cpuparams_batch.n_threads = std::thread::hardware_concurrency();
+=======
+        params.n_threads_batch_draft = std::stoi(argv[i]);
+        if (params.n_threads_batch_draft <= 0) {
+            params.n_threads_batch_draft = std::thread::hardware_concurrency();
+>>>>>>> master
         }
         return true;
     }
@@ -2062,6 +2093,10 @@ void gpt_params_print_usage(int /*argc*/, char ** argv, const gpt_params & param
     options.push_back({ "export-lora", "-m,    --model",                "model path from which to load base model (default '%s')", params.model.c_str() });
     options.push_back({ "export-lora", "       --lora FNAME",           "path to LoRA adapter  (can be repeated to use multiple adapters)" });
     options.push_back({ "export-lora", "       --lora-scaled FNAME S",  "path to LoRA adapter with user defined scaling S  (can be repeated to use multiple adapters)" });
+<<<<<<< HEAD
+=======
+    options.push_back({ "*",           "-t,    --threads N",            "number of threads to use during computation (default: %d)", params.n_threads });
+>>>>>>> master
     options.push_back({ "export-lora", "-o,    --output FNAME",         "output file (default: '%s')", params.lora_outfile.c_str() });
 
     printf("usage: %s [options]\n", argv[0]);

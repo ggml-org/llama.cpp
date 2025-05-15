@@ -1827,6 +1827,13 @@ static std::pair<int, int> uhd_get_refine_size(std::pair<int, int> original_size
     return refine_size;
 }
 
+<<<<<<< HEAD
+=======
+inline int clip(int x, int lower, int upper) {
+    return std::max(lower, std::min(x, upper));
+}
+
+>>>>>>> master
 static std::pair<int, int> uhd_best_grid(const int max_slice_nums, const int multiple, const float log_ratio) {
     std::vector<int> candidate_split_grids_nums;
     for (int i : {multiple - 1, multiple, multiple + 1}) {

@@ -58,6 +58,7 @@ struct naive_trie {
         auto res = children.find(c);
         if (res != children.end()) {
             return res->second.get_longest_prefix(key, len, offset + 1);
+<<<<<<< HEAD
         }
 
         return std::make_pair(key, offset);
@@ -69,6 +70,19 @@ struct naive_trie {
         }
 
         return NULL;
+=======
+        } else {
+            return std::make_pair(key, offset);
+        }
+    }
+    struct naive_trie * traverse(const char c) {
+        auto res = children.find(c);
+        if (res != children.end()) {
+            return &res->second;
+        } else {
+            return NULL;
+        }
+>>>>>>> master
     }
     std::map<char, struct naive_trie> children;
     bool has_value;
@@ -843,7 +857,11 @@ struct llm_tokenizer_ugm {
             // traverse the token matcher trie to find a matching token
             bool single_codepoint_token_found = false;
             const struct best_tokenization & current_best = tokenization_results[input_offset];
+<<<<<<< HEAD
             const struct naive_trie * node = token_matcher.traverse(normalized[prefix_offset++]);
+=======
+            struct naive_trie * node  = token_matcher.traverse(normalized[prefix_offset++]);
+>>>>>>> master
 
             while (prefix_offset <= input_len && node != NULL) {
                 // check if we found valid token in prefix
@@ -963,7 +981,11 @@ private:
     /*
      * This structure is a view wrapper for XOR-compressed double array (XCDA)
      * See Shunsuke Kanda (2018). Space- and Time-Efficient String Dictionaries.
+<<<<<<< HEAD
      * Each bit-packed entry contains:
+=======
+     * Eeach bit-packed entry contains:
+>>>>>>> master
      * - BASE array value in bits 10-30
      * - LCHECK array value in bits 0-7
      * - LEAF array value in bit 9
@@ -1098,6 +1120,7 @@ private:
 };
 
 //
+<<<<<<< HEAD
 // RWKV tokenizer
 //
 
@@ -1203,6 +1226,8 @@ struct llm_tokenizer_rwkv {
 };
 
 //
+=======
+>>>>>>> master
 // (de-) tokenize
 //
 
@@ -1506,6 +1531,7 @@ std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, 
                     output.push_back(vocab.special_eos_id);
                 }
             } break;
+<<<<<<< HEAD
         case LLAMA_VOCAB_TYPE_RWKV:
             {
                 for (const auto & fragment : fragment_buffer) {
@@ -1523,6 +1549,8 @@ std::vector<llama_vocab::id> llama_tokenize_internal(const llama_vocab & vocab, 
                     }
                 }
             } break;
+=======
+>>>>>>> master
         case LLAMA_VOCAB_TYPE_NONE:
             GGML_ABORT("fatal error");
     }
@@ -1738,6 +1766,7 @@ int32_t llama_token_to_piece_impl(const struct llama_vocab & vocab, llama_token 
                 }
                 break;
             }
+<<<<<<< HEAD
             case LLAMA_VOCAB_TYPE_RWKV: {
                 std::vector<uint8_t> result = llama_unescape_rwkv_token(token_text);
 
@@ -1749,6 +1778,8 @@ int32_t llama_token_to_piece_impl(const struct llama_vocab & vocab, llama_token 
                 memcpy(buf, result.data(), result.size());
                 return (int)result.size();
             }
+=======
+>>>>>>> master
             default:
                 GGML_ABORT("fatal error");
         }

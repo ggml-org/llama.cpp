@@ -180,7 +180,11 @@ static const char * sample(struct llama_sampling_context * ctx_sampling,
 
 static struct llava_context * minicpmv_init(gpt_params * params, const std::string & fname, int &n_past){
     auto ctx_clip = clip_init_context(params);
+<<<<<<< HEAD
     auto embeds = llava_image_embed_make_with_filename(ctx_clip, params->cpuparams.n_threads, fname.c_str());
+=======
+    auto embeds = llava_image_embed_make_with_filename(ctx_clip, params->n_threads, fname.c_str());
+>>>>>>> master
     if (!embeds) {
         std::cerr << "error: failed to load image " << fname << ". Terminating\n\n";
         return NULL;

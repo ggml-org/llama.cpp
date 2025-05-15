@@ -227,6 +227,7 @@ typedef struct {
 } block_q8_0x8;
 static_assert(sizeof(block_q8_0x8) == 8 * sizeof(ggml_half) + QK8_0 * 8, "wrong q8_0x8 block size/padding");
 
+<<<<<<< HEAD
 //
 // Ternary quantization
 //
@@ -247,6 +248,8 @@ typedef struct {
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
 
+=======
+>>>>>>> master
 //
 // Super-block quantization structures
 //

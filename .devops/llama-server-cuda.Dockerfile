@@ -18,6 +18,7 @@ WORKDIR /app
 
 COPY . .
 
+<<<<<<< HEAD
 # Use the default CUDA archs if not specified
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
         export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
@@ -25,6 +26,19 @@ RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
     cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
     cmake --build build --config Release --target llama-server -j$(nproc)
 
+=======
+# Set nvcc architecture
+ENV CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH}
+# Enable CUDA
+ENV GGML_CUDA=1
+# Enable cURL
+ENV LLAMA_CURL=1
+# Must be set to 0.0.0.0 so it can listen to requests from host machine
+ENV LLAMA_ARG_HOST=0.0.0.0
+
+RUN make -j$(nproc) llama-server
+
+>>>>>>> master
 FROM ${BASE_CUDA_RUN_CONTAINER} AS runtime
 
 RUN apt-get update && \
@@ -36,6 +50,8 @@ COPY --from=build /app/build/bin/llama-server /llama-server
 
 # Must be set to 0.0.0.0 so it can listen to requests from host machine
 ENV LLAMA_ARG_HOST=0.0.0.0
+
+HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 

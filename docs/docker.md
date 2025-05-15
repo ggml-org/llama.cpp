@@ -66,8 +66,13 @@ You may want to pass in some different `ARGS`, depending on the CUDA environment
 
 The defaults are:
 
+<<<<<<< HEAD
 - `CUDA_VERSION` set to `12.6.0`
 - `CUDA_DOCKER_ARCH` set to the cmake build default, which includes all the supported architectures
+=======
+- `CUDA_VERSION` set to `11.7.1`
+- `CUDA_DOCKER_ARCH` set to `all`
+>>>>>>> master
 
 The resulting images, are essentially the same as the non-CUDA images:
 

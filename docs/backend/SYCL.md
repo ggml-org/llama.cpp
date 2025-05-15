@@ -336,12 +336,20 @@ Choose one of following methods to run.
 - Use device 0:
 
 ```sh
+<<<<<<< HEAD
 ./examples/sycl/run-llama2.sh 0
+=======
+./examples/sycl/run_llama2.sh 0
+>>>>>>> master
 ```
 - Use multiple devices:
 
 ```sh
+<<<<<<< HEAD
 ./examples/sycl/run-llama2.sh
+=======
+./examples/sycl/run_llama2.sh
+>>>>>>> master
 ```
 
 2. Command line

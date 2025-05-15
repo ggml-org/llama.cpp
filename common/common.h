@@ -67,6 +67,7 @@ enum dimre_method {
     DIMRE_METHOD_MEAN,
 };
 
+<<<<<<< HEAD
 struct cpu_params {
     int      n_threads                   = -1;
     bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
@@ -76,6 +77,8 @@ struct cpu_params {
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
 };
 
+=======
+>>>>>>> master
 struct gpt_params {
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
@@ -339,13 +342,21 @@ struct llama_init_result {
     struct llama_context * context = nullptr;
     std::vector<llama_lora_adapter_container> lora_adapters;
 };
+<<<<<<< HEAD
+=======
+
+struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
+>>>>>>> master
 
 struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 
+<<<<<<< HEAD
 struct llama_model_params     llama_model_params_from_gpt_params    (const gpt_params & params);
 struct llama_context_params   llama_context_params_from_gpt_params  (const gpt_params & params);
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
 
+=======
+>>>>>>> master
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 

@@ -5,6 +5,7 @@ if (WIN32)
     endif()
 endif()
 
+<<<<<<< HEAD
 if (GGML_BITNET_ARM_TL1)
     add_compile_definitions(GGML_BITNET_ARM_TL1)
 endif()
@@ -12,6 +13,8 @@ if (GGML_BITNET_X86_TL2)
     add_compile_definitions(GGML_BITNET_X86_TL2)
 endif()
 
+=======
+>>>>>>> master
 #
 # libraries
 #
