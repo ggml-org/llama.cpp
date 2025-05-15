@@ -98,7 +98,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') || github.ref == 'refs/heads/master' }}
+        if: "${{ github.event_name == 'workflow_dispatch' ? github.event.inputs.create_release == 'true' : github.ref == 'refs/heads/master' }}"
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
@@ -167,7 +167,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
@@ -249,7 +249,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
@@ -433,7 +433,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
@@ -939,8 +939,8 @@ jobs:
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
 
-      - name: Build with libCURL
-        id: cmake_build_curl
+      - name: Build
+        id: cmake_build
         shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
@@ -990,7 +990,7 @@ jobs:
           ctest -L main -C Release --verbose --timeout 900
 
       - name: Test (Intel SDE)
-        if: ${{ matrix.build == 'avx512-x64' && steps.check_avx512f.outputs.has_avx512f == '0' }} # use Intel SDE for AVX-512 emulation
+        if: ${{ matrix.build == 'avx512-x64' && (steps.check_avx512f.outputs.has_avx512f == '0' || env.HAS_AVX512F == '0') }} # use Intel SDE for AVX-512 emulation
         run: |
           curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
           # for some weird reason windows tar doesn't like sde tar.xz
@@ -1016,7 +1016,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
@@ -1025,7 +1025,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-x64.zip
           name: llama-bin-win-${{ matrix.build }}-x64.zip
@@ -1149,7 +1149,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
@@ -1158,7 +1158,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}-cu${{ matrix.cuda }}-x64.zip
           name: llama-bin-win-cu${{ matrix.cuda }}-x64.zip
@@ -1166,10 +1166,10 @@ jobs:
       - name: Copy and pack Cuda runtime
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
-          echo "Cuda install location: $CUDA_PATH"
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
           $dst='.\build\bin\cudart\'
-          robocopy "$env:CUDA_PATH\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "$env:CUDA_PATH\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           7z a cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
@@ -1229,7 +1229,7 @@ jobs:
 
       - name: Build the release package
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         run: |
           echo "cp oneAPI running time dll files in ${{ env.ONEAPI_ROOT }} to ./build/bin"
 
@@ -1255,7 +1255,7 @@ jobs:
 
       - name: Upload the release package
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4 
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
@@ -1401,7 +1401,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        env:
+        env: 
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\libcurl-x64.dll
@@ -1409,7 +1409,7 @@ jobs:
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
-        with:
+        with: 
           path: llama-${{ steps.tag.outputs.name }}-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
           name: llama-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
 
@@ -1461,7 +1461,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event.inputs.create_release == 'true') }}
         run: |
           zip --symlinks -r llama-${{ steps.tag.outputs.name }}-xcframework.zip build-apple/llama.xcframework
 
@@ -1469,7 +1469,7 @@ jobs:
         if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip
+          path: llama-${{ steps.tag.outputs.name }}-xcframework.zip 
           name: llama-${{ steps.tag.outputs.name }}-xcframework
 
   android-build:

@@ -98,7 +98,7 @@ jobs:
 
       - name: Pack artifacts
         id: pack_artifacts
-        if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true') || github.ref == 'refs/heads/master' }}
+        if: "${{ github.event_name == 'workflow_dispatch' ? github.event.inputs.create_release == 'true' : github.ref == 'refs/heads/master' }}"
         run: |
           cp LICENSE ./build/bin/
           zip -r llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
@@ -939,7 +939,7 @@ jobs:
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
 
-      - name: Build with libCURL
+      - name: Build
         id: cmake_build_curl
         shell: cmd
         env:
@@ -949,7 +949,7 @@ jobs:
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON ^
+            -DGGML_CUDA=OFF ^
             -DGGML_RPC=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
@@ -990,7 +990,8 @@ jobs:
           ctest -L main -C Release --verbose --timeout 900
 
       - name: Test (Intel SDE)
-        if: ${{ matrix.build == 'avx512-x64' && steps.check_avx512f.outputs.has_avx512f == '0' }} # use Intel SDE for AVX-512 emulation
+        if: ${{ matrix.build == 'avx512-x64' && (steps.check_avx512f.outputs.has_avx512f == '0') }} # use Intel SDE for AVX-512 emulation
+        if: ${{ matrix.build == 'avx512-x64' && env.HAS_AVX512F == '0' }} # use Intel SDE for AVX-512 emulation
         run: |
           curl.exe -o $env:RUNNER_TEMP/sde.tar.xz -L "https://downloadmirror.intel.com/813591/sde-external-${env:SDE_VERSION}-win.tar.xz"
           # for some weird reason windows tar doesn't like sde tar.xz
@@ -1118,7 +1119,7 @@ jobs:
         uses: ./.github/actions/windows-setup-curl
 
       - name: Build
-        id: cmake_build
+        id: cmake_build_cuda
         shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
@@ -1127,7 +1128,7 @@ jobs:
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_NATIVE=OFF ^
-            -DGGML_CUDA=ON ^
+            -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=all ^
             -DGGML_RPC=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include"
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
@@ -1166,10 +1167,10 @@ jobs:
       - name: Copy and pack Cuda runtime
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         run: |
-          echo "Cuda install location: $CUDA_PATH"
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
           $dst='.\build\bin\cudart\'
-          robocopy "$env:CUDA_PATH\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          robocopy "$env:CUDA_PATH\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           7z a cudart-llama-bin-win-cu${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
@@ -1300,7 +1301,7 @@ jobs:
         uses: ./.github/actions/windows-setup-curl
 
       - name: Build
-        id: cmake_build
+        id: cmake_build_hip
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
@@ -1364,7 +1365,7 @@ jobs:
         uses: ./.github/actions/windows-setup-curl
 
       - name: Build
-        id: cmake_build
+        id: cmake_build_hip_release
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
