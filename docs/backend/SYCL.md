@@ -353,7 +353,7 @@ cmake --build build --config Release -j -v
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model prepration, or download an already quantized model like [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -399,12 +399,16 @@ Choose one of following methods to run.
 - Use device 0:
 
 ```sh
-./examples/sycl/run-llama.sh 0
+./examples/sycl/run-llama2.sh 0
+# OR
+./examples/sycl/run-llama3.sh 0
 ```
 - Use multiple devices:
 
 ```sh
-./examples/sycl/run-llama.sh
+./examples/sycl/run-llama2.sh
+# OR
+./examples/sycl/run-llama3.sh
 ```
 
 2. Command line
@@ -427,13 +431,13 @@ Examples:
 - Use device 0:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/Meta-Llama-3-8B-Instruct-Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm none -mg 0
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm none -mg 0
 ```
 
 - Use multiple devices:
 
 ```sh
-ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/Meta-Llama-3-8B-Instruct-Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -sm layer
+ZES_ENABLE_SYSMAN=1 ./build/bin/llama-cli -no-cnv -m models/llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 99 -sm layer
 ```
 
 *Notes:*
@@ -454,7 +458,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 1. Install GPU driver
 
-Intel GPU drivers instructions guide and download page can be found here: [Get intel GPU Drivers](https://www.intel.com/content/www/us/en/products/docs/discrete-gpus/arc/software/drivers.html).
+Intel GPU drivers instructions guide and download page can be found here: [Get Intel GPU Drivers](https://www.intel.com/content/www/us/en/products/docs/discrete-gpus/arc/software/drivers.html).
 
 2. Install Visual Studio
 
@@ -631,7 +635,7 @@ Once it is completed, final results will be in **build/Release/bin**
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model prepration, or simply download [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/blob/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf) model as example.
+You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -676,7 +680,13 @@ Choose one of following methods to run.
 1. Script
 
 ```
-examples\sycl\win-run-llama.bat
+examples\sycl\win-run-llama-2.bat
+```
+
+or
+
+```
+examples\sycl\win-run-llama-3.bat
 ```
 
 2. Command line
@@ -700,13 +710,13 @@ Examples:
 - Use device 0:
 
 ```
-build\bin\llama-cli.exe -no-cnv -m models\Meta-Llama-3-8B-Instruct-Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm none -mg 0
+build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm none -mg 0
 ```
 
 - Use multiple devices:
 
 ```
-build\bin\llama-cli.exe -no-cnv -m models\Meta-Llama-3-8B-Instruct-Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm layer
+build\bin\llama-cli.exe -no-cnv -m models\llama-2-7b.Q4_0.gguf -p "Building a website can be done in 10 simple steps:\nStep 1:" -n 400 -e -ngl 99 -sm layer
 ```
 
 
