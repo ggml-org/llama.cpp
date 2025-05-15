@@ -2824,11 +2824,10 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
                 dnn_gemm(src1_f16, src0_f16, dst_ddf, ne12*ne13, ne02 * ne03);
             }
             else {
-
                 for (int64_t ie03 = 0; ie03 < ne03; ++ie03) {
-                    const sycl::half* src0_f16_shifted = src0_f16 + ((ie03*nb03)/2); // div2 cuz nb is in bytes and pointer is in f16 (2 bytes)
+                    const sycl::half* src0_f16_shifted = src0_f16 + ((ie03*nb03)/sizeof(sycl::half)); // nb is in bytes
                     const sycl::half* src1_f16_shifted = src1_f16 + ie03*s13;
-                    float* dst_shifted = dst_ddf + ((ie03*nb3)/4); // div4 cuz nb is in bytes and pointer is float (4 bytes)
+                    float* dst_shifted = dst_ddf + ((ie03*nb3)/sizeof(float));
                     dnn_gemm(src1_f16_shifted, src0_f16_shifted, dst_shifted, ne12, ne02);
                 }
             }
@@ -2836,9 +2835,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             // iterate over batches from smaller set of matrices (matrix 0)
             for (int64_t ie02 = 0; ie02 < ne02; ++ie02) {
                 for (int64_t ie03 = 0; ie03 < ne03; ++ie03) {
-                    const sycl::half* src0_f16_shifted = src0_f16 + ((ie02*nb02 + ie03*nb03)/2); // div2 cuz nb is in bytes and pointer is in f16 (2 bytes)
+                    const sycl::half* src0_f16_shifted = src0_f16 + ((ie02*nb02 + ie03*nb03)/sizeof(sycl::half));
                     const sycl::half* src1_f16_shifted = src1_f16 + ie02*s12*r2 + ie03*s13*r3;
-                    float* dst_shifted = dst_ddf + ((ie02*nb2*r2 + ie03*nb3*r3)/4); // div4 cuz nb is in bytes and pointer is float (4 bytes)
+                    float* dst_shifted = dst_ddf + ((ie02*nb2*r2 + ie03*nb3*r3)/sizeof(float));
                     dnn_gemm(src1_f16_shifted, src0_f16_shifted, dst_shifted, r2*r3, 1);
                 }
             }
