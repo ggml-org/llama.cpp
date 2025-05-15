@@ -469,7 +469,7 @@ llama_model_loader::llama_model_loader(
 
     meta.reset(gguf_init_from_file(fname.c_str(), params));
     if (!meta) {
-        throw std::runtime_error(format("%s: failed to load model from %s\n", __func__, fname.c_str()));
+        throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
     }
 
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
@@ -528,7 +528,7 @@ llama_model_loader::llama_model_loader(
             };
             gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
             if (!ctx_gguf) {
-                throw std::runtime_error(format("%s: failed to load GGUF split from %s\n", __func__, fname_split));
+                throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
             }
 
             // check idx
