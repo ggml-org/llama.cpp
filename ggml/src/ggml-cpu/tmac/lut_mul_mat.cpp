@@ -38,6 +38,7 @@ namespace ggml::cpu::tmac {
 
 /****** T-MAC properties ******/
 constexpr size_t kAllocAlignment = 64;
+const int n_threads = 8;
 
 static tmac_tensor_extra * tmac_tensor_extras = nullptr;
 static size_t tmac_tensor_extras_index = 0;
@@ -411,48 +412,78 @@ static void ggml_tmac_tune_kernel_config(const struct ggml_tensor * tensor, int 
 
 
     double min_time = 1e9;
-    struct tmac_kernel_config best_kcfg;
-    for (int bm: bms) {
-        if (M % (bm/bits) != 0 || bm % bits != 0) {
-            continue;
-        }
-        
-        kernel_config.bm = bm;
-        for (int n: bns) {
-            if ((N >= n && N % n != 0) || (N < n && n != bns[0])) {
+    struct tmac_kernel_config best_kcfg = kernel_config;
+
+    auto profile_based = [&]() {
+        for (int bm: bms) {
+            if (M % (bm/bits) != 0 || bm % bits != 0) {
                 continue;
             }
-
-            for (int kfactor: kfactors) {
-                if (kfactor < kernel_config.actk) {
+            
+            kernel_config.bm = bm;
+            for (int n: bns) {
+                if ((N >= n && N % n != 0) || (N < n && n != bns[0])) {
                     continue;
                 }
 
-                kernel_config.kfactor = kfactor;
-                // insert to dict for finding
-                insert_or_assign_tmac_kernel_config(M, K, bits, kernel_config);
-                struct tmac_run_single_kernel_settings settings = {
-                    /* .test_time_ms = */ 5000,
-                    /* .M = */ M,
-                    /* .N = */ N,
-                    /* .K = */ K,
-                    /* .n = */ n,
-                    /* .kernel_config = */ &kernel_config
-                };
-                double this_time;
-                ggml_tmac_tune_single_kernel_config(&settings, this_time);
-                GGML_LOG_INFO("Tuned kernel config: M=%d, N=%d, K=%d, bm=%d, n=%d, kfactor=%d, bits=%d, g=%d, ngroups_per_elem=%d, q_group_size=%d, act_group_size=%d\t TIME: %.4f ms\n",
-                                M, N, K, bm, n, kfactor, bits, kernel_config.g, kernel_config.ngroups_per_elem, kernel_config.q_group_size, kernel_config.act_group_size, this_time);
-                if (this_time < min_time) {
-                    min_time = this_time;
-                    best_kcfg = kernel_config;
+                for (int kfactor: kfactors) {
+                    if (kfactor < kernel_config.actk) {
+                        continue;
+                    }
+
+                    kernel_config.kfactor = kfactor;
+                    // insert to dict for finding
+                    insert_or_assign_tmac_kernel_config(M, K, bits, kernel_config);
+                    struct tmac_run_single_kernel_settings settings = {
+                        /* .test_time_ms = */ 5000,
+                        /* .M = */ M,
+                        /* .N = */ N,
+                        /* .K = */ K,
+                        /* .n = */ n,
+                        /* .kernel_config = */ &kernel_config
+                    };
+                    double this_time;
+                    ggml_tmac_tune_single_kernel_config(&settings, this_time);
+                    if (this_time < min_time) {
+                        min_time = this_time;
+                        best_kcfg = kernel_config;
+                    }
                 }
             }
+        };
+    };
+    auto rule_based = [&]() {
+        float smallest_penalty = 1e9;
+        for (int bm: bms) {
+            if (M % (bm/bits) != 0 || bm % bits != 0) {
+                continue;
+            }
+            int num_tiles = M / (bm/bits);
+            int num_groups = (num_tiles + n_threads - 1) / n_threads;
+            float penalty = 0.1 * num_groups + (num_groups - 1.0 * num_tiles / n_threads) / num_groups;
+            if (penalty <= smallest_penalty) {
+                smallest_penalty = penalty;
+                best_kcfg.bm = bm;
+            }
         }
-    }
+
+        int largest_kfactor = 0;
+        for (int kfactor: kfactors) {
+            if (kfactor < kernel_config.actk) {
+                continue;
+            }
+            if (kfactor > largest_kfactor) {
+                largest_kfactor = kfactor;
+                best_kcfg.kfactor = kfactor;
+            }
+        }
+    };
+    rule_based();
 
     // Save the results
     insert_or_assign_tmac_kernel_config(M, K, bits, best_kcfg);
+    GGML_LOG_INFO("Tuned kernel config: M=%d, N=%d, K=%d, bm=%d, kfactor=%d, bits=%d, g=%d, ngroups_per_elem=%d, q_group_size=%d, act_group_size=%d\n",
+                    M, N, K, best_kcfg.bm, best_kcfg.kfactor, bits, best_kcfg.g, best_kcfg.ngroups_per_elem, best_kcfg.q_group_size, best_kcfg.act_group_size);
 }
 
 
