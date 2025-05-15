@@ -299,6 +299,10 @@ class Model:
     # Repack and merge qweight, scales, and qzeros into a single tensor
     # Currently, this logic is nearly impossible to be implemented in quants.py
     def _modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Convert unsupported bfloat16 to float32
+        if data_torch.dtype == torch.bfloat16:
+            data_torch = data_torch.to(torch.float32)
+
         if not self.enable_t_mac or isinstance(self, BitnetModel):
             return self.modify_tensors(data_torch, name, bid)
 
@@ -316,6 +320,7 @@ class Model:
                 if len(self._gptq_quant_dict[base_name]) < 3:
                     return []
 
+                # Get weight components: all [out_feature, in_feature]
                 qweight = LazyTorchTensor.to_eager(self._gptq_quant_dict[base_name][".qweight"]).numpy()
                 scales = LazyTorchTensor.to_eager(self._gptq_quant_dict[base_name][".scales"]).numpy()
                 qzeros = LazyTorchTensor.to_eager(self._gptq_quant_dict[base_name][".qzeros"]).numpy()
@@ -323,8 +328,7 @@ class Model:
                 from gguf.tmac_utils import unpack_gptqv2
                 w, scales, zeros, bits, group_size = unpack_gptqv2(qweight, scales, qzeros, "gptqmodel" in self.quantization_config["quantizer"])
                 if bits != self.quantization_config["bits"] or group_size != self.quantization_config["group_size"]:
-                    # logger.error("Error while parsing weights for quantization_config: {}, but got bits={} and group_size={}".format(
-                    #     self.quantization_config, bits, group_size))
+                    # Currently, we only support models that all weights are corresponding to the quantization config.
                     raise ValueError("Error while parsing weights for quantization_config: {}, but got bits={} and group_size={}".format(
                         self.quantization_config, bits, group_size))
                 self._t_mac_raw_shape = w.shape
