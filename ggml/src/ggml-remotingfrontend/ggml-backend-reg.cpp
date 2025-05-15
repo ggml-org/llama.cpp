@@ -77,7 +77,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
 	ctx->gpu = gpu;
 
         devices.push_back(new ggml_backend_device {
-            /* .iface   = */ ggml_backend_remoting_device_i,
+            /* .iface   = */ ggml_backend_remoting_device_interface,
             /* .reg     = */ reg,
             /* .context = */ ctx,
           });

@@ -14,7 +14,8 @@
 
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
-typedef void * apir_buffer_type_context_t;
+typedef uintptr_t apir_buffer_type_handle_t;
+typedef uintptr_t apir_buffer_handle_t;
 
 typedef uint32_t (*apir_backend_initialize_t)(void);
 typedef void (*apir_backend_deinit_t)(void);
@@ -41,7 +42,9 @@ typedef enum ApirBackendCommandType {
   APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT = 9,
   APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE = 10,
   APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST = 11,
+  APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER = 12,
+  APIR_COMMAND_TYPE_BUFFER_GET_BASE = 13,
 
   // last command_type index + 1
-  APIR_BACKEND_DISPATCH_TABLE_COUNT = 12,
+  APIR_BACKEND_DISPATCH_TABLE_COUNT = 14,
 } ApirBackendCommandType;

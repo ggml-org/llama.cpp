@@ -88,7 +88,12 @@ ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backe
 			&props->caps.events
     );
 
-  INFO("%s: async=%d, host_buffer=%d, buffer_from_host_ptr=%d, events=%d",
+  // ignore the actual backend answers and set it as we provide it in
+  // the API Remoting frontend
+  props->caps.host_buffer = true;
+  props->caps.buffer_from_host_ptr = false;
+
+  INFO("%s: async=%d, host_buffer=%d!, buffer_from_host_ptr=%d!, events=%d",
     __func__, props->caps.async, props->caps.host_buffer,
        props->caps.buffer_from_host_ptr, props->caps.events);
 }
@@ -99,12 +104,12 @@ ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
-  apir_buffer_type_context_t ctx = apir_device_get_buffer_type(gpu);
+  apir_buffer_type_handle_t ctx = apir_device_get_buffer_type(gpu);
 
   static struct ggml_backend_buffer_type buft {
     /* .iface    = */ ggml_backend_remoting_buffer_type_interface,
     /* .device   = */ dev,
-    /* .context  = */ ctx,
+    /* .context  = */ (void *) ctx,
   };
 
   return &buft;
@@ -122,7 +127,22 @@ static ggml_backend_buffer_t ggml_backend_remoting_device_buffer_from_ptr(ggml_b
   return nullptr;
 }
 
-const struct ggml_backend_device_i ggml_backend_remoting_device_i = {
+static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+
+    static struct ggml_backend_buffer_type host_bufft = {
+      /* .iface    = */ ggml_backend_remoting_host_buffer_type_interface,
+      /* .device   = */ dev,
+      /* .context  = */ nullptr,
+    };
+
+    // Make sure device 0 is initialized
+    //ggml_remoting_instance_init();
+    //ggml_remoting_get_device(0);
+
+    return &host_bufft;
+}
+
+const struct ggml_backend_device_i ggml_backend_remoting_device_interface = {
   /* .get_name             = */ ggml_backend_remoting_device_get_name,
   /* .get_description      = */ ggml_backend_remoting_device_get_description,
   /* .get_memory           = */ ggml_backend_remoting_device_get_memory,
@@ -130,8 +150,8 @@ const struct ggml_backend_device_i ggml_backend_remoting_device_i = {
   /* .get_props            = */ ggml_backend_remoting_device_get_props,
   /* .init_backend         = */ ggml_backend_remoting_device_init,
   /* .get_buffer_type      = */ ggml_backend_remoting_device_get_buffer_type,
-  /* .get_host_buffer_type = */ NULL,
-  /* .buffer_from_host_ptr = */ ggml_backend_remoting_device_buffer_from_ptr,
+  /* .get_host_buffer_type = */ ggml_backend_remoting_device_get_host_buffer_type,
+  /* .buffer_from_host_ptr = */ NULL,
   /* .supports_op          = */ ggml_backend_remoting_device_supports_op,
   /* .supports_buft        = */ ggml_backend_remoting_device_supports_buft,
   /* .offload_op           = */ ggml_backend_remoting_device_offload_op,

@@ -43,7 +43,8 @@ struct ggml_backend_remoting_device_context {
 };
 
 extern const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface;
-extern const struct ggml_backend_device_i ggml_backend_remoting_device_i;
+extern const struct ggml_backend_device_i ggml_backend_remoting_device_interface;
+extern const ggml_backend_buffer_type_i ggml_backend_remoting_host_buffer_type_interface;
 
 ggml_backend_buffer_type_t ggml_backend_remoting_host_buffer_type();
 ggml_backend_t ggml_backend_remoting_device_init(ggml_backend_dev_t dev, const char * params);

@@ -88,3 +88,18 @@ apir_buffer_type_is_host(struct virtgpu *gpu, ggml_backend_buffer_type_t buft) {
 
   return is_host;
 }
+
+apir_buffer_handle_t
+apir_buffer_type_alloc_buffer(struct virtgpu *gpu, size_t size) {
+  UNUSED(gpu);
+  UNUSED(size);
+
+  return 0;
+}
+
+void *
+apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
+  UNUSED(gpu);
+  UNUSED(buffer_handle);
+  return NULL;
+}

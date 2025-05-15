@@ -8,7 +8,8 @@ ggml_add_backend_library(ggml-remotingfrontend
                          ggml-backend.cpp
                          ggml-backend-device.cpp
                          ggml-backend-reg.cpp
-                         ggml-buffer-type.cpp
+                         ggml-backend-buffer-type.cpp
+                         ggml-backend-host-buffer-type.cpp
                          virtgpu.cpp
                          virtgpu-shm.cpp
                          virtgpu-utils.cpp

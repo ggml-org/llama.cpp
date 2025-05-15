@@ -3,6 +3,9 @@
 #define BUFT_TO_GPU(name) \
   ((struct ggml_backend_remoting_device_context *) (name)->device->context)->gpu
 
+#define BUFFER_TO_GPU(name) \
+  ((struct ggml_backend_remoting_device_context *) (name)->dev->context)->gpu
+
 extern const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface;
 
 static ggml_backend_buffer_t
@@ -11,9 +14,9 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
   UNUSED(gpu);
 
-  void *ctx = NULL;
+  apir_buffer_handle_t handle = apir_buffer_type_alloc_buffer(gpu, size);
 
-  return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, ctx, size);
+  return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) handle, size);
 }
 
 static const char *
@@ -76,17 +79,20 @@ static enum ggml_status ggml_backend_remoting_buffer_init_tensor(ggml_backend_bu
 
   NEXT;
   NOT_IMPLEMENTED;
-
+  STOP_HERE;
   return GGML_STATUS_SUCCESS;
 }
 
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
   UNUSED(buffer);
+  BEING_IMPLEMENTED;
 
-  NEXT;
-  NOT_IMPLEMENTED;
+  STOP_HERE;
+  return NULL;
+  //struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-  return (void *) 4096;
+
+  //return apir_buffer_get_base(gpu, (ggml_backend_buffer_t)buffer->context);
 }
 
 static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
