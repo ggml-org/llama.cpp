@@ -102,7 +102,9 @@ public:
                          bool    v_trans,
                          bool    offload,
                      uint32_t    kv_size,
-                     uint32_t    padding);
+                     uint32_t    padding,
+                     uint32_t    n_swa,
+               llama_swa_type    swa_type);
 
     ~llama_kv_cache_unified() = default;
 
@@ -169,7 +171,7 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, bool swa) const;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
@@ -223,6 +225,11 @@ private:
     ggml_type type_k = GGML_TYPE_F16;
     ggml_type type_v = GGML_TYPE_F16;
 
+    // SWA
+    uint32_t n_swa = 0;
+
+    llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
+
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
@@ -263,6 +270,8 @@ private:
 
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;
+
+    bool is_masked_swa(llama_pos p0, llama_pos p1) const;
 
     ggml_tensor * build_rope_shift(
             const llama_cparams & cparams,

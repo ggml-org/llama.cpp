@@ -572,7 +572,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
                 ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
 
-                hparams.swa_type      = (llama_swa_type) LLAMA_SWA_TYPE_CHUNKED;
+                hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
                 hparams.n_swa         = 8192; // should this be a gguf kv? currently it's the same for Scout and Maverick
                 hparams.n_swa_pattern = 4;    // pattern: 3 chunked - 1 full
 
@@ -858,18 +858,24 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     // default value for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct
                     LLAMA_LOG_WARN("%s: assuming n_swa = 2047 for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct\n", __func__);
 
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+
                     hparams.n_swa = 2047;
                 } else if (hparams.n_layer == 32 && hparams.n_head_kv(0) == 32 && hparams.n_ctx_train == 131072) {
                     // default value for Phi-3-mini-128k-instruct
-                    LLAMA_LOG_WARN("%s: assuming n_swa = n_ctx_train for Phi-3-mini-128k-instruct\n", __func__);
+                    LLAMA_LOG_WARN("%s: assuming no SWA for Phi-3-mini-128k-instruct\n", __func__);
 
-                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+
+                    hparams.n_swa         = hparams.n_ctx_train;
                     hparams.n_swa_pattern = 1;
                 } else if (hparams.n_layer == 40 && hparams.n_ctx_train == 131072) {
                     // default value for Phi-3-medium-128k-instruct
-                    LLAMA_LOG_WARN("%s: assuming n_swa = n_ctx_train for Phi-3-medium-128k-instruct\n", __func__);
+                    LLAMA_LOG_WARN("%s: assuming no SWA for Phi-3-medium-128k-instruct\n", __func__);
 
-                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+
+                    hparams.n_swa         = hparams.n_ctx_train;
                     hparams.n_swa_pattern = 1;
                 }
 
@@ -879,9 +885,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 if (hparams.n_swa > hparams.n_ctx_train) {
-                    LLAMA_LOG_WARN("%s: unexpected n_swa: %d >= %d, setting to 0\n", __func__, hparams.n_swa, hparams.n_ctx_train);
+                    LLAMA_LOG_WARN("%s: unexpected n_swa: %d >= %d, disabling SWA\n", __func__, hparams.n_swa, hparams.n_ctx_train);
 
-                    hparams.n_swa = hparams.n_ctx_train;
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+
+                    hparams.n_swa         = hparams.n_ctx_train;
                     hparams.n_swa_pattern = 1;
                 }
             } break;
@@ -952,6 +960,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GEMMA2:
             {
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 4096; // default value of gemma 2
                 hparams.n_swa_pattern = 2;
                 hparams.attn_soft_cap = true;
@@ -970,6 +979,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_GEMMA3:
             {
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa_pattern = 6;
 
                 hparams.rope_freq_base_train_swa  = 10000.0f;
@@ -1054,6 +1064,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_COHERE2:
             {
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa_pattern = 4;
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
@@ -13228,7 +13239,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.n_ctx,
-                            padding);
+                            padding,
+                            hparams.n_swa,
+                            hparams.swa_type);
                 }
             }
     }

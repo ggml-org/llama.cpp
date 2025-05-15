@@ -15,8 +15,9 @@ enum llama_expert_gating_func_type {
 };
 
 enum llama_swa_type {
-    LLAMA_SWA_TYPE_STANDARD = 0,
-    LLAMA_SWA_TYPE_CHUNKED  = 1,
+    LLAMA_SWA_TYPE_NONE     = 0,
+    LLAMA_SWA_TYPE_STANDARD = 1,
+    LLAMA_SWA_TYPE_CHUNKED  = 2,
 };
 
 struct llama_hparams_posnet {
@@ -100,7 +101,7 @@ struct llama_hparams {
     std::array<int, 4> rope_sections;
 
     // Sliding Window Attention (SWA)
-    llama_swa_type swa_type = LLAMA_SWA_TYPE_STANDARD;
+    llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     uint32_t n_swa = 0;         // the size of the sliding window (0 - no SWA)
     uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention

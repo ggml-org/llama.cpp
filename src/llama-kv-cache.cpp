@@ -30,7 +30,9 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                      bool    v_trans,
                      bool    offload,
                  uint32_t    kv_size,
-                 uint32_t    padding) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding) {
+                 uint32_t    padding,
+                 uint32_t    n_swa,
+           llama_swa_type    swa_type) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding), n_swa(n_swa), swa_type(swa_type) {
     GGML_ASSERT(kv_size % padding == 0 && "kv_size must be a multiple of padding");
 
     this->type_k = type_k;
@@ -594,8 +596,8 @@ ggml_tensor * llama_kv_cache_unified::get_v(ggml_context * ctx, int32_t il) cons
     // note: v->nb[1] > v->nb[2]
     return ggml_view_3d(ctx, v,
             n, hparams.n_head_kv(il), hparams.n_embd_head_v,
-            ggml_element_size(v)*v->ne[1]*hparams.n_embd_head_v, // v->nb[1]
-            ggml_element_size(v)*v->ne[1],                       // v->nb[2]
+            ggml_row_size(v->type, v->ne[1]*hparams.n_embd_head_v), // v->nb[1]
+            ggml_row_size(v->type, v->ne[1]),                       // v->nb[2]
             0);
 }
 
@@ -640,7 +642,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     return ggml_cpy(ctx, v_cur, v_view);
 }
 
-void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, bool swa) const {
+void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const int64_t n_tokens     = ubatch->n_tokens;
     const int64_t n_seq_tokens = ubatch->n_seq_tokens;
     const int64_t n_seqs       = ubatch->n_seqs;
@@ -667,41 +669,28 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
             for (int j = 0; j < n_seq_tokens; ++j) {
-                const llama_pos pos = ubatch->pos[s*n_seq_tokens + j];
+                const llama_pos p1 = ubatch->pos[s*n_seq_tokens + j];
 
                 for (int i = 0; i < n_kv; ++i) {
-                    float f;
-                    // mask the token if:
-                    if (!cells[i].has_seq_id(seq_id) // not the correct sequence
-                            || (causal_attn && cells[i].pos > pos) // for causal, mask future tokens
-                       ) {
+                    const llama_pos p0 = cells[i].pos;
+
+                    bool masked = false;
+
+                    // mask the token if not the same sequence
+                    masked = masked || (!cells[i].has_seq_id(seq_id));
+
+                    // mask future tokens
+                    masked = masked || (causal_attn && p0 > p1);
+
+                    // apply SWA if any
+                    masked = masked || (is_masked_swa(p0, p1));
+
+                    float f = 0.0f;
+
+                    if (masked) {
                         f = -INFINITY;
-                    } else {
-                        if (hparams.use_alibi) {
-                            f = -std::abs(cells[i].pos - pos);
-                        } else {
-                            f = 0.0f;
-                        }
-                    }
-
-                    if (swa) {
-                        // may need to cut off old tokens for sliding window
-                        switch (hparams.swa_type) {
-                            case LLAMA_SWA_TYPE_STANDARD:
-                                {
-                                    if (pos - cells[i].pos >= (int32_t) hparams.n_swa) {
-                                        f = -INFINITY;
-                                    }
-                                } break;
-                            case LLAMA_SWA_TYPE_CHUNKED:
-                                {
-                                    const llama_pos pos_chunk_start = (pos / hparams.n_swa) * hparams.n_swa;
-
-                                    if (cells[i].pos < pos_chunk_start) {
-                                        f = -INFINITY;
-                                    }
-                                } break;
-                        }
+                    } else if (hparams.use_alibi) {
+                        f = -std::abs(p0 - p1);
                     }
 
                     data[h*(n_kv*n_tokens) + s*(n_kv*n_seq_tokens) + j*n_kv + i] = f;
@@ -1191,6 +1180,30 @@ uint32_t llama_kv_cache_unified::cell_max() const {
     return 0;
 }
 
+bool llama_kv_cache_unified::is_masked_swa(llama_pos p0, llama_pos p1) const {
+    switch (swa_type) {
+        case LLAMA_SWA_TYPE_NONE:
+            {
+            } break;
+        case LLAMA_SWA_TYPE_STANDARD:
+            {
+                if (p1 - p0 >= (int32_t) n_swa) {
+                    return true;
+                }
+            } break;
+        case LLAMA_SWA_TYPE_CHUNKED:
+            {
+                const llama_pos pos_chunk_start = (p1 / n_swa) * n_swa;
+
+                if (p0 < pos_chunk_start) {
+                    return true;
+                }
+            } break;
+    }
+
+    return false;
+}
+
 void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
     uint32_t cell_count = 0;
@@ -1586,11 +1599,17 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
 
     LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, kv_size_base);
 
-    kv_base = std::make_unique<llama_kv_cache_unified>(model, std::move(filter_base), type_k, type_v, v_trans, offload, kv_size_base, padding);
+    kv_base = std::make_unique<llama_kv_cache_unified>(
+            model, std::move(filter_base), type_k, type_v,
+            v_trans, offload, kv_size_base, padding,
+            0, LLAMA_SWA_TYPE_NONE);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, kv_size_swa);
 
-    kv_swa  = std::make_unique<llama_kv_cache_unified>(model, std::move(filter_swa),  type_k, type_v, v_trans, offload, kv_size_swa,  padding);
+    kv_swa = std::make_unique<llama_kv_cache_unified>(
+            model, std::move(filter_swa), type_k, type_v,
+            v_trans, offload, kv_size_swa,  padding,
+            hparams.n_swa, hparams.swa_type);
 }
 
 void llama_kv_cache_unified_iswa::clear() {
