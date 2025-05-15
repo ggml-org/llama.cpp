@@ -1245,7 +1245,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens);
     } else {
         // NOTE: Fallback to ggml_mul_mat for non-flash attention.
-#ifdef GGML_USE_QLUTATTN
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
 
         // note: this op tends to require high floating point range
@@ -1295,57 +1294,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             // all nodes between the KV store and the attention output are run on the CPU
             ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
         }
-#else
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-
-        // note: this op tends to require high floating point range
-        //       while for some models F16 is enough, for others it is not, so we default to F32 here
-        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-        if (arch == LLM_ARCH_GROK) {
-            // need to do the following:
-            // multiply by attn_output_multiplyer of 0.08838834764831845
-            // and then :
-            // kq = 30 * tanh(kq / 30)
-            // before the softmax below
-
-            kq = ggml_tanh(ctx0, ggml_scale(ctx0, kq, 0.08838834764831845f/30.0f));
-            kq = ggml_scale(ctx0, kq, 30);
-        }
-
-        if (hparams.attn_soft_cap) {
-            kq = ggml_scale(ctx0, kq, 1.0f / hparams.f_attn_logit_softcapping);
-            kq = ggml_tanh (ctx0, kq);
-            kq = ggml_scale(ctx0, kq, hparams.f_attn_logit_softcapping);
-        }
-
-        if (kq_b) {
-            kq = ggml_add(ctx0, kq, kq_b);
-        }
-
-        kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-
-        if (!v_trans) {
-            // note: avoid this branch
-            v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
-        }
-
-        ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-
-        // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
-        if (v_mla) {
-            kqv = ggml_mul_mat(ctx0, v_mla, kqv);
-        }
-
-        cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-
-        cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens);
-
-        if (!cparams.offload_kqv) {
-            // all nodes between the KV store and the attention output are run on the CPU
-            ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
-        }
-#endif  // GGML_USE_QLUTATTN
     }
 
     ggml_build_forward_expand(gf, cur);
@@ -1470,7 +1418,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const bool v_trans = !cparams.flash_attn;
 
-    // store to KV cache
+    //> ===================================================================================================
+    //> Store to KV cache.
+    //> ===================================================================================================
     {
         const auto kv_head = kv_self->head;
 
@@ -1500,7 +1450,10 @@ ggml_tensor * llm_graph_context::build_attn(
 
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, v_cur, v_cache_view));
     }
-
+    
+    //> ===================================================================================================
+    //> Fetch KV cache. (include new Kcur and Vcur)
+    //> ===================================================================================================
     const bool is_swa = hparams.is_swa(il);
 
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();

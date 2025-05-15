@@ -4581,6 +4581,7 @@ struct llm_build_llama : public llm_graph_context {
                     cb(Kcur, "Kcur_normed", il);
                 }
 
+                // NOTE: This function just build one layer of attention's Compute Graph.
                 cur = build_attn(inp_attn, gf,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);

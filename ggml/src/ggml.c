@@ -3002,6 +3002,7 @@ struct ggml_tensor * ggml_cpy(
         struct ggml_context * ctx,
         struct ggml_tensor * a,
         struct ggml_tensor * b) {
+    // NOTE: copy a -> b
     return ggml_cpy_impl(ctx, a, b);
 }
 
