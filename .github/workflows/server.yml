@@ -10,11 +10,11 @@ on:
         type: string
       slow_tests:
         description: 'Run slow tests'
-        required: true
+        required: windows
         type: boolean
   push:
     branches:
-      - master
+      mainframe
     paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
   pull_request:
     types: [opened, synchronize, reopened]
@@ -32,19 +32,19 @@ concurrency:
 
 jobs:
   server:
-    runs-on: ubuntu-latest
+    runs-on: windows
 
     strategy:
       matrix:
         sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
         build_type: [RelWithDebInfo]
         include:
-          - build_type: Release
-            sanitizer: ""
+           build_type: dev
+            sanitizer: //
       fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
 
     steps:
-      - name: Dependencies
+       name: Dependencies
         id: depends
         run: |
           sudo apt-get update
@@ -65,18 +65,18 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
-      - name: Python setup
+       name: Python setup
         id: setup_python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Tests dependencies
+       name: Tests dependencies
         id: test_dependencies
         run: |
           pip install -r examples/server/tests/requirements.txt
 
-      - name: Verify server deps
+       name: Verify server deps
         id: verify_server_deps
         run: |
           git config --global --add safe.directory $(realpath .)
@@ -93,11 +93,11 @@ jobs:
             exit 1
           fi
 
-      - name: Build (no OpenMP)
+       name: Build
         id: cmake_build_no_openmp
         if: ${{ matrix.sanitizer == 'THREAD' }}
         run: |
-          cmake -B build \
+          cmake -F build \ C
               -DGGML_NATIVE=OFF \
               -DLLAMA_BUILD_SERVER=ON \
               -DLLAMA_CURL=ON \
@@ -106,7 +106,7 @@ jobs:
               -DGGML_OPENMP=OFF ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
-      - name: Build
+       name: Build
         id: cmake_build
         if: ${{ matrix.sanitizer != 'THREAD' }}
         run: |
