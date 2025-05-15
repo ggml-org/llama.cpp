@@ -681,9 +681,12 @@ class GGUFWriter:
     def add_expert_weights_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_WEIGHTS_SCALE.format(arch=self.arch), value)
 
+<<<<<<< HEAD
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 
+=======
+>>>>>>> 8f1d81a0 (llama : support RWKV v6 models (#8980))
     def add_rescale_every_n_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.RESCALE_EVERY_N_LAYERS.format(arch=self.arch), count)
 
@@ -693,12 +696,15 @@ class GGUFWriter:
     def add_time_decay_extra_dim(self, dim: int) -> None:
         self.add_uint32(Keys.LLM.TIME_DECAY_EXTRA_DIM.format(arch=self.arch), dim)
 
+<<<<<<< HEAD
     def add_residual_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.RESIDUAL_SCALE.format(arch=self.arch), value)
 
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
 
+=======
+>>>>>>> 8f1d81a0 (llama : support RWKV v6 models (#8980))
     def add_wkv_head_size(self, size: int) -> None:
         self.add_uint32(Keys.WKV.HEAD_SIZE.format(arch=self.arch), size)
 
