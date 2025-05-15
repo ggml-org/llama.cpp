@@ -77,6 +77,7 @@ option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE
 
 # extra artifacts
 option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
@@ -187,6 +188,10 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
     add_subdirectory(pocs)
 endif()
 
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
+    add_subdirectory(tools)
+endif()
+
 #
 # install
 #
@@ -247,20 +252,3 @@ configure_file(cmake/llama.pc.in
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-#
-# copy the license files
-#
-
-# Check if running in GitHub Actions
-if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
-    message(STATUS "Running inside GitHub Actions - copying license files")
-
-    # Copy all files from licenses/ to build/bin/
-    file(GLOB LICENSE_FILES "${CMAKE_SOURCE_DIR}/licenses/*")
-    foreach(LICENSE_FILE ${LICENSE_FILES})
-        get_filename_component(FILENAME ${LICENSE_FILE} NAME)
-        configure_file(${LICENSE_FILE} "${CMAKE_BINARY_DIR}/bin/${FILENAME}" COPYONLY)
-    endforeach()
-endif()
-

@@ -107,6 +107,7 @@ message(DEBUG "INS_ENB             : ${INS_ENB}")
 option(GGML_CPU_HBM          "ggml: use memkind for CPU HBM" OFF)
 option(GGML_CPU_AARCH64      "ggml: use runtime weight conversion of Q4_0 to Q4_X_X" ON)
 option(GGML_CPU_KLEIDIAI     "ggml: use KleidiAI optimized kernels if applicable" OFF)
+option(GGML_SSE42            "ggml: enable SSE 4.2"          ${INS_ENB})
 option(GGML_AVX              "ggml: enable AVX"              ${INS_ENB})
 option(GGML_AVX_VNNI         "ggml: enable AVX-VNNI"         OFF)
 option(GGML_AVX2             "ggml: enable AVX2"             ${INS_ENB})
@@ -170,7 +171,6 @@ option(GGML_HIP                             "ggml: use HIP"                     
 option(GGML_HIP_GRAPHS                      "ggml: use HIP graph, experimental, slow"         OFF)
 option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"                 ON)
 option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
-option(GGML_HIP_UMA                         "ggml: use HIP unified memory architecture"       OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
 option(GGML_VULKAN_DEBUG                    "ggml: enable Vulkan debug output"                OFF)
@@ -360,3 +360,29 @@ write_basic_package_version_file(
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
+
+if (MSVC)
+    set(MSVC_WARNING_FLAGS
+        /wd4005  # Macro redefinition
+        /wd4244  # Conversion from one type to another type, possible loss of data
+        /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4996  # Disable POSIX deprecation warnings
+        /wd4702  # Unreachable code warnings
+    )
+    function(disable_msvc_warnings target_name)
+        if(TARGET ${target_name})
+            target_compile_options(${target_name} PRIVATE ${MSVC_WARNING_FLAGS})
+        endif()
+    endfunction()
+
+    disable_msvc_warnings(ggml-base)
+    disable_msvc_warnings(ggml)
+    disable_msvc_warnings(ggml-cpu)
+    disable_msvc_warnings(ggml-cpu-x64)
+    disable_msvc_warnings(ggml-cpu-sse42)
+    disable_msvc_warnings(ggml-cpu-sandybridge)
+    disable_msvc_warnings(ggml-cpu-haswell)
+    disable_msvc_warnings(ggml-cpu-skylakex)
+    disable_msvc_warnings(ggml-cpu-icelake)
+    disable_msvc_warnings(ggml-cpu-alderlake)
+endif()
