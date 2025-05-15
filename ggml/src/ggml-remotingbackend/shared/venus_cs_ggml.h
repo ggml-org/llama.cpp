@@ -33,19 +33,44 @@ vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
   return op;
 }
 
-static inline void
-vn_encode_ggml_buft(struct vn_cs_encoder *enc, ggml_backend_buffer_type_t buft) {
-  size_t buft_ctx_size = sizeof(buft->context);
+/* *** ggml_backend_buffer_type_t *** */
 
-  vn_cs_encoder_write(enc, buft_ctx_size, &buft->context, buft_ctx_size);
+// ggml_backend_buffer_type_t is a POINTER (to a struct).
+// Only the host pointer is shared between the host and guest.
+// The guest stores it in `buft->context`.
+// The host simply writes the pointer address in the buffer variable.
+
+
+static inline void
+vn_encode_apir_buffer_type_handle_t(struct vn_cs_encoder *enc, apir_buffer_type_handle_t *handle) {
+  vn_cs_encoder_write(enc, sizeof(*handle), handle, sizeof(*handle));
 }
 
 static inline ggml_backend_buffer_type_t
 vn_decode_ggml_buft(struct vn_cs_decoder *dec) {
-  ggml_backend_buffer_type_t buft;
-  size_t buft_size = sizeof(buft);
+  apir_buffer_type_handle_t handle;
 
-  vn_cs_decoder_read(dec, buft_size, &buft, buft_size);
+  vn_cs_decoder_read(dec, sizeof(handle), &handle, sizeof(handle));
 
-  return buft;
+  return (ggml_backend_buffer_type_t) handle;
+}
+
+/* *** ggml_backend_type_t *** */
+
+// ggml_backend_buffer_t is a POINTER.
+// same logic as for ggml_backend_buffer_type_t
+
+static inline void
+vn_encode_ggml_buffer_handle(struct vn_cs_encoder *enc, const apir_buffer_handle_t *handle) {
+  vn_cs_encoder_write(enc, sizeof(*handle), &handle, sizeof(*handle));
+}
+
+static inline ggml_backend_buffer_t
+vn_decode_ggml_buffer(struct vn_cs_decoder *dec) {
+  ggml_backend_buffer_t buffer;
+  size_t buffer_ptr_size = sizeof(buffer);
+
+  vn_cs_decoder_read(dec, buffer_ptr_size, &buffer, buffer_ptr_size);
+
+  return buffer;
 }

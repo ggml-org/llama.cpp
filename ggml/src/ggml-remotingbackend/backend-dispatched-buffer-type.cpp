@@ -54,3 +54,31 @@ backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec
 
   return 0;
 }
+
+uint32_t
+backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  ggml_backend_buffer_type_t buft;
+  buft = vn_decode_ggml_buft(dec);
+
+  size_t size;
+  vn_decode_size_t(dec, &size);
+
+  ggml_backend_buffer_t buffer = buft->iface.alloc_buffer(buft, size);
+  apir_buffer_handle_t *buffer_handle = (apir_buffer_handle_t *) buffer;
+  vn_encode_ggml_buffer_handle(enc, buffer_handle);
+
+  return 0;
+}
+
+uint32_t
+backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  ggml_backend_buffer_t buffer;
+  buffer = vn_decode_ggml_buffer(dec);
+
+  uintptr_t base = (uintptr_t) buffer->iface.get_base(buffer);
+  vn_encode_uintptr_t(enc, &base);
+
+  INFO("%s: send base %p\n", __func__,  (void *) base);
+
+  return 0;
+}

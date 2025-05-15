@@ -4,19 +4,24 @@
   ((struct ggml_backend_remoting_device_context *) (name)->device->context)->gpu
 
 #define BUFFER_TO_GPU(name) \
-  ((struct ggml_backend_remoting_device_context *) (name)->dev->context)->gpu
+  ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
 extern const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface;
 
 static ggml_backend_buffer_t
 ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-  BEING_IMPLEMENTED;
+  IMPLEMENTED;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
-  UNUSED(gpu);
 
-  apir_buffer_handle_t handle = apir_buffer_type_alloc_buffer(gpu, size);
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
+  if (!context) {
+    FATAL("Couldn't allocate the buffer context ...");
+  }
 
-  return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) handle, size);
+  context->gpu = gpu;
+  context->handle = apir_buffer_type_alloc_buffer(gpu, buft, size);
+
+  return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
 }
 
 static const char *
@@ -69,7 +74,7 @@ static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffe
   NEXT;
   NOT_IMPLEMENTED;
 
-  ggml_remoting_destroy_buffer(ctx->dev_buffer);
+  //ggml_remoting_destroy_buffer(ctx->dev_buffer);
   delete ctx;
 }
 
@@ -85,14 +90,11 @@ static enum ggml_status ggml_backend_remoting_buffer_init_tensor(ggml_backend_bu
 
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
   UNUSED(buffer);
-  BEING_IMPLEMENTED;
+  IMPLEMENTED;
 
-  STOP_HERE;
-  return NULL;
-  //struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-
-  //return apir_buffer_get_base(gpu, (ggml_backend_buffer_t)buffer->context);
+  return apir_buffer_get_base(gpu, ((struct ggml_backend_remoting_buffer_context *) buffer->context)->handle);
 }
 
 static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
@@ -175,9 +177,11 @@ static void ggml_remoting_buffer_memset_async(remoting_context& ctx, remoting_bu
 static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
   NOT_IMPLEMENTED;
 
-  ggml_backend_remoting_buffer_context * ctx = (ggml_backend_remoting_buffer_context *)buffer->context;
+  UNUSED(buffer);
+  UNUSED(value);
+  //ggml_backend_remoting_buffer_context * ctx = (ggml_backend_remoting_buffer_context *)buffer->context;
 
-  ggml_remoting_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
+  //ggml_remoting_buffer_memset(ctx->dev_buffer, 0, value, buffer->size);
 }
 
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
