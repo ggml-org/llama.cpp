@@ -1,4 +1,4 @@
-numpy~=1.26.4
+numpy>=2.1
 sentencepiece~=0.2.0
 transformers>=4.45.1,<5.0.0
 gguf>=0.1.0
