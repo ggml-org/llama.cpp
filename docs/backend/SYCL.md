@@ -26,16 +26,16 @@
 
 ### Llama.cpp + SYCL
 
-The llama.cpp SYCL backend is mainly designed to support **Intel GPUs**.
-Based on the cross-platform feature of SYCL, it also supports Nvidia GPUs, with very limited support for AMD.
+The llama.cpp SYCL backend is primarily designed for **Intel GPUs**.
+SYCL cross-platform capabilities enable support for Nvidia GPUs as well, with limited support for AMD.
 
 ## Recommended Release
 
-The following releases are verified:
+The following releases are verified and recommended:
 
 |Commit ID|Tag|Release|Verified  Platform| Update date|
 |-|-|-|-|-|
-|24e86cae7219b0f3ede1d5abdf5bf3ad515cccb8|b5377 |[llama-b5377-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b5377/llama-b5377-bin-win-sycl-x64.zip) |ArcB580/Linux/oneAPI 2025.1<br>LNL Arc GPU/Windows 11/oneAPI 2025.1|2025-05-15|
+|24e86cae7219b0f3ede1d5abdf5bf3ad515cccb8|b5377 |[llama-b5377-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b5377/llama-b5377-bin-win-sycl-x64.zip) |ArcB580/Linux/oneAPI 2025.1<br>LNL Arc GPU/Windows 11/oneAPI 2025.1.1|2025-05-15|
 |3bcd40b3c593d14261fb2abfabad3c0fb5b9e318|b4040 |[llama-b4040-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b4040/llama-b4040-bin-win-sycl-x64.zip) |Arc770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1| 2024-11-19|
 |fb76ec31a9914b7761c1727303ab30380fd4f05c|b3038 |[llama-b3038-bin-win-sycl-x64.zip](https://github.com/ggml-org/llama.cpp/releases/download/b3038/llama-b3038-bin-win-sycl-x64.zip) |Arc770/Linux/oneAPI 2024.1<br>MTL Arc GPU/Windows 11/oneAPI 2024.1||
 
@@ -107,8 +107,8 @@ SYCL backend supports Intel GPU Family:
 | Intel Data Center Max Series  | Support | Max 1550, 1100                        |
 | Intel Data Center Flex Series | Support | Flex 170                              |
 | Intel Arc Series              | Support | Arc 770, 730M, Arc A750, B580         |
-| Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake    |
-| Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7, Ultra 7 268V |
+| Intel built-in Arc GPU        | Support | built-in Arc GPU in Meteor Lake, Arrow Lake, Lunar Lake |
+| Intel iGPU                    | Support | iGPU in 13700k, 13400, i5-1250P, i7-1260P, i7-1165G7  |
 
 *Notes:*
 
@@ -734,12 +734,12 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL          | ON (mandatory)                        | Enable build with SYCL code path.           |
 | GGML_SYCL_TARGET   | INTEL *(default)* \| NVIDIA \| AMD    | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional (except for AMD)             | Set the SYCL device architecture, optional except for AMD. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
-| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path.\* |
+| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
-* The FP32 codepath used to have better on quantized models but latest results show similar performance in text generation. Check both `GGML_SYCL_F16` ON and OFF to check in your system, but take into accound that FP32 reduces Prompt processing performance.
+1. FP16 is recommended for better prompt processing performance on quantized models. Performance is equivalent in text generation but set `GGML_SYCL_F16=OFF` if you are experiencing issues with FP16 builds.
 
 #### Runtime
 
@@ -800,4 +800,4 @@ Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contrib
 
 ## TODO
 
-- NA
+- Review ZES_ENABLE_SYSMAN: https://github.com/intel/compute-runtime/blob/master/programmers-guide/SYSMAN.md#support-and-limitations
