@@ -147,4 +147,6 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 bench_results
+breakdown_results
 breakdown_results/Meta-Llama-3.1-8B-Instruct-Q8_0
+breakdown_results_llamacpp/Meta-Llama-3.1-8B-Instruct-Q8_0
