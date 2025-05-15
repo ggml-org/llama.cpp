@@ -140,3 +140,94 @@ jobs:
                          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
           cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-ppc64el-cpu-cross:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PowerPC64le
+        run: |
+          sudo dpkg --add-architecture ppc64el
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          sudo apt-get install -y --no-install-recommends \
+                  build-essential \
+                  gcc-14-powerpc64le-linux-gnu \
+                  g++-14-powerpc64le-linux-gnu \
+                  libcurl4-openssl-dev:ppc64el
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
+                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-ppc64el-vulkan-cross:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PowerPC64le
+        run: |
+          sudo dpkg --add-architecture ppc64el
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          sudo apt-get install -y --no-install-recommends \
+                  build-essential \
+                  glslc \
+                  gcc-14-powerpc64le-linux-gnu \
+                  g++-14-powerpc64le-linux-gnu \
+                  libvulkan-dev:ppc64el \
+                  libcurl4-openssl-dev:ppc64el
+
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_VULKAN=ON \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
+                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
