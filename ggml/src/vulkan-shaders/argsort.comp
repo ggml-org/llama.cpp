@@ -29,20 +29,18 @@ void main() {
     const int col = int(gl_LocalInvocationID.x);
     const uint row = gl_WorkGroupID.y;
 
-    if (col >= p.ncols_pad) {
-        return;
-    }
-
     const uint row_offset = row * p.ncols;
 
     // initialize indices
-    dst_row[col] = col;
+    if (col < p.ncols_pad) {
+        dst_row[col] = col;
+    }
     barrier();
 
     for (uint k = 2; k <= p.ncols_pad; k *= 2) {
         for (uint j = k / 2; j > 0; j /= 2) {
             const uint ixj = col ^ j;
-            if (ixj > col) {
+            if (col < p.ncols_pad && ixj > col) {
                 if ((col & k) == 0) {
                     if (dst_row[col] >= p.ncols ||
                         (dst_row[ixj] < p.ncols && (p.order == ASC ?

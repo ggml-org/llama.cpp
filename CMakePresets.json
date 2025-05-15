@@ -32,8 +32,8 @@
 
     {
         "name": "arm64-windows-msvc", "hidden": true,
-        "architecture": { "value": "arm64",       "strategy": "external" },
-        "toolset":      { "value": "host=x86_64", "strategy": "external" },
+        "architecture": { "value": "arm64",    "strategy": "external" },
+        "toolset":      { "value": "host=x64", "strategy": "external" },
         "cacheVariables": {
             "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-windows-msvc.cmake"
         }
@@ -41,8 +41,8 @@
 
     {
         "name": "arm64-windows-llvm", "hidden": true,
-        "architecture": { "value": "arm64",       "strategy": "external" },
-        "toolset":      { "value": "host=x86_64", "strategy": "external" },
+        "architecture": { "value": "arm64",    "strategy": "external" },
+        "toolset":      { "value": "host=x64", "strategy": "external" },
         "cacheVariables": {
             "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/arm64-windows-llvm.cmake"
         }

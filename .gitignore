@@ -61,6 +61,7 @@ llama-batched-swift
 /rpc-server
 out/
 tmp/
+autogen-*.md
 
 # Deprecated
 

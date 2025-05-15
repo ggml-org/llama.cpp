@@ -11,9 +11,11 @@ var sources = [
     "src/unicode-data.cpp",
     "ggml/src/ggml.c",
     "ggml/src/ggml-alloc.c",
-    "ggml/src/ggml-backend.c",
+    "ggml/src/ggml-backend.cpp",
     "ggml/src/ggml-quants.c",
     "ggml/src/ggml-aarch64.c",
+    "spm-sources/ggml-bitnet-lut.cpp",
+    "spm-sources/ggml-bitnet-mad.cpp",
 ]
 
 var resources: [Resource] = []
@@ -21,6 +23,7 @@ var linkerSettings: [LinkerSetting] = []
 var cSettings: [CSetting] =  [
     .unsafeFlags(["-Wno-shorten-64-to-32", "-O3", "-DNDEBUG"]),
     .unsafeFlags(["-fno-objc-arc"]),
+    .define("GGML_BITNET_ARM_TL1")
     // NOTE: NEW_LAPACK will required iOS version 16.4+
     // We should consider add this in the future when we drop support for iOS 14
     // (ref: ref: https://developer.apple.com/documentation/accelerate/1513264-cblas_sgemm?language=objc)

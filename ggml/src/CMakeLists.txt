@@ -26,6 +26,9 @@ if (NOT MSVC)
     endif()
 endif()
 
+unset(GGML_EXTRA_LIBS_PRIVATE)
+unset(GGML_EXTRA_LIBS_PUBLIC)
+
 if (APPLE AND GGML_ACCELERATE)
     find_library(ACCELERATE_FRAMEWORK Accelerate)
     if (ACCELERATE_FRAMEWORK)
@@ -35,7 +38,7 @@ if (APPLE AND GGML_ACCELERATE)
         add_compile_definitions(ACCELERATE_NEW_LAPACK)
         add_compile_definitions(ACCELERATE_LAPACK_ILP64)
 
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} ${ACCELERATE_FRAMEWORK})
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE ${ACCELERATE_FRAMEWORK})
     else()
         message(WARNING "Accelerate framework not found")
     endif()
@@ -87,7 +90,7 @@ if (GGML_METAL)
             COMMENT "Generate assembly for embedded Metal library"
         )
 
-        set(GGML_SOURCES_METAL ${GGML_SOURCES_METAL} ${METALLIB_EMBED_ASM})
+        list(APPEND GGML_SOURCES_METAL ${METALLIB_EMBED_ASM})
     else()
         if (GGML_METAL_SHADER_DEBUG)
             # custom command to do the following:
@@ -132,7 +135,7 @@ if (GGML_METAL)
             )
     endif() # GGML_METAL_EMBED_LIBRARY
 
-    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS}
+    list(APPEND GGML_EXTRA_LIBS_PRIVATE
         ${FOUNDATION_LIBRARY}
         ${METAL_FRAMEWORK}
         ${METALKIT_FRAMEWORK}
@@ -157,11 +160,11 @@ if (GGML_OPENMP)
 
         add_compile_definitions(GGML_USE_OPENMP)
 
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
 
         if (GGML_MUSA)
-            set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} "/usr/lib/llvm-10/include/openmp")
-            set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} "/usr/lib/llvm-10/lib/libomp.so")
+            list(APPEND GGML_EXTRA_INCLUDES     "/usr/lib/llvm-14/lib/clang/14.0.0/include")
+            list(APPEND GGML_EXTRA_LIBS_PRIVATE "/usr/lib/llvm-14/lib/libomp.so")
         endif()
     else()
         message(WARNING "OpenMP not found")
@@ -187,22 +190,24 @@ if (GGML_BLAS)
             # see https://gitlab.kitware.com/cmake/cmake/-/issues/20268
             find_package(PkgConfig REQUIRED)
             if (${GGML_BLAS_VENDOR} MATCHES "Generic")
-                pkg_check_modules(DepBLAS REQUIRED blas)
+                pkg_check_modules(DepBLAS blas)
             elseif (${GGML_BLAS_VENDOR} MATCHES "OpenBLAS")
                 # As of openblas v0.3.22, the 64-bit is named openblas64.pc
                 pkg_check_modules(DepBLAS openblas64)
                 if (NOT DepBLAS_FOUND)
-                    pkg_check_modules(DepBLAS REQUIRED openblas)
+                    pkg_check_modules(DepBLAS openblas)
                 endif()
             elseif (${GGML_BLAS_VENDOR} MATCHES "FLAME")
-                pkg_check_modules(DepBLAS REQUIRED blis)
+                add_compile_definitions(GGML_BLAS_USE_BLIS)
+                pkg_check_modules(DepBLAS blis)
             elseif (${GGML_BLAS_VENDOR} MATCHES "ATLAS")
-                pkg_check_modules(DepBLAS REQUIRED blas-atlas)
+                pkg_check_modules(DepBLAS blas-atlas)
             elseif (${GGML_BLAS_VENDOR} MATCHES "FlexiBLAS")
-                pkg_check_modules(DepBLAS REQUIRED flexiblas_api)
+                pkg_check_modules(DepBLAS flexiblas_api)
             elseif (${GGML_BLAS_VENDOR} MATCHES "Intel")
+                add_compile_definitions(GGML_BLAS_USE_MKL)
                 # all Intel* libraries share the same include path
-                pkg_check_modules(DepBLAS REQUIRED mkl-sdl)
+                pkg_check_modules(DepBLAS mkl-sdl)
             elseif (${GGML_BLAS_VENDOR} MATCHES "NVHPC")
                 # this doesn't provide pkg-config
                 # suggest to assign BLAS_INCLUDE_DIRS on your own
@@ -244,8 +249,8 @@ if (GGML_BLAS)
         set(GGML_HEADERS_BLAS ../include/ggml-blas.h)
         set(GGML_SOURCES_BLAS ggml-blas.cpp)
 
-        set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     ${BLAS_LIBRARIES})
-        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${BLAS_INCLUDE_DIRS})
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE ${BLAS_LIBRARIES})
+        list(APPEND GGML_EXTRA_INCLUDES     ${BLAS_INCLUDE_DIRS})
     else()
         message(WARNING "BLAS not found, please refer to "
         "https://cmake.org/cmake/help/latest/module/FindBLAS.html#blas-lapack-vendors"
@@ -326,7 +331,7 @@ if (GGML_CUDA)
         add_compile_definitions(K_QUANTS_PER_ITERATION=${GGML_CUDA_KQUANTS_ITER})
         add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
-        if (GGML_CUDA_USE_GRAPHS)
+        if (GGML_CUDA_GRAPHS)
             add_compile_definitions(GGML_CUDA_USE_GRAPHS)
         endif()
 
@@ -361,26 +366,26 @@ if (GGML_CUDA)
         if (GGML_MUSA)
             set_source_files_properties(${GGML_SOURCES_CUDA} PROPERTIES LANGUAGE CXX)
             foreach(SOURCE ${GGML_SOURCES_CUDA})
-                set_property(SOURCE ${SOURCE} PROPERTY COMPILE_FLAGS "-x musa -mtgpu --cuda-gpu-arch=mp_22")
+                set_property(SOURCE ${SOURCE} PROPERTY COMPILE_FLAGS "-x musa -mtgpu --cuda-gpu-arch=mp_21 --cuda-gpu-arch=mp_22")
             endforeach()
         endif()
 
         if (GGML_STATIC)
             if (WIN32)
                 # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
+                list(APPEND GGML_EXTRA_LIBS_PRIVATE CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
             else ()
                 if (GGML_MUSA)
-                    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musart_static MUSA::mublas_static)
+                    list(APPEND GGML_EXTRA_LIBS_PRIVATE MUSA::musart_static MUSA::mublas_static)
                 else()
-                    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+                    list(APPEND GGML_EXTRA_LIBS_PRIVATE CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
                 endif()
             endif()
         else()
             if (GGML_MUSA)
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musart MUSA::mublas)
+                list(APPEND GGML_EXTRA_LIBS_PRIVATE MUSA::musart MUSA::mublas)
             else()
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cudart CUDA::cublas CUDA::cublasLt)
+                list(APPEND GGML_EXTRA_LIBS_PRIVATE CUDA::cudart CUDA::cublas CUDA::cublasLt)
             endif()
         endif()
 
@@ -388,9 +393,9 @@ if (GGML_CUDA)
             # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
         else()
             if (GGML_MUSA)
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} MUSA::musa_driver) # required by muDeviceGetAttribute(), muMemGetAllocationGranularity(...), ...
+                list(APPEND GGML_EXTRA_LIBS_PRIVATE MUSA::musa_driver) # required by muDeviceGetAttribute(), muMemGetAllocationGranularity(...), ...
             else()
-                set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} CUDA::cuda_driver) # required by cuDeviceGetAttribute(), cuMemGetAllocationGranularity(...), ...
+                list(APPEND GGML_EXTRA_LIBS_PRIVATE CUDA::cuda_driver) # required by cuDeviceGetAttribute(), cuMemGetAllocationGranularity(...), ...
             endif()
         endif()
     else()
@@ -495,7 +500,7 @@ if (GGML_HIPBLAS)
 
     if (CXX_IS_HIPCC)
         set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} hip::device)
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE hip::device)
     else()
         set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE HIP)
     endif()
@@ -504,16 +509,17 @@ if (GGML_HIPBLAS)
         message(FATAL_ERROR "Static linking not supported for HIP/ROCm")
     endif()
 
-    set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} PUBLIC hip::host roc::rocblas roc::hipblas)
+    list(APPEND GGML_EXTRA_LIBS_PUBLIC hip::host roc::rocblas roc::hipblas)
 endif()
 
 if (GGML_SYCL)
-    if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL|NVIDIA)$")
-        message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL or NVIDIA")
+    if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL|NVIDIA|AMD)$")
+        message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL, NVIDIA, or AMD")
     endif()
 
     check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
-    if ( DEFINED ENV{ONEAPI_ROOT})
+
+    if (DEFINED ENV{ONEAPI_ROOT})
         message(STATUS "Using oneAPI Release SYCL compiler (icpx).")
     elseif(SUPPORTS_SYCL)
         message(WARNING "Using open-source SYCL compiler (clang++). Didn't detect ENV {ONEAPI_ROOT}.
@@ -528,6 +534,9 @@ if (GGML_SYCL)
     list(APPEND GGML_CDEF_PUBLIC GGML_USE_SYCL)
 
     if (GGML_SYCL_F16)
+        if (GGML_SYCL_TARGET STREQUAL "AMD")
+            message(WARNING "AMD target does not entirely support FP16 in the SYCL backend.")
+        endif()
         add_compile_definitions(GGML_SYCL_F16)
     endif()
 
@@ -538,6 +547,12 @@ if (GGML_SYCL)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -fsycl")
 
     if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
+        add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
+    elseif (GGML_SYCL_TARGET STREQUAL "AMD")
+        # INFO: Allowed Sub_group_sizes are not consistent through all
+        # hip targets. For example, 64 is used for certain models, but the backend
+        # does not support it.
+        # Target archs tested working: gfx1030, gfx1031, (Only tested sub_group_size = 32)
         add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
     else()
         add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
@@ -551,25 +566,34 @@ if (GGML_SYCL)
 
     find_package(DNNL)
     message("-- DNNL found:" ${DNNL_FOUND})
+
     if (GGML_SYCL_TARGET STREQUAL "INTEL")
         add_compile_definitions(GGML_SYCL_DNNL=${DNNL_FOUND})
     else()
         add_compile_definitions(GGML_SYCL_DNNL=0)
     endif()
+
+    if (${DNNL_FOUND} AND GGML_SYCL_TARGET STREQUAL "INTEL")
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE DNNL::dnnl)
+    endif()
+
     if (WIN32)
         find_package(IntelSYCL REQUIRED)
         find_package(MKL REQUIRED)
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE IntelSYCL::SYCL_CXX MKL::MKL MKL::MKL_SYCL)
     else()
         if (GGML_SYCL_TARGET STREQUAL "INTEL")
-            set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} -fsycl OpenCL mkl_core pthread m dl mkl_sycl_blas mkl_intel_ilp64 mkl_tbb_thread)
+            list(APPEND GGML_EXTRA_LIBS_PRIVATE sycl OpenCL mkl_core pthread m dl mkl_sycl_blas mkl_intel_ilp64 mkl_tbb_thread)
         elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=nvptx64-nvidia-cuda")
-            set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} -fsycl pthread m dl onemkl)
+            list(APPEND GGML_EXTRA_LIBS_PRIVATE sycl pthread m dl onemkl)
+        elseif (GGML_SYCL_TARGET STREQUAL "AMD")
+            if (GGML_SYCL_HIP_TARGET STREQUAL "")
+                message(ERROR "Can't enable SYCL hip backend, GGML_SYCL_HIP_TARGET has not been set.")
+            endif()
+            set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-targets=amdgcn-amd-amdhsa -Xsycl-target-backend --offload-arch=${GGML_SYCL_HIP_TARGET}")
+            list(APPEND GGML_EXTRA_LIBS_PRIVATE sycl pthread m dl onemkl)
         endif()
-    endif()
-    if (${DNNL_FOUND} AND GGML_SYCL_TARGET STREQUAL "INTEL")
-        list(APPEND GGML_EXTRA_LIBS DNNL::dnnl)
     endif()
 endif()
 
@@ -579,7 +603,7 @@ if (GGML_RPC)
     list(APPEND GGML_CDEF_PUBLIC GGML_USE_RPC)
 
     if (WIN32)
-        set(GGML_EXTRA_LIBS ${GGML_EXTRA_LIBS} ws2_32)
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE ws2_32)
     endif()
 
     set(GGML_HEADERS_RPC ../include/ggml-rpc.h)
@@ -610,6 +634,10 @@ if (GGML_VULKAN)
 
         if (GGML_VULKAN_MEMORY_DEBUG)
             add_compile_definitions(GGML_VULKAN_MEMORY_DEBUG)
+        endif()
+
+        if (GGML_VULKAN_SHADER_DEBUG_INFO)
+            add_compile_definitions(GGML_VULKAN_SHADER_DEBUG_INFO)
         endif()
 
         if (GGML_VULKAN_PERF)
@@ -653,8 +681,8 @@ if (GGML_VULKAN)
         set(GGML_HEADERS_VULKAN ${CMAKE_CURRENT_SOURCE_DIR}/../include/ggml-vulkan.h ${_ggml_vk_header})
         set(GGML_SOURCES_VULKAN ggml-vulkan.cpp ${_ggml_vk_source})
 
-        set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS} Vulkan::Vulkan)
-        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE Vulkan::Vulkan)
+        list(APPEND GGML_EXTRA_INCLUDES     ${CMAKE_CURRENT_BINARY_DIR})
     else()
         message(WARNING "Vulkan not found")
     endif()
@@ -813,8 +841,8 @@ if (GGML_KOMPUTE)
 
         list(APPEND GGML_CDEF_PUBLIC GGML_USE_KOMPUTE)
 
-        set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     kompute)
-        set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CMAKE_CURRENT_BINARY_DIR})
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE kompute)
+        list(APPEND GGML_EXTRA_INCLUDES     ${CMAKE_CURRENT_BINARY_DIR})
     else()
         message(WARNING "Kompute not found")
     endif()
@@ -879,9 +907,10 @@ if (GGML_CANN)
             message(STATUS "CANN: CANN_INCLUDE_DIRS =  ${CANN_INCLUDE_DIRS}")
             message(STATUS "CANN: CANN_LIBRARIES =  ${CANN_LIBRARIES}")
 
-            set(GGML_EXTRA_LIBS     ${GGML_EXTRA_LIBS}     ${CANN_LIBRARIES} )
-            set(GGML_EXTRA_INCLUDES ${GGML_EXTRA_INCLUDES} ${CANN_INCLUDE_DIRS})
-            set(GGML_EXTRA_LIBDIRS  ${GGML_EXTRA_LIBDIRS}  ${CANN_INSTALL_DIR}/lib64)
+            list(APPEND GGML_EXTRA_LIBS_PRIVATE ${CANN_LIBRARIES} )
+            list(APPEND GGML_EXTRA_INCLUDES     ${CANN_INCLUDE_DIRS})
+            list(APPEND GGML_EXTRA_LIBDIRS      ${CANN_INSTALL_DIR}/lib64)
+
             list(APPEND GGML_CDEF_PUBLIC GGML_USE_CANN)
         endif()
     else()
@@ -1174,6 +1203,7 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
         endif()
         if (GGML_AVX512)
             list(APPEND ARCH_FLAGS -mavx512f)
+            list(APPEND ARCH_FLAGS -mavx512dq)
             list(APPEND ARCH_FLAGS -mavx512bw)
         endif()
         if (GGML_AVX512_VBMI)
@@ -1248,10 +1278,14 @@ endif()
 # Data types, macros and functions related to controlling CPU affinity and
 # some memory allocation are available on Linux through GNU extensions in libc
 <<<<<<< HEAD
+<<<<<<< HEAD
 if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
 =======
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
 >>>>>>> master
+=======
+if (CMAKE_SYSTEM_NAME MATCHES "Linux" OR CMAKE_SYSTEM_NAME MATCHES "Android")
+>>>>>>> ahead
     add_compile_definitions(_GNU_SOURCE)
 endif()
 
@@ -1300,19 +1334,29 @@ add_library(ggml
             ../include/ggml-alloc.h
             ../include/ggml-backend.h
 <<<<<<< HEAD
+<<<<<<< HEAD
             ../include/inline_func.h
             ../include/ggml-tmac.h
 =======
 >>>>>>> master
+=======
+            ../../../../include/bitnet-lut-kernels.h
+            ../../../../include/ggml-bitnet.h
+>>>>>>> ahead
             ggml.c
             ggml-alloc.c
-            ggml-backend.c
+            ggml-backend.cpp
             ggml-quants.c
             ggml-quants.h
+<<<<<<< HEAD
 <<<<<<< HEAD
             ggml-tmac.cpp
 =======
 >>>>>>> master
+=======
+            ../../../../src/ggml-bitnet-mad.cpp
+            ../../../../src/ggml-bitnet-lut.cpp
+>>>>>>> ahead
             ${GGML_SOURCES_CUDA}      ${GGML_HEADERS_CUDA}
             ${GGML_SOURCES_METAL}     ${GGML_HEADERS_METAL}
             ${GGML_SOURCES_RPC}       ${GGML_HEADERS_RPC}
@@ -1331,20 +1375,29 @@ if (EMSCRIPTEN)
     set_target_properties(ggml PROPERTIES COMPILE_FLAGS "-msimd128")
 endif()
 
-target_compile_definitions(ggml PUBLIC  ${GGML_CDEF_PUBLIC})
-target_include_directories(ggml PUBLIC ../include)
+target_compile_definitions(ggml PUBLIC    ${GGML_CDEF_PUBLIC})
+target_include_directories(ggml PUBLIC  ../include)
+target_include_directories(ggml PUBLIC ../../../../include)
 target_include_directories(ggml PRIVATE . ${GGML_EXTRA_INCLUDES})
-target_link_directories(ggml PRIVATE ${GGML_EXTRA_LIBDIRS})
+target_link_directories   (ggml PRIVATE   ${GGML_EXTRA_LIBDIRS})
 target_compile_features   (ggml PRIVATE c_std_11) # don't bump
 
-target_link_libraries(ggml PRIVATE Threads::Threads ${GGML_EXTRA_LIBS})
+list(APPEND GGML_EXTRA_LIBS_PRIVATE Threads::Threads)
 
 find_library(MATH_LIBRARY m)
 if (MATH_LIBRARY)
     if (NOT WIN32 OR NOT GGML_SYCL)
-        target_link_libraries(ggml PRIVATE ${MATH_LIBRARY})
+        list(APPEND GGML_EXTRA_LIBS_PRIVATE m)
     endif()
 endif()
+
+if (CMAKE_SYSTEM_NAME MATCHES "Android")
+    list(APPEND GGML_EXTRA_LIBS_PRIVATE dl) # Must be linked explicitly
+endif()
+
+list(REMOVE_DUPLICATES GGML_EXTRA_LIBS_PRIVATE)
+list(REMOVE_DUPLICATES GGML_EXTRA_LIBS_PUBLIC)
+target_link_libraries(ggml PRIVATE ${GGML_EXTRA_LIBS_PRIVATE} PUBLIC ${GGML_EXTRA_LIBS_PUBLIC})
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(ggml PROPERTIES POSITION_INDEPENDENT_CODE ON)

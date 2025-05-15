@@ -120,7 +120,7 @@ You can use GBNF grammars:
 
 - In [llama-server](../examples/server):
     - For any completion endpoints, passed as the `json_schema` body field
-    - For the `/chat/completions` endpoint, passed inside the `result_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}`)
+    - For the `/chat/completions` endpoint, passed inside the `response_format` body field (e.g. `{"type", "json_object", "schema": {"items": {}}}` or `{ type: "json_schema", json_schema: {"schema": ...} }`)
 - In [llama-cli](../examples/main), passed as the `--json` / `-j` flag
 - To convert to a grammar ahead of time:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)

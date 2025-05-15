@@ -26,7 +26,7 @@
 
 ### Llama.cpp + SYCL
 
-The llama.cpp SYCL backend is designed to support **Intel GPU** firstly. Based on the cross-platform feature of SYCL, it could support other vendor GPUs: Nvidia GPU (*AMD GPU coming*).
+The llama.cpp SYCL backend is designed to support **Intel GPU** firstly. Based on the cross-platform feature of SYCL, it also supports other vendor GPUs: Nvidia and AMD.
 
 ## Recommended Release
 
@@ -111,10 +111,18 @@ SYCL backend supports Intel GPU Family:
 
 **Verified devices**
 
-| Nvidia GPU               | Status  | Verified Model |
-|--------------------------|---------|----------------|
-| Ampere Series            | Support | A100, A4000    |
-| Ampere Series *(Mobile)* | Support | RTX 40 Series  |
+| Nvidia GPU               | Status    | Verified Model |
+|--------------------------|-----------|----------------|
+| Ampere Series            | Supported | A100, A4000    |
+| Ampere Series *(Mobile)* | Supported | RTX 40 Series  |
+
+| AMD GPU                  | Status       | Verified Model |
+|--------------------------|--------------|----------------|
+| Radeon Pro               | Experimental | W6800          |
+| Radeon RX                | Experimental | 6700 XT        |
+
+Note: AMD GPU support is highly experimental and is incompatible with F16.
+Additionally, it only supports GPUs with a sub_group_size (warp size) of 32.
 
 ## Docker
 The docker build option is currently limited to *intel GPU* targets.
@@ -186,6 +194,10 @@ Platform #0: Intel(R) OpenCL HD Graphics
 
 In order to target Nvidia GPUs through SYCL, please make sure the CUDA/CUBLAS native requirements *-found [here](README.md#cuda)-* are installed.
 
+- **AMD GPU**
+
+To target AMD GPUs with SYCL, the ROCm stack must be installed first.
+
 2. **Install Intel® oneAPI Base toolkit**
 
 - **For Intel GPU**
@@ -212,6 +224,19 @@ cmake -B buildWithCublas -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENAB
 cmake --build buildWithCublas --config Release
 ```
 
+- **Adding support to AMD GPUs**
+
+**oneAPI Plugin**: In order to enable SYCL support on AMD GPUs, please install the [Codeplay oneAPI Plugin for AMD GPUs](https://developer.codeplay.com/products/oneapi/amd/download). As with Nvidia GPUs, the user should also make sure the plugin version matches the installed base toolkit.
+
+**oneMKL for rocBlas**: The current oneMKL releases *(shipped with the oneAPI base-toolkit)* doesn't contain the rocBLAS backend. A build from source of the upstream [oneMKL](https://github.com/oneapi-src/oneMKL) with the *rocBLAS* backend enabled is thus required to run it on AMD GPUs.
+
+```sh
+git clone https://github.com/oneapi-src/oneMKL
+cd oneMKL
+# Find your HIPTARGET with rocminfo, under the key 'Name:'
+cmake -B buildWithrocBLAS -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx -DENABLE_MKLGPU_BACKEND=OFF -DENABLE_MKLCPU_BACKEND=OFF -DENABLE_ROCBLAS_BACKEND=ON -DHIPTARGETS=${HIPTARGET} -DTARGET_DOMAINS=blas
+cmake --build buildWithrocBLAS --config Release
+```
 
 3. **Verify installation and environment**
 
@@ -223,22 +248,32 @@ sycl-ls
 
 - **Intel GPU**
 
-When targeting an intel GPU, the user should expect one or more level-zero devices among the available SYCL devices. Please make sure that at least one GPU is present, for instance [`ext_oneapi_level_zero:gpu:0`] in the sample output below:
+When targeting an intel GPU, the user should expect one or more level-zero devices among the available SYCL devices. Please make sure that at least one GPU is present, for instance [`level_zero:gpu`] in the sample output below:
 
 ```
-[opencl:acc:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.10.0.17_160000]
-[opencl:cpu:1] Intel(R) OpenCL, 13th Gen Intel(R) Core(TM) i7-13700K OpenCL 3.0 (Build 0) [2023.16.10.0.17_160000]
-[opencl:gpu:2] Intel(R) OpenCL Graphics, Intel(R) Arc(TM) A770 Graphics OpenCL 3.0 NEO  [23.30.26918.50]
-[ext_oneapi_level_zero:gpu:0] Intel(R) Level-Zero, Intel(R) Arc(TM) A770 Graphics 1.3 [1.3.26918]
+[opencl:acc][opencl:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.10.0.17_160000]
+[opencl:cpu][opencl:1] Intel(R) OpenCL, 13th Gen Intel(R) Core(TM) i7-13700K OpenCL 3.0 (Build 0) [2023.16.10.0.17_160000]
+[opencl:gpu][opencl:2] Intel(R) OpenCL Graphics, Intel(R) Arc(TM) A770 Graphics OpenCL 3.0 NEO  [23.30.26918.50]
+[level_zero:gpu][level_zero:0] Intel(R) Level-Zero, Intel(R) Arc(TM) A770 Graphics 1.3 [1.3.26918]
 ```
 
 - **Nvidia GPU**
 
-Similarly, user targeting Nvidia GPUs should expect at least one SYCL-CUDA device [`ext_oneapi_cuda:gpu`] as bellow:
+Similarly, user targeting Nvidia GPUs should expect at least one SYCL-CUDA device [`cuda:gpu`] as below:
+
 ```
-[opencl:acc:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.12.0.12_195853.xmain-hotfix]
-[opencl:cpu:1] Intel(R) OpenCL, Intel(R) Xeon(R) Gold 6326 CPU @ 2.90GHz OpenCL 3.0 (Build 0) [2023.16.12.0.12_195853.xmain-hotfix]
-[ext_oneapi_cuda:gpu:0] NVIDIA CUDA BACKEND, NVIDIA A100-PCIE-40GB 8.0 [CUDA 12.2]
+[opencl:acc][opencl:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.12.0.12_195853.xmain-hotfix]
+[opencl:cpu][opencl:1] Intel(R) OpenCL, Intel(R) Xeon(R) Gold 6326 CPU @ 2.90GHz OpenCL 3.0 (Build 0) [2023.16.12.0.12_195853.xmain-hotfix]
+[cuda:gpu][cuda:0] NVIDIA CUDA BACKEND, NVIDIA A100-PCIE-40GB 8.0 [CUDA 12.5]
+```
+
+- **AMD GPU**
+
+For AMD GPUs we should expect at least one SYCL-HIP device [`hip:gpu`]:
+
+```
+[opencl:cpu][opencl:0] Intel(R) OpenCL, 12th Gen Intel(R) Core(TM) i9-12900K OpenCL 3.0 (Build 0) [2024.18.6.0.02_160000]
+[hip:gpu][hip:0] AMD HIP BACKEND, AMD Radeon PRO W6800 gfx1030 [HIP 60140.9]
 ```
 
 ### II. Build llama.cpp
@@ -266,6 +301,7 @@ cmake --build build --config Release -j -v
 ```
 
 #### Nvidia GPU
+
 ```sh
 # Export relevant ENV variables
 export LD_LIBRARY_PATH=/path/to/oneMKL/buildWithCublas/lib:$LD_LIBRARY_PATH
@@ -283,7 +319,25 @@ cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=NVIDIA -DCMAKE_C_COMPILER=icx -
 
 # build all binary
 cmake --build build --config Release -j -v
+```
 
+#### AMD GPU
+
+```sh
+# Export relevant ENV variables
+export LD_LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LD_LIBRARY_PATH
+export LIBRARY_PATH=/path/to/oneMKL/buildWithrocBLAS/lib:$LIBRARY_PATH
+export CPLUS_INCLUDE_DIR=/path/to/oneMKL/buildWithrocBLAS/include:$CPLUS_INCLUDE_DIR
+
+# Build LLAMA with rocBLAS acceleration through SYCL
+
+## AMD
+# Use FP32, FP16 is not supported
+# Find your GGML_SYCL_HIP_TARGET with rocminfo, under the key 'Name:'
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=AMD -DGGML_SYCL_HIP_TARGET=${GGML_SYCL_HIP_TARGET} -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx
+
+# build all binary
+cmake --build build --config Release -j -v
 ```
 
 ### III. Run the inference
@@ -337,19 +391,27 @@ Choose one of following methods to run.
 
 ```sh
 <<<<<<< HEAD
+<<<<<<< HEAD
 ./examples/sycl/run-llama2.sh 0
 =======
 ./examples/sycl/run_llama2.sh 0
 >>>>>>> master
+=======
+./examples/sycl/run-llama2.sh 0
+>>>>>>> ahead
 ```
 - Use multiple devices:
 
 ```sh
 <<<<<<< HEAD
+<<<<<<< HEAD
 ./examples/sycl/run-llama2.sh
 =======
 ./examples/sycl/run_llama2.sh
 >>>>>>> master
+=======
+./examples/sycl/run-llama2.sh
+>>>>>>> ahead
 ```
 
 2. Command line
@@ -594,11 +656,11 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 #### Build
 
-| Name               | Value                             | Function                                    |
-|--------------------|-----------------------------------|---------------------------------------------|
-| GGML_SYCL          | ON (mandatory)                    | Enable build with SYCL code path.<br>FP32 path - recommended for better perforemance than FP16 on quantized model|
-| GGML_SYCL_TARGET   | INTEL *(default)* \| NVIDIA       | Set the SYCL target device type.            |
-| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)* | Enable FP16 build with SYCL code path.      |
+| Name               | Value                                 | Function                                    |
+|--------------------|---------------------------------------|---------------------------------------------|
+| GGML_SYCL          | ON (mandatory)                        | Enable build with SYCL code path.<br>FP32 path - recommended for better perforemance than FP16 on quantized model|
+| GGML_SYCL_TARGET   | INTEL *(default)* \| NVIDIA \| AMD    | Set the SYCL target device type.            |
+| GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path.      |
 | CMAKE_C_COMPILER   | `icx` *(Linux)*, `icx/cl` *(Windows)* | Set `icx` compiler for SYCL code path.      |
 | CMAKE_CXX_COMPILER | `icpx` *(Linux)*, `icx` *(Windows)*   | Set `icpx/icx` compiler for SYCL code path. |
 
@@ -644,6 +706,14 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   It's same for other projects including llama.cpp SYCL backend.
 
+- Meet issue: `Native API failed. Native API returns: -6 (PI_ERROR_OUT_OF_HOST_MEMORY) -6 (PI_ERROR_OUT_OF_HOST_MEMORY) -999 (UNKNOWN PI error)` or `failed to allocate SYCL0 buffer`
+
+  Device Memory is not enough.
+
+  |Reason|Solution|
+  |-|-|
+  |Default Context is too big. It leads to more memory usage.|Set `-c 8192` or smaller value.|
+  |Model is big and require more memory than device's.|Choose smaller quantized model, like Q5 -> Q4;<br>Use more than one devices to load model.|
 
 ### **GitHub contribution**:
 Please add the **[SYCL]** prefix/tag in issues/PRs titles to help the SYCL-team check/address them without delay.

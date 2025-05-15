@@ -8,6 +8,9 @@ fi
 set -e
 set -x
 
+# verify at the start that the compare script has all the necessary dependencies installed
+./scripts/compare-llama-bench.py --check
+
 bench_args="${@:3}"
 
 rm -f llama-bench.sqlite > /dev/null

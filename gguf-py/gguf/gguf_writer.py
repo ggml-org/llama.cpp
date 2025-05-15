@@ -223,10 +223,14 @@ class GGUFWriter:
             fout.write(self._pack("<I", GGUF_MAGIC, skip_pack_prefix = True))
             fout.write(self._pack("I", GGUF_VERSION))
 <<<<<<< HEAD
+<<<<<<< HEAD
             fout.write(self._pack("Q", len([k for k in tensors.keys() if not k.endswith("_scale")])))
 =======
             fout.write(self._pack("Q", len(tensors)))
 >>>>>>> master
+=======
+            fout.write(self._pack("Q", len([k for k in tensors.keys() if not k.endswith("_scale")])))
+>>>>>>> ahead
             fout.write(self._pack("Q", len(kv_data)))
             fout.flush()
         self.state = WriterState.HEADER
@@ -259,10 +263,15 @@ class GGUFWriter:
 
             for name, ti in tensors.items():
 <<<<<<< HEAD
+<<<<<<< HEAD
                 if name.endswith("_scale"):
                     continue
 =======
 >>>>>>> master
+=======
+                if name.endswith("_scale"):
+                    continue
+>>>>>>> ahead
                 ti_data += self._pack_val(name, GGUFValueType.STRING, add_vtype=False)
                 n_dims = len(ti.shape)
                 ti_data += self._pack("I", n_dims)
@@ -271,14 +280,20 @@ class GGUFWriter:
                 ti_data += self._pack("I", ti.dtype)
                 ti_data += self._pack("Q", offset_tensor)
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ahead
                 dtype = ti.dtype
                 if ti.dtype == GGMLQuantizationType.TL1 or dtype == GGMLQuantizationType.TL2:
                     offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment) + self.data_alignment
                 else:
                     offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
+<<<<<<< HEAD
 =======
                 offset_tensor += GGUFWriter.ggml_pad(ti.nbytes, self.data_alignment)
 >>>>>>> master
+=======
+>>>>>>> ahead
 
             fout.write(ti_data)
             fout.flush()
@@ -693,11 +708,17 @@ class GGUFWriter:
         self.add_float32(Keys.LLM.EXPERT_WEIGHTS_SCALE.format(arch=self.arch), value)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     def add_swin_norm(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
 
 =======
 >>>>>>> 8f1d81a0 (llama : support RWKV v6 models (#8980))
+=======
+    def add_swin_norm(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.SWIN_NORM.format(arch=self.arch), value)
+
+>>>>>>> ahead
     def add_rescale_every_n_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.RESCALE_EVERY_N_LAYERS.format(arch=self.arch), count)
 
@@ -708,14 +729,20 @@ class GGUFWriter:
         self.add_uint32(Keys.LLM.TIME_DECAY_EXTRA_DIM.format(arch=self.arch), dim)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ahead
     def add_residual_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.RESIDUAL_SCALE.format(arch=self.arch), value)
 
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
 
+<<<<<<< HEAD
 =======
 >>>>>>> 8f1d81a0 (llama : support RWKV v6 models (#8980))
+=======
+>>>>>>> ahead
     def add_wkv_head_size(self, size: int) -> None:
         self.add_uint32(Keys.WKV.HEAD_SIZE.format(arch=self.arch), size)
 
@@ -741,11 +768,17 @@ class GGUFWriter:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
 
 <<<<<<< HEAD
+<<<<<<< HEAD
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
 
 =======
 >>>>>>> master
+=======
+    def add_attention_scale(self, value: float) -> None:
+        self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
+
+>>>>>>> ahead
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
 

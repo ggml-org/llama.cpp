@@ -2742,6 +2742,7 @@ struct mmq_args {
     int64_t ne00; int64_t ne01; int64_t stride01;
     int64_t ne10; int64_t ne11; int64_t stride11;
     int64_t ne0;
+    bool use_stream_k;
 };
 
 template<ggml_type type>
@@ -2777,8 +2778,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int ntx = (args.ne11 + mmq_x - 1) / mmq_x;
     const dim3 block_nums_xy_tiling(nty, ntx, 1);
 
-    const bool use_stream_k = cc >= CC_VOLTA && cc < CC_OFFSET_AMD;
-    if (!use_stream_k) {
+    if (!args.use_stream_k) {
         if (args.ne01 % mmq_y == 0) {
             constexpr bool need_check = false;
             mul_mat_q<type, mmq_x, MMQ_NWARPS, need_check><<<block_nums_xy_tiling, block_dims, shmem, stream>>>

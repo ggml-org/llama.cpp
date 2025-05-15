@@ -14,7 +14,8 @@ Performance testing tool for llama.cpp.
     1. [Markdown](#markdown)
     2. [CSV](#csv)
     3. [JSON](#json)
-    4. [SQL](#sql)
+    4. [JSONL](#jsonl)
+    5. [SQL](#sql)
 
 ## Syntax
 
@@ -23,27 +24,34 @@ usage: ./llama-bench [options]
 
 options:
   -h, --help
-  -m, --model <filename>              (default: models/7B/ggml-model-q4_0.gguf)
-  -p, --n-prompt <n>                  (default: 512)
-  -n, --n-gen <n>                     (default: 128)
-  -pg <pp,tg>                         (default: 512,128)
-  -b, --batch-size <n>                (default: 2048)
-  -ub, --ubatch-size <n>              (default: 512)
-  -ctk, --cache-type-k <t>            (default: f16)
-  -ctv, --cache-type-v <t>            (default: f16)
-  -t, --threads <n>                   (default: 16)
-  -ngl, --n-gpu-layers <n>            (default: 99)
-  -sm, --split-mode <none|layer|row>  (default: layer)
-  -mg, --main-gpu <i>                 (default: 0)
-  -nkvo, --no-kv-offload <0|1>        (default: 0)
-  -fa, --flash-attn <0|1>             (default: 0)
-  -mmp, --mmap <0|1>                  (default: 1)
-  --numa <distribute|isolate|numactl> (default: disabled)
-  -embd, --embeddings <0|1>           (default: 0)
-  -ts, --tensor-split <ts0/ts1/..>    (default: 0)
-  -r, --repetitions <n>               (default: 5)
-  -o, --output <csv|json|md|sql>      (default: md)
-  -v, --verbose                       (default: 0)
+  -m, --model <filename>                    (default: models/7B/ggml-model-q4_0.gguf)
+  -p, --n-prompt <n>                        (default: 512)
+  -n, --n-gen <n>                           (default: 128)
+  -pg <pp,tg>                               (default: )
+  -b, --batch-size <n>                      (default: 2048)
+  -ub, --ubatch-size <n>                    (default: 512)
+  -ctk, --cache-type-k <t>                  (default: f16)
+  -ctv, --cache-type-v <t>                  (default: f16)
+  -t, --threads <n>                         (default: 8)
+  -C, --cpu-mask <hex,hex>                  (default: 0x0)
+  --cpu-strict <0|1>                        (default: 0)
+  --poll <0...100>                          (default: 50)
+  -ngl, --n-gpu-layers <n>                  (default: 99)
+  -rpc, --rpc <rpc_servers>                 (default: )
+  -sm, --split-mode <none|layer|row>        (default: layer)
+  -mg, --main-gpu <i>                       (default: 0)
+  -nkvo, --no-kv-offload <0|1>              (default: 0)
+  -fa, --flash-attn <0|1>                   (default: 0)
+  -mmp, --mmap <0|1>                        (default: 1)
+  --numa <distribute|isolate|numactl>       (default: disabled)
+  -embd, --embeddings <0|1>                 (default: 0)
+  -ts, --tensor-split <ts0/ts1/..>          (default: 0)
+  -r, --repetitions <n>                     (default: 5)
+  --prio <0|1|2|3>                          (default: 0)
+  --delay <0...N> (seconds)                 (default: 0)
+  -o, --output <csv|json|jsonl|md|sql>      (default: md)
+  -oe, --output-err <csv|json|jsonl|md|sql> (default: none)
+  -v, --verbose                             (default: 0)
 
 Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.
 ```
@@ -237,6 +245,19 @@ $ ./llama-bench -o json
   }
 ]
 ```
+
+
+### JSONL
+
+```sh
+$ ./llama-bench -o jsonl
+```
+
+```json lines
+{"build_commit":"3469684","build_number":1275,"cuda":true,"metal":false,"gpu_blas":true,"blas":true,"cpu_info":"13th Gen Intel(R) Core(TM) i9-13900K","gpu_info":"NVIDIA GeForce RTX 3090 Ti","model_filename":"models/7B/ggml-model-q4_0.gguf","model_type":"llama 7B mostly Q4_0","model_size":3825065984,"model_n_params":6738415616,"n_batch":512,"n_threads":16,"f16_kv":true,"n_gpu_layers":99,"main_gpu":0,"mul_mat_q":true,"tensor_split":"0.00","n_prompt":512,"n_gen":0,"test_time":"2023-09-23T12:09:57Z","avg_ns":212365953,"stddev_ns":985423,"avg_ts":2410.974041,"stddev_ts":11.163766,"samples_ns":[213837238,211635853,212328053,211329715,212698907],"samples_ts":[2394.34,2419.25,2411.36,2422.75,2407.16]}
+{"build_commit":"3469684","build_number":1275,"cuda":true,"metal":false,"gpu_blas":true,"blas":true,"cpu_info":"13th Gen Intel(R) Core(TM) i9-13900K","gpu_info":"NVIDIA GeForce RTX 3090 Ti","model_filename":"models/7B/ggml-model-q4_0.gguf","model_type":"llama 7B mostly Q4_0","model_size":3825065984,"model_n_params":6738415616,"n_batch":512,"n_threads":16,"f16_kv":true,"n_gpu_layers":99,"main_gpu":0,"mul_mat_q":true,"tensor_split":"0.00","n_prompt":0,"n_gen":128,"test_time":"2023-09-23T12:09:59Z","avg_ns":977425219,"stddev_ns":9268593,"avg_ts":130.965708,"stddev_ts":1.238924,"samples_ns":[984472709,974901233,989474741,970729355,967548060],"samples_ts":[130.019,131.295,129.362,131.86,132.293]}
+```
+
 
 ### SQL
 

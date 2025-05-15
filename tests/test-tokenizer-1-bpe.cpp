@@ -78,10 +78,10 @@ int main(int argc, char **argv) {
     const int n_vocab = llama_n_vocab(model);
 
     for (int i = 0; i < n_vocab; ++i) {
-        std::string str = llama_detokenize(ctx, std::vector<int>(1, i));
+        std::string str = common_detokenize(ctx, std::vector<int>(1, i));
         try {
             auto cps = unicode_cpts_from_utf8(str);
-            std::vector<llama_token> tokens = llama_tokenize(ctx, str, false, true);
+            std::vector<llama_token> tokens = common_tokenize(ctx, str, false, true);
             if (ignore_merges && tokens.size() > 1) {
                 fprintf(stderr,
                         "%s : error: token %d detokenizes to '%s'(%zu) but "
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "]\n");
                 return 2;
             }
-            std::string check = llama_detokenize(ctx, tokens);
+            std::string check = common_detokenize(ctx, tokens);
             if (check != str) {
                 fprintf(stderr, "%s : error: token %d detokenizes to '%s'(%zu) but tokenization of this detokenizes to '%s'(%zu)\n",
                     __func__, i, str.c_str(), str.length(), check.c_str(), check.length());
@@ -123,8 +123,8 @@ int main(int argc, char **argv) {
                     }
 
                     std::string str = unicode_cpt_to_utf8(cp);
-                    std::vector<llama_token> tokens = llama_tokenize(ctx, str, false);
-                    std::string check = llama_detokenize(ctx, tokens);
+                    std::vector<llama_token> tokens = common_tokenize(ctx, str, false);
+                    std::string check = common_detokenize(ctx, tokens);
                     if (cp != 9601 && str != check) {
                         fprintf(stderr, "error: codepoint 0x%x detokenizes to '%s'(%zu) instead of '%s'(%zu)\n",
                                 cp, check.c_str(), check.length(), str.c_str(), str.length());

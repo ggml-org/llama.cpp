@@ -9,10 +9,13 @@ Feature: llama.cpp server
     And   a model alias bert-bge-small
     And   42 as server seed
     And   2 slots
-    And   1024 as batch size
-    And   1024 as ubatch size
-    And   2048 KV cache size
-    And   embeddings extraction
+    # the bert-bge-small model has context size of 512
+    # since the generated prompts are as big as the batch size, we need to set the batch size to <= 512
+    # ref: https://huggingface.co/BAAI/bge-small-en-v1.5/blob/5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/config.json#L20
+    And   128 as batch size
+    And   128 as ubatch size
+    And   512 KV cache size
+    And   enable embeddings endpoint
     Then  the server is starting
     Then  the server is healthy
 
@@ -22,6 +25,20 @@ Feature: llama.cpp server
     What is the capital of Bulgaria ?
     """
     Then embeddings are generated
+
+  Scenario: Embedding (error: prompt too long)
+    When embeddings are computed for:
+    """
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+    Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+    Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+    Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+    Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+    Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+    Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+    """
+    And  embeddings request with 500 api error
 
   Scenario: OAI Embeddings compatibility
     Given a model bert-bge-small

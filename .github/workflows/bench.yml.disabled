@@ -27,10 +27,10 @@ on:
   push:
     branches:
       - master
-    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.c', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
+    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
   pull_request_target:
     types: [opened, synchronize, reopened]
-    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.c', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
+    paths: ['llama.cpp', 'ggml.c', 'ggml-backend.cpp', 'ggml-quants.c', '**/*.cu', 'examples/server/*.h*', 'examples/server/*.cpp']
   schedule:
     -  cron: '04 2 * * *'
 

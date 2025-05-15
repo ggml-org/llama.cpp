@@ -40,7 +40,6 @@ server --host localhost --port 8080 \
   --parallel 8 \
   --batch-size 512 \
   --ctx-size 4096 \
-  --log-format text \
   -ngl 33
 ```
 

@@ -2,10 +2,13 @@
 #include "common.h"
 #include "log.h"
 
+#include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
+#include <thread>
 
-void llama_ngram_cache_update(llama_ngram_cache & ngram_cache, int ngram_min, int ngram_max,
+void common_ngram_cache_update(common_ngram_cache & ngram_cache, int ngram_min, int ngram_max,
                               std::vector<llama_token> & inp, int nnew, bool print_progress) {
     const int64_t t_start_ms = ggml_time_ms();
     const int64_t inp_size = inp.size();
@@ -17,16 +20,16 @@ void llama_ngram_cache_update(llama_ngram_cache & ngram_cache, int ngram_min, in
         const int64_t i_start = std::max(inp_size - nnew, ngram_size);
         for (int64_t i = i_start; i < inp_size; ++i) {
             const int64_t ngram_start = i - ngram_size;
-            llama_ngram ngram(&inp[ngram_start], ngram_size);
+            common_ngram ngram(&inp[ngram_start], ngram_size);
             const llama_token token = inp[i];
 
-            llama_ngram_cache::iterator part_it = ngram_cache.find(ngram);
+            common_ngram_cache::iterator part_it = ngram_cache.find(ngram);
             if (part_it == ngram_cache.end()) {
-                llama_ngram_cache_part part;
+                common_ngram_cache_part part;
                 part.emplace(token, 1);
                 ngram_cache.emplace(ngram, part);
             } else {
-                llama_ngram_cache_part::iterator token_count_it = part_it->second.find(token);
+                common_ngram_cache_part::iterator token_count_it = part_it->second.find(token);
                 if (token_count_it == part_it->second.end()) {
                     part_it->second.emplace(token, 1);
                 } else {
@@ -59,12 +62,12 @@ constexpr int draft_min_sample_size_strict[LLAMA_NGRAM_MAX] = { 4,  3,  2,  2};
 constexpr int     draft_min_percent_strict[LLAMA_NGRAM_MAX] = {75, 66, 66, 66};
 
 // Helper function that tries to draft a token from only the static ngram cache:
-static llama_token try_draft(llama_ngram_cache & nc_static, const llama_ngram ngram_static) {
-    llama_ngram_cache::iterator part_static_it = nc_static.find(ngram_static);
+static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram ngram_static) {
+    common_ngram_cache::iterator part_static_it = nc_static.find(ngram_static);
     if (part_static_it == nc_static.end()) {
         return -1;
     }
-    const llama_ngram_cache_part part_static = part_static_it->second;
+    const common_ngram_cache_part part_static = part_static_it->second;
 
     int max_count_static  = 0;
     int sum_count_static  = 0;
@@ -92,19 +95,19 @@ static llama_token try_draft(llama_ngram_cache & nc_static, const llama_ngram ng
 
 // Try to draft a token from primary cache (context/dynamic), validate with static cache:
 static llama_token try_draft(
-    llama_ngram_cache & nc_primary, const std::vector<llama_ngram> & ngrams_primary, llama_ngram_cache_part & part_static,
+    common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, common_ngram_cache_part & part_static,
     const int * min_sample_size, const int * min_percent) {
 
     llama_token drafted_token = -1;
 
     for (int i = ngrams_primary.size()-1; i >= 0 && drafted_token == -1; --i) {
-        const llama_ngram ngram_primary = ngrams_primary[i];
+        const common_ngram ngram_primary = ngrams_primary[i];
 
-        llama_ngram_cache::iterator part_primary_it = nc_primary.find(ngram_primary);
+        common_ngram_cache::iterator part_primary_it = nc_primary.find(ngram_primary);
         if (part_primary_it == nc_primary.end()) {
             continue;
         }
-        const llama_ngram_cache_part part_primary = part_primary_it->second;
+        const common_ngram_cache_part part_primary = part_primary_it->second;
 
         int max_count_primary = 0;
         int max_count_static  = 0;
@@ -114,7 +117,7 @@ static llama_token try_draft(
         for (std::pair<llama_token, int> token_count_primary : part_primary) {
             const llama_token token = token_count_primary.first;
 
-            llama_ngram_cache_part::iterator token_count_static_it = part_static.find(token);
+            common_ngram_cache_part::iterator token_count_static_it = part_static.find(token);
 
             const int32_t count_primary = token_count_primary.second;
             const int32_t count_static  = token_count_static_it != part_static.end() ? 100*token_count_static_it->second : 1;
@@ -139,9 +142,9 @@ static llama_token try_draft(
     return drafted_token;
 }
 
-void llama_ngram_cache_draft(
+void common_ngram_cache_draft(
     std::vector<llama_token> & inp, std::vector<llama_token> & draft, int n_draft, int ngram_min, int ngram_max,
-    llama_ngram_cache & nc_context, llama_ngram_cache & nc_dynamic, llama_ngram_cache & nc_static
+    common_ngram_cache & nc_context, common_ngram_cache & nc_dynamic, common_ngram_cache & nc_static
 ) {
     GGML_ASSERT(draft.size() == 1);
     const int inp_size = inp.size();
@@ -154,21 +157,21 @@ void llama_ngram_cache_draft(
         llama_token drafted_token = -1;
 
         const int ngram_start_static = inp_size-LLAMA_NGRAM_STATIC + draft.size()-1;
-        llama_ngram ngram_static;
+        common_ngram ngram_static;
         for (int j = ngram_start_static; j < ngram_start_static + LLAMA_NGRAM_STATIC; ++j) {
             ngram_static.tokens[j-ngram_start_static] = get_token(inp, draft, j);
         }
-        llama_ngram_cache::iterator part_static_it = nc_static.find(ngram_static);
-        llama_ngram_cache_part part_static;
+        common_ngram_cache::iterator part_static_it = nc_static.find(ngram_static);
+        common_ngram_cache_part part_static;
         if (part_static_it != nc_static.end()) {
             part_static = part_static_it->second;
         }
 
         // cd = context + dynamic
-        std::vector<llama_ngram> ngrams_cd;
+        std::vector<common_ngram> ngrams_cd;
         for (int ngram_size_cd = ngram_min; ngram_size_cd <= ngram_max; ++ngram_size_cd) {
             const int ngram_start_cd = inp_size-ngram_size_cd + draft.size()-1;
-            llama_ngram ngram_cd;
+            common_ngram ngram_cd;
             for (int j = ngram_start_cd; j < ngram_start_cd + ngram_size_cd; ++j) {
                 ngram_cd.tokens[j-ngram_start_cd] = get_token(inp, draft, j);
             }
@@ -193,16 +196,16 @@ void llama_ngram_cache_draft(
     }
 }
 
-void llama_ngram_cache_save(llama_ngram_cache & ngram_cache, std::string & filename) {
+void common_ngram_cache_save(common_ngram_cache & ngram_cache, std::string & filename) {
     std::ofstream file_out(filename, std::ios::binary);
-    for (std::pair<llama_ngram, llama_ngram_cache_part> item : ngram_cache) {
-        const llama_ngram      ngram        = item.first;
-        llama_ngram_cache_part token_counts = item.second;
+    for (std::pair<common_ngram, common_ngram_cache_part> item : ngram_cache) {
+        const common_ngram      ngram        = item.first;
+        common_ngram_cache_part token_counts = item.second;
         GGML_ASSERT(!token_counts.empty());
         const int32_t ntokens = token_counts.size();
         GGML_ASSERT(ntokens > 0);
 
-        file_out.write(reinterpret_cast<const char *>(&ngram),   sizeof(llama_ngram));
+        file_out.write(reinterpret_cast<const char *>(&ngram),   sizeof(common_ngram));
         file_out.write(reinterpret_cast<const char *>(&ntokens), sizeof(int32_t));
         for (std::pair<llama_token, int32_t> item2 : token_counts) {
             const llama_token token = item2.first;
@@ -216,14 +219,14 @@ void llama_ngram_cache_save(llama_ngram_cache & ngram_cache, std::string & filen
 
 }
 
-llama_ngram_cache llama_ngram_cache_load(std::string & filename) {
+common_ngram_cache common_ngram_cache_load(std::string & filename) {
     std::ifstream hashmap_file(filename, std::ios::binary);
     if (!hashmap_file) {
         throw std::ifstream::failure("Unable to open file " + filename);
     }
-    llama_ngram_cache ngram_cache;
+    common_ngram_cache ngram_cache;
 
-    llama_ngram ngram;
+    common_ngram ngram;
     int32_t     ntokens;
     llama_token token;
     int32_t     count;
@@ -232,11 +235,11 @@ llama_ngram_cache llama_ngram_cache_load(std::string & filename) {
     char * ntokensc = reinterpret_cast<char*>(&ntokens);
     char * tokenc   = reinterpret_cast<char*>(&token);
     char * countc   = reinterpret_cast<char*>(&count);
-    while(hashmap_file.read(ngramc, sizeof(llama_ngram))) {
+    while(hashmap_file.read(ngramc, sizeof(common_ngram))) {
         GGML_ASSERT(!hashmap_file.eof());
         GGML_ASSERT(hashmap_file.read(ntokensc, sizeof(int32_t)));
         GGML_ASSERT(ntokens > 0);
-        llama_ngram_cache_part token_counts;
+        common_ngram_cache_part token_counts;
 
         for (int i = 0; i < ntokens; ++i) {
             GGML_ASSERT(!hashmap_file.eof());
@@ -254,12 +257,12 @@ llama_ngram_cache llama_ngram_cache_load(std::string & filename) {
     return ngram_cache;
 }
 
-void llama_ngram_cache_merge(llama_ngram_cache & ngram_cache_target, llama_ngram_cache & ngram_cache_add) {
-    for (std::pair<llama_ngram, llama_ngram_cache_part> ngram_part : ngram_cache_add) {
-        const llama_ngram      ngram = ngram_part.first;
-        llama_ngram_cache_part  part = ngram_part.second;
+void common_ngram_cache_merge(common_ngram_cache & ngram_cache_target, common_ngram_cache & ngram_cache_add) {
+    for (std::pair<common_ngram, common_ngram_cache_part> ngram_part : ngram_cache_add) {
+        const common_ngram      ngram = ngram_part.first;
+        common_ngram_cache_part  part = ngram_part.second;
 
-        llama_ngram_cache::iterator part_merged_it = ngram_cache_target.find(ngram);
+        common_ngram_cache::iterator part_merged_it = ngram_cache_target.find(ngram);
         if (part_merged_it == ngram_cache_target.end()) {
             ngram_cache_target.emplace(ngram, part);
             continue;
@@ -270,7 +273,7 @@ void llama_ngram_cache_merge(llama_ngram_cache & ngram_cache_target, llama_ngram
             const int32_t     count = token_count.second;
             GGML_ASSERT(count > 0);
 
-            llama_ngram_cache_part::iterator token_count_merged_it = part_merged_it->second.find(token);
+            common_ngram_cache_part::iterator token_count_merged_it = part_merged_it->second.find(token);
             if (token_count_merged_it == part_merged_it->second.end()) {
                 part_merged_it->second.emplace(token, count);
                 continue;

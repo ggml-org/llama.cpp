@@ -31,6 +31,7 @@ import re
 import requests
 import sys
 import json
+import shutil
 
 from hashlib import sha256
 from enum import IntEnum, auto
@@ -80,6 +81,7 @@ models = [
     {"name": "qwen2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen1.5-7B", },
     {"name": "olmo",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/allenai/OLMo-1.7-7B-hf", },
     {"name": "dbrx",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/databricks/dbrx-base", },
+    {"name": "jina-v1-en",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jinaai/jina-reranker-v1-tiny-en", },
     {"name": "jina-v2-en",     "tokt": TOKENIZER_TYPE.WPM, "repo": "https://huggingface.co/jinaai/jina-embeddings-v2-base-en", }, # WPM!
     {"name": "jina-v2-es",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jinaai/jina-embeddings-v2-base-es", },
     {"name": "jina-v2-de",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jinaai/jina-embeddings-v2-base-de", },
@@ -97,6 +99,8 @@ models = [
     {'name': "bloom",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/bigscience/bloom", },
     {'name': "gpt3-finnish",   "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/TurkuNLP/gpt3-finnish-small", },
     {"name": "exaone",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct", },
+    {"name": "phi-2",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/microsoft/phi-2", },
+    {"name": "chameleon",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/facebook/chameleon-7b", },
 ]
 
 
@@ -125,12 +129,27 @@ def download_model(model):
     if tokt == TOKENIZER_TYPE.UGM:
         files.append("spiece.model")
 
-    for file in files:
-        save_path = f"models/tokenizers/{name}/{file}"
-        if os.path.isfile(save_path):
-            logger.info(f"{name}: File {save_path} already exists - skipping")
-            continue
-        download_file_with_auth(f"{repo}/resolve/main/{file}", token, save_path)
+    if os.path.isdir(repo):
+        # If repo is a path on the file system, copy the directory
+        for file in files:
+            src_path = os.path.join(repo, file)
+            dst_path = f"models/tokenizers/{name}/{file}"
+            if os.path.isfile(dst_path):
+                logger.info(f"{name}: File {dst_path} already exists - skipping")
+                continue
+            if os.path.isfile(src_path):
+                shutil.copy2(src_path, dst_path)
+                logger.info(f"{name}: Copied {src_path} to {dst_path}")
+            else:
+                logger.warning(f"{name}: Source file {src_path} does not exist")
+    else:
+        # If repo is a URL, download the files
+        for file in files:
+            save_path = f"models/tokenizers/{name}/{file}"
+            if os.path.isfile(save_path):
+                logger.info(f"{name}: File {save_path} already exists - skipping")
+                continue
+            download_file_with_auth(f"{repo}/resolve/main/{file}", token, save_path)
 
 
 for model in models:

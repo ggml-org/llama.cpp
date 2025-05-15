@@ -8,9 +8,12 @@ Feature: Wrong usage of llama.cpp server
   Scenario: Infinite loop
     Given a server listening on localhost:8080
     And   a model file tinyllamas/stories260K.gguf from HF repo ggml-org/models
+    And   42 as server seed
+    And   2048 KV cache size
     # Uncomment below to fix the issue
     #And   64 server max tokens to predict
     Then  the server is starting
+    Then  the server is healthy
     Given a prompt:
       """
       Go to: infinite loop

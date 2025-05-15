@@ -1,16 +1,25 @@
 #pragma once
 
-#include "llama.h"
 #include "common.h"
+#include "log.h"
+#include "llama.h"
+
+#ifndef NDEBUG
+// crash the server in debug mode, otherwise send an http 500 error
+#define CPPHTTPLIB_NO_EXCEPTIONS 1
+#endif
+// increase max payload length to allow use of larger context size
+#define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+#include "httplib.h"
 
 // Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include "json.hpp"
 
+#include <random>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <sstream>
-#include <random>
 
 #define DEFAULT_OAICOMPAT_MODEL "gpt-3.5-turbo-0613"
 
@@ -27,32 +36,6 @@ enum error_type {
     ERROR_TYPE_NOT_SUPPORTED, // custom error
 };
 
-extern bool server_verbose;
-extern bool server_log_json;
-
-#ifndef SERVER_VERBOSE
-#define SERVER_VERBOSE 1
-#endif
-
-#if SERVER_VERBOSE != 1
-#define LOG_VERBOSE(MSG, ...)
-#else
-#define LOG_VERBOSE(MSG, ...)                                            \
-    do                                                                   \
-    {                                                                    \
-        if (server_verbose)                                              \
-        {                                                                \
-            server_log("VERB", __func__, __LINE__, MSG, __VA_ARGS__); \
-        }                                                                \
-    } while (0)
-#endif
-
-#define LOG_ERROR(  MSG, ...) server_log("ERR",  __func__, __LINE__, MSG, __VA_ARGS__)
-#define LOG_WARNING(MSG, ...) server_log("WARN", __func__, __LINE__, MSG, __VA_ARGS__)
-#define LOG_INFO(   MSG, ...) server_log("INFO", __func__, __LINE__, MSG, __VA_ARGS__)
-
-static inline void server_log(const char * level, const char * function, int line, const char * message, const json & extra);
-
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value
@@ -60,56 +43,12 @@ static T json_value(const json & body, const std::string & key, const T & defaul
         try {
             return body.at(key);
         } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const &) {
-            std::stringstream ss;
-            ss << "Wrong type supplied for parameter '" << key << "'. Expected '" << json(default_value).type_name() << "', using default value.";
-            LOG_WARNING(ss.str().c_str(), body);
+            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value\n", key.c_str(), json(default_value).type_name());
             return default_value;
         }
     } else {
         return default_value;
     }
-}
-
-static inline void server_log(const char * level, const char * function, int line, const char * message, const json & extra) {
-    std::stringstream ss_tid;
-    ss_tid << std::this_thread::get_id();
-    json log = json{
-        {"tid",       ss_tid.str()},
-        {"timestamp", time(nullptr)},
-    };
-
-    if (server_log_json) {
-        log.merge_patch({
-            {"level",    level},
-            {"function", function},
-            {"line",     line},
-            {"msg",      message},
-        });
-
-        if (!extra.empty()) {
-            log.merge_patch(extra);
-        }
-
-        printf("%s\n", log.dump(-1, ' ', false, json::error_handler_t::replace).c_str());
-    } else {
-        char buf[1024];
-        snprintf(buf, 1024, "%4s [%24s] %s", level, function, message);
-
-        if (!extra.empty()) {
-            log.merge_patch(extra);
-        }
-        std::stringstream ss;
-        ss << buf << " |";
-        for (const auto & el : log.items())
-        {
-            const std::string value = el.value().dump(-1, ' ', false, json::error_handler_t::replace);
-            ss << " " << el.key() << "=" << value;
-        }
-
-        const std::string str = ss.str();
-        printf("%.*s\n", (int)str.size(), str.data());
-    }
-    fflush(stdout);
 }
 
 //
@@ -118,7 +57,7 @@ static inline void server_log(const char * level, const char * function, int lin
 
 // Format given chat. If tmpl is empty, we take the template from model metadata
 inline std::string format_chat(const struct llama_model * model, const std::string & tmpl, const std::vector<json> & messages) {
-    std::vector<llama_chat_msg> chat;
+    std::vector<common_chat_msg> chat;
 
     for (size_t i = 0; i < messages.size(); ++i) {
         const auto & curr_msg = messages[i];
@@ -145,9 +84,23 @@ inline std::string format_chat(const struct llama_model * model, const std::stri
         chat.push_back({role, content});
     }
 
-    auto formatted_chat = llama_chat_apply_template(model, tmpl, chat, true);
-    LOG_VERBOSE("formatted_chat", {{"text", formatted_chat.c_str()}});
+    const auto formatted_chat = common_chat_apply_template(model, tmpl, chat, true);
+    LOG_DBG("formatted_chat: '%s'\n", formatted_chat.c_str());
+
     return formatted_chat;
+}
+
+static std::string llama_get_chat_template(const struct llama_model * model) {
+    std::string template_key = "tokenizer.chat_template";
+    // call with NULL buffer to get the total size of the string
+    int32_t res = llama_model_meta_val_str(model, template_key.c_str(), NULL, 0);
+    if (res < 0) {
+        return "";
+    } else {
+        std::vector<char> model_template(res, 0);
+        llama_model_meta_val_str(model, template_key.c_str(), model_template.data(), model_template.size());
+        return std::string(model_template.data(), model_template.size());
+    }
 }
 
 //
@@ -235,24 +188,21 @@ static std::string random_string() {
 }
 
 static std::string gen_chatcmplid() {
-    std::stringstream chatcmplid;
-    chatcmplid << "chatcmpl-" << random_string();
-
-    return chatcmplid.str();
+    return "chatcmpl-" + random_string();
 }
 
 //
 // other common utils
 //
 
-static size_t common_part(const std::vector<llama_token> & a, const std::vector<llama_token> & b) {
+static size_t longest_common_prefix(const std::vector<llama_token> & a, const std::vector<llama_token> & b) {
     size_t i;
     for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
 
     return i;
 }
 
-static size_t common_part(const std::string & a, const std::string & b) {
+static size_t longest_common_prefix(const std::string & a, const std::string & b) {
     size_t i;
     for (i = 0; i < a.size() && i < b.size() && a[i] == b[i]; i++) {}
 
@@ -279,12 +229,24 @@ static size_t find_partial_stop_string(const std::string &stop, const std::strin
     return std::string::npos;
 }
 
+static bool json_is_array_of_numbers(const json & data) {
+    if (data.is_array()) {
+        for (const auto & e : data) {
+            if (!e.is_number()) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
     std::string ret;
     for (; begin != end; ++begin) {
-        ret += llama_token_to_piece(ctx, *begin);
+        ret += common_token_to_piece(ctx, *begin);
     }
 
     return ret;
@@ -292,7 +254,7 @@ static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
 
 // format incomplete utf-8 multibyte character for output
 static std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token) {
-    std::string out = token == -1 ? "" : llama_token_to_piece(ctx, token);
+    std::string out = token == -1 ? "" : common_token_to_piece(ctx, token);
 
     // if the size is 1 and first bit is 1, meaning it's a partial character
     //   (size > 1 meaning it's already a known token)
@@ -343,6 +305,17 @@ static json probs_vector_to_json(const llama_context * ctx, const std::vector<co
     return out;
 }
 
+static bool server_sent_event(httplib::DataSink & sink, const char * event, const json & data) {
+    const std::string str =
+        std::string(event) + ": " +
+        data.dump(-1, ' ', false, json::error_handler_t::replace) +
+        "\n\n"; // note: these newlines are important (not sure why though, if you know, add a comment to explain)
+
+    LOG_DBG("data stream, to_send: %s", str.c_str());
+
+    return sink.write(str.c_str(), str.size());
+}
+
 //
 // OAI utils
 //
@@ -371,6 +344,9 @@ static json oaicompat_completion_params_parse(
         std::string response_type = json_value(response_format, "type", std::string());
         if (response_type == "json_object") {
             llama_params["json_schema"] = json_value(response_format, "schema", json::object());
+        } else if (response_type == "json_schema") {
+            json json_schema = json_value(response_format, "json_schema", json::object());
+            llama_params["json_schema"] = json_value(json_schema, "schema", json::object());
         } else if (!response_type.empty() && response_type != "text") {
             throw std::runtime_error("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
         }
@@ -384,15 +360,15 @@ static json oaicompat_completion_params_parse(
 
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
-    if (body.contains("logprobs")) {
+    if (json_value(body, "logprobs", false)) {
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
-    } else if (body.contains("top_logprobs")) {
+    } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
     }
 
     // Params supported by OAI but unsupported by llama.cpp
     static const std::vector<std::string> unsupported_params { "tools", "tool_choice" };
-    for (auto & param : unsupported_params) {
+    for (const auto & param : unsupported_params) {
         if (body.contains(param)) {
             throw std::runtime_error("Unsupported param: " + param);
         }
@@ -411,7 +387,7 @@ static json oaicompat_completion_params_parse(
     return llama_params;
 }
 
-static json format_final_response_oaicompat(const json & request, json result, const std::string & completion_id, bool streaming = false) {
+static json format_final_response_oaicompat(const json & request, const json & result, const std::string & completion_id, bool streaming = false, bool verbose = false) {
     bool stopped_word        = result.count("stopped_word") != 0;
     bool stopped_eos         = json_value(result, "stopped_eos", false);
     int num_tokens_predicted = json_value(result, "tokens_predicted", 0);
@@ -448,7 +424,8 @@ static json format_final_response_oaicompat(const json & request, json result, c
         {"id", completion_id}
     };
 
-    if (server_verbose) {
+    // extra fields for debugging purposes
+    if (verbose) {
         res["__verbose"] = result;
     }
 
@@ -460,7 +437,7 @@ static json format_final_response_oaicompat(const json & request, json result, c
 }
 
 // return value is vector as there is one case where we might need to generate two responses
-static std::vector<json> format_partial_response_oaicompat(json result, const std::string & completion_id) {
+static std::vector<json> format_partial_response_oaicompat(const json & result, const std::string & completion_id) {
     if (!result.contains("model") || !result.contains("oaicompat_token_ctr")) {
         return std::vector<json>({result});
     }
@@ -562,7 +539,7 @@ static std::vector<json> format_partial_response_oaicompat(json result, const st
 static json format_embeddings_response_oaicompat(const json & request, const json & embeddings) {
     json data = json::array();
     int i = 0;
-    for (auto & elem : embeddings) {
+    for (const auto & elem : embeddings) {
         data.push_back(json{
             {"embedding", json_value(elem, "embedding", json::array())},
             {"index",     i++},
@@ -573,7 +550,7 @@ static json format_embeddings_response_oaicompat(const json & request, const jso
     json res = json {
         {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
         {"object", "list"},
-        {"usage", json {
+        {"usage", json { // TODO: fill
             {"prompt_tokens", 0},
             {"total_tokens", 0}
         }},
@@ -583,7 +560,63 @@ static json format_embeddings_response_oaicompat(const json & request, const jso
     return res;
 }
 
-static json format_tokenizer_response(const std::vector<llama_token> & tokens) {
+static json format_response_rerank(const json & request, const json & ranks) {
+    json data = json::array();
+    int i = 0;
+    for (const auto & rank : ranks) {
+        data.push_back(json{
+            {"index",    i++},
+            {"relevance_score", json_value(rank, "score", 0.0)},
+        });
+    }
+
+    json res = json {
+        {"model", json_value(request, "model", std::string(DEFAULT_OAICOMPAT_MODEL))},
+        {"object", "list"},
+        {"usage", json { // TODO: fill
+            {"prompt_tokens", 0},
+            {"total_tokens", 0}
+        }},
+        {"results", data}
+    };
+
+    return res;
+}
+
+static bool is_valid_utf8(const std::string & str) {
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(str.data());
+    const unsigned char* end = bytes + str.length();
+
+    while (bytes < end) {
+        if (*bytes <= 0x7F) {
+            // 1-byte sequence (0xxxxxxx)
+            bytes++;
+        } else if ((*bytes & 0xE0) == 0xC0) {
+            // 2-byte sequence (110xxxxx 10xxxxxx)
+            if (end - bytes < 2 || (bytes[1] & 0xC0) != 0x80)
+                return false;
+            bytes += 2;
+        } else if ((*bytes & 0xF0) == 0xE0) {
+            // 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
+            if (end - bytes < 3 || (bytes[1] & 0xC0) != 0x80 || (bytes[2] & 0xC0) != 0x80)
+                return false;
+            bytes += 3;
+        } else if ((*bytes & 0xF8) == 0xF0) {
+            // 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
+            if (end - bytes < 4 || (bytes[1] & 0xC0) != 0x80 ||
+                (bytes[2] & 0xC0) != 0x80 || (bytes[3] & 0xC0) != 0x80)
+                return false;
+            bytes += 4;
+        } else {
+            // Invalid UTF-8 lead byte
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static json format_tokenizer_response(const json & tokens) {
     return json {
         {"tokens", tokens}
     };

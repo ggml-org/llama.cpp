@@ -2631,11 +2631,11 @@ kernel void kernel_flash_attn_ext_vec_f16(
         const short iv3 = iq3 / rv3;
 
         // load the queries from shared memory into local memory
-        half4 mq[D4];
+        float4 mq[D4];
 
         for (short ii = 0; ii < D4; ii += NW) {
             short i = ii + tiisg;
-            mq[i] = sq4[i];
+            mq[i] = (float4) sq4[i];
         }
 
         // pointer to the mask
@@ -2661,11 +2661,11 @@ kernel void kernel_flash_attn_ext_vec_f16(
                     for (short ii = 0; ii < D4; ii += NW) {
                         const short i = ii + tiisg;
 
-                        half4x4 mk;
-                        mk[0] = pk4[i + 0*(nb11/8)];
-                        mk[1] = pk4[i + 1*(nb11/8)];
-                        mk[2] = pk4[i + 2*(nb11/8)];
-                        mk[3] = pk4[i + 3*(nb11/8)];
+                        float4x4 mk;
+                        mk[0] = (float4) pk4[i + 0*(nb11/8)];
+                        mk[1] = (float4) pk4[i + 1*(nb11/8)];
+                        mk[2] = (float4) pk4[i + 2*(nb11/8)];
+                        mk[3] = (float4) pk4[i + 3*(nb11/8)];
 
                         mqk += (float4) (mq[i] * mk);
                     }
@@ -3330,6 +3330,105 @@ kernel void kernel_concat(
     }
 }
 
+void kernel_mul_mv_i2_s_f32_impl(
+        device const void  * src0,
+        device const float * src1,
+        device       float * dst,
+                   int64_t   ne00,
+                   int64_t   ne01,
+                   int64_t   ne02,
+                   int64_t   ne10,
+                   int64_t   ne12,
+                   int64_t   ne0,
+                   int64_t   ne1,
+                   uint      r2,
+                   uint      r3,
+        threadgroup int8_t * shared_values,
+                   uint3 tgpig, uint tiisg, uint sgitg) {
+    const int nb = ne00/QK_K;
+    const int r0 = tgpig.x;
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+
+    const int first_row = (r0 * N_SIMDGROUP + sgitg) * N_DST;
+    const int ib_row = first_row * nb;
+
+    const uint i12 = im%ne12;
+    const uint i13 = im/ne12;
+
+    const uint offset0 = (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02);
+
+    // block i2_s -> 256 2bit per block -> 512bit total per block
+    // 512bit / 8 = 64 int8
+    device const block_i2_s * x = (device const block_i2_s *) src0 + ib_row + offset0;
+    device const float      * sc = (device const float *)(((device const int8_t *) src0) + ne00 * ne01 / 4);
+    device const float      * y = (device const float      *) src1 + r1*ne10 + im*ne00*ne1;
+
+    float yl[32];
+    float sumf[N_DST]={0.f}, all_sum;
+
+    const int step = sizeof(block_i2_s) * nb;
+
+    const int ix = tiisg/8;  // 0...3
+    const int it = tiisg%8;  // 0...7
+    const int iq = it/4;     // 0 or 1
+    const int ir = it%4;     // 0...3
+    const int is = (8*ir)/16;// 0 or 1
+
+    device const float * y4 = y + ix * QK_K + 128 * iq + 8 * ir;
+    // for (int i = 0; i < ne00; ++i) {
+    //     sum_y += y4[i];
+    // }
+
+    // float sumy[N_DST]={0.f}, all_y_sum;
+    // device const uint16_t * qsi = (device const uint16_t *)qs;
+
+    for (int ib = ix; ib < nb; ib += 4) {
+
+        float4 sumy = {0.f, 0.f, 0.f, 0.f};
+        for (int i = 0; i < 8; ++i) {
+            yl[i+ 0] = y4[i+ 0]; sumy[0] += yl[i+ 0];
+            yl[i+ 8] = y4[i+32]; sumy[1] += yl[i+ 8];
+            yl[i+16] = y4[i+64]; sumy[2] += yl[i+16];
+            yl[i+24] = y4[i+96]; sumy[3] += yl[i+24];
+        }
+
+        device const uint16_t * qsi = (device const uint16_t *)x[ib].qs + 16 * iq + 4 * ir;
+
+        for (int row = 0; row < N_DST; row++) {
+
+            float4 acc1 = {0.f, 0.f, 0.f, 0.f};
+            float4 acc2 = {0.f, 0.f, 0.f, 0.f};
+            for (int i = 0; i < 8; i += 2) {
+                acc1[0] += yl[i+ 0] * ((qsi[i/2] & 0x00c0) / 64.f);
+                acc2[0] += yl[i+ 1] * ((qsi[i/2] & 0xc000) / 16384.f);
+                acc1[1] += yl[i+ 8] * ((qsi[i/2] & 0x0030) / 16.f);
+                acc2[1] += yl[i+ 9] * ((qsi[i/2] & 0x3000) / 4096.f);
+                acc1[2] += yl[i+16] * ((qsi[i/2] & 0x000c) / 4.f);
+                acc2[2] += yl[i+17] * ((qsi[i/2] & 0x0c00) / 1024.f);
+                acc1[3] += yl[i+24] * ((qsi[i/2] & 0x0003));
+                acc2[3] += yl[i+25] * ((qsi[i/2] & 0x0300) / 256.f);
+            }
+
+            sumf[row] += (((acc1[0] + acc2[0]) +
+                          (acc1[1] + acc2[1]) +
+                          (acc1[2] + acc2[2]) +
+                          (acc1[3] + acc2[3])) - sumy[0] - sumy[1] - sumy[2] - sumy[3]);
+
+            qsi += step/2;
+        }
+
+        y4 += 4 * QK_K;
+    }
+
+    for (int row = 0; row < N_DST; ++row) {
+        all_sum = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + row] = all_sum * sc[0];
+        }
+    }
+}
+
 void kernel_mul_mv_q2_K_f32_impl(
         device const  void * src0,
         device const float * src1,
@@ -3455,6 +3554,34 @@ kernel void kernel_mul_mv_q2_K_f32(
         uint  sgitg[[simdgroup_index_in_threadgroup]]) {
 
     kernel_mul_mv_q2_K_f32_impl(src0, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3, nullptr, tgpig, tiisg, sgitg);
+}
+
+[[host_name("kernel_mul_mv_i2_s_f32")]]
+kernel void kernel_mul_mv_i2_s_f32(
+        device const  void * src0,
+        device const float * src1,
+        device       float * dst,
+        constant   int64_t & ne00,
+        constant   int64_t & ne01,
+        constant   int64_t & ne02,
+        constant  uint64_t & nb00,
+        constant  uint64_t & nb01,
+        constant  uint64_t & nb02,
+        constant   int64_t & ne10,
+        constant   int64_t & ne11,
+        constant   int64_t & ne12,
+        constant  uint64_t & nb10,
+        constant  uint64_t & nb11,
+        constant  uint64_t & nb12,
+        constant   int64_t & ne0,
+        constant   int64_t & ne1,
+        constant   uint    & r2,
+        constant   uint    & r3,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    kernel_mul_mv_i2_s_f32_impl(src0, src1, dst, ne00, ne01, ne02, ne10, ne12, ne0, ne1, r2, r3, nullptr, tgpig, tiisg, sgitg);
 }
 
 void kernel_mul_mv_q3_K_f32_impl(
@@ -5216,7 +5343,7 @@ kernel void kernel_mul_mv_iq4_xs_f32(
 
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>
-void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
+void dequantize_f32(device const float4x4 * src, short il, float temp_sc, thread type4x4 & reg) {
     float4x4 temp = *(((device float4x4 *)src));
     for (int i = 0; i < 16; i++){
         reg[i/4][i%4] = temp[i/4][i%4];
@@ -5224,7 +5351,7 @@ void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg)
 }
 
 template <typename type4x4>
-void dequantize_f16(device const half4x4 * src, short il, thread type4x4 & reg) {
+void dequantize_f16(device const half4x4 * src, short il, float temp_sc, thread type4x4 & reg) {
     half4x4 temp = *(((device half4x4 *)src));
     for (int i = 0; i < 16; i++){
         reg[i/4][i%4] = temp[i/4][i%4];
@@ -5232,7 +5359,7 @@ void dequantize_f16(device const half4x4 * src, short il, thread type4x4 & reg) 
 }
 
 template <typename type4x4>
-void dequantize_q4_0(device const block_q4_0 *xb, short il, thread type4x4 & reg) {
+void dequantize_q4_0(device const block_q4_0 *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 1);
     const float d1 = il ? (xb->d / 16.h) : xb->d;
     const float d2 = d1 / 256.f;
@@ -5247,7 +5374,7 @@ void dequantize_q4_0(device const block_q4_0 *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q4_1(device const block_q4_1 *xb, short il, thread type4x4 & reg) {
+void dequantize_q4_1(device const block_q4_1 *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 2);
     const float d1 = il ? (xb->d / 16.h) : xb->d;
     const float d2 = d1 / 256.f;
@@ -5262,7 +5389,7 @@ void dequantize_q4_1(device const block_q4_1 *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q5_0(device const block_q5_0 *xb, short il, thread type4x4 & reg) {
+void dequantize_q5_0(device const block_q5_0 *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 3);
     const float d = xb->d;
     const float md = -16.h * xb->d;
@@ -5290,7 +5417,7 @@ void dequantize_q5_0(device const block_q5_0 *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q5_1(device const block_q5_1 *xb, short il, thread type4x4 & reg) {
+void dequantize_q5_1(device const block_q5_1 *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 4);
     const float d = xb->d;
     const float m = xb->m;
@@ -5318,7 +5445,7 @@ void dequantize_q5_1(device const block_q5_1 *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg) {
+void dequantize_q8_0(device const block_q8_0 *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const int8_t * qs = ((device const int8_t *)xb->qs);
     const half d = xb->d;
 
@@ -5328,7 +5455,7 @@ void dequantize_q8_0(device const block_q8_0 *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q2_K(device const block_q2_K *xb, short il, thread type4x4 & reg) {
+void dequantize_q2_K(device const block_q2_K *xb, short il, float temp_sc, thread type4x4 & reg) {
     const float d = xb->d;
     const float min = xb->dmin;
     device const uint8_t * q = (device const uint8_t *)xb->qs;
@@ -5347,7 +5474,21 @@ void dequantize_q2_K(device const block_q2_K *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q3_K(device const block_q3_K *xb, short il, thread type4x4 & reg) {
+void dequantize_i2_s(device const block_i2_s *xb, short il, float temp_sc, thread type4x4 & reg) {
+    device const uint8_t * q = (device const uint8_t *)xb->qs;
+    // uint8_t sc = xb->scales[il];
+
+    q = q + 32*(il/8) + 16*(il&1);
+    il = (il/2)%4;
+    uchar mask = il>1 ? (il>2 ? 3    : 12)     : (il>0 ? 48    : 192);
+    half  coef = il>1 ? (il>2 ? 1.h : 1/4.h) : (il>0 ? 1/16.h : 1/64.h);
+    for (int i = 0; i < 16; ++i) {
+        reg[i/4][i%4] = ((((half)(q[i] & mask)) * coef) - 1.h) * temp_sc;
+    }
+}
+
+template <typename type4x4>
+void dequantize_q3_K(device const block_q3_K *xb, short il, float temp_sc, thread type4x4 & reg) {
     const half d_all = xb->d;
     device const uint8_t * q = (device const uint8_t *)xb->qs;
     device const uint8_t * h = (device const uint8_t *)xb->hmask;
@@ -5381,7 +5522,7 @@ static inline uchar2 get_scale_min_k4_just2(int j, int k, device const uchar * q
 }
 
 template <typename type4x4>
-void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg) {
+void dequantize_q4_K(device const block_q4_K *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uchar * q = xb->qs;
 
     short is = (il/4) * 2;
@@ -5400,7 +5541,7 @@ void dequantize_q4_K(device const block_q4_K *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q5_K(device const block_q5_K *xb, short il, thread type4x4 & reg) {
+void dequantize_q5_K(device const block_q5_K *xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint8_t * q  = xb->qs;
     device const uint8_t * qh = xb->qh;
 
@@ -5423,7 +5564,7 @@ void dequantize_q5_K(device const block_q5_K *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_q6_K(device const block_q6_K *xb, short il, thread type4x4 & reg) {
+void dequantize_q6_K(device const block_q6_K *xb, short il, float temp_sc, thread type4x4 & reg) {
     const half d_all = xb->d;
     device const uint8_t * ql = (device const uint8_t *)xb->ql;
     device const uint8_t * qh = (device const uint8_t *)xb->qh;
@@ -5447,7 +5588,7 @@ void dequantize_q6_K(device const block_q6_K *xb, short il, thread type4x4 & reg
 }
 
 template <typename type4x4>
-void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, thread type4x4 & reg) {
+void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const float d = xb->d;
     const int ib32 = il/2;
@@ -5472,7 +5613,7 @@ void dequantize_iq2_xxs(device const block_iq2_xxs * xb, short il, thread type4x
 }
 
 template <typename type4x4>
-void dequantize_iq2_xs(device const block_iq2_xs * xb, short il, thread type4x4 & reg) {
+void dequantize_iq2_xs(device const block_iq2_xs * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const float d = xb->d;
     const int ib32 = il/2;
@@ -5493,7 +5634,7 @@ void dequantize_iq2_xs(device const block_iq2_xs * xb, short il, thread type4x4 
 }
 
 template <typename type4x4>
-void dequantize_iq3_xxs(device const block_iq3_xxs * xb, short il, thread type4x4 & reg) {
+void dequantize_iq3_xxs(device const block_iq3_xxs * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const float d = xb->d;
     const int ib32 = il/2;
@@ -5520,7 +5661,7 @@ void dequantize_iq3_xxs(device const block_iq3_xxs * xb, short il, thread type4x
 }
 
 template <typename type4x4>
-void dequantize_iq3_s(device const block_iq3_s * xb, short il, thread type4x4 & reg) {
+void dequantize_iq3_s(device const block_iq3_s * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const float d = xb->d;
     const int ib32 = il/2;
@@ -5545,7 +5686,7 @@ void dequantize_iq3_s(device const block_iq3_s * xb, short il, thread type4x4 & 
 }
 
 template <typename type4x4>
-void dequantize_iq2_s(device const block_iq2_s * xb, short il, thread type4x4 & reg) {
+void dequantize_iq2_s(device const block_iq2_s * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const float d = xb->d;
     const int ib32 = il/2;
@@ -5564,7 +5705,7 @@ void dequantize_iq2_s(device const block_iq2_s * xb, short il, thread type4x4 & 
 }
 
 template <typename type4x4>
-void dequantize_iq1_s(device const block_iq1_s * xb, short il, thread type4x4 & reg) {
+void dequantize_iq1_s(device const block_iq1_s * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const int ib32 = il/2;
     il = il%2;
@@ -5585,7 +5726,7 @@ void dequantize_iq1_s(device const block_iq1_s * xb, short il, thread type4x4 & 
 }
 
 template <typename type4x4>
-void dequantize_iq1_m(device const block_iq1_m * xb, short il, thread type4x4 & reg) {
+void dequantize_iq1_m(device const block_iq1_m * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const int ib32 = il/2;
     il = il%2;
@@ -5612,7 +5753,7 @@ void dequantize_iq1_m(device const block_iq1_m * xb, short il, thread type4x4 & 
 }
 
 template <typename type4x4>
-void dequantize_iq4_nl(device const block_iq4_nl * xb, short il, thread type4x4 & reg) {
+void dequantize_iq4_nl(device const block_iq4_nl * xb, short il, float temp_sc, thread type4x4 & reg) {
     device const uint16_t * q4 = (device const uint16_t *)xb->qs;
     const float d = xb->d;
     uint32_t aux32;
@@ -5627,7 +5768,7 @@ void dequantize_iq4_nl(device const block_iq4_nl * xb, short il, thread type4x4 
 }
 
 template <typename type4x4>
-void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 & reg) {
+void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, float temp_sc, thread type4x4 & reg) {
     // il is 0...15 for QK_K = 256 => index of block of 32 is il/2
     const int ib32 = il/2;
     il = il%2;
@@ -5646,7 +5787,7 @@ void dequantize_iq4_xs(device const block_iq4_xs * xb, short il, thread type4x4 
     }
 }
 
-template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, float, thread float4x4 &)>
 kernel void kernel_get_rows_q(
         device const  void * src0,
         device const  void * src1,
@@ -5671,7 +5812,7 @@ kernel void kernel_get_rows_q(
 
     for (int64_t ind = tiitg; ind < ne00/16; ind += tptg.x) {
         float4x4 temp;
-        dequantize_func(((device const block_q *) ((const device char *) src0 + r*nb01 + i02*nb02)) + ind/nl, ind%nl, temp);
+        dequantize_func(((device const block_q *) ((const device char *) src0 + r*nb01 + i02*nb02)) + ind/nl, ind%nl, 0.f, temp);
         *(((device float4x4 *) ((device char *) dst + i11*nb2 + i10*nb1)) + ind) = temp;
     }
 }
@@ -5746,7 +5887,7 @@ kernel void kernel_get_rows_i32(
 #define SG_MAT_ROW 8
 
 // each block_q contains 16*nl weights
-template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
+template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, short temp_shift, void (*dequantize_func)(device const block_q *, short, float, thread T4x4 &)>
 kernel void kernel_mul_mm(device const  uchar * src0,
                           device const  uchar * src1,
                           device        float * dst,
@@ -5794,19 +5935,20 @@ kernel void kernel_mul_mm(device const  uchar * src0,
     const uint i12 = im%ne12;
     const uint i13 = im/ne12;
 
-    uint   offset0 = (i12/r2)*nb02 + (i13/r3)*(nb02*ne02);
+    uint   offset0 = (i12/r2)*nb02 / temp_shift + (i13/r3)*(nb02 / temp_shift*ne02);
     ushort offset1 = il/nl;
 
-    device const block_q * x = (device const block_q *)(src0 + (r0 * BLOCK_SIZE_M + thread_row) * nb01 + offset0) + offset1;
+    device const block_q * x = (device const block_q *)(src0 + (r0 * BLOCK_SIZE_M + thread_row) * nb01 / temp_shift + offset0) + offset1;
     device const float   * y = (device const float   *)(src1
         + nb12 * im
         + nb11 * (r1 * BLOCK_SIZE_N + thread_col)
         + nb10 * (BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
+    device const float   * t_sc = (device const float *)(((device const int8_t *) src0) + ne0 * ne00 / 4);
 
     for (int loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
         T4x4 temp_a;
-        dequantize_func(x, il, temp_a);
+        dequantize_func(x, il, t_sc[0], temp_a);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         #pragma unroll(16)
@@ -5879,7 +6021,7 @@ kernel void kernel_mul_mm(device const  uchar * src0,
 }
 
 // same as kernel_mul_mm_impl, but src1 and dst are accessed via indices stored in rowids
-template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, float, thread half4x4 &)>
 void kernel_mul_mm_id_impl(
         device const  uchar * src0,
         device const  uchar * src1,
@@ -5939,7 +6081,7 @@ void kernel_mul_mm_id_impl(
     for (int loop_k = 0; loop_k < ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
         half4x4 temp_a;
-        dequantize_func(x, il, temp_a);
+        dequantize_func(x, il, 0.f, temp_a);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (int i = 0; i < 16; i++) {
@@ -6001,7 +6143,7 @@ void kernel_mul_mm_id_impl(
     }
 }
 
-template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread half4x4 &)>
+template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, float, thread half4x4 &)>
 kernel void kernel_mul_mm_id(
         device const   uchar * src0s,
         device const   uchar * src1,
@@ -6112,29 +6254,30 @@ template [[host_name("kernel_get_rows_iq4_xs")]]  kernel get_rows_q_t kernel_get
 // matrix-matrix multiplication
 //
 
-typedef decltype(kernel_mul_mm<half, half4x4, simdgroup_half8x8, float4x4, 1, dequantize_f32>) mat_mm_t;
+typedef decltype(kernel_mul_mm<half, half4x4, simdgroup_half8x8, float4x4, 1, 1, dequantize_f32>) mat_mm_t;
 
-template [[host_name("kernel_mul_mm_f32_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32>;
-template [[host_name("kernel_mul_mm_f16_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16>;
-template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0>;
-template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1>;
-template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0>;
-template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_1,    2,     dequantize_q5_1>;
-template [[host_name("kernel_mul_mm_q8_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q8_0,    2,     dequantize_q8_0>;
-template [[host_name("kernel_mul_mm_q2_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q2_K,    QK_NL, dequantize_q2_K>;
-template [[host_name("kernel_mul_mm_q3_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q3_K,    QK_NL, dequantize_q3_K>;
-template [[host_name("kernel_mul_mm_q4_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_K,    QK_NL, dequantize_q4_K>;
-template [[host_name("kernel_mul_mm_q5_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_K,    QK_NL, dequantize_q5_K>;
-template [[host_name("kernel_mul_mm_q6_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q6_K,    QK_NL, dequantize_q6_K>;
-template [[host_name("kernel_mul_mm_iq2_xxs_f32")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_xxs, QK_NL, dequantize_iq2_xxs>;
-template [[host_name("kernel_mul_mm_iq2_xs_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_xs,  QK_NL, dequantize_iq2_xs>;
-template [[host_name("kernel_mul_mm_iq3_xxs_f32")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq3_xxs, QK_NL, dequantize_iq3_xxs>;
-template [[host_name("kernel_mul_mm_iq3_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq3_s,   QK_NL, dequantize_iq3_s>;
-template [[host_name("kernel_mul_mm_iq2_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_s,   QK_NL, dequantize_iq2_s>;
-template [[host_name("kernel_mul_mm_iq1_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq1_s,   QK_NL, dequantize_iq1_s>;
-template [[host_name("kernel_mul_mm_iq1_m_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq1_m,   QK_NL, dequantize_iq1_m>;
-template [[host_name("kernel_mul_mm_iq4_nl_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_nl,  2,     dequantize_iq4_nl>;
-template [[host_name("kernel_mul_mm_iq4_xs_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
+template [[host_name("kernel_mul_mm_f32_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   float4x4,      1,     1, dequantize_f32>;
+template [[host_name("kernel_mul_mm_f16_f32")]]     kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half4x4,       1,     1, dequantize_f16>;
+template [[host_name("kernel_mul_mm_q4_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_0,    2,     1, dequantize_q4_0>;
+template [[host_name("kernel_mul_mm_i2_s_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_i2_s,    QK_NL, 4, dequantize_i2_s>;
+template [[host_name("kernel_mul_mm_q4_1_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_1,    2,     1, dequantize_q4_1>;
+template [[host_name("kernel_mul_mm_q5_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_0,    2,     1, dequantize_q5_0>;
+template [[host_name("kernel_mul_mm_q5_1_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_1,    2,     1, dequantize_q5_1>;
+template [[host_name("kernel_mul_mm_q8_0_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q8_0,    2,     1, dequantize_q8_0>;
+template [[host_name("kernel_mul_mm_q2_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q2_K,    QK_NL, 1, dequantize_q2_K>;
+template [[host_name("kernel_mul_mm_q3_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q3_K,    QK_NL, 1, dequantize_q3_K>;
+template [[host_name("kernel_mul_mm_q4_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q4_K,    QK_NL, 1, dequantize_q4_K>;
+template [[host_name("kernel_mul_mm_q5_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q5_K,    QK_NL, 1, dequantize_q5_K>;
+template [[host_name("kernel_mul_mm_q6_K_f32")]]    kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_q6_K,    QK_NL, 1, dequantize_q6_K>;
+template [[host_name("kernel_mul_mm_iq2_xxs_f32")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_xxs, QK_NL, 1, dequantize_iq2_xxs>;
+template [[host_name("kernel_mul_mm_iq2_xs_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_xs,  QK_NL, 1, dequantize_iq2_xs>;
+template [[host_name("kernel_mul_mm_iq3_xxs_f32")]] kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq3_xxs, QK_NL, 1, dequantize_iq3_xxs>;
+template [[host_name("kernel_mul_mm_iq3_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq3_s,   QK_NL, 1, dequantize_iq3_s>;
+template [[host_name("kernel_mul_mm_iq2_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq2_s,   QK_NL, 1, dequantize_iq2_s>;
+template [[host_name("kernel_mul_mm_iq1_s_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq1_s,   QK_NL, 1, dequantize_iq1_s>;
+template [[host_name("kernel_mul_mm_iq1_m_f32")]]   kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq1_m,   QK_NL, 1, dequantize_iq1_m>;
+template [[host_name("kernel_mul_mm_iq4_nl_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_nl,  2,     1, dequantize_iq4_nl>;
+template [[host_name("kernel_mul_mm_iq4_xs_f32")]]  kernel mat_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, 1, dequantize_iq4_xs>;
 
 //
 // indirect matrix-matrix multiplication

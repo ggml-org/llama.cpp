@@ -251,6 +251,25 @@ static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 
 =======
 >>>>>>> master
 //
+// Ternary quantization
+//
+
+// 1.6875 bpw
+typedef struct {
+    uint8_t qs[(QK_K - 4 * QK_K / 64) / 5]; // 5 elements per byte (3^5 = 243 < 256)
+    uint8_t qh[QK_K/64]; // 4 elements per byte
+    ggml_half d;
+} block_tq1_0;
+static_assert(sizeof(block_tq1_0) == sizeof(ggml_half) + QK_K / 64 + (QK_K - 4 * QK_K / 64) / 5, "wrong tq1_0 block size/padding");
+
+// 2.0625 bpw
+typedef struct {
+    uint8_t qs[QK_K/4]; // 2 bits per element
+    ggml_half d;
+} block_tq2_0;
+static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
+
+//
 // Super-block quantization structures
 //
 
@@ -270,6 +289,12 @@ typedef struct {
     };
 } block_q2_K;
 static_assert(sizeof(block_q2_K) == 2*sizeof(ggml_half) + QK_K/16 + QK_K/4, "wrong q2_K block size/padding");
+
+typedef struct {
+    uint8_t qs[QK_K/4];      // quants
+} block_i2_s;
+static_assert(sizeof(block_i2_s) == QK_K/4, "wrong gpu i2_s block size/padding");
+
 
 // 3-bit quantization
 // weight is represented as x = a * q
@@ -384,6 +409,7 @@ typedef struct {
 } block_iq3_s;
 static_assert(sizeof(block_iq3_s) == sizeof(ggml_half) + 13*(QK_K/32) + IQ3S_N_SCALE, "wrong iq3_s block size/padding");
 
+// 1.5625 bpw
 typedef struct {
     ggml_half d;
     uint8_t  qs[QK_K/8];

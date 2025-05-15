@@ -23,11 +23,15 @@ WORKDIR /app
 COPY . .
 
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ahead
 # Use the default CUDA archs if not specified
 RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
         export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
     fi && \
     cmake -B build -DGGML_CUDA=ON -DLLAMA_CURL=ON ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
+<<<<<<< HEAD
     cmake --build build --config Release --target llama-cli -j$(nproc) && \
     cp build/bin/* .
 =======
@@ -40,5 +44,9 @@ ENV LLAMA_CURL=1
 
 RUN make -j$(nproc)
 >>>>>>> master
+=======
+    cmake --build build --config Release -j$(nproc) && \
+    cp build/bin/* .
+>>>>>>> ahead
 
 ENTRYPOINT ["/app/.devops/tools.sh"]

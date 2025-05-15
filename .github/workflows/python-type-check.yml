@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - '.github/workflows/python-type-check.yml'
+      - 'pyrightconfig.json'
       - '**.py'
       - '**/requirements*.txt'
   pull_request:
     paths:
       - '.github/workflows/python-type-check.yml'
+      - 'pyrightconfig.json'
       - '**.py'
       - '**/requirements*.txt'
 
@@ -33,6 +35,6 @@ jobs:
       - name: Type-check with Pyright
         uses: jakebailey/pyright-action@v2
         with:
-          version: 1.1.370
+          version: 1.1.382
           level: warning
           warnings: true

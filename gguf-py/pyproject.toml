@@ -24,9 +24,13 @@ numpy = ">=1.17"
 tqdm = ">=4.27"
 pyyaml = ">=5.1"
 <<<<<<< HEAD
+<<<<<<< HEAD
 sentencepiece = ">=0.1.98,<=0.2.0"
 =======
 >>>>>>> master
+=======
+sentencepiece = ">=0.1.98,<=0.2.0"
+>>>>>>> ahead
 
 [tool.poetry.dev-dependencies]
 pytest = "^5.2"

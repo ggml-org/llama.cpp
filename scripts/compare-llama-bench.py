@@ -92,12 +92,17 @@ help_s = (
     "If the columns are manually specified, then the results for each unique combination of the "
     "specified values are averaged WITHOUT weighing by the --repetitions parameter of llama-bench."
 )
+parser.add_argument("--check", action="store_true", help="check if all required Python libraries are installed")
 parser.add_argument("-s", "--show", help=help_s)
 parser.add_argument("--verbose", action="store_true", help="increase output verbosity")
 
 known_args, unknown_args = parser.parse_known_args()
 
 logging.basicConfig(level=logging.DEBUG if known_args.verbose else logging.INFO)
+
+if known_args.check:
+    # Check if all required Python libraries are installed. Would have failed earlier if not.
+    sys.exit(0)
 
 if unknown_args:
     logger.error(f"Received unknown args: {unknown_args}.\n")

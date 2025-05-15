@@ -14,10 +14,14 @@ class TensorNameMap:
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.embed_tokens",                        # llama-hf nemotron olmoe
 =======
             "model.embed_tokens",                        # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.embed_tokens",                        # llama-hf nemotron olmoe
+>>>>>>> ahead
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "language_model.embedding.word_embeddings",  # persimmon
@@ -32,9 +36,13 @@ class TensorNameMap:
             "transformer.token_embeddings",              # openelm
             "shared",                                    # t5
 <<<<<<< HEAD
+<<<<<<< HEAD
             "rwkv.embeddings",                           # rwkv
 =======
 >>>>>>> master
+=======
+            "rwkv.embeddings",                           # rwkv
+>>>>>>> ahead
         ),
 
         # Token type embeddings
@@ -49,9 +57,13 @@ class TensorNameMap:
             "emb_ln",                     # nomic-bert
             "transformer.norm",           # openelm
 <<<<<<< HEAD
+<<<<<<< HEAD
             "rwkv.blocks.0.pre_ln",       # rwkv
 =======
 >>>>>>> master
+=======
+            "rwkv.blocks.0.pre_ln",       # rwkv
+>>>>>>> ahead
         ),
 
         # Position embeddings
@@ -65,18 +77,26 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
 <<<<<<< HEAD
+<<<<<<< HEAD
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe
 =======
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone
 >>>>>>> master
+=======
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe
+>>>>>>> ahead
             "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
             "output_layer",              # chatglm
 <<<<<<< HEAD
+<<<<<<< HEAD
             "head",                      # rwkv
 =======
 >>>>>>> master
+=======
+            "head",                      # rwkv
+>>>>>>> ahead
         ),
 
         # Output norm
@@ -84,10 +104,14 @@ class TensorNameMap:
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.norm",                              # llama-hf baichuan internlm2 olmoe
 =======
             "model.norm",                              # llama-hf baichuan internlm2
 >>>>>>> master
+=======
+            "model.norm",                              # llama-hf baichuan internlm2 olmoe
+>>>>>>> ahead
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
             "ln_f",                                    # refact bloom qwen gpt2
@@ -101,9 +125,13 @@ class TensorNameMap:
             "transformer.norm",                        # openelm
             "model.norm",                              # nemotron
 <<<<<<< HEAD
+<<<<<<< HEAD
             "rwkv.ln_out",                             # rwkv
 =======
 >>>>>>> master
+=======
+            "rwkv.ln_out",                             # rwkv
+>>>>>>> ahead
         ),
 
         # Rope frequencies
@@ -126,10 +154,14 @@ class TensorNameMap:
             "h.{bid}.input_layernorm",                              # bloom
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.attention_norm",                          # llama-pth
             "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
             "model.layers.{bid}.ln1",                               # yi
@@ -144,9 +176,13 @@ class TensorNameMap:
             "encoder.layers.{bid}.input_layernorm",                 # chatglm
             "transformer.layers.{bid}.attn_norm",                   # openelm
 <<<<<<< HEAD
+<<<<<<< HEAD
             "rwkv.blocks.{bid}.ln1",                                # rwkv
 =======
 >>>>>>> master
+=======
+            "rwkv.blocks.{bid}.ln1",                                # rwkv
+>>>>>>> ahead
         ),
 
         # Attention norm 2
@@ -172,15 +208,20 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "layers.{bid}.attention.wqkv",
         ),
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.attention.wq",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.query",                  # bert
             "transformer.h.{bid}.attn.q_proj",                           # gpt-j
@@ -193,10 +234,14 @@ class TensorNameMap:
         # Attention key
         MODEL_TENSOR.ATTN_K: (
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.attention.wk",                               # llama-pth
             "encoder.layer.{bid}.attention.self.key",                  # bert
             "transformer.h.{bid}.attn.k_proj",                         # gpt-j
@@ -210,10 +255,14 @@ class TensorNameMap:
         # Attention value
         MODEL_TENSOR.ATTN_V: (
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.attention.wv",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.value",                  # bert
             "transformer.h.{bid}.attn.v_proj",                           # gpt-j
@@ -232,10 +281,14 @@ class TensorNameMap:
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
@@ -280,10 +333,14 @@ class TensorNameMap:
             "h.{bid}.post_attention_layernorm",                              # bloom
             "transformer.blocks.{bid}.norm_2",                               # mpt
 <<<<<<< HEAD
+<<<<<<< HEAD
             "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe
 =======
             "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron
 >>>>>>> master
+=======
+            "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe
+>>>>>>> ahead
             "layers.{bid}.ffn_norm",                                         # llama-pth
             "language_model.encoder.layers.{bid}.post_attention_layernorm",  # persimmon
             "model.layers.{bid}.ln2",                                        # yi
@@ -614,10 +671,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
             "model.layers.{bid}.self_attn.inner_attn_ln",  # bitnet
+            "layers.{bid}.attention.attn_sub_norm",  # bitnet
+            "model.layers.{bid}.self_attn.attn_sub_norm",
         ),
 
         MODEL_TENSOR.FFN_SUB_NORM: (
             "model.layers.{bid}.mlp.ffn_layernorm",  # bitnet
+            "layers.{bid}.feed_forward.ffn_sub_norm", # bitnet
+            "model.layers.{bid}.mlp.ffn_sub_norm",
         ),
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
@@ -734,6 +795,9 @@ class TensorNameMap:
             "encoder.final_layer_norm", # t5
         ),
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> ahead
 
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
@@ -743,8 +807,11 @@ class TensorNameMap:
         MODEL_TENSOR.CLS_OUT: (
             "classifier.out_proj", # roberta
         ),
+<<<<<<< HEAD
 =======
 >>>>>>> master
+=======
+>>>>>>> ahead
     }
 
     # architecture-specific block mappings

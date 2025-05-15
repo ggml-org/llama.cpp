@@ -62,6 +62,9 @@ option(LLAMA_SANITIZE_THREAD    "llama: enable thread sanitizer"    OFF)
 option(LLAMA_SANITIZE_ADDRESS   "llama: enable address sanitizer"   OFF)
 option(LLAMA_SANITIZE_UNDEFINED "llama: enable undefined sanitizer" OFF)
 
+# utils
+option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE})
+
 # extra artifacts
 option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
@@ -82,11 +85,11 @@ set(GGML_FATAL_WARNINGS     ${LLAMA_FATAL_WARNINGS})
 
 # change the default for these ggml options
 if (NOT DEFINED GGML_LLAMAFILE)
-    set(GGML_LLAMAFILE ON)
+    set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
 
-if (NOT DEFINED GGML_CUDA_USE_GRAPHS)
-    set(GGML_CUDA_USE_GRAPHS ON)
+if (NOT DEFINED GGML_CUDA_GRAPHS)
+    set(GGML_CUDA_GRAPHS_DEFAULT ON)
 endif()
 
 # transition helpers
@@ -139,10 +142,16 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
 # determining _precisely_ which defines are necessary for the llama-config
 # package.
 #
+set(GGML_TRANSIENT_DEFINES)
 get_target_property(GGML_DIRECTORY ggml SOURCE_DIR)
 get_directory_property(GGML_DIR_DEFINES DIRECTORY ${GGML_DIRECTORY} COMPILE_DEFINITIONS)
+if (GGML_DIR_DEFINES)
+    list(APPEND GGML_TRANSIENT_DEFINES ${GGML_DIR_DEFINES})
+endif()
 get_target_property(GGML_TARGET_DEFINES ggml COMPILE_DEFINITIONS)
-set(GGML_TRANSIENT_DEFINES ${GGML_TARGET_DEFINES} ${GGML_DIR_DEFINES})
+if (GGML_TARGET_DEFINES)
+    list(APPEND GGML_TRANSIENT_DEFINES ${GGML_TARGET_DEFINES})
+endif()
 get_target_property(GGML_LINK_LIBRARIES ggml LINK_LIBRARIES)
 
 set_target_properties(llama PROPERTIES PUBLIC_HEADER ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h)
@@ -185,17 +194,8 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION lib/pkgconfig)
 
 #
-# programs, examples and tests
+# utils, programs, examples and tests
 #
 
 add_subdirectory(common)
-
-if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
-    include(CTest)
-    add_subdirectory(tests)
-endif ()
-
-if (LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
-endif()
+add_subdirectory(examples)

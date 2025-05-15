@@ -39,7 +39,7 @@ python ./examples/llava/llava_surgery.py -m path/to/MobileVLM-1.7B
 3. Use `convert_image_encoder_to_gguf.py` with `--projector-type ldp` (for **V2** please use `--projector-type ldpv2`) to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./examples/llava/convert_image_encoder_to_gguf \
+python ./examples/llava/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B/llava.projector \
     --output-dir path/to/MobileVLM-1.7B \
@@ -47,7 +47,7 @@ python ./examples/llava/convert_image_encoder_to_gguf \
 ```
 
 ```sh
-python ./examples/llava/convert_image_encoder_to_gguf \
+python ./examples/llava/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B_V2/llava.projector \
     --output-dir path/to/MobileVLM-1.7B_V2 \
@@ -57,12 +57,12 @@ python ./examples/llava/convert_image_encoder_to_gguf \
 4. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
 
 ```sh
-python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B
+python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B --skip-unknown
 ```
 
-5. Use `quantize` to convert LLaMA part's DataType from `fp16` to `q4_k`
+5. Use `quantize` to convert LLaMA part's DataType from `fp32` to `q4_k`
 ```sh
-./llama-quantize path/to/MobileVLM-1.7B/ggml-model-f16.gguf path/to/MobileVLM-1.7B/ggml-model-q4_k.gguf q4_k_s
+./llama-quantize path/to/MobileVLM-1.7B/ggml-model-F32.gguf path/to/MobileVLM-1.7B/ggml-model-q4_k.gguf q4_k_s
 ```
 
 Now both the LLaMA part and the image encoder is in the `MobileVLM-1.7B` directory.

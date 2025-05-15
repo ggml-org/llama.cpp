@@ -9,6 +9,7 @@
 #include <climits>
 #include <cstring>
 #include <cstdarg>
+#include <cinttypes>
 #include <ctime>
 #include <random>
 #include <stdexcept>
@@ -105,43 +106,43 @@ static void alloc_weights(TransformerWeights * w, const Config * p, bool shared_
     const int n_multiqueries = p->n_kv_heads <= 0 || p->n_kv_heads >= p->n_heads ? 1 : p->n_heads / p->n_kv_heads;
     try {
         w->token_embedding_table.resize(p->vocab_size * p->dim);
-        LOG("%s: Allocating [%d] x [%d] = [%d] float space for w->token_embedding_table\n",__func__,p->vocab_size , p->dim, p->vocab_size * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] = [%d] float space for w->token_embedding_table\n",__func__,p->vocab_size , p->dim, p->vocab_size * p->dim);
 
         w->rms_att_weight.resize(p->n_layers * p->dim);
-        LOG("%s: Allocating [%d] x [%d] = [%d] float space for w->rms_att_weight\n",__func__,p->n_layers, p->dim, p->n_layers * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] = [%d] float space for w->rms_att_weight\n",__func__,p->n_layers, p->dim, p->n_layers * p->dim);
 
         w->rms_ffn_weight.resize(p->n_layers * p->dim);
-        LOG("%s: Allocating [%d] x [%d] = [%d] float space for w->rms_ffn_weight\n",__func__,p->n_layers , p->dim, p->n_layers * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] = [%d] float space for w->rms_ffn_weight\n",__func__,p->n_layers , p->dim, p->n_layers * p->dim);
 
         w->wq.resize(p->n_layers * p->dim * p->dim);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wq\n",__func__,p->n_layers, p->dim, p->dim, p->n_layers * p->dim * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wq\n",__func__,p->n_layers, p->dim, p->dim, p->n_layers * p->dim * p->dim);
 
         w->wk.resize(p->n_layers * p->dim * p->dim / n_multiqueries);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wk\n",__func__,p->n_layers, p->dim, p->dim / n_multiqueries, p->n_layers * p->dim * p->dim / n_multiqueries);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wk\n",__func__,p->n_layers, p->dim, p->dim / n_multiqueries, p->n_layers * p->dim * p->dim / n_multiqueries);
 
         w->wv.resize(p->n_layers * p->dim * p->dim / n_multiqueries);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wv\n",__func__, p->n_layers, p->dim, p->dim / n_multiqueries, p->n_layers * p->dim * p->dim / n_multiqueries);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wv\n",__func__, p->n_layers, p->dim, p->dim / n_multiqueries, p->n_layers * p->dim * p->dim / n_multiqueries);
 
         w->wo.resize(p->n_layers * p->dim * p->dim);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wo\n",__func__,p->n_layers, p->dim, p->dim, p->n_layers * p->dim * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->wo\n",__func__,p->n_layers, p->dim, p->dim, p->n_layers * p->dim * p->dim);
 
         w->w1.resize(p->n_layers * p->hidden_dim * p->dim);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w1\n",__func__,p->n_layers, p->hidden_dim, p->dim, p->n_layers * p->hidden_dim * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w1\n",__func__,p->n_layers, p->hidden_dim, p->dim, p->n_layers * p->hidden_dim * p->dim);
 
         w->w2.resize(p->n_layers * p->hidden_dim * p->dim);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w2\n",__func__,p->n_layers, p->dim, p->hidden_dim, p->n_layers * p->hidden_dim * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w2\n",__func__,p->n_layers, p->dim, p->hidden_dim, p->n_layers * p->hidden_dim * p->dim);
 
         w->w3.resize(p->n_layers * p->hidden_dim * p->dim);
-        LOG("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w3\n",__func__,p->n_layers, p->hidden_dim, p->dim, p->n_layers * p->hidden_dim * p->dim);
+        LOG_INF("%s: Allocating [%d] x [%d] x [%d] = [%d] float space for w->w3\n",__func__,p->n_layers, p->hidden_dim, p->dim, p->n_layers * p->hidden_dim * p->dim);
 
         w->rms_final_weight.resize(p->dim);
-        LOG("%s: Allocating [%d] float space for w->rms_final_weight\n",__func__,p->dim);
+        LOG_INF("%s: Allocating [%d] float space for w->rms_final_weight\n",__func__,p->dim);
 
         if (shared_weights) {
             w->wcls = {};
         } else {
             w->wcls.resize(p->vocab_size * p->dim);
-            LOG("%s: Allocating [%d] x [%d] = [%d] float space for w->wcls\n",__func__,p->vocab_size , p->dim, p->vocab_size * p->dim);
+            LOG_INF("%s: Allocating [%d] x [%d] = [%d] float space for w->wcls\n",__func__,p->vocab_size , p->dim, p->vocab_size * p->dim);
         }
     }
     catch (std::length_error &) {
@@ -173,7 +174,7 @@ static int checkpoint_init_weights(TransformerWeights * w, const Config * p, FIL
     fseek(f, 0, SEEK_END);
     auto end = ftell(f);
     if (curr != end) {
-        LOG("%s: Error: failed to read the checkpoint file to the end (curr = %ld, end =  %ld)\n", __func__, curr, end);
+        LOG_ERR("%s: Error: failed to read the checkpoint file to the end (curr = %ld, end =  %ld)\n", __func__, curr, end);
         return 1;
     }
 
@@ -181,26 +182,26 @@ static int checkpoint_init_weights(TransformerWeights * w, const Config * p, FIL
 }
 
 static void print_sample_weights(TransformerWeights *w){
-    LOG("----- Quick print of first of the weight vales of all the variables\n");
-    LOG("%f\n", w->token_embedding_table[0]);
-    LOG("%f\n", w->rms_att_weight[0]);
-    LOG("%f\n", w->rms_ffn_weight[0]);
+    LOG_INF("----- Quick print of first of the weight vales of all the variables\n");
+    LOG_INF("%f\n", w->token_embedding_table[0]);
+    LOG_INF("%f\n", w->rms_att_weight[0]);
+    LOG_INF("%f\n", w->rms_ffn_weight[0]);
 
-    LOG("%f\n", w->wq[0]);
-    LOG("%f\n", w->wk[0]);
-    LOG("%f\n", w->wv[0]);
-    LOG("%f\n", w->wo[0]);
-    LOG("%f\n", w->w1[0]);
-    LOG("%f\n", w->w2[0]);
-    LOG("%f\n", w->w3[0]);
-    LOG("%f\n", w->rms_att_weight[0]);
-    if (!w->wcls.empty()) LOG("%f\n", w->wcls[0]);
+    LOG_INF("%f\n", w->wq[0]);
+    LOG_INF("%f\n", w->wk[0]);
+    LOG_INF("%f\n", w->wv[0]);
+    LOG_INF("%f\n", w->wo[0]);
+    LOG_INF("%f\n", w->w1[0]);
+    LOG_INF("%f\n", w->w2[0]);
+    LOG_INF("%f\n", w->w3[0]);
+    LOG_INF("%f\n", w->rms_att_weight[0]);
+    if (!w->wcls.empty()) LOG_INF("%f\n", w->wcls[0]);
 }
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////// ggml structs and functions required to load models, configs and save the model.
 
-struct llama_vocab {
+struct my_llama_vocab {
     using id    = int32_t;
     using token = std::string;
     using ttype = llama_token_type;
@@ -318,20 +319,20 @@ struct train_params {
 };
 
 static void print_params(struct my_llama_hparams * params) {
-    LOG("%s: n_vocab:   %u\n", __func__, params->n_vocab);
-    LOG("%s: n_ctx:     %u\n", __func__, params->n_ctx);
-    LOG("%s: n_embd:    %u\n", __func__, params->n_embd);
-    LOG("%s: n_mult:    %u\n", __func__, params->n_mult);
-    LOG("%s: n_head:    %u\n", __func__, params->n_head);
-    LOG("%s: n_head_kv: %u\n", __func__, params->n_head_kv);
-    LOG("%s: n_ff:      %u\n", __func__, params->n_ff);
-    LOG("%s: n_layer:   %u\n", __func__, params->n_layer);
-    LOG("%s: n_rot:     %u\n", __func__, params->n_rot);
+    LOG_INF("%s: n_vocab:   %u\n", __func__, params->n_vocab);
+    LOG_INF("%s: n_ctx:     %u\n", __func__, params->n_ctx);
+    LOG_INF("%s: n_embd:    %u\n", __func__, params->n_embd);
+    LOG_INF("%s: n_mult:    %u\n", __func__, params->n_mult);
+    LOG_INF("%s: n_head:    %u\n", __func__, params->n_head);
+    LOG_INF("%s: n_head_kv: %u\n", __func__, params->n_head_kv);
+    LOG_INF("%s: n_ff:      %u\n", __func__, params->n_ff);
+    LOG_INF("%s: n_layer:   %u\n", __func__, params->n_layer);
+    LOG_INF("%s: n_rot:     %u\n", __func__, params->n_rot);
 }
 
 static void print_tensor_info(const struct ggml_context * ctx) {
     for (auto t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        LOG("%s: Allocating ", __func__);
+        LOG_INF("%s: Allocating ", __func__);
         int64_t total = 1;
         int i = 0;
         for (; i < ggml_n_dims(t); ++i) {
@@ -524,9 +525,9 @@ static std::string llama_escape_whitespaces(const std::string & text) {
     return out.str();
 }
 
-static void load_vocab(const char * filename, const Config * config, struct llama_vocab * vocab) {
+static void load_vocab(const char * filename, const Config * config, struct my_llama_vocab * vocab) {
     if (is_ggml_file(filename)) {
-        LOG("%s: Loading vocabulary from gguf file %s\n", __func__, filename);
+        LOG_INF("%s: Loading vocabulary from gguf file %s\n", __func__, filename);
         struct ggml_context * ctx_data = NULL;
 
         struct gguf_init_params params = {
@@ -574,7 +575,7 @@ static void load_vocab(const char * filename, const Config * config, struct llam
         gguf_free(ctx);
     } else {
         // assume llama2.c vocabulary
-        LOG("%s: Assuming llama2.c vocabulary since %s is not a gguf file\n", __func__, filename);
+        LOG_INF("%s: Assuming llama2.c vocabulary since %s is not a gguf file\n", __func__, filename);
         llama_file file(filename, "rb");
         if (!file.fp) {
             die_fmt("%s: %s", strerror(errno), filename);
@@ -582,13 +583,13 @@ static void load_vocab(const char * filename, const Config * config, struct llam
         const int  n_vocab = config->vocab_size;
         /* uint32_t max_token_length =  */ file.read_u32(); // unused
         vocab->id_to_token.resize(n_vocab);
-        for (llama_vocab::id id=0; id<n_vocab; ++id) {
+        for (my_llama_vocab::id id=0; id<n_vocab; ++id) {
             float_t score = file.read_f32();
             uint32_t len = file.read_u32();
             std::string text = file.read_string(len);
 
             unsigned char byte_val;
-            llama_vocab::ttype type = LLAMA_TOKEN_TYPE_NORMAL;
+            my_llama_vocab::ttype type = LLAMA_TOKEN_TYPE_NORMAL;
             if (id == UNKNOWN_TOKEN_ID) {
                 text = "<unk>";
                 type = LLAMA_TOKEN_TYPE_UNKNOWN;
@@ -630,7 +631,7 @@ static void convert_weights_ak_to_gg(struct ggml_tensor * gg_weights, const floa
 }
 
 static void save_as_llama_model(
-    struct llama_vocab * vocab, struct my_llama_model * model, TransformerWeights* w, const char * filename
+    struct my_llama_vocab * vocab, struct my_llama_model * model, TransformerWeights* w, const char * filename
 ) {
     // convert AK weights into GG weights one by one.
     // w->token_embedding_table -> model->tok_embeddings
@@ -670,7 +671,7 @@ static void save_as_llama_model(
     std::vector<const char*> tokens;
     std::vector<float> scores;
     std::vector<llama_token_type> token_types;
-    for (const llama_vocab::token_data & token_data : vocab->id_to_token) {
+    for (const my_llama_vocab::token_data & token_data : vocab->id_to_token) {
         tokens.push_back(token_data.text.c_str());
         scores.push_back(token_data.score);
         token_types.push_back(token_data.type);
@@ -871,23 +872,25 @@ static std::string basename(const std::string &path) {
 }
 
 int main(int argc, char ** argv) {
+    common_init();
+
     struct train_params params = get_default_train_params();
     if (!params_parse(argc, argv, &params)) {
         return 1;
     }
-    log_set_target(stdout);
+
     Config config;
     TransformerWeights weights = {};
     {
-        LOG("%s: Loading llama2c model from %s\n", __func__, params.fn_llama2c_model);
+        LOG_INF("%s: Loading llama2c model from %s\n", __func__, params.fn_llama2c_model);
         FILE * file = fopen(params.fn_llama2c_model, "rb");
         if (!file) {
-            LOG("%s: Unable to open the checkpoint file %s!\n", __func__, params.fn_llama2c_model);
+            LOG_ERR("%s: Unable to open the checkpoint file %s!\n", __func__, params.fn_llama2c_model);
             return 1;
         }
         // read in the config header
         if (fread(&config, sizeof(Config), 1, file) != 1) {
-            LOG("%s: Unable to read llama2c config from %s!\n",__func__,params.fn_llama2c_model);
+            LOG_ERR("%s: Unable to read llama2c config from %s!\n",__func__,params.fn_llama2c_model);
             return 1;
         }
         auto shared_weights = config.vocab_size > 0;
@@ -896,13 +899,13 @@ int main(int argc, char ** argv) {
         // read in the Transformer weights
         alloc_weights(&weights, &config, shared_weights);
         if (checkpoint_init_weights(&weights, &config, file, shared_weights)) {
-            LOG("%s: Unable to initialize transformer weights from %s!",__func__,params.fn_llama2c_model);
+            LOG_ERR("%s: Unable to initialize transformer weights from %s!",__func__,params.fn_llama2c_model);
             return 1;
         }
         fclose(file);
     }
 
-    struct llama_vocab vocab;
+    struct my_llama_vocab vocab;
     load_vocab(params.fn_vocab_model, &config, &vocab);
 
     struct my_llama_model model;
@@ -929,7 +932,7 @@ int main(int argc, char ** argv) {
     model.name = basename(params.fn_llama2c_model);
     save_as_llama_model(&vocab, &model, &weights, params.fn_llama2c_output_model);
 
-    LOG("%s: Saving llama.c model file %s in ggml format at %s\n", __func__, params.fn_llama2c_model, params.fn_llama2c_output_model);
+    LOG_INF("%s: Saving llama.c model file %s in ggml format at %s\n", __func__, params.fn_llama2c_model, params.fn_llama2c_output_model);
 
     ggml_free(model.ctx);
     return 0;

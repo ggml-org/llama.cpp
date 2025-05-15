@@ -1,7 +1,7 @@
 *.o
 *.a
 .cache/
-.git/
+# Do not ignore .git directory, otherwise the reported build number will always be 0
 .github/
 .gitignore
 .vs/

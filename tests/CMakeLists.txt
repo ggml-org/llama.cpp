@@ -108,6 +108,8 @@ llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-llama-spm ARGS ${CMAKE_CU
 #llama_test(test-tokenizer-1-spm  NAME test-tokenizer-1-baichuan  ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-baichuan.gguf)
 
 # llama_target_and_test(test-double-float.cpp) # SLOW
+llama_target_and_test(test-log.cpp)
+llama_target_and_test(test-arg-parser.cpp)
 llama_target_and_test(test-quantize-fns.cpp)
 llama_target_and_test(test-quantize-perf.cpp)
 llama_target_and_test(test-sampling.cpp)
@@ -117,6 +119,7 @@ llama_target_and_test(test-grammar-parser.cpp)
 llama_target_and_test(test-llama-grammar.cpp)
 llama_target_and_test(test-grammar-integration.cpp)
 llama_target_and_test(test-grad0.cpp)
+llama_target_and_test(test-barrier.cpp)
 # llama_target_and_test(test-opt.cpp) # SLOW
 llama_target_and_test(test-backend-ops.cpp)
 

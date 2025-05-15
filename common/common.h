@@ -4,18 +4,9 @@
 
 #include "llama.h"
 
-#include "sampling.h"
-
-#define LOG_NO_FILE_LINE_FUNCTION
-#include "log.h"
-
-#include <cmath>
 #include <string>
 #include <vector>
-#include <random>
-#include <thread>
-#include <unordered_map>
-#include <tuple>
+#include <sstream>
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -33,12 +24,12 @@
 
 #define DEFAULT_MODEL_PATH "models/7B/ggml-model-f16.gguf"
 
-struct llama_lora_adapter_info {
+struct common_lora_adapter_info {
     std::string path;
     float scale;
 };
 
-struct llama_lora_adapter_container : llama_lora_adapter_info {
+struct common_lora_adapter_container : common_lora_adapter_info {
     struct llama_lora_adapter * adapter;
 };
 
@@ -48,18 +39,58 @@ extern char const * LLAMA_COMMIT;
 extern char const * LLAMA_COMPILER;
 extern char const * LLAMA_BUILD_TARGET;
 
-struct llama_control_vector_load_info;
+struct common_control_vector_load_info;
 
 //
 // CPU utils
 //
 
+struct cpu_params {
+    int      n_threads                   = -1;
+    bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
+    bool     mask_valid                  = false;   // Default: any CPU
+    enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
+    bool     strict_cpu                  = false;   // Use strict CPU placement
+    uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
+};
+
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
 
 //
-// CLI argument parsing
+// Common params
 //
+
+enum llama_example {
+    LLAMA_EXAMPLE_COMMON,
+    LLAMA_EXAMPLE_SPECULATIVE,
+    LLAMA_EXAMPLE_MAIN,
+    LLAMA_EXAMPLE_INFILL,
+    LLAMA_EXAMPLE_EMBEDDING,
+    LLAMA_EXAMPLE_PERPLEXITY,
+    LLAMA_EXAMPLE_RETRIEVAL,
+    LLAMA_EXAMPLE_PASSKEY,
+    LLAMA_EXAMPLE_IMATRIX,
+    LLAMA_EXAMPLE_BENCH,
+    LLAMA_EXAMPLE_SERVER,
+    LLAMA_EXAMPLE_CVECTOR_GENERATOR,
+    LLAMA_EXAMPLE_EXPORT_LORA,
+    LLAMA_EXAMPLE_LLAVA,
+    LLAMA_EXAMPLE_LOOKUP,
+    LLAMA_EXAMPLE_PARALLEL,
+
+    LLAMA_EXAMPLE_COUNT,
+};
+
+enum common_sampler_type {
+    COMMON_SAMPLER_TYPE_NONE        = 0,
+    COMMON_SAMPLER_TYPE_TOP_K       = 1,
+    COMMON_SAMPLER_TYPE_TOP_P       = 2,
+    COMMON_SAMPLER_TYPE_MIN_P       = 3,
+    COMMON_SAMPLER_TYPE_TFS_Z       = 4,
+    COMMON_SAMPLER_TYPE_TYPICAL_P   = 5,
+    COMMON_SAMPLER_TYPE_TEMPERATURE = 6,
+};
 
 // dimensionality reduction methods, used by cvector-generator
 enum dimre_method {
@@ -67,6 +98,7 @@ enum dimre_method {
     DIMRE_METHOD_MEAN,
 };
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 struct cpu_params {
     int      n_threads                   = -1;
@@ -82,6 +114,52 @@ struct cpu_params {
 struct gpt_params {
     uint32_t seed                 = LLAMA_DEFAULT_SEED; // RNG seed
 
+=======
+// sampler parameters
+struct common_sampler_params {
+    uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
+
+    int32_t n_prev            = 64;    // number of previous tokens to remember
+    int32_t n_probs           = 0;     // if greater than 0, output the probabilities of top n_probs tokens.
+    int32_t min_keep          = 0;     // 0 = disabled, otherwise samplers should return at least min_keep tokens
+    int32_t top_k             = 40;    // <= 0 to use vocab size
+    float   top_p             = 0.95f; // 1.0 = disabled
+    float   min_p             = 0.05f; // 0.0 = disabled
+    float   tfs_z             = 1.00f; // 1.0 = disabled
+    float   typ_p             = 1.00f; // typical_p, 1.0 = disabled
+    float   temp              = 0.80f; // <= 0.0 to sample greedily, 0.0 to not output probabilities
+    float   dynatemp_range    = 0.00f; // 0.0 = disabled
+    float   dynatemp_exponent = 1.00f; // controls how entropy maps to temperature in dynamic temperature sampler
+    int32_t penalty_last_n    = 64;    // last n tokens to penalize (0 = disable penalty, -1 = context size)
+    float   penalty_repeat    = 1.00f; // 1.0 = disabled
+    float   penalty_freq      = 0.00f; // 0.0 = disabled
+    float   penalty_present   = 0.00f; // 0.0 = disabled
+    int32_t mirostat          = 0;     // 0 = disabled, 1 = mirostat, 2 = mirostat 2.0
+    float   mirostat_tau      = 5.00f; // target entropy
+    float   mirostat_eta      = 0.10f; // learning rate
+    bool    penalize_nl       = false; // consider newlines as a repeatable token
+    bool    ignore_eos        = false;
+    bool    no_perf           = false; // disable performance metrics
+
+    std::vector<enum common_sampler_type> samplers = {
+        COMMON_SAMPLER_TYPE_TOP_K,
+        COMMON_SAMPLER_TYPE_TFS_Z,
+        COMMON_SAMPLER_TYPE_TYPICAL_P,
+        COMMON_SAMPLER_TYPE_TOP_P,
+        COMMON_SAMPLER_TYPE_MIN_P,
+        COMMON_SAMPLER_TYPE_TEMPERATURE
+    };
+
+    std::string grammar; // optional BNF-like grammar to constrain sampling
+
+    std::vector<llama_logit_bias> logit_bias; // logit biases to apply
+
+    // print the parameters into a string
+    std::string print() const;
+};
+
+struct common_params {
+>>>>>>> ahead
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =     0; // context size
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
@@ -123,35 +201,34 @@ struct gpt_params {
     enum llama_pooling_type      pooling_type      = LLAMA_POOLING_TYPE_UNSPECIFIED; // pooling type for embeddings
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
 
-    // // sampling parameters
-    struct llama_sampling_params sparams;
+    struct common_sampler_params sparams;
 
-    std::string model                = ""; // model path
-    std::string model_draft          = ""; // draft model for speculative decoding
-    std::string model_alias          = "unknown"; // model alias
-    std::string model_url            = ""; // model url to download
-    std::string hf_token             = ""; // HF token
-    std::string hf_repo              = ""; // HF repo
-    std::string hf_file              = ""; // HF file
-    std::string prompt               = "";
-    std::string prompt_file          = ""; // store the external prompt file name
-    std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state
-    std::string input_prefix         = ""; // string to prefix user inputs with
-    std::string input_suffix         = ""; // string to suffix user inputs with
-    std::string logdir               = ""; // directory in which to save YAML log files
-    std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding
-    std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding
-    std::string logits_file          = ""; // file for saving *all* logits
-    std::string rpc_servers          = ""; // comma separated list of RPC servers
+    std::string model                = ""; // model path                                                    // NOLINT
+    std::string model_draft          = ""; // draft model for speculative decoding                          // NOLINT
+    std::string model_alias          = "unknown"; // model alias                                            // NOLINT
+    std::string model_url            = ""; // model url to download                                         // NOLINT
+    std::string hf_token             = ""; // HF token                                                      // NOLINT
+    std::string hf_repo              = ""; // HF repo                                                       // NOLINT
+    std::string hf_file              = ""; // HF file                                                       // NOLINT
+    std::string prompt               = "";                                                                  // NOLINT
+    std::string prompt_file          = ""; // store the external prompt file name                           // NOLINT
+    std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state             // NOLINT
+    std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
+    std::string input_suffix         = ""; // string to suffix user inputs with                             // NOLINT
+    std::string logdir               = ""; // directory in which to save YAML log files                     // NOLINT
+    std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
+    std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
+    std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
+    std::string rpc_servers          = ""; // comma separated list of RPC servers                           // NOLINT
 
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_lora_adapter_apply)
-    std::vector<llama_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
+    std::vector<common_lora_adapter_info> lora_adapters; // lora adapter path with user defined scale
 
-    std::vector<llama_control_vector_load_info> control_vectors; // control vector with user defined scale
+    std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     int32_t verbosity                  = 0;
     int32_t control_vector_layer_start = -1; // layer range for control vector
@@ -186,15 +263,15 @@ struct gpt_params {
     bool simple_io         = false; // improves compatibility with subprocesses and limited consoles
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
+    bool no_perf           = false; // disable performance metrics
+    bool ctx_shift         = true;  // context shift on inifinite text generation
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool ignore_eos        = false; // ignore generated EOS tokens
     bool logits_all        = false; // return logits for all tokens in the batch
     bool use_mmap          = true;  // use mmap for faster loads
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
-    bool infill            = false; // use infill mode
     bool dump_kv_cache     = false; // dump the KV cache contents for debugging purposes
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
@@ -204,7 +281,7 @@ struct gpt_params {
     std::string cache_type_v = "f16"; // KV cache data type for the V
 
     // multimodal models (see examples/llava)
-    std::string mmproj = "";        // path to multimodal projector
+    std::string mmproj = "";        // path to multimodal projector                                         // NOLINT
     std::vector<std::string> image; // path to image file(s)
 
     // embedding
@@ -212,25 +289,33 @@ struct gpt_params {
     int32_t embd_normalize = 2;     // normalisation for embendings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
     std::string embd_out   = "";    // empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
     std::string embd_sep   = "\n";  // separator of embendings
+    bool reranking         = false; // enable reranking support on server
 
     // server params
     int32_t port           = 8080;         // server listens on this network port
     int32_t timeout_read   = 600;          // http read timeout in seconds
     int32_t timeout_write  = timeout_read; // http write timeout in seconds
+<<<<<<< HEAD
     int     n_threads_http = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
+=======
+    int32_t n_threads_http = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
+    int32_t n_cache_reuse  = 0;            // min chunk size to reuse from the cache via KV shifting
+>>>>>>> ahead
 
     std::string hostname      = "127.0.0.1";
-    std::string public_path   = "";
-    std::string chat_template = "";
-    std::string system_prompt = "";
+    std::string public_path   = "";                                                                         // NOLINT
+    std::string chat_template = "";                                                                         // NOLINT
     bool enable_chat_template = true;
 
     std::vector<std::string> api_keys;
 
-    std::string ssl_file_key  = "";
-    std::string ssl_file_cert = "";
+    std::string ssl_file_key  = "";                                                                         // NOLINT
+    std::string ssl_file_cert = "";                                                                         // NOLINT
 
-    bool endpoint_slots   = true;
+    // "advanced" endpoints are disabled by default for better security
+    bool webui            = true;
+    bool endpoint_slots   = false;
+    bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
 
     bool log_json = false;
@@ -278,17 +363,21 @@ struct gpt_params {
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
     std::string lora_outfile = "ggml-lora-merged-f16.gguf";
+
+    // batched-bench params
+    bool batched_bench_output_jsonl = false;
 };
 
-void gpt_params_parse_from_env(gpt_params & params);
-void gpt_params_handle_model_default(gpt_params & params);
+// call once at the start of a program if it uses libcommon
+// initializes the logging system and prints info about the build
+void common_init();
 
-bool gpt_params_parse_ex   (int argc, char ** argv, gpt_params & params);
-bool gpt_params_parse      (int argc, char ** argv, gpt_params & params);
-bool gpt_params_find_arg   (int argc, char ** argv, const std::string & arg, gpt_params & params, int & i, bool & invalid_param);
-void gpt_params_print_usage(int argc, char ** argv, const gpt_params & params);
+std::string common_params_get_system_info(const common_params & params);
 
-std::string gpt_params_get_system_info(const gpt_params & params);
+bool parse_cpu_range(const std::string & range, bool(&boolmask)[GGML_MAX_N_THREADS]);
+bool parse_cpu_mask(const std::string & mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
+void postprocess_cpu_params(cpu_params & cpuparams, const cpu_params * role_model = nullptr);
+bool set_process_priority(enum ggml_sched_priority prio);
 
 bool parse_cpu_range(const std::string& range, bool(&boolmask)[GGML_MAX_N_THREADS]);
 bool parse_cpu_mask(const std::string& mask, bool(&boolmask)[GGML_MAX_N_THREADS]);
@@ -298,6 +387,19 @@ bool set_process_priority(enum ggml_sched_priority prio);
 //
 // String utils
 //
+
+#ifdef __GNUC__
+#ifdef __MINGW32__
+#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(gnu_printf, __VA_ARGS__)))
+#else
+#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
+#endif
+#else
+#define LLAMA_COMMON_ATTRIBUTE_FORMAT(...)
+#endif
+
+LLAMA_COMMON_ATTRIBUTE_FORMAT(1, 2)
+std::string string_format(const char * fmt, ...);
 
 std::vector<std::string> string_split(std::string input, char separator);
 
@@ -323,6 +425,11 @@ static std::vector<T> string_split(const std::string & str, char delim) {
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
 void string_process_escapes(std::string & input);
 
+std::string string_from(bool value);
+std::string string_from(const std::vector<int> & values);
+std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
+std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
+
 //
 // Filesystem utils
 //
@@ -337,10 +444,10 @@ std::string fs_get_cache_file(const std::string & filename);
 // Model utils
 //
 
-struct llama_init_result {
+struct common_init_result {
     struct llama_model   * model   = nullptr;
     struct llama_context * context = nullptr;
-    std::vector<llama_lora_adapter_container> lora_adapters;
+    std::vector<common_lora_adapter_container> lora_adapters;
 };
 <<<<<<< HEAD
 =======
@@ -348,8 +455,9 @@ struct llama_init_result {
 struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
 >>>>>>> master
 
-struct llama_init_result    llama_init_from_gpt_params(gpt_params & params);
+struct common_init_result     common_init_from_params(common_params & params);
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 struct llama_model_params     llama_model_params_from_gpt_params    (const gpt_params & params);
 struct llama_context_params   llama_context_params_from_gpt_params  (const gpt_params & params);
@@ -359,15 +467,23 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 >>>>>>> master
 struct llama_model * llama_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
 struct llama_model * llama_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
+=======
+struct llama_model_params     common_model_params_to_llama  (const common_params & params);
+struct llama_context_params   common_context_params_to_llama(const common_params & params);
+struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
+
+struct llama_model * common_load_model_from_url(const char * model_url, const char * path_model, const char * hf_token, const struct llama_model_params & params);
+struct llama_model * common_load_model_from_hf(const char * repo, const char * file, const char * path_model, const char * hf_token, const struct llama_model_params & params);
+>>>>>>> ahead
 
 // clear LoRA adapters from context, then apply new list of adapters
-void llama_lora_adapters_apply(struct llama_context * ctx, std::vector<llama_lora_adapter_container> & lora_adapters);
+void common_lora_adapters_apply(struct llama_context * ctx, std::vector<common_lora_adapter_container> & lora_adapters);
 
 // Batch utils
 
-void llama_batch_clear(struct llama_batch & batch);
+void common_batch_clear(struct llama_batch & batch);
 
-void llama_batch_add(
+void common_batch_add(
                  struct llama_batch & batch,
                         llama_token   id,
                           llama_pos   pos,
@@ -380,13 +496,13 @@ void llama_batch_add(
 
 // tokenizes a string into a vector of tokens
 // should work similar to Python's `tokenizer.encode`
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
   const struct llama_context * ctx,
            const std::string & text,
                         bool   add_special,
                         bool   parse_special = false);
 
-std::vector<llama_token> llama_tokenize(
+std::vector<llama_token> common_tokenize(
     const struct llama_model * model,
            const std::string & text,
                         bool   add_special,
@@ -394,7 +510,7 @@ std::vector<llama_token> llama_tokenize(
 
 // tokenizes a token into a piece, optionally renders special/control tokens
 // should work similar to Python's `tokenizer.id_to_piece`
-std::string llama_token_to_piece(
+std::string common_token_to_piece(
         const struct llama_context * ctx,
                        llama_token   token,
                        bool          special = true);
@@ -402,7 +518,7 @@ std::string llama_token_to_piece(
 // detokenizes a vector of tokens into a string
 // should work similar to Python's `tokenizer.decode`
 // optionally renders special/control tokens
-std::string llama_detokenize(
+std::string common_detokenize(
                          llama_context * ctx,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
@@ -412,31 +528,31 @@ std::string llama_detokenize(
 //
 
 // same with llama_chat_message, but uses std::string
-struct llama_chat_msg {
+struct common_chat_msg {
     std::string role;
     std::string content;
 };
 
 // Check if the template supplied via "--chat-template" is supported or not. Returns true if it's valid
-bool llama_chat_verify_template(const std::string & tmpl);
+bool common_chat_verify_template(const std::string & tmpl);
 
 // CPP wrapper for llama_chat_apply_template
 // If the built-in template is not supported, we default to chatml
 // If the custom "tmpl" is not supported, we throw an error
-std::string llama_chat_apply_template(const struct llama_model * model,
+std::string common_chat_apply_template(const struct llama_model * model,
         const std::string & tmpl,
-        const std::vector<llama_chat_msg> & chat,
+        const std::vector<common_chat_msg> & chat,
         bool add_ass);
 
 // Format single message, while taking into account the position of that message in chat history
-std::string llama_chat_format_single(const struct llama_model * model,
+std::string common_chat_format_single(const struct llama_model * model,
         const std::string & tmpl,
-        const std::vector<llama_chat_msg> & past_msg,
-        const llama_chat_msg & new_msg,
+        const std::vector<common_chat_msg> & past_msg,
+        const common_chat_msg & new_msg,
         bool add_ass);
 
 // Returns an example of formatted chat
-std::string llama_chat_format_example(const struct llama_model * model,
+std::string common_chat_format_example(const struct llama_model * model,
         const std::string & tmpl);
 
 //
@@ -444,31 +560,31 @@ std::string llama_chat_format_example(const struct llama_model * model,
 //
 
 // Dump the KV cache view with the number of sequences per cell.
-void llama_kv_cache_dump_view(const llama_kv_cache_view & view, int row_size = 80);
+void common_kv_cache_dump_view(const llama_kv_cache_view & view, int row_size = 80);
 
 // Dump the KV cache view showing individual sequences in each cell (long output).
-void llama_kv_cache_dump_view_seqs(const llama_kv_cache_view & view, int row_size = 40);
+void common_kv_cache_dump_view_seqs(const llama_kv_cache_view & view, int row_size = 40);
 
 //
 // Embedding utils
 //
 
-void llama_embd_normalize(const float * inp, float * out, int n, int embd_norm = 2);
+void common_embd_normalize(const float * inp, float * out, int n, int embd_norm = 2);
 
-float llama_embd_similarity_cos(const float * embd1, const float * embd2, int n);
+float common_embd_similarity_cos(const float * embd1, const float * embd2, int n);
 
 //
 // Control vector utils
 //
 
-struct llama_control_vector_data {
+struct common_control_vector_data {
     int n_embd;
 
     // stores data for layers [1, n_layer] where n_layer = data.size() / n_embd
     std::vector<float> data;
 };
 
-struct llama_control_vector_load_info {
+struct common_control_vector_load_info {
     float strength;
 
     std::string fname;
@@ -476,7 +592,7 @@ struct llama_control_vector_load_info {
 
 // Load control vectors, scale each by strength, and add them together.
 // On error, returns {-1, empty}
-llama_control_vector_data llama_control_vector_load(const std::vector<llama_control_vector_load_info> & load_infos);
+common_control_vector_data common_control_vector_load(const std::vector<common_control_vector_load_info> & load_infos);
 
 //
 // Split utils
@@ -495,5 +611,5 @@ void yaml_dump_vector_int      (FILE * stream, const char * prop_name, const std
 void yaml_dump_string_multiline(FILE * stream, const char * prop_name, const char * data);
 
 void yaml_dump_non_result_info(
-    FILE * stream, const gpt_params & params, const llama_context * lctx,
+    FILE * stream, const common_params & params, const llama_context * lctx,
     const std::string & timestamp, const std::vector<int> & prompt_tokens, const char * model_desc);

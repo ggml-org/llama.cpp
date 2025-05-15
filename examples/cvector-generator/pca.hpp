@@ -12,12 +12,9 @@
 
 #include <cstdio>
 #include <ctime>
+#include <random>
 #include <string>
-#include <tuple>
 #include <vector>
-#include <algorithm>
-#include <iostream>
-#include <fstream>
 
 #define DEBUG_POS 5
 
@@ -207,13 +204,6 @@ static ggml_status compute_piter(
         ggml_backend_cpu_set_n_threads(model.backend, params.n_threads);
     }
 
-// TODO: enable GPU support when support for GGML_OP_SQRT is added
-//#ifdef GGML_USE_METAL
-//    if (ggml_backend_is_metal(model.backend)) {
-//        ggml_backend_metal_set_n_cb(model.backend, params.n_threads);
-//    }
-//#endif
-
     ggml_status res = ggml_backend_graph_compute(model.backend, gf);
     if (res == GGML_STATUS_SUCCESS) {
         auto extract_i = [](std::string prefix, std::string str) -> int {
@@ -229,8 +219,8 @@ static ggml_status compute_piter(
         result.eigenvectors.resize(params.n_batch);
         result.distances.resize(params.n_batch);
         // get output nodes
-        for (int i = 0; i < gf->n_nodes; ++i) {
-            auto node = gf->nodes[i];
+        for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+            auto node = ggml_graph_node(gf, i);
             int iter = -1;
             // find b_tensor (without copying data from device)
             if ((iter = extract_i("b_tensor_norm_", node->name)) > -1) {

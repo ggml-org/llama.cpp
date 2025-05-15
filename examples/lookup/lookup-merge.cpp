@@ -33,15 +33,15 @@ int main(int argc, char ** argv){
     }
 
     fprintf(stderr, "lookup-merge: loading file %s\n", args[0].c_str());
-    llama_ngram_cache ngram_cache_merged = llama_ngram_cache_load(args[0]);
+    common_ngram_cache ngram_cache_merged = common_ngram_cache_load(args[0]);
 
     for (size_t i = 1; i < args.size()-1; ++i) {
         fprintf(stderr, "lookup-merge: loading file %s\n", args[i].c_str());
-        llama_ngram_cache ngram_cache = llama_ngram_cache_load(args[i]);
+        common_ngram_cache ngram_cache = common_ngram_cache_load(args[i]);
 
-        llama_ngram_cache_merge(ngram_cache_merged, ngram_cache);
+        common_ngram_cache_merge(ngram_cache_merged, ngram_cache);
     }
 
     fprintf(stderr, "lookup-merge: saving file %s\n", args.back().c_str());
-    llama_ngram_cache_save(ngram_cache_merged, args.back());
+    common_ngram_cache_save(ngram_cache_merged, args.back());
 }

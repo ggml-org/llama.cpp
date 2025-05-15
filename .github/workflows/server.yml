@@ -20,6 +20,12 @@ on:
     types: [opened, synchronize, reopened]
     paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'examples/server/**.*']
 
+env:
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_LOG_VERBOSITY: 10
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -173,6 +179,7 @@ jobs:
         if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
           cd examples/server/tests
+          $env:PYTHONIOENCODING = ":replace"
           behave.exe --summary --stop --no-capture --exclude 'issues|wrong_usages|passkey' --tags llama.cpp
 
       - name: Slow tests
