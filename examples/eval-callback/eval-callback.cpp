@@ -64,9 +64,15 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                     } else {
                         GGML_ABORT("fatal error");
                     }
+<<<<<<< HEAD
                     LOG("%12.4f", v);
                     sum += v;
                     if (i0 < ne[0] - 1) LOG(", ");
+=======
+                    printf("%12.4f", v);
+                    sum += fabs(v);
+                    if (i0 < ne[0] - 1) printf(", ");
+>>>>>>> upstream/x86_prompt
                 }
                 LOG("],\n");
             }

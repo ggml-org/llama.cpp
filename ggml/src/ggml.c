@@ -12799,10 +12799,14 @@ void float_act_quant(const int K, float* B, int32_t* dst, float* act_scale) {
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 void weight_quant(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
 =======
 void weight_quant_f32(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
 >>>>>>> ahead
+=======
+void weight_quant_f32(const int M, const int K, float* A, int32_t* dst, float* i2_scale) {
+>>>>>>> upstream/x86_prompt
     double max = 0.00001;
 
     for (int i = 0; i < M * K; i++) {
@@ -12823,9 +12827,15 @@ void weight_quant_f32(const int M, const int K, float* A, int32_t* dst, float* i
 }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 void weight_quant_f16(const int M, const int K, uint16_t* A, int32_t* dst, float* i2_scale) {
     double max = 0.00001;
+=======
+void weight_quant_f16(const int M, const int K, uint16_t* A, int32_t* dst, float* i2_scale) {
+    double max = 0.00001;
+
+>>>>>>> upstream/x86_prompt
     for (int i = 0; i < M * K; i++) {
         float temp_A = GGML_FP16_TO_FP32(A[i]);
         if (fabs(temp_A) > max){
@@ -12845,7 +12855,10 @@ void weight_quant_f16(const int M, const int K, uint16_t* A, int32_t* dst, float
     }
 }
 
+<<<<<<< HEAD
 >>>>>>> ahead
+=======
+>>>>>>> upstream/x86_prompt
 void matrixMultiply_int(const int M, const int N, const int K, const int32_t* A, const int32_t* B, int32_t* C) {
     for (int i = 0; i < M; ++i) {
         for (int j = 0; j < N; ++j) {
@@ -12908,7 +12921,13 @@ static void ggml_compute_forward_mul_mat(
         int32_t* int_B = (int32_t*)malloc(1 * src0->ne[0] * sizeof(int32_t));
         int32_t* int_A = (int32_t*)malloc(src0->ne[0] * src0->ne[1] * sizeof(int32_t));
         float_act_quant(src1->ne[0], (float*)src1->data, int_B, act_scale);
-        weight_quant(src0->ne[1], src0->ne[0], (float*)src0->data, int_A, i2_scale);        
+        
+        if (src0->type == 0) {
+            weight_quant_f32(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+        } else if (src0->type == 1) {
+            weight_quant_f16(src0->ne[1], src0->ne[0], src0->data, int_A, i2_scale);
+        }
+         
         matrixMultiply_int(src0->ne[1], src1->ne[1], src0->ne[0], int_A, int_B, int_C);
         for (int i=0; i < src0->ne[1] * 1; i++) {
             ((float*)(dst->data))[i] = int_C[i] / act_scale[0] * i2_scale[0];

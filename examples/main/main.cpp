@@ -565,7 +565,16 @@ int main(int argc, char ** argv) {
         embd_inp.push_back(decoder_start_token_id);
     }
 
+    int token_length = 0;
+    std::string filename = "check1.txt";
+    std::ofstream outFile;
+    outFile.open(filename,std::ios::out|std::ios::app);
+    outFile << std::endl;
+    outFile.close();
+
     while ((n_remain != 0 && !is_antiprompt) || params.interactive) {
+        token_length++;
+        if (token_length == 500) return 1;
         // predict
         if (!embd.empty()) {
             // Note: (n_ctx - 4) here is to match the logic for commandline prompt handling via
@@ -738,6 +747,15 @@ int main(int argc, char ** argv) {
         if (input_echo && display) {
             for (auto id : embd) {
                 const std::string token_str = common_token_to_piece(ctx, id, params.special);
+
+                // output
+                outFile.open(filename,std::ios::out|std::ios::app);
+                if (token_str == "\n") {
+                    outFile << "<alterline>" << "<#>";
+                } else {
+                    outFile << token_str << "<#>";
+                }
+                outFile.close();
 
                 // Console/Stream Output
                 LOG("%s", token_str.c_str());
