@@ -146,6 +146,11 @@ static inline int get_type_group_size(enum ggml_type type) {
         case GGML_TYPE_TMAC_W4G128_0:
         case GGML_TYPE_TMAC_W4G128_1:
             return 128;
+        case GGML_TYPE_Q4_0:
+            return 32;
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
+            return 256;
         default:
             return 0;
     }
@@ -164,6 +169,10 @@ static inline bool get_type_has_zero_point(enum ggml_type type) {
         case GGML_TYPE_TMAC_W2G128_1:
         case GGML_TYPE_TMAC_W4G128_1:
             return true;
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
+            return false;
         default:
             return false;
     }
@@ -175,29 +184,6 @@ static inline bool get_type_is_one_scale(enum ggml_type type) {
             return true;
         default:
             return false;
-    }
-}
-
-static inline int ggml_tmac_get_type_bits(enum ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_TMAC_BN_0:
-        case GGML_TYPE_TMAC_W2G64_0:
-        case GGML_TYPE_TMAC_W2G64_1:
-        case GGML_TYPE_TMAC_W2G128_0:
-        case GGML_TYPE_TMAC_W2G128_1:
-            return 2;
-        case GGML_TYPE_TMAC_W4G64_0:
-        case GGML_TYPE_TMAC_W4G64_1:
-        case GGML_TYPE_TMAC_W4G128_0:
-        case GGML_TYPE_TMAC_W4G128_1:
-            return 4;
-        case GGML_TYPE_Q4_0:
-            return 4;
-        case GGML_TYPE_TQ1_0:
-        case GGML_TYPE_TQ2_0:
-            return 2;
-        default:
-            return 0;
     }
 }
 
@@ -495,7 +481,7 @@ size_t ggml_backend_tmac_desired_wsize(const struct ggml_tensor * dst) {
     const size_t n = src0->ne[1];    // llama.cpp n
     const size_t k = src1->ne[0];    // k
     const size_t m = src1->ne[1];    // llama.cpp m
-    const int bits = ggml_tmac_get_type_bits(src0->type);
+    const int bits = get_type_bits(src0->type);
 
     struct tmac_kernel_config * kernel_config = find_tmac_kernel_config(n, k, bits);
     if (kernel_config == nullptr) {
@@ -514,7 +500,7 @@ size_t ggml_backend_tmac_desired_wsize(const struct ggml_tensor * dst) {
 }
 
 size_t ggml_tmac_get_nbytes(const struct ggml_tensor * tensor) {
-    const int bits = ggml_tmac_get_type_bits(tensor->type);
+    const int bits = get_type_bits(tensor->type);
 
     int k = tensor->ne[0];
     int m = tensor->ne[1];  // `n` in llama.cpp
@@ -529,7 +515,6 @@ size_t ggml_tmac_get_nbytes(const struct ggml_tensor * tensor) {
     // Currently, always uses float to store scales or zero points
     size_t nbytes = k * m / 8 * bits + scales_size * sizeof(float);
     nbytes = GGML_PAD(nbytes, GGUF_DEFAULT_ALIGNMENT);
-    // printf("ggml_tmac_get_nbytes: %s --- k=%d, m=%d, w=%d, sc=%d, nbytes: %zu\n", tensor->name, k, m, k * m / 8 * bits, scales_size, nbytes);
     return nbytes;
 }
 
@@ -727,7 +712,7 @@ static inline void ggml_tmac_transform_tensor(struct ggml_tensor * tensor, const
         return;
     }
 
-    const int bits = ggml_tmac_get_type_bits(tensor->type);
+    const int bits = get_type_bits(tensor->type);
     int k = tensor->ne[0];
     int m = tensor->ne[1];  // `n` in llama.cpp
 
@@ -1087,7 +1072,7 @@ void ggml_backend_tmac_mul_mat(const struct ggml_compute_params * params, struct
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    const int bits = ggml_tmac_get_type_bits(src0->type);
+    const int bits = get_type_bits(src0->type);
     // src0: weight,     ne00 = k, ne01 = n
     // src1: activation, ne10 = k, ne11 = m
     char * wdata = (char *) (params->wdata);
