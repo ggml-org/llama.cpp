@@ -520,6 +520,7 @@ extern "C" {
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
         GGML_OP_ADD_REL_POS,
+        GGML_OP_RWKV_WKV,
 
         GGML_OP_UNARY,
 
@@ -554,6 +555,7 @@ extern "C" {
         GGML_UNARY_OP_SILU,
         GGML_UNARY_OP_HARDSWISH,
         GGML_UNARY_OP_HARDSIGMOID,
+        GGML_UNARY_OP_EXP,
 
         GGML_UNARY_OP_COUNT,
     };
@@ -1168,6 +1170,14 @@ extern "C" {
 
     // hardsigmoid(x) = relu6(x + 3) / 6
     GGML_API struct ggml_tensor * ggml_hardsigmoid(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_exp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_exp_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
@@ -1918,6 +1928,15 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * pw,
             struct ggml_tensor  * ph);
+
+    GGML_API struct ggml_tensor * ggml_rwkv_wkv(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * r,
+            struct ggml_tensor  * tf,
+            struct ggml_tensor  * td,
+            struct ggml_tensor  * state);
 
     // custom operators
 
