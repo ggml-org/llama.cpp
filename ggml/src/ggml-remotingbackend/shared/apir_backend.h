@@ -43,6 +43,8 @@ typedef enum ApirBackendCommandType {
   APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE = 10,
   APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST = 11,
   APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER = 12,
+
+  /* buffer */
   APIR_COMMAND_TYPE_BUFFER_GET_BASE = 13,
 
   // last command_type index + 1

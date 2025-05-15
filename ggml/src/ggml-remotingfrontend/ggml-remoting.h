@@ -10,6 +10,9 @@
 #include "ggml-backend.h"
 #include "virtgpu.h"
 
+#define BUFFER_TO_HANDLE(name) \
+  ((struct ggml_backend_remoting_buffer_context *) (name)->context)->handle
+
 #define NOT_IMPLEMENTED							\
   do {									\
     static bool first = true;						\
@@ -29,8 +32,8 @@
 #define STOP_HERE \
   thks_bye()
 
-#define IMPLEMENTED
-//  printf("INFO: ### reached implemented function %s\n", __func__)
+#define IMPLEMENTED \
+  printf("INFO: ### reached implemented function %s\n", __func__)
 
 #define RMT_LOG_DEBUG(msg) std::cerr << msg << std::endl
 
@@ -47,6 +50,14 @@ struct ggml_backend_remoting_buffer_context {
 
   struct virtgpu *gpu;
 };
+
+static inline apir_buffer_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
+
+//  return buffer?0:1;
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) buffer->context;
+
+  return context->handle;
+}
 
 extern const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface;
 extern const struct ggml_backend_device_i ggml_backend_remoting_device_interface;

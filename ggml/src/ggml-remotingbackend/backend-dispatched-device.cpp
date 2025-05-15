@@ -6,8 +6,6 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
-#include "ggml-metal.h"
-
 uint32_t backend_reg_get_device_count(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
   UNUSED(dec);
 

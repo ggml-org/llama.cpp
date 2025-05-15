@@ -1,4 +1,5 @@
 #include "ggml-backend-impl.h"
+#include "ggml-remoting.h"
 #include "virtgpu.h"
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/apir_backend.h"
 #include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/venus_cs_ggml.h"

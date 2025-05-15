@@ -33,6 +33,7 @@ ggml_backend_remoting_host_buffer_type_get_alignment(ggml_backend_buffer_type_t 
   UNUSED(buft);
 
   NOT_IMPLEMENTED;
+  STOP_HERE;
 
   return 4096;
 }
@@ -41,16 +42,27 @@ static bool
 ggml_backend_remoting_host_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
   UNUSED(buft);
 
-  NOT_IMPLEMENTED;
+  IMPLEMENTED;
+  STOP_HERE;
 
   return true;
+}
+
+static size_t
+ggml_backend_remoting_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+  UNUSED(buft);
+
+  IMPLEMENTED;
+  STOP_HERE;
+
+  return SIZE_MAX;
 }
 
 const ggml_backend_buffer_type_i ggml_backend_remoting_host_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_remoting_host_buffer_type_get_name,
     /* .alloc_buffer     = */ ggml_backend_remoting_host_buffer_type_alloc_buffer,
     /* .get_alignment    = */ ggml_backend_remoting_host_buffer_type_get_alignment,
-    /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+    /* .get_max_size     = */ ggml_backend_remoting_host_buffer_type_get_max_size,
     /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
-    /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+    /* .is_host          = */ ggml_backend_remoting_host_buffer_type_is_host,
   };

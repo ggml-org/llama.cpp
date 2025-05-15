@@ -23,5 +23,9 @@ const char *apir_buffer_type_get_name(struct virtgpu *gpu, ggml_backend_buffer_t
 size_t apir_buffer_type_get_alignment(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
 size_t apir_buffer_type_get_max_size(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
 bool apir_buffer_type_is_host(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
-apir_buffer_handle_t apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t buft, size_t size);
-void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t handle);
+apir_buffer_handle_t apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t buffer_buft, size_t size);
+
+/* buffer */
+
+void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle);
+enum ggml_status apir_buffer_init_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle, ggml_tensor *tensor);

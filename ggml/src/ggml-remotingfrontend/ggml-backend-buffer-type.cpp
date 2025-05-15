@@ -63,9 +63,3 @@ const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
 };
 
 /****************************************************************************************/
-
-static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-  ggml_backend_remoting_buffer_context * ctx = (ggml_backend_remoting_buffer_context *)buffer->context;
-  NEXT;
-  NOT_IMPLEMENTED;
-}

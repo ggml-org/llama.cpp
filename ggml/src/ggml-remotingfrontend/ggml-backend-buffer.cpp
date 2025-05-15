@@ -3,27 +3,18 @@
 #define BUFFER_TO_GPU(name) \
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
-static enum ggml_status ggml_backend_remoting_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-  UNUSED(buffer);
-  UNUSED(tensor);
-
-  NEXT;
-  NOT_IMPLEMENTED;
-  STOP_HERE;
-  return GGML_STATUS_SUCCESS;
-}
-
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
-  UNUSED(buffer);
-  IMPLEMENTED;
+  //IMPLEMENTED;
 
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-  return apir_buffer_get_base(gpu, ((struct ggml_backend_remoting_buffer_context *) buffer->context)->handle);
+  return apir_buffer_get_base(gpu, BUFFER_TO_HANDLE(buffer));
 }
 
 static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
   NOT_IMPLEMENTED;
+
+  STOP_HERE;
 
   UNUSED(buffer);
   UNUSED(tensor);
@@ -34,7 +25,6 @@ static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buf
 
 
 static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-
   NOT_IMPLEMENTED;
 
   UNUSED(buffer);
@@ -100,7 +90,7 @@ static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffe
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
   /* .free_buffer     = */ ggml_backend_remoting_buffer_free_buffer,
   /* .get_base        = */ ggml_backend_remoting_buffer_get_base,
-  /* .init_tensor     = */ ggml_backend_remoting_buffer_init_tensor,
+  /* .init_tensor     = */ NULL,
   /* .memset_tensor   = */ ggml_backend_remoting_buffer_memset_tensor,
   /* .set_tensor      = */ ggml_backend_remoting_buffer_set_tensor,
   /* .get_tensor      = */ ggml_backend_remoting_buffer_get_tensor,

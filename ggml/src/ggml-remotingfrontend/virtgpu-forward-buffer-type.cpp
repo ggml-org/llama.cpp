@@ -87,6 +87,8 @@ apir_buffer_type_is_host(struct virtgpu *gpu, ggml_backend_buffer_type_t buft) {
   bool is_host;
   vn_decode_bool_t(decoder, &is_host);
 
+  INFO("%s: buffer is host? %d", __func__, is_host);
+
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
   return is_host;
@@ -115,25 +117,4 @@ apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
   return buffer_handle;
-}
-
-void *
-apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t handle) {
-  struct vn_cs_encoder *encoder;
-  struct vn_cs_decoder *decoder;
-
-  REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_BASE);
-
-  vn_encode_apir_buffer_handle_t(encoder, &handle);
-
-  REMOTE_CALL(gpu, encoder, decoder);
-
-  uintptr_t base;
-  vn_decode_uintptr_t(decoder, &base);
-
-  REMOTE_CALL_FINISH(gpu, encoder, decoder);
-
-  INFO("%s: received base %p\n", __func__,  (void *) base);
-
-  return (void *) base;
 }

@@ -1,19 +1,45 @@
 // needs the ggml-backend-impl.h definition
 // needs venus_cs.h definition
 
-static inline void
-vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *op) {
-  size_t tensor_size = sizeof(*op);
+// needs
+// ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer);
 
-  if (op->buffer || op->data || op->view_src || op->extra) {
-    FATAL("Cannot pass tensors with data");
+static inline void
+vn_encode_ggml_buffer_handle(struct vn_cs_encoder *enc, const apir_buffer_handle_t *handle);
+
+static inline ggml_backend_buffer_t
+vn_decode_ggml_buffer(struct vn_cs_decoder *dec);
+
+static inline void
+vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor) {
+  size_t tensor_size = sizeof(*tensor);
+
+  if (tensor->view_src) {
+    FATAL("Cannot pass tensors with view_src");
+  }
+  if (tensor->extra) {
+    FATAL("Cannot pass tensors with extra");
   }
 
-  vn_cs_encoder_write(enc, tensor_size, op, tensor_size);
+  if (tensor->src[0] && tensor->buffer) {
+    // not sure if the buffer needs to be updated inside the src tensors or not
+    FATAL("Cannot pass tensors with src and buffer");
+  }
 
-  for (int i = 0; op->src[i]; i++) {
-    const ggml_tensor *src_op = op->src[i];
-    vn_cs_encoder_write(enc, tensor_size, src_op, tensor_size);
+  vn_cs_encoder_write(enc, tensor_size, tensor, tensor_size);
+
+  // tensor->data is a pointer inside the device buffer. No need to touch it
+  // tensor->buffer is a pointer to a buffer. Encoding the buffer handle in sequence.
+  // (could also make a copy of the tensor, and update locally.)
+
+  if (tensor->buffer) {
+    apir_buffer_handle_t buffer_handle = ggml_buffer_to_apir_handle(tensor->buffer);
+    vn_encode_ggml_buffer_handle(enc, &buffer_handle);
+  }
+
+  for (int i = 0; tensor->src[i]; i++) {
+    const ggml_tensor *src_tensor = tensor->src[i];
+    vn_cs_encoder_write(enc, tensor_size, src_tensor, tensor_size);
   }
 }
 
@@ -22,15 +48,20 @@ vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
 
   // it safe to remove the `const` qualifier here, we *do* want to
   // modify the shared memory data to fix the `src` pointers.
-  ggml_tensor *op = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
+  ggml_tensor *tensor = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
 
-
-  for (int i = 0; op->src[i]; i++) {
-    ggml_tensor *src_op = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
-    op->src[i] = src_op; // overwrite op->src[i] pointer with the actual location of the src tensor
+  // tensor->data is a pointer inside the device buffer. No need to touch it
+  // tensor->buffer is a pointer to a buffer. Decode the buffer handle encoded in sequence.
+  if (tensor->buffer) {
+    tensor->buffer = vn_decode_ggml_buffer(dec);
   }
 
-  return op;
+  for (int i = 0; tensor->src[i]; i++) {
+    ggml_tensor *src_tensor = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
+    tensor->src[i] = src_tensor; // overwrite op->src[i] pointer with the actual location of the src tensor
+  }
+
+  return tensor;
 }
 
 /* *** ggml_backend_buffer_type_t *** */
@@ -73,4 +104,16 @@ vn_decode_ggml_buffer(struct vn_cs_decoder *dec) {
   vn_cs_decoder_read(dec, buffer_ptr_size, &buffer, buffer_ptr_size);
 
   return buffer;
+}
+
+/* enum ggml_status */
+
+static inline void
+vn_encode_ggml_status(struct vn_cs_encoder *enc, const enum ggml_status *status) {
+  vn_cs_encoder_write(enc, sizeof(*status), &status, sizeof(*status));
+}
+
+static inline void
+vn_decode_ggml_status(struct vn_cs_decoder *dec, enum ggml_status *status) {
+  vn_cs_decoder_read(dec, sizeof(*status), status, sizeof(*status));
 }

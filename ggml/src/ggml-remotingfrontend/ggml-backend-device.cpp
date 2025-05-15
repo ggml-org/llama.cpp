@@ -41,7 +41,7 @@ ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, s
 
 static bool
 ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  IMPLEMENTED;
+  //IMPLEMENTED;
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
@@ -135,9 +135,7 @@ static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_t
       /* .context  = */ nullptr,
     };
 
-    // Make sure device 0 is initialized
-    //ggml_remoting_instance_init();
-    //ggml_remoting_get_device(0);
+    //IMPLEMENTED;
 
     return &host_bufft;
 }
