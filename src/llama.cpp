@@ -9890,7 +9890,11 @@ static struct ggml_tensor * llm_build_ffn(
     }
 
     if (down) {
+<<<<<<< HEAD:src/llama.cpp
         cur = llm_build_lora_mm(lctx, ctx, down, cur);
+=======
+        cur = ggml_mul_mat(ctx, down, cur);
+>>>>>>> upstream/ffn_change:llama.cpp
     }
 
     if (down_b) {
@@ -11092,7 +11096,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -11237,7 +11245,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -11342,7 +11354,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -11458,7 +11474,11 @@ struct llm_build_context {
 
             // feed forward
             {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, attn_norm, // !! use the attn norm, not the result
+=======
+                cur = llm_build_ffn(ctx0, attn_norm, // !! use the attn norm, not the result
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         NULL,                      NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -11849,7 +11869,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -11941,7 +11965,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -12126,21 +12154,33 @@ struct llm_build_context {
 
             // feed-forward network
             if (model.arch == LLM_ARCH_BERT) {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                         NULL,
                         LLM_FFN_GELU, LLM_FFN_SEQ, cb, il);
             } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL,                        NULL,
                         model.layers[il].ffn_gate, NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                         NULL,
                         LLM_FFN_GELU, LLM_FFN_PAR, cb, il);
             } else {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -12238,7 +12278,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -12376,7 +12420,11 @@ struct llm_build_context {
                         model.layers[il].ffn_norm_b,
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -12525,7 +12573,11 @@ struct llm_build_context {
                     // parallel residual
                     cur = inpSA;
                 }
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -12638,7 +12690,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -12751,7 +12807,11 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
@@ -12888,7 +12948,11 @@ struct llm_build_context {
                 ggml_tensor * cur_gate = ggml_div(ctx0, ggml_silu(ctx0, cur_gate_inp), cur_gate_inp);
                 cb(cur_gate, "ffn_shexp_gate", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 ggml_tensor * cur_ffn = llm_build_ffn(ctx0, lctx, cur,
+=======
+                ggml_tensor * cur_ffn = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up_shexp,   NULL, NULL,
                         model.layers[il].ffn_gate_shexp, NULL, NULL,
                         model.layers[il].ffn_down_shexp, NULL, NULL,
@@ -13017,7 +13081,11 @@ struct llm_build_context {
 
             // FF
             {
+<<<<<<< HEAD:src/llama.cpp
                 ffn_output = llm_build_ffn(ctx0, lctx, attn_norm_output,
+=======
+                ffn_output = llm_build_ffn(ctx0, attn_norm_output,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -13248,7 +13316,11 @@ struct llm_build_context {
 
             // feed-forward network
             {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -13356,7 +13428,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -13467,7 +13543,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -13584,7 +13664,11 @@ struct llm_build_context {
                     LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
@@ -13702,7 +13786,11 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
@@ -13839,7 +13927,11 @@ struct llm_build_context {
                         LLM_NORM_RMS, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -14165,7 +14257,11 @@ struct llm_build_context {
 
             // feed-forward network
             {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -14421,7 +14517,11 @@ struct llm_build_context {
                     LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -14615,7 +14715,11 @@ struct llm_build_context {
 
             // feed-forward network
             {
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, ffn_inp,
+=======
+                cur = llm_build_ffn(ctx0, ffn_inp,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -14752,7 +14856,11 @@ struct llm_build_context {
                     LLM_NORM, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
@@ -15119,7 +15227,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -15150,7 +15262,11 @@ struct llm_build_context {
                         LLM_NORM, cb, il);
                 cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
                         model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
@@ -15259,7 +15375,11 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, NULL, NULL,
@@ -15480,8 +15600,12 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             if ((uint32_t) il < hparams.n_layer_dense_lead) {
                 cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+                cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                         model.layers[il].ffn_up,   NULL, NULL,
                         model.layers[il].ffn_gate, NULL, NULL,
                         model.layers[il].ffn_down, NULL, NULL,
@@ -15504,7 +15628,11 @@ struct llm_build_context {
 
                 // FFN shared expert
                 {
+<<<<<<< HEAD:src/llama.cpp
                     ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, lctx, cur,
+=======
+                    ggml_tensor * ffn_shexp = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                             model.layers[il].ffn_up_shexp,   NULL, NULL,
                             model.layers[il].ffn_gate_shexp, NULL, NULL,
                             model.layers[il].ffn_down_shexp, NULL, NULL,
@@ -15645,7 +15773,11 @@ struct llm_build_context {
                 );
                 cb(Kcur, "Kcur", il);
 
+<<<<<<< HEAD:src/llama.cpp
                 cur = llm_build_kv(ctx0, lctx, kv_self, gf,
+=======
+                cur = llm_build_kv(ctx0, model, hparams, cparams, kv_self, gf,
+>>>>>>> upstream/ffn_change:llama.cpp
                         NULL, NULL,
                         Kcur, Vcur, Qcur, KQ_mask, n_tokens, kv_head, n_kv, 1.0f/sqrtf(float(n_embd_head)), cb, il);
 
@@ -15690,7 +15822,11 @@ struct llm_build_context {
                     LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_ffn(ctx0, lctx, cur,
+=======
+            cur = llm_build_ffn(ctx0, cur,
+>>>>>>> upstream/ffn_change:llama.cpp
                     model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_scale,
                     model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_scale,
                     NULL,                      NULL, NULL,
@@ -15703,6 +15839,7 @@ struct llm_build_context {
                             LLM_NORM_RMS, cb, il);
             cb(cur, "ffn_sub_norm", il);
 
+<<<<<<< HEAD:src/llama.cpp
             cur = llm_build_lora_mm(lctx, ctx0, model.layers[il].ffn_down, cur);
 <<<<<<< HEAD
 <<<<<<< HEAD
@@ -15717,6 +15854,10 @@ struct llm_build_context {
                 cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
             }
 >>>>>>> ahead
+=======
+            cur = ggml_mul_mat(ctx0, model.layers[il].ffn_down, cur);
+            cur = ggml_mul(ctx0, cur, model.layers[il].ffn_down_scale);
+>>>>>>> upstream/ffn_change:llama.cpp
             cb(cur, "ffn_down", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
