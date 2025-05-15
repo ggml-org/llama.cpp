@@ -1763,6 +1763,7 @@ class GGMLQuantizationType(IntEnum):
     TL1     = 38
     TL2     = 39
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 >>>>>>> master
 =======
@@ -1823,6 +1824,8 @@ class LlamaFileType(IntEnum):
 >>>>>>> ahead
 
     GUESSED              = 1024  # not specified in the model file
+=======
+>>>>>>> upstream/release-dev
 
 
 class GGUFEndian(IntEnum):
@@ -1906,10 +1909,13 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.TL1:      (4, 1),
     GGMLQuantizationType.TL2:      (4, 1),
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 >>>>>>> master
 =======
 >>>>>>> ahead
+=======
+>>>>>>> upstream/release-dev
 }
 
 

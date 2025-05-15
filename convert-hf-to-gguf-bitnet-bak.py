@@ -533,7 +533,11 @@ def preprocess_weights_tl1(
     return weight
 
 
+<<<<<<< HEAD:convert-hf-to-gguf-bitnet-bak.py
 def preprocess_two_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final_weight):
+=======
+def preprocess_two_weights(M, K, weight_num, BM, BY, bm, by, weight, final_weight):
+>>>>>>> upstream/release-dev:convert-hf-to-gguf-bitnet.py
     weight = np.reshape(weight, (weight_num // 2, 2))
     hi_weight = np.multiply(np.split(weight, 2, axis=1)[0], 3)
     lo_weight = np.split(weight, 2, axis=1)[1]
@@ -576,7 +580,11 @@ def preprocess_two_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final_w
                     func_weight = np.reshape(func_weight, bm * by // 4)
                     final_weight.append(func_weight)
 
+<<<<<<< HEAD:convert-hf-to-gguf-bitnet-bak.py
 def preprocess_three_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final_weight):
+=======
+def preprocess_three_weights(M, K, weight_num, BM, BY, bm, by, weight, final_weight):
+>>>>>>> upstream/release-dev:convert-hf-to-gguf-bitnet.py
     weight = np.reshape(weight, (weight_num // 3, 3))
     split_weights = np.split(weight, 3, axis=1)
     first_weight = np.multiply(split_weights[0], 9)
@@ -653,6 +661,7 @@ def preprocess_three_weights_tl2(M, K, weight_num, BM, BY, bm, by, weight, final
                     sign_weight_list.append(combine_weight)
     final_weight.extend(sign_weight_list)
     final_weight.extend(sign_weight_list)
+<<<<<<< HEAD:convert-hf-to-gguf-bitnet-bak.py
 
 
 def preprocess_weights_tl2(
@@ -730,8 +739,75 @@ def preprocess_weights_tl2(
     weight = np.array(final_weight, dtype=np.uint8)
 
     return weight
+=======
+>>>>>>> upstream/release-dev:convert-hf-to-gguf-bitnet.py
 
 
+def preprocess_weights_tl2(
+    w: np.ndarray,
+    bits = 2,
+    g    = 4,
+) -> Tuple[np.ndarray, np.ndarray]:
+    M, K = w.shape
+    weight = w
+    weight = np.where(np.abs(weight) < 1e-6, 0, weight).astype(np.float32)
+    weight = np.sign(weight)
+    weight_num = np.prod(weight.shape)
+
+    # for three num 6 bit ->
+
+    # outer loop
+    BM3 = 128
+    BY3 = 96
+
+    # inner loop (32row 32num/16index)
+    bm3 = 32
+    by3 = 6
+
+    # for two num 4 bit ->
+
+    # outer loop
+    BM2 = 128
+    BY2 = 32
+
+    # inner loop (32row 32num/16index)
+    bm2 = 32
+    by2 = 4
+
+    if (weight.shape[1] % BY3 != 0):
+        slice_k_idx = weight.shape[1] - weight.shape[1] % BY3
+        slice_weights = np.split(weight, [slice_k_idx], axis=1)
+        three_weight = slice_weights[0]
+        two_weight = slice_weights[1]
+    else:
+        three_weight = weight
+
+    final_weight = []
+
+    preprocess_three_weights(three_weight.shape[0],
+                         three_weight.shape[1],
+                         three_weight.shape[0] * three_weight.shape[1],
+                         BM3,
+                         BY3,
+                         bm3,
+                         by3,
+                         three_weight,
+                         final_weight)
+
+    if (weight.shape[1] % BY3 != 0):
+        preprocess_two_weights(  two_weight.shape[0],
+                         two_weight.shape[1],
+                         two_weight.shape[0] * two_weight.shape[1],
+                         BM2,
+                         BY2,
+                         bm2,
+                         by2,
+                         two_weight,
+                         final_weight)
+
+    weight = np.array(final_weight, dtype=np.uint8)
+
+    return weight
 
 def read_model_config(model_dir: str) -> dict[str, Any]:
     config = os.path.join(model_dir, "config.json")
@@ -767,7 +843,11 @@ class BitnetModel(Model):
         # res = np.round(x / scale + 2).astype(np.uint8)
         res = preprocess_weights_tl1(x)
         return res, scale
+<<<<<<< HEAD:convert-hf-to-gguf-bitnet-bak.py
 
+=======
+    
+>>>>>>> upstream/release-dev:convert-hf-to-gguf-bitnet.py
     def transform_to_tl2(self, x: np.ndarray):
         scale = np.max(np.abs(x))
         # res = np.round(x / scale + 2).astype(np.uint8)
@@ -856,6 +936,10 @@ class BitnetModel(Model):
                         assert data.dtype == np.uint8
                         assert i2_scale.dtype == np.float32
                         data_qtype = gguf.GGMLQuantizationType.TL2
+<<<<<<< HEAD:convert-hf-to-gguf-bitnet-bak.py
+=======
+
+>>>>>>> upstream/release-dev:convert-hf-to-gguf-bitnet.py
                     else:  # default to float16 for quantized tensors
                         if data_dtype != np.float16:
                             data = data.astype(np.float16)

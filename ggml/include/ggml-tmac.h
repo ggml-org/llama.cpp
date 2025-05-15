@@ -43,7 +43,10 @@ GGML_API void ggml_preprocessor(int k, void* B, void* LUT_Scales, void* QLUT);
 GGML_API void ggml_qgemm_lut(int bs, int k, void* A, void* sign, void* LUT, void* Scales, void* LUT_Scales, void* C);
 GGML_API void ggml_preprocessor(int bs, int three_k, int two_k, void* B, void* LUT_Scales, void* Three_QLUT, void* Two_QLUT);
 #endif
+<<<<<<< HEAD
 
+=======
+>>>>>>> upstream/release-dev
 #ifdef  __cplusplus
 }
 #endif

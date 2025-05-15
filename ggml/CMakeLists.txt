@@ -172,8 +172,13 @@ option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
 =======
 >>>>>>> ahead
 # bitnet methods
+<<<<<<< HEAD
 option(GGML_BITNET_ARM_TL1                  "ggml: use Bitnet tl1(arm)"                       OFF)
 option(GGML_BITNET_X86_TL2                  "ggml: use Bitnet tl2(x86)"                       OFF)
+=======
+option(GGML_BITNET_ARM_TL1                  "ggml: use Bitnet tl1 on arm"                     OFF)
+option(GGML_BITNET_X86_TL2                  "ggml: use Bitnet tl2 on x86"                     OFF)
+>>>>>>> upstream/release-dev
 
 
 <<<<<<< HEAD

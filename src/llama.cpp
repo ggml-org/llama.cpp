@@ -4763,12 +4763,15 @@ struct llama_model_loader {
 <<<<<<< HEAD
                 case GGML_TYPE_TL1   :   ftype = LLAMA_FTYPE_MOSTLY_TL1    ;   break;
                 case GGML_TYPE_TL2   :   ftype = LLAMA_FTYPE_MOSTLY_TL2    ;   break;
+<<<<<<< HEAD
 =======
 >>>>>>> master
 =======
                 case GGML_TYPE_TL1   :   ftype = LLAMA_FTYPE_MOSTLY_TL1    ;   break;
                 case GGML_TYPE_TL2   :   ftype = LLAMA_FTYPE_MOSTLY_TL2    ;   break;
 >>>>>>> ahead
+=======
+>>>>>>> upstream/release-dev
                 default:
                     {
                         LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -5397,8 +5400,12 @@ struct llama_model_loader {
             }
 
             size_done += n_size;
+<<<<<<< HEAD
 #if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_X86_TL2)
 <<<<<<< HEAD
+=======
+#if defined(GGML_BITNET_ARM_TL1) || defined(GGML_BITNET_ARM_TL2)
+>>>>>>> upstream/release-dev
             ggml_tmac_transform_tensor(cur);
 =======
             ggml_bitnet_transform_tensor(cur);
@@ -5496,12 +5503,15 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
 <<<<<<< HEAD
         case LLAMA_FTYPE_MOSTLY_TL1:      return "TL1";
         case LLAMA_FTYPE_MOSTLY_TL2:      return "TL2";
+<<<<<<< HEAD
 =======
 >>>>>>> master
 =======
         case LLAMA_FTYPE_MOSTLY_TL1:      return "TL1";
         case LLAMA_FTYPE_MOSTLY_TL2:      return "TL2";
 >>>>>>> ahead
+=======
+>>>>>>> upstream/release-dev
         case LLAMA_FTYPE_MOSTLY_Q2_K:     return "Q2_K - Medium";
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:   return "Q2_K - Small";
         case LLAMA_FTYPE_MOSTLY_Q3_K_S:   return "Q3_K - Small";

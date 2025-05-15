@@ -3654,11 +3654,15 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
 <<<<<<< HEAD
+<<<<<<< HEAD
         if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1 || tensor->type == GGML_TYPE_TL2) {
             nbytes = nbytes / 4 + 32;
         }
 =======
         if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1) {
+=======
+        if(tensor->type == GGML_TYPE_I2_S || tensor->type == GGML_TYPE_TL1 || tensor->type == GGML_TYPE_TL2) {
+>>>>>>> upstream/release-dev
             nbytes = nbytes / 4 + 32;
         }
         else if (tensor->type == GGML_TYPE_TL2) {
@@ -12944,7 +12948,10 @@ static void ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 #if defined(GGML_BITNET_ARM_TL1)
     if (ggml_tmac_can_mul_mat(src0, src1, dst)) {
+<<<<<<< HEAD
 
+=======
+>>>>>>> upstream/release-dev
         const int bits = ggml_tmac_get_type_bits(type);
 =======
 // #ifndef GGML_BITNET_X86_TL2
@@ -13584,6 +13591,363 @@ static void ggml_compute_forward_mul_mat(
 >>>>>>> master
 =======
 >>>>>>> ahead
+
+#if defined(GGML_BITNET_X86_TL2)
+#define BK3 96
+    if (ggml_tmac_can_mul_mat(src0, src1, dst)) {
+        // src0: weight,     ne00 = k, ne01 = n
+        // src1: activation, ne10 = k, ne11 = m
+        char * wdata = params->wdata;
+
+        struct tmac_tensor_extra * wt = src0->extra;
+        char * cur_wdata = wdata;
+        tmac_float_type * tmac_f_ptr = wdata;
+        if (sizeof(tmac_float_type) == 2) {
+            cur_wdata = wdata + MAX(ne10, ne01) * ne11 * sizeof(tmac_float_type);
+        };
+        int8_t * three_qlut = cur_wdata;
+        tmac_float_type * lut_scales;
+        int8_t * two_qlut;
+        const int total_k = ne10;
+        const int three_k = (int)(total_k / BK3) * BK3;
+        const int two_k = total_k - three_k;
+
+        lut_scales = (tmac_float_type *) (three_qlut + three_k / 3 * 16 * 2 * ne11);
+        two_qlut = (int8_t *) (lut_scales + ne11);
+
+        // g = 4
+        if (ith == 0) {
+            // Transform tensor if not already transformed
+            // Although we have done this in file `llama.cpp`,
+            // we still need to do it here for non-model inference, e.g., test-backend-ops.cpp.
+            // It's better to do this in ggml-backend.c,
+            // but llama.cpp directly manipulates tensor.data for cbe in a lot of space.
+            ggml_tmac_transform_tensor(src0);
+            GGML_ASSERT(src1->type == GGML_TYPE_F32);
+            tmac_float_type * act_input;
+            if (sizeof(tmac_float_type) == 2) {
+                ggml_fp32_to_fp16_row(src1->data, tmac_f_ptr, ne10 * ne11);
+                act_input = tmac_f_ptr;
+            } else {
+                act_input = src1->data;
+            }
+            ggml_preprocessor(ne11, three_k, two_k, act_input, lut_scales, three_qlut, two_qlut);
+            return;
+        }
+        ggml_barrier(params->shared);
+
+        tmac_float_type * act_output;
+        if (sizeof(tmac_float_type) == 2) {
+            act_output = tmac_f_ptr;
+        } else {
+            act_output = dst->data;
+        }
+
+        const int n_tile_num = wt->n_tile_num;
+        GGML_ASSERT(ne0 % n_tile_num == 0);
+        const int w_size           = three_k * ne01 / (2 * 3);
+        const int w_tile_size      = w_size / n_tile_num;
+        const int c_size           = ne01;
+        const int c_tile_size      = c_size / n_tile_num;
+        const int sign_size        = three_k * ne01 / 24;
+        const int sign_tile_size   = sign_size / n_tile_num;
+
+        const int th_tile_num = (n_tile_num + nth - 1) / nth;
+        const int th_tile_beg = ith * th_tile_num;
+        const int th_tile_end = MIN((ith + 1) * th_tile_num, n_tile_num);
+
+        uint8_t* sign = ((uint8_t *)(wt->qweights)) + three_k * ne01 / 3 / 2;
+
+        if (ne11 > 1) {
+            // printf("ne11:%d\n", ne11);
+            int iter = ne11;
+            int bs512_num = iter / 512;
+            iter = iter - 512 * bs512_num;
+            int bs256_num = iter / 256;
+            iter = iter - 256 * bs256_num;
+            int bs128_num = iter / 128;
+            iter = iter - 128 * bs128_num;
+            int bs32_num = iter / 32;
+            iter = iter - 32 * bs32_num;
+            int bs8_num = iter / 8;
+            iter = iter - 8 * bs8_num;
+            int bs1_num = iter / 1;
+
+        // bs 512
+        for (int i = 0; i < bs512_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 512, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + i * 512 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + i * 512,
+                            act_output + dst_offset + i * 512 * ne01);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 512, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + i * 512 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + i * 512,
+                            act_output + two_dst_offset + i * 512 * ne01);
+        }   
+         
+        }
+
+        // bs 256
+        for (int i = 0; i < bs256_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 256, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + bs512_num * 512 * three_k / 3 * 32 + i * 256 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + i * 256,
+                            act_output + dst_offset + bs512_num * 512 * ne01 + i * 256 * ne01);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 256, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + bs512_num * 512 * two_k / 2 * 32 + i * 256 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + i * 256,
+                            act_output + two_dst_offset + bs512_num * 512 * ne01 + i * 256 * ne01);
+        }   
+         
+        }
+
+        // bs 128
+        // printf("128:%d\n", bs128_num);
+        for (int i = 0; i < bs128_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 128, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32 + i * 128 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256 + i * 128,
+                            act_output + dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01 + i * 128 * ne01);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 128, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + bs512_num * 512 * two_k / 2 * 32 + bs256_num * 256 * two_k / 2 * 32 + i * 128 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256 + i * 128,
+                            act_output + two_dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01 + i * 128 * ne01);
+        }   
+         
+        }
+        // printf("128end\n");
+
+        // bs 32
+        // printf("32:%d\n", bs32_num);
+        for (int i = 0; i < bs32_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 32, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32\
+                             + bs128_num * 128 * three_k / 3 * 32 + i * 32 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256 + bs128_num * 128 + i * 32,
+                            act_output + dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01 + bs128_num * 128 * ne01 + i * 32 * ne01);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 32, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
+                             + bs128_num * 128 * two_k / 2 * 32 + i * 32 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256 + bs128_num * 128 + i * 32,
+                            act_output + two_dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01 + bs128_num * 128 * ne01 + i * 32 * ne01);
+        }   
+         
+        }
+        // printf("32end\n");
+   
+        // bs 8
+        // printf("8:%d\n", bs8_num);
+        for (int i = 0; i < bs8_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 8, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32\
+                             + bs128_num * 128 * three_k / 3 * 32 + bs32_num * 32 * three_k / 3 * 32\
+                            + i * 8 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256\
+                             + bs128_num * 128 + bs32_num * 32 + i * 8,
+                            act_output + dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01\
+                             + bs128_num * 128 * ne01 + bs32_num * 32 * ne01 + \
+                            i * 8 * ne01);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 8, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
+                             + bs128_num * 128 * two_k / 2 * 32 + bs32_num * 32 * two_k / 2 * 32\
+                             + i * 8 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256\
+                             + bs128_num * 128 + bs32_num * 32 + i * 8,
+                            act_output + two_dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01\
+                             + bs128_num * 128 * ne01 + bs32_num * 32 * ne01\
+                             + i * 8 * ne01);
+        }   
+         
+        }
+        // printf("8end\n");
+
+        // bs 1
+        // printf("1:%d\n", bs1_num);
+        for (int i = 0; i < bs1_num; i++) {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 1, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut + bs512_num * 512 * three_k / 3 * 32 + bs256_num * 256 * three_k / 3 * 32 + \
+                            bs128_num * 128 * three_k / 3 * 32 + bs32_num * 32 * three_k / 3 * 32\
+                            + bs8_num * 8 * three_k / 3 * 32 + i * 1 * three_k / 3 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256\
+                             + bs128_num * 128 + bs32_num * 32 + bs8_num * 8 + i * 1,
+                            act_output + dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01\
+                             + bs128_num * 128 * ne01 + bs32_num * 32 * ne01 + \
+                            bs8_num * 8 * ne01 + i * 1 * ne01);
+        }
+        
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 1, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut + bs512_num * 512 * two_k / 3 * 32 + bs256_num * 256 * two_k / 3 * 32\
+                             + bs128_num * 128 * two_k / 2 * 32 + bs32_num * 32 * two_k / 2 * 32\
+                             + bs8_num * 8 * two_k / 2 * 32 + i * 1 * two_k / 2 * 32,
+                            wt->scales,
+                            lut_scales + bs512_num * 512 + bs256_num * 256\
+                             + bs128_num * 128 + bs32_num * 32 + bs8_num * 8 + i * 1,
+                            act_output + two_dst_offset + bs512_num * 512 * ne01 + bs256_num * 256 * ne01\
+                             + bs128_num * 128 * ne01 + bs32_num * 32 * ne01\
+                             + bs8_num * 8 * ne01 + i * 1 * ne01);
+        }   
+         
+        }
+        // printf("1end\n");
+
+        } else {
+
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int w_offset          = i_tile * w_tile_size;
+            const int sign_offset       = i_tile * sign_tile_size;
+            const int dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 1, three_k, ((uint8_t *)(wt->qweights) + w_offset),
+                            sign + sign_offset,
+                            three_qlut,
+                            wt->scales,
+                            lut_scales,
+                            act_output + dst_offset);
+        }
+
+        const int two_w_size           = ne01 * two_k / (2 * 2); // int8 
+        const int two_w_tile_size      = two_w_size / n_tile_num;
+        uint8_t* two_A = ((uint8_t *)(wt->qweights)) + ne01 * three_k / 4;
+        // auto gemm_start = std::chrono::high_resolution_clock::now();
+        for (int i_tile = th_tile_beg; i_tile < th_tile_end; i_tile++) {
+            const int two_w_offset          = i_tile * two_w_tile_size;
+            const int two_dst_offset        = i_tile * c_tile_size;
+
+            ggml_qgemm_lut( 1, two_k, two_A + two_w_offset, 
+                            NULL,
+                            two_qlut,
+                            wt->scales,
+                            lut_scales,
+                            act_output + two_dst_offset);
+        }        
+
+
+        }
+
+
+
+
+        return;
+    }
+#endif
 
 #if GGML_USE_LLAMAFILE
     // broadcast factors

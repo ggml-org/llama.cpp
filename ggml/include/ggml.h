@@ -407,10 +407,13 @@ extern "C" {
         GGML_TYPE_TL1      = 38,
         GGML_TYPE_TL2      = 39,
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 >>>>>>> master
 =======
 >>>>>>> ahead
+=======
+>>>>>>> upstream/release-dev
         GGML_TYPE_COUNT,
     };
 
