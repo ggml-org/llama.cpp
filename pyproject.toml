@@ -15,7 +15,7 @@ classifiers = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.9"
+python = ">=3.10,<3.14"
 numpy = "^1.25.0"
 sentencepiece = ">=0.1.98,<=0.2.0"
 transformers = ">=4.35.2,<5.0.0"
