@@ -687,7 +687,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                auto value = argv[i];
+                auto * value = argv[i];
                 /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
                 if (buft_list.empty()) {
                     // enumerate all the devices and add their buffer types to the list
@@ -719,7 +719,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     // memory leak present in the implementation
                     // over in arg.cpp. Acceptable because we
                     // only parse these args once in this program.
-                    auto override_group = value;
+                    auto * override_group = value;
                     if (value[override_group_span_len] == '\0') {
                         value = &value[override_group_span_len];
                         last_group = true;
@@ -730,7 +730,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
                     auto override_span_len = std::strcspn(override_group, ";");
                     while (override_span_len > 0) {
-                        auto override = override_group;
+                        auto * override = override_group;
                         if (override_group[override_span_len] != '\0') {
                             override_group[override_span_len] = '\0';
                             override_group = &override_group[override_span_len + 1];
@@ -743,9 +743,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                             break;
                         }
                         override[tensor_name_span_len] = '\0';
-                        auto tensor_name = override;
-                        auto buffer_type = &override[tensor_name_span_len + 1];
+                        auto * tensor_name = override;
+                        auto * buffer_type = &override[tensor_name_span_len + 1];
                         if (buft_list.find(buffer_type) == buft_list.end()) {
+                            printf("error: unrecognized buffer type '%s'\n", buffer_type);
                             printf("Available buffer types:\n");
                             for (const auto & it : buft_list) {
                                 printf("  %s\n", ggml_backend_buft_name(it.second));
@@ -1816,10 +1817,11 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "warning: sanitizer enabled, performance may be affected\n");
 #endif
 
-    cmd_params params = parse_cmd_params(argc, argv);
-
     // initialize backends
     ggml_backend_load_all();
+
+    cmd_params params = parse_cmd_params(argc, argv);
+
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
         fprintf(stderr, "%s: error: CPU backend is not loaded\n", __func__);
