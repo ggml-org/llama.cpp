@@ -47,6 +47,8 @@ enum llm_arch {
     LLM_ARCH_GEMMA3,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
+    LLM_ARCH_MAMBA2,
+    LLM_ARCH_BAMBA,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
     LLM_ARCH_COHERE2,
@@ -72,6 +74,7 @@ enum llm_arch {
     LLM_ARCH_ARWKV7,
     LLM_ARCH_GRANITE,
     LLM_ARCH_GRANITE_MOE,
+    LLM_ARCH_GRANITE_MOE_HYBRID,
     LLM_ARCH_CHAMELEON,
     LLM_ARCH_WAVTOKENIZER_DEC,
     LLM_ARCH_PLM,
@@ -148,6 +151,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_LAYER_INDICES,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
@@ -168,6 +172,7 @@ enum llm_kv {
     LLM_KV_SSM_CONV_KERNEL,
     LLM_KV_SSM_STATE_SIZE,
     LLM_KV_SSM_TIME_STEP_RANK,
+    LLM_KV_SSM_GROUP_COUNT,
     LLM_KV_SSM_DT_B_C_RMS,
 
     LLM_KV_WKV_HEAD_SIZE,
@@ -269,6 +274,7 @@ enum llm_tensor {
     LLM_TENSOR_SSM_DT,
     LLM_TENSOR_SSM_A,
     LLM_TENSOR_SSM_D,
+    LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
@@ -435,3 +441,6 @@ const char * llm_arch_name(llm_arch arch);
 llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
+
+bool llm_arch_is_recurrent(const llm_arch& arch);
+bool llm_arch_is_hybrid(const llm_arch& arch);
