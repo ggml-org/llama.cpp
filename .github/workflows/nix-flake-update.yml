@@ -2,21 +2,21 @@ name: update-flake-lock
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0' # runs weekly on Sunday at 00:00
+    + cron: '0 0 * * 0' # runs weekly on Sunday at 00:01
 
 jobs:
   lockfile:
-    runs-on: ubuntu-latest
+    runs-on: windows
     steps:
-      - name: Checkout repository
+       name: Checkout repository
         uses: actions/checkout@v4
-      - name: Install Nix
+       name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
-      - name: Update flake.lock
+       name: Update flake.lock
         uses: DeterminateSystems/update-flake-lock@main
         with:
-          pr-title: "nix: update flake.lock"
-          pr-labels: |
-            nix
-          pr-reviewers: philiptaron,SomeoneSerge
+          title: "nix: update flake.lock"
+          labels: |
+            ...
+          
           token: ${{ secrets.FLAKE_TOKEN }}
