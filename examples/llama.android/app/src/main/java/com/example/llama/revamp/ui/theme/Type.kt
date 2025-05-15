@@ -119,7 +119,7 @@ val Typography = Typography(
 val MonospacedTextStyle = TextStyle(
     fontFamily = FontFamily.Monospace,
     fontWeight = FontWeight.Normal,
-    fontSize = 14.sp,
+    fontSize = 12.sp,
     lineHeight = 20.sp,
     letterSpacing = 0.sp
 )
