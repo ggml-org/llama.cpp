@@ -333,44 +333,31 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 void llama_kv_cache_unified::restore() {
-    if (pending.ubatches.empty()) {
-        return;
-    }
+    for (const auto & [id, cell] : recovery.cells) {
+        // TODO: move to new `struct kv_cells`
+        const bool is_empty0 = cells[id].is_empty();
+        const bool is_empty1 = cell.is_empty();
 
-    uint32_t new_head = size;
-
-    for (const auto & ubatch : pending.ubatches) {
-        for (uint32_t i = 0; i < ubatch.data.n_tokens; ++i) {
-            for (int s = 0; s < ubatch.data.n_seq_id[i]; ++s) {
-                const llama_seq_id seq_id = ubatch.data.seq_id[i][s];
-
-                cells[ubatch.head + i].seq_id.erase(seq_id);
-                if (cells[ubatch.head + i].seq_id.empty()) {
-                    used--;
-
-                    new_head = std::min(new_head, ubatch.head + i);
-                }
-
-                cells[ubatch.head + i].pos = -1;
-            }
+        if (!is_empty0 && is_empty1) {
+            used--;
+        } else if (is_empty0 && !is_empty1) {
+            used++;
         }
+
+        cells[id] = cell;
     }
 
-    if (new_head != size && new_head < head) {
-        head = new_head;
-    }
-
-    pending.clear();
+    recovery.clear();
 }
 
 void llama_kv_cache_unified::commit() {
-    if (pending.ubatches.empty()) {
-        LLAMA_LOG_WARN("%s: no pending KV cache updates to commit - might indicate a bug (ref: %s)\n",
-                __func__, "https://github.com/ggml-org/llama.cpp/pull/12695");
+    if (recovery.cells.empty()) {
+        LLAMA_LOG_WARN("%s: the recovery information upon a commit was empty - might indicate a bug (ref: %s)\n",
+                __func__, "https://github.com/ggml-org/llama.cpp/pull/13194");
         return;
     }
 
-    pending.clear();
+    recovery.clear();
 }
 
 bool llama_kv_cache_unified::update(llama_context & lctx) {
@@ -460,16 +447,11 @@ void llama_kv_cache_unified::set_full() {
     head = 0;
 }
 
-llama_sbatch llama_kv_cache_unified::sbatch_init(
-        const llama_batch & batch,
-        bool logits_all) {
+llama_sbatch llama_kv_cache_unified::sbatch_init(const llama_batch & batch, bool logits_all) {
     return llama_sbatch(batch, hparams.n_embd, true, logits_all);
 }
 
-llama_ubatch llama_kv_cache_unified::ubatch_next(
-        llama_sbatch & sbatch,
-        uint32_t n_ubatch,
-        bool embd_pooled) const {
+llama_ubatch llama_kv_cache_unified::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
     GGML_UNUSED(embd_pooled);
     return sbatch.split_simple(n_ubatch);
 }
@@ -489,6 +471,29 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %d\n", __func__, n_tokens, size);
         return false;
     }
+
+//#define FIND_SLOT_DEBUG 1
+#if FIND_SLOT_DEBUG
+    LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
+
+    // for debugging
+    {
+        std::string ss;
+        if (n_swa > 0) {
+            for (uint32_t i = 0; i < size; ++i) {
+                if (cells[i].pos == -1) {
+                    ss += '.';
+                } else {
+                    ss += std::to_string(*cells[i].seq_id.begin());
+                }
+                if (i%256 == 255) {
+                    ss += '\n';
+                }
+            }
+        }
+        LLAMA_LOG_WARN("\n%s\n", ss.c_str());
+    }
+#endif
 
     uint32_t n_tested = 0;
 
@@ -520,6 +525,11 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
     }
 
     for (uint32_t i = 0; i < n_tokens; ++i) {
+        // remember the original state
+        if (recovery.cells.find(head + i) == recovery.cells.end()) {
+            recovery.cells[head + i] = cells[head + i];
+        }
+
         cells[head + i].pos = ubatch.pos[i];
 
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; j++) {
@@ -529,14 +539,14 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
 
     used += n_tokens;
 
-    pending.ubatches.push_back({ head, ubatch });
-
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // after enough generations, the benefit from this heuristic disappears
     // if we start defragmenting the cache, the benefit from this will be more important
     n = std::min(size, std::max(padding, GGML_PAD(cell_max(), padding)));
 
-    //printf("n = %5d, used = %5d, head = %5d\n", n, used, head);
+#ifdef FIND_SLOT_DEBUG
+    LLAMA_LOG_WARN("end:   n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
+#endif
 
     return true;
 }
@@ -640,6 +650,34 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     }
 
     return ggml_cpy(ctx, v_cur, v_view);
+}
+
+void llama_kv_cache_unified::prune_swa(llama_seq_id seq_id, llama_pos p1) {
+    // no pruning is needed when the cache does not use SWA
+    GGML_ASSERT(swa_type != LLAMA_SWA_TYPE_NONE && "do not prune non-SWA cache");
+
+    for (uint32_t i = 0; i < size; ++i) {
+        const llama_pos p0 = cells[i].pos;
+
+        if (is_masked_swa(p0, p1)) {
+            if (seq_id < 0) {
+                cells[i].seq_id.clear();
+            } else if (cells[i].has_seq_id(seq_id)) {
+                cells[i].seq_id.erase(seq_id);
+            } else {
+                continue;
+            }
+
+            if (cells[i].is_empty()) {
+                // keep count of the number of used cells
+                if (cells[i].pos >= 0) {
+                    used--;
+                }
+
+                cells[i].pos = -1;
+            }
+        }
+    }
 }
 
 void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
@@ -1181,6 +1219,10 @@ uint32_t llama_kv_cache_unified::cell_max() const {
 }
 
 bool llama_kv_cache_unified::is_masked_swa(llama_pos p0, llama_pos p1) const {
+    if (p0 < 0) {
+        return true;
+    }
+
     switch (swa_type) {
         case LLAMA_SWA_TYPE_NONE:
             {
@@ -1659,20 +1701,12 @@ void llama_kv_cache_unified_iswa::commit() {
     kv_base->commit();
     kv_swa ->commit();
 
-    if (pending.pos_max.empty()) {
-        return;
-    }
-
     // slide the attention window, forgetting/pruning old tokens that are outside the window
     for (const auto & [seq_id, pos_max] : pending.pos_max) {
-        if (pos_max <= (llama_pos) hparams.n_swa) {
-            continue;
-        }
-
-        kv_swa->seq_rm(seq_id, -1, pos_max - hparams.n_swa + 1);
+        kv_swa->prune_swa(seq_id, pos_max);
     }
 
-    pending.pos_max.clear();
+    pending.clear();
 }
 
 bool llama_kv_cache_unified_iswa::update(llama_context & lctx) {
@@ -1695,12 +1729,18 @@ void llama_kv_cache_unified_iswa::set_full() {
 }
 
 llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch, bool logits_all) {
+    pending.pos_max.clear();
+
     for (int i = 0; i < batch.n_tokens; ++i) {
         for (int s = 0; s < batch.n_seq_id[i]; ++s) {
             const llama_seq_id seq_id = batch.seq_id[i][s];
             const llama_pos    pos    = batch.pos[i];
 
-            pending.pos_max[seq_id] = std::max(pending.pos_max[seq_id], pos);
+            if (pending.pos_max.find(seq_id) == pending.pos_max.end()) {
+                pending.pos_max[seq_id] = pos;
+            } else {
+                pending.pos_max[seq_id] = std::max(pending.pos_max[seq_id], pos);
+            }
         }
     }
 

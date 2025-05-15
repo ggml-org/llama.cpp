@@ -2,18 +2,19 @@
 
 #include "llama.h"
 #include "llama-io.h"
-#include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-memory.h"
 
 #include "ggml-cpp.h"
 
-#include <map>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 struct llama_cparams;
 struct llama_hparams;
+struct llama_ubatch;
+struct llama_sbatch;
 struct llama_model;
 struct llama_context;
 
@@ -40,6 +41,9 @@ struct llama_kv_cache : public llama_memory_i {
     // batch processing
     //
 
+    // =============================================================================================================
+    // TODO: refactor  and simplify this
+
     virtual llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) = 0;
 
     // different KV caches require different batch splitting strategies
@@ -47,6 +51,8 @@ struct llama_kv_cache : public llama_memory_i {
 
     // find an empty slot of size "n_tokens" in the cache
     virtual bool find_slot(const llama_ubatch & batch) = 0;
+
+    // =============================================================================================================
 
     // getters
     virtual int32_t   get_n_tokens()   const = 0;
@@ -171,6 +177,8 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
+    void prune_swa(llama_seq_id seq_id, llama_pos p1);
+
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -214,7 +222,7 @@ private:
 
     uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
     uint32_t size = 0; // total number of cells, shared across all sequences
-    uint32_t used = 0; // used cells (i.e. at least one seq_id)
+    uint32_t used = 0; // used cells (i.e. at least one seq_id) (TODO: add `struct kv_cells` and keep track automaticallt)
 
     // computed before each graph build
     uint32_t n = 0;
@@ -233,27 +241,20 @@ private:
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
-    std::vector<kv_cell>  cells;
+    std::vector<kv_cell>  cells;  // TODO: replace with `struct kv_cells`
     std::vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id
-    std::map<int32_t, int32_t> map_layer_ids;
+    std::unordered_map<int32_t, int32_t> map_layer_ids;
 
-    struct ubatch_info {
-        uint32_t head;
-
-        llama_ubatch data;
-    };
-
-    // pending cell updates that are not yet committed
+    // recovery information used to restore the KV cells to their original state in case of a failure
     struct {
         void clear() {
-            ubatches.clear();
+            cells.clear();
         }
 
-        // upon batch processing failure, we revert these ubatches from the KV cells
-        std::vector<ubatch_info> ubatches;
-    } pending;
+        std::unordered_map<uint32_t, kv_cell> cells;
+    } recovery;
 
     // defrag
     struct {
@@ -377,9 +378,12 @@ public:
 private:
     const llama_hparams & hparams;
 
-    // pending cell updates that are not yet committed
     struct {
-        std::map<llama_seq_id, llama_pos> pos_max;
+        void clear() {
+            pos_max.clear();
+        }
+
+        std::unordered_map<llama_seq_id, llama_pos> pos_max;
     } pending;
 
     std::unique_ptr<llama_kv_cache_unified> kv_base;
