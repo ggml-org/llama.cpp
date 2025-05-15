@@ -258,6 +258,11 @@ cmake --build build --config release
 ### **GitHub contribution**:
 Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team check/address them without delay.
 
+### Basic Flash Attention Support
+The basic FA kernel with aclnnops has been added in aclnn_ops.cpp.
+
+Authors: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang@pku.edu.cn), Ruiyang Ma (ruiyang@stu.pku.edu.cn), and Guojie Luo (gluo@pku.edu.cn).
+
 
 ## TODO
 - Support more models and data types.
