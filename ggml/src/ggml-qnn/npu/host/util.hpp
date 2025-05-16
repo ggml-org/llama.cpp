@@ -23,4 +23,6 @@ const char * get_dsp_arch_desc(hexagon_dsp_arch arch);
 
 void enable_unsigned_dsp_module(common::rpc_interface_ptr rpc_interface, uint32_t domain_id);
 
+void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len);
+
 }  // namespace hexagon

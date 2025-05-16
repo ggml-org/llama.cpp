@@ -32,7 +32,8 @@ bool host_graph::update(ggml_cgraph * cgraph) {
     _tensor_handles.reserve(cgraph->n_nodes);
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         auto * node = cgraph->nodes[i];
-        if (node->op == GGML_OP_NONE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE) {
+        if (node->op == GGML_OP_NONE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE ||
+            node->op == GGML_OP_RESHAPE) {
             // skip view liked ops
             LOG_DEBUG("node[%d]%s(%s), addr: %p, type: %s, skipped\n", i, ggml_get_name(node), ggml_op_desc(node),
                       (void *) node, ggml_type_name(node->type));
@@ -55,8 +56,8 @@ bool host_graph::update(ggml_cgraph * cgraph) {
         }
     }
 
-    LOG_DEBUG("host_graph::update, host_graph(%p), ggml_cgraph(%p), tensor count(%zu)\n", (void *) this,
-              (void *) cgraph, _tensor_handles.size());
+    LOG_DEBUG("host_graph::update, host_graph(%p), handle(%p), ggml_cgraph(%p), tensor count(%zu)\n", (void *) this,
+              (void *) _graph_handle, (void *) cgraph, _tensor_handles.size());
     if (!_tensor_handles.empty()) {
         npu_device_graph_set_tensor(_device_handle, _graph_handle, _tensor_handles.data(),
                                     (int) _tensor_handles.size());

@@ -57,7 +57,7 @@ void backend_dev_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props
 ggml_backend_t backend_dev_init_backend(ggml_backend_dev_t dev, const char * params) {
     auto * dev_obj = get_device_object(dev);
     GGML_ASSERT(dev_obj != nullptr);
-    if (!dev_obj->init_device(dev, params)) {
+    if (!dev_obj->init_device()) {
         LOG_ERROR("[%s]Failed to init device\n", backend_dev_get_name(dev));
         return nullptr;
     }

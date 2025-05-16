@@ -10,7 +10,7 @@
 #include "profiler.hpp"
 #include "tensor.hpp"
 
-#ifdef GGML_QNN_ENABLE_PERFORMANCE_TRACKING
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 #    define GRAPH_PROFILE_HANDLE (_event_tracer ? _event_tracer->get_handle() : nullptr)
 #    define GRAPH_PROFILE_PRINT()                  \
         if (_event_tracer) {                       \
@@ -381,7 +381,7 @@ qnn_graph::qnn_graph(const std::string & graph_name, backend_index_type device, 
         return;
     }
 
-#ifdef GGML_QNN_ENABLE_PERFORMANCE_TRACKING
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
     if (device == QNN_BACKEND_NPU) {
         _event_tracer = std::make_shared<qnn_event_tracer>(
             graph_name, qnn_interface, qnn_instance->get_qnn_backend_handle(), qnn_event_tracer::PROFILE_OP_TRACE);

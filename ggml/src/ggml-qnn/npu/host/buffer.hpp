@@ -25,6 +25,8 @@ class host_buffer {
 
     std::shared_ptr<host_tensor> init_tensor(ggml_tensor * tensor, remote_handle64 device_handle);
 
+    void clear_tensors();
+
   private:
     common::rpc_mem_ptr _allocator;
     void *              _data      = nullptr;

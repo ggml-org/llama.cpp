@@ -75,6 +75,12 @@ void backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     memset(buffer_obj->get_buffer(), value, buffer_obj->get_size());
 }
 
+void backend_buffer_reset(ggml_backend_buffer_t buffer) {
+    auto * buffer_obj = get_buffer_object(buffer);
+    GGML_ASSERT(buffer_obj != nullptr);
+    buffer_obj->clear_tensors();
+}
+
 constexpr const ggml_backend_buffer_i backend_buffer_interface = {
     /* .free_buffer     = */ backend_buffer_free_buffer,
     /* .get_base        = */ backend_buffer_get_base,
@@ -84,7 +90,7 @@ constexpr const ggml_backend_buffer_i backend_buffer_interface = {
     /* .get_tensor      = */ backend_buffer_get_tensor,
     /* .cpy_tensor      = */ backend_buffer_cpy_tensor,
     /* .clear           = */ backend_buffer_clear,
-    /* .reset           = */ nullptr,
+    /* .reset           = */ backend_buffer_reset,
 };
 
 const char * backend_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
@@ -188,6 +194,11 @@ std::shared_ptr<host_tensor> host_buffer::init_tensor(ggml_tensor * tensor, remo
 
     _tensors.push_back(tensor_object);
     return tensor_object;
+}
+
+void host_buffer::clear_tensors() {
+    _tensors.clear();
+    LOG_DEBUG("clear host_buffer(%p) tensors\n", (void *) _data);
 }
 
 host_buffer_type::host_buffer_type(ggml_backend_dev_t dev, const std::string & name, common::rpc_mem_ptr rpc_mem) :

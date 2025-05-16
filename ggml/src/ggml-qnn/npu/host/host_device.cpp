@@ -7,6 +7,8 @@
 
 #include <remote.h>
 
+#include <type_traits>
+
 #include "graph.hpp"
 #include "util.hpp"
 
@@ -114,11 +116,117 @@ bool npu_device::is_device_initialized() const {
     return true;
 }
 
-bool npu_device::init_device(ggml_backend_dev_t dev, const char * params) {
+bool npu_device::init_device() {
     if (!init_rpc_mem()) {
         return false;
     }
 
+    if (!init_device_lib()) {
+        return false;
+    }
+
+    return true;
+}
+
+bool npu_device::supports_buft(ggml_backend_buffer_type_t buft) const {
+    return buft && buft->device && buft->device->context == this;
+}
+
+bool npu_device::supports_op_impl(const ggml_tensor * op) {
+    static_assert(std::is_same<npu_device_fp16_t, ggml_fp16_t>::value,
+                  "npu_device_fp16_t should be same as ggml_fp16_t");
+
+    if (op->op == GGML_OP_NONE) {
+        return true;
+    }
+
+    if (op->op == GGML_OP_VIEW || op->op == GGML_OP_RESHAPE || op->op == GGML_OP_PERMUTE) {
+        return true;
+    }
+
+    if (type_to_npu_type(op->type) == NPU_DATA_TYPE_COUNT) {
+        LOG_DEBUG("[%s]Unsupported op tensor type: %s\n", get_name(), ggml_type_name(op->type));
+        return false;
+    }
+
+    auto * src0 = op->src[0];
+    if (!src0) {
+        LOG_DEBUG("[%s]Unsupported inplace op: %s\n", get_name(), ggml_op_name(op->op));
+        return false;
+    }
+
+    if (type_to_npu_type(src0->type) == NPU_DATA_TYPE_COUNT) {
+        LOG_DEBUG("[%s]Unsupported src0 tensor type: %s\n", get_name(), ggml_type_name(src0->type));
+        return false;
+    }
+
+    auto * src1 = op->src[1];
+    if (src1 && type_to_npu_type(src1->type) == NPU_DATA_TYPE_COUNT) {
+        LOG_DEBUG("[%s]Unsupported src1 tensor type: %s\n", get_name(), ggml_type_name(src1->type));
+        return false;
+    }
+
+    auto npu_op = op_to_npu_op(op->op);
+    if (npu_op == NPU_OP_COUNT) {
+        LOG_DEBUG("[%s]Unsupported op: %s\n", get_name(), ggml_op_name(op->op));
+        return false;
+    }
+
+    if (!_device_handle && !init_device()) {
+        LOG_DEBUG("[%s]NPU device initialization failed\n", get_name());
+        return false;
+    }
+
+    constexpr const auto get_spec = [](const ggml_tensor * tensor) -> npu_device_tensor_spec {
+        if (!tensor) {
+            return npu_device_tensor_spec{};
+        }
+
+        static_assert(DEVICE_TENSOR_MAX_DIMS == GGML_MAX_DIMS, "tensor dimensions mismatch");
+        npu_device_tensor_spec spec{};
+        spec.ne[0] = tensor->ne[0];
+        spec.ne[1] = tensor->ne[1];
+        spec.ne[2] = tensor->ne[2];
+        spec.ne[3] = tensor->ne[3];
+        spec.type  = type_to_npu_type(tensor->type);
+        return spec;
+    };
+
+    boolean supported = false;
+    auto    src0_spec = get_spec(src0);
+    auto    src1_spec = get_spec(src1);
+    auto    dst_spec  = get_spec(op);
+    auto    ret = npu_device_device_support_op(_device_handle, &src0_spec, &src1_spec, &dst_spec, npu_op, &supported);
+    if (ret != AEE_SUCCESS || !supported) {
+        LOG_DEBUG("[%s][%s]unsupported %s(%s,%s), ret: 0x%x, supported: %d\n", get_name(), ggml_op_name(op->op),
+                  ggml_type_name(op->type), ggml_type_name(src0->type), (src1 ? ggml_type_name(src1->type) : "null"),
+                  ret, supported);
+        return false;
+    }
+
+    return true;
+}
+
+bool npu_device::init_rpc_mem() {
+    if (!_rpc_mem) {
+        auto rpc_interface = std::make_shared<common::rpc_interface>();
+        if (!rpc_interface->is_valid()) {
+            LOG_ERROR("[%s]Failed to load rpc memory library\n", get_name());
+            return false;
+        }
+
+        auto rpc_mem   = std::make_shared<common::rpc_mem>(rpc_interface);
+        _rpc_interface = rpc_interface;
+        _rpc_mem       = rpc_mem;
+        LOG_DEBUG("[%s]rpc memory initialized\n", get_name());
+    } else {
+        LOG_DEBUG("[%s]rpc memory already initialized\n", get_name());
+    }
+
+    return true;
+}
+
+bool npu_device::init_device_lib() {
     if (!_device_handle) {
         auto         arch            = get_dsp_arch(_rpc_interface, _dsp_domain_id);
         const auto & device_lib_info = get_device_library_info(arch);
@@ -152,96 +260,37 @@ bool npu_device::init_device(ggml_backend_dev_t dev, const char * params) {
     return true;
 }
 
-bool npu_device::supports_buft(ggml_backend_buffer_type_t buft) const {
-    return buft && buft->device && buft->device->context == this;
-}
-
-bool npu_device::supports_op_impl(const ggml_tensor * op) {
-    if (op->op == GGML_OP_NONE) {
-        return true;
-    }
-
-    if (type_to_npu_type(op->type) == NPU_DATA_TYPE_COUNT) {
-        LOG_DEBUG("[%s]Unsupported op tensor type: %s\n", get_name(), ggml_type_name(op->type));
-        return false;
-    }
-
-    auto * src0 = op->src[0];
-    if (!src0) {
-        LOG_DEBUG("[%s]Unsupported inplace op: %s\n", get_name(), ggml_op_name(op->op));
-        return false;
-    }
-
-    if (type_to_npu_type(src0->type) == NPU_DATA_TYPE_COUNT) {
-        LOG_DEBUG("[%s]Unsupported src0 tensor type: %s\n", get_name(), ggml_type_name(src0->type));
-        return false;
-    }
-
-    auto * src1 = op->src[1];
-    if (src1 && type_to_npu_type(src1->type) == NPU_DATA_TYPE_COUNT) {
-        LOG_DEBUG("[%s]Unsupported src1 tensor type: %s\n", get_name(), ggml_type_name(src1->type));
-        return false;
-    }
-
-    auto npu_op = op_to_npu_op(op->op);
-    if (npu_op == NPU_OP_COUNT) {
-        LOG_DEBUG("[%s]Unsupported op: %s\n", get_name(), ggml_op_name(op->op));
-        return false;
-    }
-
-    constexpr const auto get_spec = [](const ggml_tensor * tensor) -> npu_device_tensor_spec {
-        if (!tensor) {
-            return npu_device_tensor_spec{};
-        }
-
-        static_assert(DEVICE_TENSOR_MAX_DIMS == GGML_MAX_DIMS, "tensor dimensions mismatch");
-        npu_device_tensor_spec spec{};
-        spec.ne[0] = tensor->ne[0];
-        spec.ne[1] = tensor->ne[1];
-        spec.ne[2] = tensor->ne[2];
-        spec.ne[3] = tensor->ne[3];
-        spec.type  = type_to_npu_type(tensor->type);
-        return spec;
-    };
-
-    boolean supported = false;
-    auto    src0_spec = get_spec(src0);
-    auto    src1_spec = get_spec(src1);
-    auto    dst_spec  = get_spec(op);
-    auto    ret = npu_device_device_support_op(_device_handle, &src0_spec, &src1_spec, &dst_spec, npu_op, &supported);
-    if (ret != AEE_SUCCESS || !supported) {
-        LOG_DEBUG("[%s]Unsupported op: %s, ret: 0x%x, supported: %d\n", get_name(), ggml_op_name(op->op), ret,
-                  supported);
-        return false;
-    }
-
-    LOG_DEBUG("[%s]Supported op: %s\n", get_name(), ggml_op_name(op->op));
-    return true;
-}
-
-bool npu_device::init_rpc_mem() {
-    if (!_rpc_mem) {
-        auto rpc_interface = std::make_shared<common::rpc_interface>();
-        if (!rpc_interface->is_valid()) {
-            LOG_ERROR("[%s]Failed to load rpc memory library\n", get_name());
-            return false;
-        }
-
-        auto rpc_mem   = std::make_shared<common::rpc_mem>(rpc_interface);
-        _rpc_interface = rpc_interface;
-        _rpc_mem       = rpc_mem;
-        LOG_DEBUG("[%s]rpc memory initialized\n", get_name());
-    } else {
-        LOG_DEBUG("[%s]rpc memory already initialized\n", get_name());
-    }
-
-    return true;
-}
-
 bool npu_device::offload_op(const ggml_tensor * op) {
     // TODO: implement this
     return false;
 }
+
+#ifndef NDEBUG
+bool npu_device::supports_op(const ggml_tensor * op) {
+    char op_desc[1024];
+    get_op_tensor_desc(op, op_desc, sizeof(op_desc));
+
+    if (supports_op_impl(op)) {
+        if (op->op != GGML_OP_NONE && op->op != GGML_OP_VIEW && op->op != GGML_OP_RESHAPE &&
+            op->op != GGML_OP_PERMUTE) {
+            _supported_op++;
+            LOG_DEBUG("[%s][%s]supported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op),
+                      op_desc, _supported_op.load(), _unsupported_op.load());
+        }
+
+        return true;
+    }
+
+    _unsupported_op++;
+    LOG_DEBUG("[%s][%s]unsupported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op), op_desc,
+              _supported_op.load(), _unsupported_op.load());
+    return false;
+}
+#else
+bool npu_device::supports_op(const ggml_tensor * op) {
+    return supports_op_impl(op);
+}
+#endif
 
 ggml_backend_buffer_type_t npu_device::get_default_buffer_type(ggml_backend_dev_t dev) {
     // Note that this function will be called before the npu_device::init_device

@@ -9,6 +9,7 @@
 #include "graph.hpp"
 #include "hexagon_npu.h"
 #include "op_impl.hpp"
+#include "quants.hpp"
 #include "remote.h"
 #include "tensor.hpp"
 #include "thread_pool.hpp"
@@ -18,6 +19,37 @@ namespace {
 
 struct npu_device_context {
     std::unique_ptr<hexagon::default_thread_pool> thread_pool;
+    std::unique_ptr<float[]>                      f16_to_f32_table;  // TODO: store vtcm?
+
+    bool init() {
+        if (!init_ltu()) {
+            DEVICE_LOG_ERROR("Failed to initialize LTU");
+            return false;
+        }
+
+        if (!init_thread_pool()) {
+            DEVICE_LOG_ERROR("Failed to initialize thread pool");
+            return false;
+        }
+
+        DEVICE_LOG_DEBUG("NPU device context initialized");
+        return true;
+    }
+
+  private:
+    bool init_ltu() {
+        constexpr const size_t kLtuCount = 1U << 16;
+
+        f16_to_f32_table = std::make_unique<float[]>(kLtuCount);
+        if (!f16_to_f32_table) {
+            DEVICE_LOG_ERROR("Failed to allocate memory for f16_to_f32 table");
+            return false;
+        }
+
+        hexagon::init_f16_f32_table(f16_to_f32_table.get(), kLtuCount);
+        DEVICE_LOG_DEBUG("f16_to_f32 table initialized");
+        return true;
+    }
 
     bool init_thread_pool() {
         if (thread_pool) {
@@ -67,8 +99,8 @@ int npu_device_open(const char * uri, remote_handle64 * h) {
         return AEE_ENOMEMORY;
     }
 
-    if (!context->init_thread_pool()) {
-        DEVICE_LOG_ERROR("Failed to initialize thread pool");
+    if (!context->init()) {
+        DEVICE_LOG_ERROR("Failed to initialize npu_device_context");
         delete context;
         return AEE_EFAILED;
     }
@@ -187,7 +219,7 @@ AEEResult npu_device_graph_compute(remote_handle64 _h, npu_device_graph_handle_t
         return AEE_EINVHANDLE;
     }
 
-    if (!graph->compute(dev_ctx->thread_pool.get())) {
+    if (!graph->compute(dev_ctx->thread_pool.get(), dev_ctx->f16_to_f32_table.get())) {
         return AEE_EFAILED;
     }
 

@@ -12,7 +12,7 @@
 
 namespace qnn {
 
-#ifdef GGML_QNN_ENABLE_PERFORMANCE_TRACKING
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 
 class qnn_scoped_timer {
   public:
@@ -92,7 +92,7 @@ using qnn_event_tracer_ptr = std::shared_ptr<qnn_event_tracer>;
 
 }  // namespace qnn
 
-#ifdef GGML_QNN_ENABLE_PERFORMANCE_TRACKING
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 #    define QNN_SCOPED_PERFORMANCE_TRACKER(fmt, ...) \
         auto __qnn_timer_##__LINE__ = qnn::make_scope_perf_timer(fmt, __VA_ARGS__)
 #else

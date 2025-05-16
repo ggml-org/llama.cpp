@@ -40,19 +40,17 @@ class host_tensor {
 
         tensor->extra = this;
         _ggml_tensor  = tensor;
-        LOG_DEBUG(
-            "host_tensor(%p) created, ggml_tensor(%p[%ldx%ldx%ldx%ld], nb[%ld][%ld][%ld][%ld]), "
-            "device_tensor_handle(%p)\n",
-            (void *) this, (void *) tensor, (long) tensor->ne[0], (long) tensor->ne[1], (long) tensor->ne[2],
-            (long) tensor->ne[3], (long) tensor->nb[0], (long) tensor->nb[1], (long) tensor->nb[2],
-            (long) tensor->nb[3], (void *) _device_tensor_handle);
+        LOG_DEBUG("host_tensor(%p), ggml_tensor(%p[%ldx%ldx%ldx%ld], nb[%ld][%ld][%ld][%ld], %s), handle(%p)\n",
+                  (void *) this, (void *) tensor, (long) tensor->ne[0], (long) tensor->ne[1], (long) tensor->ne[2],
+                  (long) tensor->ne[3], (long) tensor->nb[0], (long) tensor->nb[1], (long) tensor->nb[2],
+                  (long) tensor->nb[3], ggml_type_name(tensor->type), (void *) _device_tensor_handle);
     }
 
     ~host_tensor() {
         LOG_DEBUG("host_tensor(%p) destroy, device_tensor_handle: %p\n", (void *) this, (void *) _device_tensor_handle);
         if (_device_tensor_handle) {
             npu_device_tensor_free(_device_handle, _device_tensor_handle);
-            _ggml_tensor->extra = nullptr;
+            // TODO: figure out why the _ggml_tensor is invalid here
         }
     }
 

@@ -31,37 +31,18 @@ class npu_device {
     ggml_backend_buffer_type_t get_default_buffer_type(ggml_backend_dev_t dev);
 
     bool is_device_initialized() const;
-    bool init_device(ggml_backend_dev_t dev, const char * params);
+    bool init_device();
 
     bool supports_buft(ggml_backend_buffer_type_t buft) const;
     bool offload_op(const ggml_tensor * op);
-
-#ifndef NDEBUG
-    bool supports_op(const ggml_tensor * op) {
-        if (supports_op_impl(op)) {
-            if (op->op != GGML_OP_NONE) {
-                _supported_op++;
-                LOG_DEBUG("[%s]Supported op: %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op),
-                          _supported_op.load(), _unsupported_op.load());
-            }
-
-            return true;
-        }
-
-        _unsupported_op++;
-        LOG_DEBUG("[%s]Unsupported op: %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op),
-                  _supported_op.load(), _unsupported_op.load());
-        return false;
-    }
-#else
-    bool supports_op(const ggml_tensor * op) { return supports_op_impl(op); }
-#endif
+    bool supports_op(const ggml_tensor * op);
 
     remote_handle64 get_device_handle() const { return _device_handle; }
 
   private:
     bool supports_op_impl(const ggml_tensor * op);
     bool init_rpc_mem();
+    bool init_device_lib();
 
     std::string                       _name        = "hexagon-npu";
     std::string                       _description = "Hexagon NPU";

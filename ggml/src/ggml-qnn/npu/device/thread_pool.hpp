@@ -143,6 +143,8 @@ template <size_t _thread_count> class thread_pool {
         return true;
     }
 
+    void sync_thread() { qurt_barrier_wait(&_completed); }
+
   private:
     struct thread_pool_arg {
         thread_pool * pool       = nullptr;

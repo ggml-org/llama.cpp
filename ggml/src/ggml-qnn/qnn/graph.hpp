@@ -79,7 +79,7 @@ class qnn_graph {
     std::vector<Qnn_Tensor_t> _qnn_tensor_inputs;
     std::vector<Qnn_Tensor_t> _qnn_tensor_outputs;
 
-#ifdef GGML_QNN_ENABLE_PERFORMANCE_TRACKING
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
     // profiler
     qnn_event_tracer_ptr _event_tracer;
 #endif
