@@ -1,0 +1,32 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Project Structure Overview
+
+This project, `llama.cpp`, is primarily a C/C++ application.
+
+## Key Files:
+- Main build configuration: [`CMakeLists.txt`](mdc:CMakeLists.txt)
+- Alternative build system: [`Makefile`](mdc:Makefile)
+- Project documentation: [`README.md`](mdc:README.md)
+- Python dependencies: [`requirements.txt`](mdc:requirements.txt)
+- Python project metadata: [`pyproject.toml`](mdc:pyproject.toml)
+
+## Core Directories:
+- Source code: [`src/`](mdc:src)
+- Header files: [`include/`](mdc:include)
+- Example usage: [`examples/`](mdc:examples)
+- Utility scripts (often Python): [`scripts/`](mdc:scripts)
+- CMake helper modules: [`cmake/`](mdc:cmake)
+- GGML library (submodule or core component): [`ggml/`](mdc:ggml) (See [`ggml_structure.mdc`](mdc:.cursor/rules/ggml_structure.mdc) for more details)
+- GGUF Python library: [`gguf-py/`](mdc:gguf-py)
+
+## Other Important Directories:
+- Documentation: [`docs/`](mdc:docs)
+- Predefined grammars for generation: [`grammars/`](mdc:grammars)
+- Model files (likely downloaded or converted): [`models/`](mdc:models)
+- Continuous integration configurations: [`ci/`](mdc:ci), [`.github/`](mdc:.github)
+- Test files: [`tests/`](mdc:tests)
+- Various tools: [`tools/`](mdc:tools)

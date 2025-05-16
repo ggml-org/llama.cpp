@@ -1,0 +1,25 @@
+---
+description: 
+globs: *.py
+alwaysApply: false
+---
+# Python Scripts Overview
+
+The project utilizes Python for various helper scripts, model conversion, and tooling.
+
+## Key Python Scripts:
+- **Model Conversion:**
+  - Hugging Face to GGUF: [`convert_hf_to_gguf.py`](mdc:convert_hf_to_gguf.py)
+  - LLaMA GGML to GGUF: [`convert_llama_ggml_to_gguf.py`](mdc:convert_llama_ggml_to_gguf.py)
+  - LoRA to GGUF: [`convert_lora_to_gguf.py`](mdc:convert_lora_to_gguf.py)
+  - (Potentially updated HF to GGUF): [`convert_hf_to_gguf_update.py`](mdc:convert_hf_to_gguf_update.py)
+
+- **Dependencies & Environment:**
+  - Python package requirements are listed in [`requirements.txt`](mdc:requirements.txt).
+  - Project metadata and dependencies for tools like Poetry might be in [`pyproject.toml`](mdc:pyproject.toml).
+
+## Usage:
+These scripts are typically run from the command line, e.g., `python scripts/convert_hf_to_gguf.py ...`.
+Refer to the specific script's arguments (often available via `-h` or `--help`) or the project [`README.md`](mdc:README.md) for detailed usage instructions.
+
+The [`scripts/`](mdc:scripts) directory may contain other useful Python utilities.

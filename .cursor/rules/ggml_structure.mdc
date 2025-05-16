@@ -1,0 +1,19 @@
+---
+description: 
+globs: ggml/*
+alwaysApply: false
+---
+# GGML Library Structure
+
+This directory, [`ggml/`](mdc:ggml), contains the GGML tensor library, which is a core dependency for `llama.cpp`.
+
+## Key Components within `ggml/`:
+- **Build Configuration:** [`ggml/CMakeLists.txt`](mdc:ggml/CMakeLists.txt) - Defines how GGML itself is built.
+- **Source Code:** [`ggml/src/`](mdc:ggml/src) - Contains the C implementation of the GGML library.
+  - Look for files like `ggml.c`, `ggml-alloc.c`, `ggml-backend.c`, etc.
+- **Header Files:** [`ggml/include/`](mdc:ggml/include) - Contains the public API header files for GGML.
+  - Key headers include `ggml.h`, `ggml-alloc.h`, `ggml-backend.h`.
+- **CMake Modules:** [`ggml/cmake/`](mdc:ggml/cmake) - Contains helper CMake scripts specific to building GGML.
+- **Git Ignore:** [`ggml/.gitignore`](mdc:ggml/.gitignore) - Specifies intentionally untracked files for the GGML subdirectory.
+
+Understanding the structure of `ggml/` is important for tasks involving low-level tensor operations, performance optimization, or extending the core functionalities of `llama.cpp`.

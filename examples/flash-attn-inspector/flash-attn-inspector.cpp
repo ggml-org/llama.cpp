@@ -147,66 +147,100 @@ static void get_tensor_data_if_needed(struct ggml_tensor * t, std::vector<uint8_
 /**
  * GGML operations callback during the graph execution.
  * This callback specifically looks for GGML_OP_FLASH_ATTN_EXT operations
- * and prints their input and output tensors.
+ * and prints their input and output tensor shapes.
  */
 static bool ggml_flash_attn_ext_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     if (t->op != GGML_OP_FLASH_ATTN_EXT) {
         return true; // Continue for other ops
     }
 
-    auto * cb_data = (callback_data *) user_data;
-
     if (ask) {
         return true; // We are interested in data for GGML_OP_FLASH_ATTN_EXT
     }
 
     LOG("\nFound GGML_OP_FLASH_ATTN_EXT operation.\n");
-    ggml_print_tensor_summary("Output Tensor (result of FlashAttnExt)", t);
-
-    uint8_t * tensor_data_ptr = nullptr;
-
-    // Print Inputs
+    
+    // Print output tensor shape
+    LOG("Output Tensor Shape: [%d, %d, %d, %d]\n", 
+        t->ne[0], t->ne[1], t->ne[2], t->ne[3]);
+    
+    // Print the first input tensor (src[0]) in detail
+    if (t->src[0] != nullptr) {
+        struct ggml_tensor * q = t->src[0];
+        LOG("First input tensor (Q) details:\n");
+        LOG("  Name: %s\n", q->name[0] != '\0' ? q->name : "(unnamed)");
+        LOG("  Type: %s\n", ggml_type_name(q->type));
+        LOG("  Shape: [%d, %d, %d, %d]\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
+        LOG("  Stride: [%d, %d, %d, %d]\n", q->nb[0], q->nb[1], q->nb[2], q->nb[3]);
+        
+        // Get tensor data
+        std::vector<uint8_t> buffer;
+        uint8_t* data_ptr = nullptr;
+        get_tensor_data_if_needed(q, buffer, &data_ptr);
+        
+        if (data_ptr != nullptr) {
+            LOG("  Data preview:\n");
+            ggml_print_tensor_data(q, data_ptr, 3);
+        } else {
+            LOG("  Data: Not available\n");
+        }
+    }
+    
+    // Print input tensor shapes
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         struct ggml_tensor * src = t->src[i];
         if (src == nullptr) {
-            // This is normal, ops have variable number of inputs
-            // LOG("Src[%d] is null.\n",i); // uncomment for very verbose debugging
             continue;
         }
-        char title[64];
-        snprintf(title, sizeof(title), "  Input %d", i);
-        ggml_print_tensor_summary(title, src);
-
-        std::vector<uint8_t>* current_buffer = nullptr;
-        if (i==0) current_buffer = &cb_data->data_src0;
-        else if (i==1) current_buffer = &cb_data->data_src1;
-        else if (i==2) current_buffer = &cb_data->data_src2;
-        else if (i==3) current_buffer = &cb_data->data_src3; // Flash Attn Ext uses up to 4 inputs (Q, K, V, Mask)
-        // else: Add more else if blocks if GGML_OP_FLASH_ATTN_EXT can have more inputs
-
-        if (current_buffer) {
-           get_tensor_data_if_needed(src, *current_buffer, &tensor_data_ptr);
-           if (tensor_data_ptr != nullptr && ggml_nbytes(src) > 0) {
-                ggml_print_tensor_data(src, tensor_data_ptr, 3);
-           } else {
-                LOG("    (Data for src[%d] is null or empty or not fetched)\n", i);
-           }
-        } else {
-            LOG("    (Could not get buffer for src[%d] - this might be an issue or the op uses fewer than %d inputs)\n", i, GGML_MAX_SRC);
-        }
+        
+        LOG("Input %d Shape: [%d, %d, %d, %d]\n", 
+            i, src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
-    // Print Output
-    LOG("  Output Data (result of FlashAttnExt):\n");
-    get_tensor_data_if_needed(t, cb_data->data_out, &tensor_data_ptr);
-    if (tensor_data_ptr != nullptr && ggml_nbytes(t) > 0) {
-        ggml_print_tensor_data(t, tensor_data_ptr, 3);
-    } else {
-        LOG("    (Data for output tensor is null or empty or not fetched)\n");
-    }
-    LOG("Finished processing GGML_OP_FLASH_ATTN_EXT: %s\n\n", (t->name[0] != '\0' ? t->name : "(unnamed)"));
+    LOG("Finished processing GGML_OP_FLASH_ATTN_EXT: %s\n\n", 
+        (t->name[0] != '\0' ? t->name : "(unnamed)"));
 
     return true;
+}
+
+static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, bool do_profile=false) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+
+    const llama_model * model   = llama_get_model(ctx);
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
+
+    std::vector<llama_token> tokens(n_batch);
+
+    int n_processed = 0;
+
+    while (n_processed < n_prompt) {
+        int n_tokens = std::min(n_prompt - n_processed, n_batch);
+        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+        for (int i = 1; i < n_tokens; i++) {
+            tokens[i] = std::rand() % n_vocab;
+        }
+        llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
+        n_processed += n_tokens;
+    }
+
+    llama_synchronize(ctx);
+}
+
+static void test_gen(llama_context * ctx, int n_gen, int n_threads, bool do_profile=false) {
+    llama_set_n_threads(ctx, n_threads, n_threads);
+
+    const llama_model * model   = llama_get_model(ctx);
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
+
+    llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+
+    for (int i = 0; i < n_gen; i++) {
+        llama_decode(ctx, llama_batch_get_one(&token, 1));
+        llama_synchronize(ctx);
+        token = std::rand() % n_vocab;
+    }
 }
 
 static bool run(llama_context * ctx, const common_params & params) {
@@ -237,8 +271,7 @@ static bool run(llama_context * ctx, const common_params & params) {
         LOG_INF("Prompt size (%zu) is close to or exceeds context size (%d). Consider increasing context size.\n", tokens.size(), params.n_ctx);
     }
 
-
-    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), static_cast<int32_t>(tokens.size())))) {
+    if (llama_decode(ctx, llama_batch_get_one(tokens.data(), 1))) {
         LOG_ERR("%s : failed to eval\n", __func__);
         return false;
     }
@@ -254,20 +287,16 @@ int main(int argc, char ** argv) {
     // Initialize with a default model that is likely to use Flash Attention.
     // User can override with -m
     params.model.path = "ggml-model-f16.gguf"; // A common default, adjust if needed or rely on user.
+    params.flash_attn = true;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         fprintf(stderr, "Failed to parse common_params.\n");
         return 1;
     }
-     // Ensure defaults if some specific params are not set by user,
-    // for example, a reasonable context size.
     if (params.n_ctx == 0) {
         params.n_ctx = 512; // Default context size for the example
     }
-
-
     common_init();
-
     llama_backend_init();
     llama_numa_init(params.numa);
 

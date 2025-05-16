@@ -6873,23 +6873,25 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t DK = nek0;
-    const int64_t DV = nev0;
-    const int64_t N  = neq1;
+    const int64_t DK = nek0;     //> head_dim
+    const int64_t DV = nev0;     //> head_dim 
+    const int64_t N  = neq1;     //> q_len
 
-    GGML_ASSERT(ne0 == DV);
-    GGML_ASSERT(ne2 == N);
+    GGML_ASSERT(ne0 == DV);     //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne2 == N);      //> dst -> ne[2] == q_len
 
     // input tensor rows must be contiguous
+    //> QKV cannot do transpose.
     GGML_ASSERT(nbq0 == ggml_type_size(q->type));
     GGML_ASSERT(nbk0 == ggml_type_size(k->type));
     GGML_ASSERT(nbv0 == ggml_type_size(v->type));
 
-    GGML_ASSERT(neq0 == DK);
-    GGML_ASSERT(nek0 == DK);
-    GGML_ASSERT(nev0 == DV);
+    //> V donot transpose before.
+    GGML_ASSERT(neq0 == DK);     //> q -> ne[0] == head_dim
+    GGML_ASSERT(nek0 == DK);     //> k -> ne[0] == head_dim
+    GGML_ASSERT(nev0 == DV);     //> v -> ne[0] == head_dim
 
-    GGML_ASSERT(neq1 == N);
+    GGML_ASSERT(neq1 == N);      //> q -> ne[1] == q_len
 
     // dst cannot be transposed or permuted
     GGML_ASSERT(nb0 == sizeof(float));
@@ -6898,17 +6900,18 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     GGML_ASSERT(nb2 <= nb3);
 
     // broadcast factors
-    const int64_t rk2 = neq2/nek2;
-    const int64_t rk3 = neq3/nek3;
+    const int64_t rk2 = neq2/nek2;     //> n_q_head / n_kv_head
+    const int64_t rk3 = neq3/nek3;     //> n_q_batch / n_kv_batch
 
-    const int64_t rv2 = neq2/nev2;
-    const int64_t rv3 = neq3/nev3;
+    const int64_t rv2 = neq2/nev2;     //> n_q_head / n_v_head
+    const int64_t rv3 = neq3/nev3;     //> n_q_batch / n_v_batch
 
     // parallelize by q rows using ggml_vec_dot_f32
 
     // total rows in q
-    const int nr = neq1*neq2*neq3;
+    const int nr = neq1*neq2*neq3;     //> number of rows, one row is one head_dim.
 
+    // NOTE: Parallelize by q rows.
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
 
@@ -7119,10 +7122,10 @@ static void ggml_compute_forward_flash_attn_back_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int64_t D = neq0;
-    const int64_t N = neq1;
-    const int64_t P = nek1 - N;
-    const int64_t M = P + N;
+    const int64_t D = neq0;     //> head_dim
+    const int64_t N = neq1;     //> seq_len_q
+    const int64_t P = nek1 - N; //> seq_len_kv - seq_len_q
+    const int64_t M = P + N;    //> seq_len_kv
 
     const int Mup  = ggml_up(M, GGML_SOFT_MAX_UNROLL);
     const int mxDM = MAX(D, Mup);
