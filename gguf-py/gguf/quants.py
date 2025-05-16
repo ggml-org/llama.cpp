@@ -1,3 +1,5 @@
+# pyright: reportInvalidTypeForm=false
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Sequence
@@ -78,7 +80,7 @@ class __Quant(ABC):
     block_size: int
     type_size: int
 
-    grid: np.ndarray | None = None # np.float32
+    grid: np.ndarray[Any, np.dtype[np.float32]] | None = None
     grid_shape: tuple[int, int] = (0, 0)
     grid_map: tuple[int | float, ...] = ()
     grid_hex: bytes | None = None
