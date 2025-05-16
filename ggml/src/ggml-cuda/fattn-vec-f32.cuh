@@ -204,6 +204,8 @@ static __global__ void flash_attn_vec_ext_f32(
 
             // When using multiple parallel sequences in llama.cpp, some KV slices can be fully masked out.
             // In such cases, skip the KV slice.
+            // On AMD __all_sync would not work correctly because it assumes a warp size of 64.
+#ifndef GGML_USE_HIP
             bool skip = true;
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
@@ -217,6 +219,7 @@ static __global__ void flash_attn_vec_ext_f32(
             if (__all_sync(0xFFFFFFFF, skip)) {
                 continue;
             }
+#endif // GGML_USE_HIP
         }
 
         float kqmax_new_arr[ncols];
