@@ -823,6 +823,7 @@ class GGUFEditorWindow(QMainWindow):
         self.modified = False
         self.metadata_changes = {}  # Store changes to apply when saving
         self.metadata_to_remove = set()  # Store keys to remove when saving
+        self.on_metadata_changed_is_connected = False
 
         self.setup_ui()
 
@@ -941,9 +942,11 @@ class GGUFEditorWindow(QMainWindow):
             return
 
         # Disconnect to prevent triggering during loading
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            self.metadata_table.itemChanged.disconnect(self.on_metadata_changed)
+        if self.on_metadata_changed_is_connected:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                self.metadata_table.itemChanged.disconnect(self.on_metadata_changed)
+            self.on_metadata_changed_is_connected = False
 
         for i, (key, field) in enumerate(self.reader.fields.items()):
             self.metadata_table.insertRow(i)
@@ -1021,6 +1024,7 @@ class GGUFEditorWindow(QMainWindow):
 
         # Reconnect after loading
         self.metadata_table.itemChanged.connect(self.on_metadata_changed)
+        self.on_metadata_changed_is_connected = True
 
     def extract_array_values(self, field: ReaderField) -> list:
         """Extract all values from an array field."""
