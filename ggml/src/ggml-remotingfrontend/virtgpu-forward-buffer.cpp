@@ -27,7 +27,8 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
-  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu");
+  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
+    buffer_handle, tensor, data, offset, size);
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
 

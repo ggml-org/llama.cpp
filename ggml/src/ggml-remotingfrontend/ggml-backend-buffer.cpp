@@ -58,7 +58,7 @@ static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer
 }
 
 static void ggml_remoting_buffer_memset(remoting_buffer& dst, size_t offset, uint32_t c, size_t size) {
-  NOT_IMPLEMENTED;
+  BEING_IMPLEMENTED;
 
   UNUSED(dst);
   UNUSED(c);

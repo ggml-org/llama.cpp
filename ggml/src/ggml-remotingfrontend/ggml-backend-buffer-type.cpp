@@ -21,7 +21,7 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
 
 static const char *
 ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-  IMPLEMENTED;
+  //IMPLEMENTED;
 
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 

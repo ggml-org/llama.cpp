@@ -19,7 +19,7 @@ apir_buffer_type_get_name(struct virtgpu *gpu, ggml_backend_buffer_type_t buft) 
   }
   vn_decode_char_array(decoder, string, string_size);
 
-  INFO("%s: Forward BUFT NAME --> %s", __func__, string);
+  //INFO("%s: Forward BUFT NAME --> %s", __func__, string);
 
   /* *** */
 
@@ -99,7 +99,7 @@ apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
-  INFO("%s: allocate device memory (%lu)\n", __func__,  size);
+  INFO("%s: allocate device memory (%lu)", __func__,  size);
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER);
 
@@ -112,7 +112,6 @@ apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
 
   apir_buffer_handle_t buffer_handle;
   vn_decode_apir_buffer_handle_t(decoder, &buffer_handle);
-  INFO("%s: received buffer handle %p\n", __func__,  (void *) buffer_handle);
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
