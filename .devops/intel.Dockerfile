@@ -1,4 +1,4 @@
-ARG ONEAPI_VERSION=2025.0.0-0-devel-ubuntu22.04
+ARG ONEAPI_VERSION=2025.1.1-0-devel-ubuntu24.04
 
 ## Build Image
 
