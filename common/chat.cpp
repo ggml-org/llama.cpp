@@ -1724,7 +1724,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.grammar = inputs.grammar;
     params.now = inputs.now;
 
-    for (auto el: inputs.chat_template_kwargs) {
+    for (auto el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
     }
 
