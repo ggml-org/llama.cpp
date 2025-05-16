@@ -80,10 +80,6 @@ Using the `-d <n>` option, each test can be run at a specified context depth, pr
 
 For a description of the other options, see the [main example](../main/README.md).
 
-Note:
-
-- When using SYCL backend, there would be hang issue in some cases. Please set `--mmp 0`.
-
 ## Examples
 
 ### Text generation with different models
