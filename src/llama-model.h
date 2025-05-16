@@ -315,6 +315,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_scale   = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;
 
+    // MTP (multi token predict)
+    struct ggml_tensor * mtp_inp_proj    = nullptr;
+    struct ggml_tensor * mtp_token_norm  = nullptr;
+    struct ggml_tensor * mtp_hidden_norm = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
