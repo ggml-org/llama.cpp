@@ -444,13 +444,13 @@ vn_cs_decoder_alloc_array(struct vn_cs_decoder *dec, size_t size, size_t count)
 static inline void
 vn_encode_bool_t(struct vn_cs_encoder *enc, const bool *val)
 {
-  vn_encode(enc, sizeof(int), val, sizeof(int));
+  vn_encode(enc, sizeof(int), val, sizeof(bool));
 }
 
 static inline void
 vn_decode_bool_t(struct vn_cs_decoder *dec, bool *val)
 {
-  vn_decode(dec, sizeof(int), val, sizeof(int));
+  vn_decode(dec, sizeof(int), val, sizeof(bool));
 }
 
 /* apir_buffer_type_handle_t */
