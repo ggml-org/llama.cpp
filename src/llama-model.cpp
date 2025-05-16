@@ -13042,8 +13042,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
 
 llama_memory_i * llama_model::create_memory(
     const llama_memory_params & params,
-          llama_cparams       & cparams,
-    const llama_hparams       & hparams) const {
+          llama_cparams       & cparams) const {
     llama_memory_i * res;
 
     switch (arch) {
