@@ -3,7 +3,7 @@ import StorageUtils from '../utils/storage';
 import { useAppContext } from '../utils/app.context';
 import { classNames } from '../utils/misc';
 import daisyuiThemes from 'daisyui/theme/object';
-import { THEMES } from '../Config';
+import { THEMES } from '../utils/initConfig';
 import {
   Cog8ToothIcon,
   MoonIcon,
@@ -66,7 +66,7 @@ export default function Header() {
                   auto
                 </button>
               </li>
-              {THEMES.map((theme) => (
+              {THEMES.map((theme: string) => (
                 <li key={theme}>
                   <input
                     type="radio"

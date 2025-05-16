@@ -1,7 +1,7 @@
 // coversations is stored in localStorage
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 
-import { CONFIG_DEFAULT } from '../Config';
+import type { AppConfig } from './initConfig';
 import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
 
@@ -192,15 +192,17 @@ const StorageUtils = {
   },
 
   // manage config
-  getConfig(): typeof CONFIG_DEFAULT {
-    const savedVal = JSON.parse(localStorage.getItem('config') || '{}');
-    // to prevent breaking changes in the future, we always provide default value for missing keys
-    return {
-      ...CONFIG_DEFAULT,
-      ...savedVal,
-    };
+  getConfig(): AppConfig {
+    try {
+      return JSON.parse(localStorage.getItem('config') || '{}') as AppConfig;
+    } catch (err) {
+      console.warn(
+        'Malformed config in localStorage, falling back to empty config.'
+      );
+      return {} as AppConfig;
+    }
   },
-  setConfig(config: typeof CONFIG_DEFAULT) {
+  setConfig(config: AppConfig) {
     localStorage.setItem('config', JSON.stringify(config));
   },
   getTheme(): string {

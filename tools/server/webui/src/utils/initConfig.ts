@@ -1,47 +1,44 @@
-import daisyuiThemes from 'daisyui/theme/object';
-import { isNumeric } from './utils/misc';
-
-export const isDev = import.meta.env.MODE === 'development';
-
-// constants
 export const BASE_URL = new URL('.', document.baseURI).href
   .toString()
   .replace(/\/$/, '');
 
-export const CONFIG_DEFAULT = {
+export type AppConfig = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
   // Do not use nested objects, keep it single level. Prefix the key if you need to group them.
-  apiKey: '',
-  systemMessage: '',
-  showTokensPerSecond: false,
-  showThoughtInProgress: false,
-  excludeThoughtOnReq: true,
-  pasteLongTextToFileLen: 2500,
-  pdfAsImage: false,
+  apiKey: string;
+  systemMessage: string;
+  showTokensPerSecond: boolean;
+  showThoughtInProgress: boolean;
+  excludeThoughtOnReq: boolean;
+  pasteLongTextToFileLen: number;
+  pdfAsImage: boolean;
+
   // make sure these default values are in sync with `common.h`
-  samplers: 'edkypmxt',
-  temperature: 0.8,
-  dynatemp_range: 0.0,
-  dynatemp_exponent: 1.0,
-  top_k: 40,
-  top_p: 0.95,
-  min_p: 0.05,
-  xtc_probability: 0.0,
-  xtc_threshold: 0.1,
-  typical_p: 1.0,
-  repeat_last_n: 64,
-  repeat_penalty: 1.0,
-  presence_penalty: 0.0,
-  frequency_penalty: 0.0,
-  dry_multiplier: 0.0,
-  dry_base: 1.75,
-  dry_allowed_length: 2,
-  dry_penalty_last_n: -1,
-  max_tokens: -1,
-  custom: '', // custom json-stringified object
+  samplers: string;
+  temperature: number;
+  dynatemp_range: number;
+  dynatemp_exponent: number;
+  top_k: number;
+  top_p: number;
+  min_p: number;
+  xtc_probability: number;
+  xtc_threshold: number;
+  typical_p: number;
+  repeat_last_n: number;
+  repeat_penalty: number;
+  presence_penalty: number;
+  frequency_penalty: number;
+  dry_multiplier: number;
+  dry_base: number;
+  dry_allowed_length: number;
+  dry_penalty_last_n: number;
+  max_tokens: number;
+  custom: string; // custom json-stringified object
+
   // experimental features
-  pyIntepreterEnabled: false,
+  pyIntepreterEnabled: boolean;
 };
+
 export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
@@ -84,13 +81,11 @@ export const CONFIG_INFO: Record<string, string> = {
   max_tokens: 'The maximum number of token per output.',
   custom: '', // custom json-stringified object
 };
-// config keys having numeric value (i.e. temperature, top_k, top_p, etc)
-export const CONFIG_NUMERIC_KEYS = Object.entries(CONFIG_DEFAULT)
-  .filter((e) => isNumeric(e[1]))
-  .map((e) => e[0]);
-// list of themes supported by daisyui
-export const THEMES = ['light', 'dark']
-  // make sure light & dark are always at the beginning
-  .concat(
-    Object.keys(daisyuiThemes).filter((t) => t !== 'light' && t !== 'dark')
-  );
+
+import daisyuiThemes from 'daisyui/theme/object';
+
+export const THEMES = ['light', 'dark'].concat(
+  Object.keys(daisyuiThemes).filter((t) => t !== 'light' && t !== 'dark')
+);
+
+export const isDev = import.meta.env.MODE === 'development';
