@@ -37,6 +37,7 @@ uint32_t backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_c
 
 /* buffer */
 uint32_t backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
 
 static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
 {
@@ -60,6 +61,7 @@ static inline const char *backend_dispatch_command_name(ApirBackendCommandType t
 
   /* buffer */
   case APIR_COMMAND_TYPE_BUFFER_GET_BASE: return "backend_buffer_get_base";
+  case APIR_COMMAND_TYPE_BUFFER_SET_TENSOR: return "backend_buffer_set_tensor";
 
   default: return "unknown";
   }
@@ -85,4 +87,5 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
 
   /* buffer */
   [APIR_COMMAND_TYPE_BUFFER_GET_BASE] = backend_buffer_get_base,
+  [APIR_COMMAND_TYPE_BUFFER_SET_TENSOR] = backend_buffer_set_tensor,
 };

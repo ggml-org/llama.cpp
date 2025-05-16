@@ -25,13 +25,15 @@ static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buf
 
 
 static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-  NOT_IMPLEMENTED;
+  BEING_IMPLEMENTED;
 
-  UNUSED(buffer);
-  UNUSED(tensor);
-  UNUSED(data);
-  UNUSED(offset);
-  UNUSED(size);
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  INFO("%s: data=%p, offset=%lu, size=%lu\n", __func__, data, offset, size);
+
+  apir_buffer_set_tensor(gpu, BUFFER_TO_HANDLE(buffer), tensor, data, offset, size);
+
+  return;
 }
 
 static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {

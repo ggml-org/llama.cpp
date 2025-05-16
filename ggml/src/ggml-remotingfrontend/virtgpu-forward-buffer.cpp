@@ -20,3 +20,26 @@ apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
 
   return (void *) base;
 }
+
+void
+apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+		       ggml_tensor *tensor, const void *data, size_t offset, size_t size) {
+  struct vn_cs_encoder *encoder;
+  struct vn_cs_decoder *decoder;
+
+  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu");
+
+  REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
+
+  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_ggml_tensor(encoder, tensor);
+  vn_encode_uintptr_t(encoder, (uintptr_t *) &data);
+  vn_encode_size_t(encoder, &offset);
+  vn_encode_size_t(encoder, &size);
+
+  REMOTE_CALL(gpu, encoder, decoder);
+
+  REMOTE_CALL_FINISH(gpu, encoder, decoder);
+
+  return;
+}

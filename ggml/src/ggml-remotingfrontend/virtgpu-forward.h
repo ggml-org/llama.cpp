@@ -29,3 +29,5 @@ apir_buffer_handle_t apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_bac
 
 void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle);
 enum ggml_status apir_buffer_init_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle, ggml_tensor *tensor);
+void apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+			    ggml_tensor *tensor, const void *data, size_t offset, size_t size);
