@@ -379,7 +379,7 @@ struct common_params {
     std::string ssl_file_key  = "";                                                                         // NOLINT
     std::string ssl_file_cert = "";                                                                         // NOLINT
 
-    std::map<std::string,std::string> default_template_kwargs;
+    std::map<std::string, std::string> default_template_kwargs;
 
     // "advanced" endpoints are disabled by default for better security
     bool webui            = true;
