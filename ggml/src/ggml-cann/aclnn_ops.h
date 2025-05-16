@@ -979,6 +979,33 @@ inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffe
 }
 
 /**
+ * @brief   Performs sparse expert-based matrix multiplication using the CANN backend.
+ *
+ * @details This function implements a MoE-style batched matrix multiplication, where each input token
+ *          is routed to one or more experts, and each expert corresponds to a specific [D, M] weight matrix
+ *          in the source tensor `src0`. The routing indices are provided via the `ids` tensor.
+ *
+ *          For each token (from `src1`), the function selects the corresponding expert(s) as specified by `ids`,
+ *          performs the matrix multiplication with the selected expert's weight submatrix (from `src0`),
+ *          and stores the results in `dst`. This operation is optimized and executed on the CANN backend.
+ *
+ *          Dimensions:
+ *              - src0: [D, M, A, 1], where A is the number of experts
+ *              - src1: [D, B, N, 1], where N is batch size and B is the slot count per sample
+ *              - ids : [K, N],       where K is the number of experts each token is routed to
+ *              - dst : [M, K, N, 1], output tensor storing the result of expert × token multiplication
+ *
+ *          The function handles two main modes:
+ *              - If `ne12 == 1`, a simpler per-token loop is used.
+ *              - TODO: If `ne12 > 1`, grouped multiplication and memory copying is used for efficiency.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the expert-weighted token outputs are stored.
+ *            Expected to be of shape [M, K, N, 1].
+ */
+void ggml_cann_mul_mat_id(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
  * @brief Applies a element-wise operation to two input tensors using the CANN
  * backend.
  *
