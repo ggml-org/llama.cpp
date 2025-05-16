@@ -2309,6 +2309,14 @@ struct clip_model_loader {
     }
 };
 
+// read and create ggml_context containing the tensors and their data
+struct clip_ctx * clip_model_load(const char * fname, const int verbosity) {
+    return clip_init(fname, clip_context_params{
+        /* use_gpu */   true,
+        /* verbosity */ static_cast<ggml_log_level>(verbosity),
+    });
+}
+
 struct clip_ctx * clip_init(const char * fname, struct clip_context_params ctx_params) {
     g_logger_state.verbosity_thold = ctx_params.verbosity;
     clip_ctx * ctx_clip = nullptr;
@@ -3075,6 +3083,19 @@ const int32_t * clip_image_grid(const struct clip_ctx * ctx) {
 
 size_t get_clip_image_grid_size(const struct clip_ctx * ctx) {
     return ctx->vision_model.hparams.image_grid_pinpoints.size();
+}
+
+// deprecated
+int clip_n_patches(const struct clip_ctx * ctx) {
+    clip_image_f32 img;
+    img.nx = ctx->vision_model.hparams.image_size;
+    img.ny = ctx->vision_model.hparams.image_size;
+    return clip_n_output_tokens(ctx, &img);
+}
+
+// deprecated
+int clip_n_patches_by_img(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
+    return clip_n_output_tokens(ctx, img);
 }
 
 int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
