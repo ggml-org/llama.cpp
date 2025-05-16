@@ -140,7 +140,7 @@ static struct llama_model * llama_model_load_from_file_impl(
         struct llama_model_params params) {
     ggml_time_init();
 
-    if (ggml_backend_reg_count() == 0) {
+    if (!params.vocab_only && ggml_backend_reg_count() == 0) {
         LLAMA_LOG_ERROR("%s: no backends are loaded. hint: use ggml_backend_load() or ggml_backend_load_all() to load a backend before calling this function\n", __func__);
         return nullptr;
     }
