@@ -74,24 +74,27 @@ static void
 ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
   IMPLEMENTED;
 
-  struct virtgpu *gpu = DEV_TO_GPU(dev);
-
   props->name        = ggml_backend_remoting_device_get_name(dev);
   props->description = ggml_backend_remoting_device_get_description(dev);
   props->type        = ggml_backend_remoting_device_get_type(dev);
   ggml_backend_remoting_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
+#if 0
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
   apir_device_get_props(gpu,
 			&props->caps.async,
 			&props->caps.host_buffer,
 			&props->caps.buffer_from_host_ptr,
 			&props->caps.events
     );
-
+#else
   // ignore the actual backend answers and set it as we provide it in
   // the API Remoting frontend
-  props->caps.host_buffer = true;
+  props->caps.async = false;
+  props->caps.host_buffer = false;
   props->caps.buffer_from_host_ptr = false;
+  props->caps.events = false;
+#endif
 
   INFO("%s: async=%d, host_buffer=%d!, buffer_from_host_ptr=%d!, events=%d",
     __func__, props->caps.async, props->caps.host_buffer,
