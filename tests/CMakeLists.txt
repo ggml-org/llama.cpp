@@ -142,8 +142,10 @@ if (NOT WIN32)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 endif()
 
-llama_build_and_test(test-log.cpp)
+llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-template.cpp)
+llama_build_and_test(test-json-partial.cpp)
+llama_build_and_test(test-log.cpp)
 llama_build_and_test(test-regex-partial.cpp)
 
 # this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
