@@ -7530,39 +7530,85 @@ static void ggml_compute_forward_ssm_scan_f32(
     const int ir1 = MIN(ir0 + dr, nr);
     const int ir  = ir1 - ir0;
 
-    for (int i3 = 0; i3 < n_s; ++i3) {
-        for (int i2 = 0; i2 < n_t; ++i2) {
-            const float * s0 = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i3*(src0->nb[2])); // {d_state, d_inner, n_s}
-            const float * x  = (const float *) ((const char *) src1->data + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
-            const float * dt = (const float *) ((const char *) src2->data + ir0*(src2->nb[0]) + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {d_inner, n_t, n_s}
-            const float * A  = (const float *) ((const char *) src3->data + ir0*(src3->nb[1])); // {d_state, d_inner}
-            const float * B  = (const float *) ((const char *) src4->data +  i2*(src4->nb[1]) + i3*(src4->nb[2])); // {d_state, n_t, n_s}
-            const float * C  = (const float *) ((const char *) src5->data +  i2*(src5->nb[1]) + i3*(src5->nb[2])); // {d_state, n_t, n_s}
-                  float * y  = (      float *) ((      char *) dst->data  + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
-                  float * s  = (      float *) ((      char *) dst->data  + ir0*(src0->nb[1]) + i3*(src0->nb[2]) +     src1->nb[3]);  // {d_state, d_inner, n_s}
+    #ifdef __ARM_FEATURE_SVE
+        for (int i3 = 0; i3 < n_s; ++i3) {
+            for (int i2 = 0; i2 < n_t; ++i2) {
+                const float * s0 = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i3*(src0->nb[2])); // {d_state, d_inner, n_s}
+                const float * x  = (const float *) ((const char *) src1->data + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
+                const float * dt = (const float *) ((const char *) src2->data + ir0*(src2->nb[0]) + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {d_inner, n_t, n_s}
+                const float * A  = (const float *) ((const char *) src3->data + ir0*(src3->nb[1])); // {d_state, d_inner}
+                const float * B  = (const float *) ((const char *) src4->data +  i2*(src4->nb[1]) + i3*(src4->nb[2])); // {d_state, n_t, n_s}
+                const float * C  = (const float *) ((const char *) src5->data +  i2*(src5->nb[1]) + i3*(src5->nb[2])); // {d_state, n_t, n_s}
+                    float * y  = (      float *) ((      char *) dst->data  + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
+                    float * s  = (      float *) ((      char *) dst->data  + ir0*(src0->nb[1]) + i3*(src0->nb[2]) +     src1->nb[3]);  // {d_state, d_inner, n_s}
 
-            // use the output as the source for the next token-wise iterations
-            if (i2 > 0) { s0 = s; }
+                // use the output as the source for the next token-wise iterations
+                if (i2 > 0) { s0 = s; }
 
-            // d_inner
-            for (int i1 = 0; i1 < ir; ++i1) {
-                // ref: https://github.com/state-spaces/mamba/blob/34076d664838588a3c97727b263478ab9f621a07/mamba_ssm/ops/triton/selective_state_update.py#L78
-                float dt_soft_plus = dt[i1] <= 20.0f ? log1pf(expf(dt[i1])) : dt[i1];
-                float x_dt = x[i1] * dt_soft_plus;
-                float sumf = 0.0f;
-                // d_state
-                for (int i0 = 0; i0 < nc; ++i0) {
-                    int i = i0 + i1*nc;
-                    // state = prev_state * dA + dB * x
-                    float state = (s0[i] * expf(dt_soft_plus * A[i])) + (B[i0] * x_dt);
-                    // y = rowwise_dotprod(state, C)
-                    sumf += state * C[i0];
-                    s[i] = state;
+                // d_inner
+                for (int i1 = 0; i1 < ir; ++i1) {
+
+                    float dt_soft_plus = dt[i1] <= 20.0f ? log1pf(expf(dt[i1])) : dt[i1];
+                    float x_dt = x[i1] * dt_soft_plus;
+                    svfloat32_t vx_dt = GGML_F32_VEC_SET1(x_dt);
+                    svfloat32_t vdt_soft_plus = GGML_F32_VEC_SET1(dt_soft_plus);
+                    svfloat32_t r1_vector = GGML_F32_VEC_ZERO;
+
+                    for(int64_t k=0; k < nc; k += svcntw()) {
+
+                        svfloat32_t vA = GGML_F32_VEC_LOAD(&A[i1*nc+k]);
+                        svfloat32_t vB = GGML_F32_VEC_LOAD(&B[k]);
+                        svfloat32_t vC = GGML_F32_VEC_LOAD(&C[k]);
+                        svfloat32_t vs0 = GGML_F32_VEC_LOAD(&s0[i1*nc+k]);
+
+                        svfloat32_t t1 = GGML_F32_VEC_MUL(vdt_soft_plus,vA);
+                        t1 = exp_ps_sve(svptrue_b32(), t1); 
+                        svfloat32_t t2 = GGML_F32_VEC_MUL(vx_dt,vB); 
+
+                        vs0 = GGML_F32_VEC_FMA(vs0, t1, t2);
+                        r1_vector = GGML_F32_VEC_ADD(GGML_F32_VEC_MUL(vs0, vC), r1_vector);
+
+                        GGML_F32_VEC_STORE(&s[i1*nc+k], vs0);
+                    }
+                    y[i1] = GGML_F32xt_REDUCE_ONE(r1_vector);
                 }
-                y[i1] = sumf;
+            }
+    }
+    #else
+        for (int i3 = 0; i3 < n_s; ++i3) {
+            for (int i2 = 0; i2 < n_t; ++i2) {
+                const float * s0 = (const float *) ((const char *) src0->data + ir0*(src0->nb[1]) + i3*(src0->nb[2])); // {d_state, d_inner, n_s}
+                const float * x  = (const float *) ((const char *) src1->data + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
+                const float * dt = (const float *) ((const char *) src2->data + ir0*(src2->nb[0]) + i2*(src2->nb[1]) + i3*(src2->nb[2])); // {d_inner, n_t, n_s}
+                const float * A  = (const float *) ((const char *) src3->data + ir0*(src3->nb[1])); // {d_state, d_inner}
+                const float * B  = (const float *) ((const char *) src4->data +  i2*(src4->nb[1]) + i3*(src4->nb[2])); // {d_state, n_t, n_s}
+                const float * C  = (const float *) ((const char *) src5->data +  i2*(src5->nb[1]) + i3*(src5->nb[2])); // {d_state, n_t, n_s}
+                    float * y  = (      float *) ((      char *) dst->data  + ir0*(src1->nb[0]) + i2*(src1->nb[1]) + i3*(src1->nb[2])); // {d_inner, n_t, n_s}
+                    float * s  = (      float *) ((      char *) dst->data  + ir0*(src0->nb[1]) + i3*(src0->nb[2]) +     src1->nb[3]);  // {d_state, d_inner, n_s}
+
+                // use the output as the source for the next token-wise iterations
+                if (i2 > 0) { s0 = s; }
+
+                // d_inner
+                for (int i1 = 0; i1 < ir; ++i1) {
+                    // ref: https://github.com/state-spaces/mamba/blob/34076d664838588a3c97727b263478ab9f621a07/mamba_ssm/ops/triton/selective_state_update.py#L78
+                    float dt_soft_plus = dt[i1] <= 20.0f ? log1pf(expf(dt[i1])) : dt[i1];
+                    float x_dt = x[i1] * dt_soft_plus;
+                    float sumf = 0.0f;
+                    // d_state
+                    for (int i0 = 0; i0 < nc; ++i0) {
+                        int i = i0 + i1*nc;
+                        // state = prev_state * dA + dB * x
+                        float state = (s0[i] * expf(dt_soft_plus * A[i])) + (B[i0] * x_dt);
+                        // y = rowwise_dotprod(state, C)
+                        sumf += state * C[i0];
+                        s[i] = state;
+                    }
+                    y[i1] = sumf;
+                }
             }
         }
-    }
+    #endif
 }
 
 void ggml_compute_forward_ssm_scan(
@@ -7963,6 +8009,14 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
         #define GGML_F32X_MUL GGML_F32x16_MUL
         #define GGML_F32X_FMA GGML_F32x16_FMA
         #define WKV_VECTOR_SIZE 16
+    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+        #define GGML_F32X GGML_F32xt
+        #define GGML_F32X_SET1 GGML_F32xt_SET1
+        #define GGML_F32X_LOAD GGML_F32xt_LOAD
+        #define GGML_F32X_STORE GGML_F32xt_STORE
+        #define GGML_F32X_MUL GGML_F32xt_MUL
+        #define GGML_F32X_FMA GGML_F32xt_FMA
+        #define WKV_VECTOR_SIZE 8
     #elif defined(__ARM_NEON) && defined(__aarch64__)
         #define GGML_F32X GGML_F32x4
         #define GGML_F32X_SET1 GGML_F32x4_SET1
@@ -7973,8 +8027,14 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
         #define WKV_VECTOR_SIZE 4
     #endif
 
+    int wkv_vector_size;
     #ifdef WKV_VECTOR_SIZE
-        const int64_t vec_count = head_size / WKV_VECTOR_SIZE;
+        #if defined(__ARM_FEATURE_SVE)
+            wkv_vector_size = svcntw();
+        #else
+            wkv_vector_size = WKV_VECTOR_SIZE;
+        #endif
+        const int64_t vec_count = head_size / wkv_vector_size;
 
         for (int64_t t = 0; t < T; t++) {
             size_t t_offset = t * t_stride;
@@ -8004,7 +8064,7 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
                     GGML_F32X time_decay_vec = GGML_F32X_SET1(time_decay_val);
 
                     for (int64_t j = 0; j < vec_count; j++) {
-                        size_t base_j = j * WKV_VECTOR_SIZE;
+                        size_t base_j = j * wkv_vector_size;
                         size_t t_h_j_offset = t_h_offset + base_j;
                         size_t h_2d_i_j_offset = h_2d_i_offset + base_j;
 
@@ -8029,7 +8089,7 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
                     }
 
                     // Handle remaining elements, this will not be used.
-                    for (int64_t j = vec_count * WKV_VECTOR_SIZE; j < head_size; j++) {
+                    for (int64_t j = vec_count * wkv_vector_size; j < head_size; j++) {
                         size_t t_h_j_offset = t_h_offset + j;
                         size_t h_2d_i_j_offset = h_2d_i_offset + j;
                         float v_val = v[t_h_j_offset];
@@ -8165,6 +8225,14 @@ static void ggml_compute_forward_gla_f32(
         #define GGML_F32X_MUL GGML_F32x16_MUL
         #define GGML_F32X_FMA GGML_F32x16_FMA
         #define GLA_VECTOR_SIZE 16
+    #elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+        #define GGML_F32X GGML_F32xt
+        #define GGML_F32X_SET1 GGML_F32xt_SET1
+        #define GGML_F32X_LOAD GGML_F32xt_LOAD
+        #define GGML_F32X_STORE GGML_F32xt_STORE
+        #define GGML_F32X_MUL GGML_F32xt_MUL
+        #define GGML_F32X_FMA GGML_F32xt_FMA
+        #define GLA_VECTOR_SIZE 8
     #elif defined(__ARM_NEON) && defined(__aarch64__)
         #define GGML_F32X GGML_F32x4
         #define GGML_F32X_SET1 GGML_F32x4_SET1
@@ -8174,9 +8242,14 @@ static void ggml_compute_forward_gla_f32(
         #define GGML_F32X_FMA GGML_F32x4_FMA
         #define GLA_VECTOR_SIZE 4
     #endif
-
+    int gla_vector_size;
     #ifdef GLA_VECTOR_SIZE
-        const int64_t vec_count = head_size / GLA_VECTOR_SIZE;
+        #if defined(__ARM_FEATURE_SVE)
+            gla_vector_size = svcntw();
+        #else
+            gla_vector_size = GLA_VECTOR_SIZE
+        #endif
+        const int64_t vec_count = head_size / gla_vector_size;
 
         for (int64_t t = 0; t < T; t++) {
             size_t t_offset = t * t_stride;
@@ -8203,7 +8276,7 @@ static void ggml_compute_forward_gla_f32(
                     GGML_F32X g_vec = GGML_F32X_SET1(g_val);
 
                     for (int64_t j = 0; j < vec_count; j++) {
-                        size_t base_j = j * GLA_VECTOR_SIZE;
+                        size_t base_j = j * gla_vector_size;
                         size_t t_h_j_offset = t_h_offset + base_j;
                         size_t h_2d_i_j_offset = h_2d_i_offset + base_j;
 
@@ -8227,7 +8300,7 @@ static void ggml_compute_forward_gla_f32(
                     }
 
                     // Handle remaining elements, this will not be used.
-                    for (int64_t j = vec_count * GLA_VECTOR_SIZE; j < head_size; j++) {
+                    for (int64_t j = vec_count * gla_vector_size; j < head_size; j++) {
                         size_t t_h_j_offset = t_h_offset + j;
                         size_t h_2d_i_j_offset = h_2d_i_offset + j;
                         float v_val = v[t_h_j_offset];
