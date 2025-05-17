@@ -1416,14 +1416,17 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 GGML_ASSERT(j1 > j0);
 
                 if (split_src0) {
-                    GGML_ASSERT(j1 == j0 + 1);
-                    GGML_ASSERT(false);
-                } else {
+                    j1--;
+                }
+                if (j1 > j0) {
                     struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1);
                     enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
                     if (ec != GGML_STATUS_SUCCESS) {
                         return ec;
                     }
+                }
+                if (split_src0) {
+                    GGML_ASSERT(false);
                 }
 
                 j0 = j1;
