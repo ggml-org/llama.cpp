@@ -37,7 +37,7 @@ export default function ChatMessage({
   onChangeSibling(sibling: Message['id']): void;
   isPending?: boolean;
 }) {
-  const { viewingChat, config } = useAppContext();
+  const { viewingChat, config, serverProps } = useAppContext();
   const [editingContent, setEditingContent] = useState<string | null>(null);
   const timings = useMemo(
     () =>
@@ -174,6 +174,11 @@ export default function ChatMessage({
                     className="cursor-pointer font-semibold text-sm opacity-60"
                   >
                     Speed: {timings.predicted_per_second.toFixed(1)} t/s
+                  </div>
+                  <div>
+                    <span className="font-semibold text-sm opacity-70">
+                      Model: {serverProps?.model_path?.split(/(\\|\/)/).pop()}
+                    </span>
                   </div>
                   <div className="dropdown-content bg-base-100 z-10 w-64 p-2 shadow mt-4">
                     <b>Prompt</b>
