@@ -1583,7 +1583,7 @@ static common_chat_msg common_chat_parse_hermes_2_pro(const std::string& input, 
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    data.prompt = apply(tmpl, inputs.messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt,inputs.extra_context);
+    data.prompt = apply(tmpl, inputs.messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt, inputs.extra_context);
     data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     data.grammar_lazy = false;
     if (!inputs.json_schema.is_null()) {
@@ -1615,7 +1615,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.grammar = inputs.grammar;
     params.now = inputs.now;
 
-    for (auto el: inputs.chat_template_kwargs) {
+    for (auto el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
     }
 

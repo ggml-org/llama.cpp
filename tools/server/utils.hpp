@@ -584,7 +584,7 @@ static json oaicompat_completion_params_parse(
     const json & body, /* openai api json semantics */
     bool use_jinja,
     common_reasoning_format reasoning_format,
-    const std::map<std::string,std::string> default_template_kwargs,
+    const std::map<std::string, std::string> & default_template_kwargs,
     const struct common_chat_templates * tmpls,
     bool allow_non_text,
     std::vector<raw_buffer> & out_files)
@@ -729,7 +729,7 @@ static json oaicompat_completion_params_parse(
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
 
     auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
-    for (const auto & item: default_template_kwargs) {
+    for (const auto & item : default_template_kwargs) {
         inputs.chat_template_kwargs[item.first] = item.second;
     }
     for (const auto & item : chat_template_kwargs_object.items()) {
