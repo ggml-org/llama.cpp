@@ -11,6 +11,7 @@ This directory, [`ggml/`](mdc:ggml), contains the GGML tensor library, which is 
 - **Build Configuration:** [`ggml/CMakeLists.txt`](mdc:ggml/CMakeLists.txt) - Defines how GGML itself is built.
 - **Source Code:** [`ggml/src/`](mdc:ggml/src) - Contains the C implementation of the GGML library.
   - Look for files like `ggml.c`, `ggml-alloc.c`, `ggml-backend.c`, etc.
+  - CPU backend is under [`ggml/src/ggml-cpu/`](mdc:ggml/src/ggml-cpu) (See [`ggml_cpu_structure.mdc`](mdc:.cursor/rules/ggml_cpu_structure.mdc) for detailed breakdown)
 - **Header Files:** [`ggml/include/`](mdc:ggml/include) - Contains the public API header files for GGML.
   - Key headers include `ggml.h`, `ggml-alloc.h`, `ggml-backend.h`.
 - **CMake Modules:** [`ggml/cmake/`](mdc:ggml/cmake) - Contains helper CMake scripts specific to building GGML.

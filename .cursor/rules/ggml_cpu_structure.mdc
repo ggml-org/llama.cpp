@@ -1,0 +1,49 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GGML CPU Backend Structure
+
+The [`ggml/src/ggml-cpu/`](mdc:ggml/src/ggml-cpu) directory contains the CPU-specific implementation details for the GGML tensor library. It handles low-level tensor operations, SIMD optimizations, quantization kernels, and architecture-specific code paths.
+
+## Core Source Files
+- **Main backend entry points**
+  - [`ggml-cpu.c`](mdc:ggml/src/ggml-cpu/ggml-cpu.c) – C implementation of core CPU routines.
+  - [`ggml-cpu.cpp`](mdc:ggml/src/ggml-cpu/ggml-cpu.cpp) – C++ wrappers/helper functions.
+
+- **Operation Implementations**
+  - Unary ops: [`unary-ops.cpp`](mdc:ggml/src/ggml-cpu/unary-ops.cpp), [`unary-ops.h`](mdc:ggml/src/ggml-cpu/unary-ops.h)
+  - Binary ops: [`binary-ops.cpp`](mdc:ggml/src/ggml-cpu/binary-ops.cpp), [`binary-ops.h`](mdc:ggml/src/ggml-cpu/binary-ops.h)
+  - Generic op table: [`ops.cpp`](mdc:ggml/src/ggml-cpu/ops.cpp), [`ops.h`](mdc:ggml/src/ggml-cpu/ops.h)
+
+- **Vector / SIMD Helpers**
+  - Vectorized math: [`vec.cpp`](mdc:ggml/src/ggml-cpu/vec.cpp), [`vec.h`](mdc:ggml/src/ggml-cpu/vec.h)
+  - SIMD mappings: [`simd-mappings.h`](mdc:ggml/src/ggml-cpu/simd-mappings.h)
+  - CPU feature detection: [`cpu-feats-x86.cpp`](mdc:ggml/src/ggml-cpu/cpu-feats-x86.cpp)
+
+- **Quantization**
+  - Kernels: [`ggml-cpu-quants.c`](mdc:ggml/src/ggml-cpu/ggml-cpu-quants.c)
+  - Headers: [`ggml-cpu-quants.h`](mdc:ggml/src/ggml-cpu/ggml-cpu-quants.h)
+
+- **Architecture-Specific**
+  - AArch64: [`ggml-cpu-aarch64.cpp`](mdc:ggml/src/ggml-cpu/ggml-cpu-aarch64.cpp), [`ggml-cpu-aarch64.h`](mdc:ggml/src/ggml-cpu/ggml-cpu-aarch64.h)
+  - High-bandwidth memory helpers: [`ggml-cpu-hbm.cpp`](mdc:ggml/src/ggml-cpu/ggml-cpu-hbm.cpp), [`ggml-cpu-hbm.h`](mdc:ggml/src/ggml-cpu/ggml-cpu-hbm.h)
+  - Trait helpers: [`ggml-cpu-traits.cpp`](mdc:ggml/src/ggml-cpu/ggml-cpu-traits.cpp), [`ggml-cpu-traits.h`](mdc:ggml/src/ggml-cpu/ggml-cpu-traits.h)
+
+## Build Configuration
+- The CPU backend has its own [`CMakeLists.txt`](mdc:ggml/src/ggml-cpu/CMakeLists.txt) which defines compilation flags (e.g., SIMD intrinsics, architecture targets) and groups source files.
+
+## Sub-directories
+- [`ggml/src/ggml-cpu/tmac/`](mdc:ggml/src/ggml-cpu/tmac) – Table-based MAC optimizations.
+- [`ggml/src/ggml-cpu/amx/`](mdc:ggml/src/ggml-cpu/amx) – Intel AMX specific kernels.
+- [`ggml/src/ggml-cpu/kleidiai/`](mdc:ggml/src/ggml-cpu/kleidiai) – Experimental implementations.
+- [`ggml/src/ggml-cpu/llamafile/`](mdc:ggml/src/ggml-cpu/llamafile) – Hooks specific to llamafile build variant.
+- [`ggml/src/ggml-cpu/cmake/`](mdc:ggml/src/ggml-cpu/cmake) – Helper scripts used by the backend CMake logic.
+
+## Usage Notes
+- Most high-level tensor ops in GGML ultimately call into functions defined in this backend.
+- When modifying or extending operations, search for the corresponding op in [`ops.cpp`](mdc:ggml/src/ggml-cpu/ops.cpp) and follow the call chain into SIMD kernels.
+- Architecture-specific optimizations are gated via `#ifdef` blocks and CMake compile definitions.
+
+Referencing this rule helps locate the CPU implementation details when navigating performance-critical code paths in `llama.cpp`.
