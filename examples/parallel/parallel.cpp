@@ -181,7 +181,7 @@ int main(int argc, char ** argv) {
     const bool dump_kv_cache = params.dump_kv_cache;
 
     // is the system prompt shared in the cache
-    const bool is_pp_shared = params.is_pp_shared;
+    const bool is_sp_shared = params.is_pp_shared;
 
     // extra text to insert in each client's prompt in order to make it larger
     const int32_t n_junk = params.n_junk;
@@ -249,7 +249,7 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
     LOG_INF("\n");
 
-    if (is_pp_shared) {
+    if (is_sp_shared) {
         LOG_INF("%s: Evaluating the system prompt ...\n", __func__);
 
         for (int32_t i = 0; i < n_tokens_system; ++i) {
@@ -319,7 +319,7 @@ int main(int argc, char ** argv) {
                     // [system prompt] + [junk] + [user prompt]
                     client.n_past = 0;
                     client.prompt = "";
-                    if (is_pp_shared) {
+                    if (is_sp_shared) {
                         client.n_past = n_tokens_system;
                     } else {
                         client.prompt += k_system;
