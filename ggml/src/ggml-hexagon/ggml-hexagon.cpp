@@ -832,6 +832,7 @@ static void ggmlhexagon_get_timestring(char * p_currenttime) {
         memset(buf, 0, GGMLHEXAGON_TMPBUF_LEN);
         snprintf(buf, sizeof(buf), "%04d-%02d-%02d,%02d:%02d:%02d",
                  tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+        GGML_UNUSED(ms);
         return buf;
     };
 
@@ -2937,8 +2938,6 @@ void * qnn_instance::get_rpcmem_from_memhandle(Qnn_MemHandle_t mem_handle) {
 }
 
 void qnn_instance::unregister_rpcmem() {
-    Qnn_ErrorHandle_t error = QNN_SUCCESS;
-
     if (_qnn_mem_set.empty()) {
         GGMLHEXAGON_LOG_WARN("no rpcmem registered\n");
     }
@@ -6039,6 +6038,7 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
             for (auto & tensor : ptensors) {
                 ggmlqnn_free_qnntensor(tensor);
             }
+            GGML_UNUSED(graph_handle);
             GGMLHEXAGON_LOG_DEBUG("graph handle %p", graph_handle);
             GGMLHEXAGON_LOG_DEBUG("clean up graph:%s", graph_name.c_str());
         }
@@ -6134,13 +6134,18 @@ static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_
     } else if (HEXAGON_BACKEND_QNNNPU == ctx->device) {
         size_t rpc_ion_memsize = 0;
         size_t rpc_ion_usage   = 0;
-        if (HWACCEL_CDSP != g_hexagon_appcfg.hwaccel_approach) {
-            rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
-            rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
-        } else {
-            rpc_ion_memsize = ctx->rpc_mempool_capacity;
-            rpc_ion_usage   = ctx->rpc_mempool_usage;
-        }
+        GGML_ASSERT(nullptr != ctx->instance);
+        rpc_ion_memsize = ctx->instance->get_rpcmem_capacity();
+        rpc_ion_usage   = ctx->instance->get_rpcmem_usage();
+        *total = rpc_ion_memsize;
+        *free = (rpc_ion_memsize - rpc_ion_usage);
+        GGMLHEXAGON_LOG_DEBUG("rpc memsize %d MiB", rpc_ion_memsize / SIZE_IN_MB);
+        GGMLHEXAGON_LOG_DEBUG("rpc usage %d MiB\n\n", rpc_ion_usage / SIZE_IN_MB);
+    } else if (HEXAGON_BACKEND_CDSP == ctx->device) {
+        size_t rpc_ion_memsize = 0;
+        size_t rpc_ion_usage   = 0;
+        rpc_ion_memsize = ctx->rpc_mempool_capacity;
+        rpc_ion_usage   = ctx->rpc_mempool_usage;
         *total = rpc_ion_memsize;
         *free = (rpc_ion_memsize - rpc_ion_usage);
         GGMLHEXAGON_LOG_DEBUG("rpc memsize %d MiB", rpc_ion_memsize / SIZE_IN_MB);
