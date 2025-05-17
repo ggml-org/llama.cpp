@@ -126,6 +126,7 @@ public:
     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
 
+    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     //
@@ -335,6 +336,7 @@ public:
     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
 
+    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     //
@@ -437,6 +439,7 @@ public:
     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
 
+    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     //

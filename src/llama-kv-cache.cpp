@@ -320,8 +320,24 @@ void llama_kv_cache_unified::seq_div(llama_seq_id seq_id, llama_pos p0, llama_po
     }
 }
 
+llama_pos llama_kv_cache_unified::seq_pos_min(llama_seq_id seq_id) const {
+    llama_pos result = std::numeric_limits<llama_pos>::max();
+
+    for (uint32_t i = 0; i < size; ++i) {
+        if (cells[i].has_seq_id(seq_id)) {
+            result = std::min(result, cells[i].pos);
+        }
+    }
+
+    if (result == std::numeric_limits<llama_pos>::max()) {
+        result = -1;
+    }
+
+    return result;
+}
+
 llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
-    llama_pos result = 0;
+    llama_pos result = -1;
 
     for (uint32_t i = 0; i < size; ++i) {
         if (cells[i].has_seq_id(seq_id)) {
@@ -1688,8 +1704,13 @@ void llama_kv_cache_unified_iswa::seq_div(llama_seq_id seq_id, llama_pos p0, lla
     kv_swa ->seq_div(seq_id, p0, p1, d);
 }
 
+llama_pos llama_kv_cache_unified_iswa::seq_pos_min(llama_seq_id seq_id) const {
+    // the base cache is a superset of the SWA cache, so we can just check the SWA cache
+    return kv_swa->seq_pos_min(seq_id);
+}
+
 llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
-    return kv_base->seq_pos_max(seq_id);
+    return kv_swa->seq_pos_max(seq_id);
 }
 
 void llama_kv_cache_unified_iswa::restore() {
@@ -2117,8 +2138,24 @@ void llama_kv_cache_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_
     }
 }
 
+llama_pos llama_kv_cache_recurrent::seq_pos_min(llama_seq_id seq_id) const {
+    llama_pos result = std::numeric_limits<llama_pos>::max();
+
+    for (uint32_t i = 0; i < size; ++i) {
+        if (cells[i].has_seq_id(seq_id)) {
+            result = std::min(result, cells[i].pos);
+        }
+    }
+
+    if (result == std::numeric_limits<llama_pos>::max()) {
+        result = -1;
+    }
+
+    return result;
+}
+
 llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
-    llama_pos result = 0;
+    llama_pos result = -1;
 
     for (uint32_t i = 0; i < size; ++i) {
         if (cells[i].has_seq_id(seq_id)) {

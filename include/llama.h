@@ -730,10 +730,18 @@ extern "C" {
                        llama_pos   p1,
                              int   d);
 
+    // Returns the smallest position present in the KV cache for the specified sequence
+    // This is typically non-zero only for SWA caches
+    // Return -1 if the sequence is empty
+    LLAMA_API llama_pos llama_kv_self_seq_pos_min(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id);
+
     // Returns the largest position present in the KV cache for the specified sequence
+    // Return -1 if the sequence is empty
     LLAMA_API llama_pos llama_kv_self_seq_pos_max(
             struct llama_context * ctx,
-                     llama_seq_id   seq_id);
+                    llama_seq_id   seq_id);
 
     // Defragment the KV cache
     // This will be applied:

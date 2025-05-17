@@ -2466,6 +2466,15 @@ void llama_kv_self_seq_div(
     kv->seq_div(seq_id, p0, p1, d);
 }
 
+llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return -1;
+    }
+
+    return kv->seq_pos_min(seq_id);
+}
+
 // deprecated
 llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     return llama_kv_self_seq_pos_max(ctx, seq_id);
@@ -2474,7 +2483,7 @@ llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
-        return 0;
+        return -1;
     }
 
     return kv->seq_pos_max(seq_id);
