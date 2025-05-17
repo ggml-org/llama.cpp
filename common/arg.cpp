@@ -2585,7 +2585,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_junk = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+    ).set_examples({LLAMA_EXAMPLE_PASSKEY, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"--pos"}, "N",
         string_format("position of the passkey in the junk text (default: %d)", params.i_pos),
@@ -2648,7 +2648,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.is_pp_shared = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}));
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
