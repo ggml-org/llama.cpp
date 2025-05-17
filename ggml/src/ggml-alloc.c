@@ -758,9 +758,8 @@ bool ggml_gallocr_reserve_n(ggml_gallocr_t galloc, struct ggml_cgraph * graph, c
             }
         }
 
-        // FIXME
-        size_t cur_size = (galloc->buffers[i] ? ggml_backend_buffer_get_size(galloc->buffers[i]) : 0) + 1024*1024*1024;
-        size_t new_size = (ggml_dyn_tallocr_max_size(galloc->buf_tallocs[i])) + 1024*1024*1024;
+        size_t cur_size = galloc->buffers[i] ? ggml_backend_buffer_get_size(galloc->buffers[i]) : 0;
+        size_t new_size = ggml_dyn_tallocr_max_size(galloc->buf_tallocs[i]);
 
         // even if there are no tensors allocated in this buffer, we still need to allocate it to initialize views
         if (new_size > cur_size || galloc->buffers[i] == NULL) {

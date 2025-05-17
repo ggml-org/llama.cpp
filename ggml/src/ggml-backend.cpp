@@ -1401,37 +1401,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         }
 
-        constexpr bool tp = true;
-
-        if (tp) {
-            for (int j0 = 0; j0 < split->graph.n_nodes;) {
-                bool split_src0 = false;
-
-                int j1 = j0;
-                for (;!split_src0 && j1 < split->graph.n_nodes; ++j1) {
-                    struct ggml_tensor * dst  = split->graph.nodes[j1];
-                    struct ggml_tensor * src0 = dst->src[0];
-                    split_src0 = src0 && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer));
-                }
-                GGML_ASSERT(j1 > j0);
-
-                if (split_src0) {
-                    j1--;
-                }
-                if (j1 > j0) {
-                    struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1);
-                    enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
-                    if (ec != GGML_STATUS_SUCCESS) {
-                        return ec;
-                    }
-                }
-                if (split_src0) {
-                    GGML_ASSERT(false);
-                }
-
-                j0 = j1;
-            }
-        } else if (!sched->callback_eval) {
+        if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
