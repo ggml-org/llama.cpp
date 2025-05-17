@@ -6422,6 +6422,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_aarch64_buffer_type(void) {
                            /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
                            /* .get_alloc_size   = */ nullptr,  // defaults to ggml_nbytes
                            /* .is_host          = */ nullptr,
+                           /* .is_split         = */ nullptr,
                            },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ new ggml::cpu::aarch64::extra_buffer_type(),

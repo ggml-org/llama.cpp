@@ -1404,21 +1404,26 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         constexpr bool tp = true;
 
         if (tp) {
-            for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
-                struct ggml_tensor * dst  = split->graph.nodes[j0];
-                struct ggml_tensor * src0 = dst->src[0];
-                bool split_src0 = src0 && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer));
+            for (int j0 = 0; j0 < split->graph.n_nodes;) {
+                bool split_src0 = false;
+
                 int j1 = j0;
-
-                while (j1 < split->graph.n_nodes - 1 && !split_src0) {
-                    dst = split->graph.nodes[++j1];
-                    split_src0 = ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer));
+                for (;j1 < split->graph.n_nodes; ++j1) {
+                    struct ggml_tensor * dst  = split->graph.nodes[j1];
+                    struct ggml_tensor * src0 = dst->src[0];
+                    split_src0 = src0 && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer));
                 }
+                GGML_ASSERT(j1 > j0);
 
-                struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
-                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
-                if (ec != GGML_STATUS_SUCCESS) {
-                    return ec;
+                if (split_src0) {
+                    GGML_ASSERT(j1 == j0 + 1);
+                    GGML_ASSERT(false);
+                } else {
+                    struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1);
+                    enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+                    if (ec != GGML_STATUS_SUCCESS) {
+                        return ec;
+                    }
                 }
 
                 j0 = j1;
