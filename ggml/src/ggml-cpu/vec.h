@@ -592,7 +592,7 @@ inline static ggml_fp16_t ggml_silu_f16(ggml_fp16_t x) {
 /* Below function was borrowed from the GitHub repository: 
 https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/src/nodes/kernels/scaled_attn/common.hpp */
 #if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
-    svfloat32_t exp_ps_sve(svbool_t pg, svfloat32_t src) {
+    inline static svfloat32_t exp_ps_sve(svbool_t pg, svfloat32_t src) {
         // Constants
         const svfloat32_t log2_e = svdup_n_f32(1.4426950409f);
         const svfloat32_t ln2 = svdup_n_f32(0.6931473921f);
@@ -623,8 +623,9 @@ https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/sr
 
         return t0;
     }
+#endif
 
-#elif defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON) && defined(__aarch64__)
 
 // adapted from arm limited optimized routine
 // the maximum error is 1.45358 plus 0.5 ulps
