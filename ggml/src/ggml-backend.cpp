@@ -1408,7 +1408,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 bool split_src0 = false;
 
                 int j1 = j0;
-                for (;j1 < split->graph.n_nodes; ++j1) {
+                for (;!split_src0 && j1 < split->graph.n_nodes; ++j1) {
                     struct ggml_tensor * dst  = split->graph.nodes[j1];
                     struct ggml_tensor * src0 = dst->src[0];
                     split_src0 = src0 && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer));
