@@ -4348,6 +4348,7 @@ int main(int argc, char ** argv) {
         json data = oaicompat_completion_params_parse(
             body,
             params.use_jinja,
+            params.prefill_assistant,
             params.reasoning_format,
             ctx_server.chat_templates.get(),
             ctx_server.mctx,
@@ -4369,6 +4370,7 @@ int main(int argc, char ** argv) {
         json data = oaicompat_completion_params_parse(
             body,
             params.use_jinja,
+            params.prefill_assistant,
             params.reasoning_format,
             ctx_server.chat_templates.get(),
             ctx_server.mctx,
