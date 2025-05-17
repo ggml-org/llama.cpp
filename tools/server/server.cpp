@@ -4349,6 +4349,7 @@ int main(int argc, char ** argv) {
             body,
             params.use_jinja,
             params.reasoning_format,
+            params.default_template_kwargs,
             ctx_server.chat_templates.get(),
             ctx_server.mctx,
             files);
@@ -4370,6 +4371,7 @@ int main(int argc, char ** argv) {
             body,
             params.use_jinja,
             params.reasoning_format,
+            params.default_template_kwargs,
             ctx_server.chat_templates.get(),
             ctx_server.mctx,
             files);
