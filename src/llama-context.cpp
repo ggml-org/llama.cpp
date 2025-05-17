@@ -93,6 +93,7 @@ llama_context::llama_context(
     }
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
+
     cparams.op_offload = params.op_offload;
 
     const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
@@ -947,8 +948,6 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         // find KV slot
         if (!kv_self->find_slot(ubatch)) {
-            LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
-
             return 1;
         }
 
@@ -2467,6 +2466,15 @@ void llama_kv_self_seq_div(
     kv->seq_div(seq_id, p0, p1, d);
 }
 
+llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
+    const auto * kv = ctx->get_kv_self();
+    if (!kv) {
+        return -1;
+    }
+
+    return kv->seq_pos_min(seq_id);
+}
+
 // deprecated
 llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     return llama_kv_self_seq_pos_max(ctx, seq_id);
@@ -2475,7 +2483,7 @@ llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
-        return 0;
+        return -1;
     }
 
     return kv->seq_pos_max(seq_id);
@@ -2637,7 +2645,21 @@ int32_t llama_encode(
 int32_t llama_decode(
         llama_context * ctx,
           llama_batch   batch) {
-    const int ret = ctx->decode(batch);
+    int ret = ctx->decode(batch);
+
+    // defrag and try again
+    // TODO: distinguish return code when we are sure that even after defrag there is no space available
+    if (ret == 1) {
+        llama_kv_self_defrag(ctx);
+        ret = ctx->decode(batch);
+
+        if (ret == 1) {
+            LLAMA_LOG_WARN("%s: failed to find KV cache slot for batch of size %d\n", __func__, batch.n_tokens);
+
+            return ret;
+        }
+    }
+
     if (ret != 0) {
         LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
     }

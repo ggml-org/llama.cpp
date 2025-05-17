@@ -2004,6 +2004,23 @@ struct server_context {
             }
         }
 
+        if (!llama_kv_self_can_shift(ctx)) {
+            if (params_base.ctx_shift) {
+                params_base.ctx_shift = false;
+                SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
+            }
+
+            if (params_base.n_cache_reuse) {
+                params_base.n_cache_reuse = 0;
+                SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+            }
+
+            if (!params_base.speculative.model.path.empty()) {
+                SRV_ERR("%s\n", "err: speculative decode is not supported by this context");
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -3181,7 +3198,14 @@ struct server_context {
                                 // if we don't cache the prompt, we have to remove the entire KV cache
                                 llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
                                 slot.n_past = 0;
-                                slot.cache_tokens.clear();
+                                slot.cache_tokens.clear(); // TODO: not needed, will be cleared later via "keep_first()"
+                            }
+
+                            if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
+                                if (llama_kv_self_seq_pos_min(ctx, slot.id) > 0) {
+                                    SLT_WRN(slot, "%s", "forcing full prompt re-processing due to lack of cache data\n");
+                                    slot.n_past = 0;
+                                }
                             }
                         }
 
