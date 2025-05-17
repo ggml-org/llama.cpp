@@ -31,7 +31,7 @@ def test_ctx_shift_enabled():
         "prompt": LONG_TEXT,
     })
     assert res.status_code == 200
-    assert res.body["timings"]["prompt_n"] == 109
+    assert res.body["timings"]["prompt_n"] == 301
     assert res.body["timings"]["predicted_n"] == 64
     assert res.body["truncated"] is True
 
