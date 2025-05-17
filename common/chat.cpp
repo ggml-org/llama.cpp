@@ -829,7 +829,7 @@ static common_chat_params common_chat_params_init_generic(const common_chat_temp
         inputs.messages,
         "Respond in JSON format, either with `tool_call` (a request to call tools) or with `response` reply to the user's request");
 
-    data.prompt = apply(tmpl, tweaked_messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt);
+    data.prompt = apply(tmpl, tweaked_messages, inputs.tools.empty() ? json() : inputs.tools, inputs.add_generation_prompt, inputs.extra_context);
     data.format = COMMON_CHAT_FORMAT_GENERIC;
     return data;
 }
