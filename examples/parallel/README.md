@@ -9,3 +9,6 @@ Generate 128 client requests (`-ns 128`), simulating 8 concurrent clients (`-np 
 ```bash
 llama-parallel -m model.gguf -np 8 -ns 128 --top-k 1 -pps --junk 10 -c 16384
 ```
+
+> [!NOTE]
+> It's recommended to use base models with this example. Instruction tuned models might not be able to properly follow the custom chat template specified here, so the results might not be as expected.
