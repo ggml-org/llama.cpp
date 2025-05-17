@@ -948,8 +948,6 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         // find KV slot
         if (!kv_self->find_slot(ubatch)) {
-            LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
-
             return 1;
         }
 
@@ -2640,9 +2638,17 @@ int32_t llama_decode(
           llama_batch   batch) {
     int ret = ctx->decode(batch);
 
+    // defrag and try again
+    // TODO: distinguish return code when we are sure that even after defrag there is no space available
     if (ret == 1) {
         llama_kv_self_defrag(ctx);
         ret = ctx->decode(batch);
+
+        if (ret == 1) {
+            LLAMA_LOG_WARN("%s: failed to find KV cache slot for batch of size %d\n", __func__, batch.n_tokens);
+
+            return ret;
+        }
     }
 
     if (ret != 0) {
