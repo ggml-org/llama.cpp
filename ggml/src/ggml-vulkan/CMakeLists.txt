@@ -149,7 +149,7 @@ if (Vulkan_FOUND)
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
         CMAKE_ARGS ${VULKAN_SHADER_GEN_CMAKE_ARGS}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build .
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config=${CMAKE_BUILD_TYPE}
         INSTALL_COMMAND ${CMAKE_COMMAND} --install .
         INSTALL_DIR ${CMAKE_BINARY_DIR}
     )
