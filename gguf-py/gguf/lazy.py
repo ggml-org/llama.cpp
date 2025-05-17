@@ -5,7 +5,6 @@ import logging
 from typing import Any, Callable
 
 import numpy as np
-from numpy.typing import DTypeLike
 
 
 logger = logging.getLogger(__name__)
@@ -107,7 +106,7 @@ class LazyBase(ABC, metaclass=LazyMeta):
             return o
 
     @classmethod
-    def _wrap_fn(cls, fn: Callable, *, use_self: LazyBase | None = None, meta_noop: bool | DTypeLike | tuple[DTypeLike, Callable[[tuple[int, ...]], tuple[int, ...]]] = False) -> Callable[[Any], Any]:
+    def _wrap_fn(cls, fn: Callable, *, use_self: LazyBase | None = None, meta_noop: bool | np.dtype[Any] | tuple[np.dtype[Any], Callable[[tuple[int, ...]], tuple[int, ...]]] = False) -> Callable[[Any], Any]:
         def wrapped_fn(*args, **kwargs):
             if kwargs is None:
                 kwargs = {}
@@ -204,7 +203,7 @@ class LazyNumpyTensor(LazyBase):
     shape: tuple[int, ...]  # Makes the type checker happy in quants.py
 
     @classmethod
-    def meta_with_dtype_and_shape(cls, dtype: DTypeLike, shape: tuple[int, ...]) -> np.ndarray[Any, Any]:
+    def meta_with_dtype_and_shape(cls, dtype: np.dtype[Any], shape: tuple[int, ...]) -> np.ndarray[Any, Any]:
         # The initial idea was to use np.nan as the fill value,
         # but non-float types like np.int16 can't use that.
         # So zero it is.

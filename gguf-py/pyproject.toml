@@ -19,7 +19,7 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = ">=3.8"
-numpy = ">=1.17"
+numpy = ">=2.1"
 tqdm = ">=4.27"
 pyyaml = ">=5.1"
 sentencepiece = ">=0.1.98,<=0.2.0"
