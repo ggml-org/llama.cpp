@@ -3198,7 +3198,14 @@ struct server_context {
                                 // if we don't cache the prompt, we have to remove the entire KV cache
                                 llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
                                 slot.n_past = 0;
-                                slot.cache_tokens.clear();
+                                slot.cache_tokens.clear(); // TODO: not needed, will be cleared later via "keep_first()"
+                            }
+
+                            if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
+                                if (llama_kv_self_seq_pos_min(ctx, slot.id) > 0) {
+                                    SLT_WRN(slot, "%s", "forcing full prompt re-processing due to lack of cache data\n");
+                                    slot.n_past = 0;
+                                }
                             }
                         }
 

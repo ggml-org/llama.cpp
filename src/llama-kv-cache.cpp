@@ -1807,10 +1807,7 @@ llama_pos llama_kv_cache_unified_iswa::get_pos_max() const {
 }
 
 bool llama_kv_cache_unified_iswa::get_can_shift() const {
-    // TODO: for now allow this, eventhough it's not mathematically correct
-    //       but some initial tests indicate that the results are not bad
-    return true;
-    //return kv_base->get_size() == kv_swa->get_size();
+    return kv_base->get_size() == kv_swa->get_size();
 }
 
 void llama_kv_cache_unified_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
