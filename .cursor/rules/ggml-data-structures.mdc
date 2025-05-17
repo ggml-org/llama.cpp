@@ -1,0 +1,82 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# GGML Core Data Structures Cheat-Sheet
+
+This rule distills the essential C structs and concepts that power **llama.cpp / GGML**. Use it when reading, extending, or debugging the C++ source.
+
+---
+
+## 1. Struct Glossary
+
+| Struct | Purpose | Key Fields | Definition |
+|--------|---------|-----------|------------|
+| `ggml_tensor` | N-dimensional typed array and **graph node**. Represents both parameters and intermediate results. | `type`, `ne[4]` (shape), `nb[4]` (stride), `op` (operator ID), `src[GGML_MAX_SRC]` (input edges), `data` (pointer), `flags` (INPUT / OUTPUT / PARAM / LOSS) | [ggml.h](mdc:ggml/include/ggml.h) |
+| `ggml_context` | Memory arena that owns all tensors & graph objects created via `ggml_new_tensor_*`. | `mem_buffer`, `mem_size`, internal free-list | [ggml.h](mdc:ggml/include/ggml.h) |
+| `ggml_cgraph`  | Computation graph built from tensors; passed to back-ends for execution. | `nodes`, `n_nodes`, helpers like `ggml_graph_node` | [ggml.h](mdc:ggml/include/ggml.h) |
+| `ggml_backend` / `ggml_backend_buffer` | Abstract execution device (CPU, CUDA, Metal, SYCL, etc.) and its primary buffer. | device-specific state | [backend headers](mdc:ggml/include) |
+| `ggml_tallocr` | Tensor allocator that places tensors into a single backend buffer. | tracks offsets & alignment | [ggml-alloc.h](mdc:ggml/include/ggml-alloc.h) |
+| `ggml_gallocr` | **Graph allocator** – does a dry-run over a `ggml_cgraph` to find peak memory, then allocates en-bloc. | Used via `ggml_gallocr_reserve` / `ggml_gallocr_alloc_graph` | [ggml-alloc.h](mdc:ggml/include/ggml-alloc.h) |
+
+---
+
+## 2. Life-Cycle of a Tensor
+
+1. **Context init** – allocate a work buffer:
+   ```c
+   struct ggml_init_params p = {.mem_size = 64*1024*1024};
+   struct ggml_context * ctx = ggml_init(p);
+   ```
+2. **Create tensors** via helpers (`ggml_new_tensor_1d/2d/3d/4d`).
+3. **Build graph** with operators like `ggml_mul_mat`, `ggml_add`, etc. Each call returns a *new* `ggml_tensor` whose `src[]` point to operands.
+4. **Wrap into a graph**:
+   ```c
+   struct ggml_cgraph * gf = ggml_new_graph(ctx);
+   ggml_build_forward_expand(gf, output_tensor);
+   ```
+5. **Allocate device memory** (optional):
+   ```c
+   ggml_backend_t backend = ggml_backend_cuda_init(0); // or cpu_init()
+   ggml_backend_buffer_t buf = ggml_backend_alloc_buffer(backend, bytes);
+   struct ggml_tallocr alloc = ggml_tallocr_new(buf);
+   ggml_tallocr_alloc(&alloc, tensor);
+   ```
+6. **Compute**:
+   ```c
+   ggml_backend_graph_compute(backend, gf);
+   ```
+
+See the concrete example in [tests/test_ggml_mul_mat.cpp](mdc:tests/test_ggml_mul_mat.cpp).
+
+---
+
+## 3. Common Helper APIs
+
+- `ggml_nelements(t)` – total element count.
+- `ggml_nbytes(t)` / `ggml_type_size(t->type)` – memory footprint.
+- `ggml_set_param(ctx, t)` – mark tensor as a trainable variable.
+- `ggml_graph_dump_dot(gb, gf, "out.dot")` – export graph for graphviz.
+
+---
+
+## 4. Flags Cheat-Sheet
+
+| Flag | Meaning |
+|------|---------|
+| `GGML_TENSOR_FLAG_INPUT`  | External input to graph |
+| `GGML_TENSOR_FLAG_OUTPUT` | Should be treated as output |
+| `GGML_TENSOR_FLAG_PARAM`  | Trainable parameter |
+| `GGML_TENSOR_FLAG_LOSS`   | Marks loss node (for autograd) |
+
+---
+
+### Why This Matters
+Understanding these structs accelerates navigation of llama.cpp's C/C++ code and helps you:
+- Track memory / VRAM usage.
+- Port kernels to new back-ends.
+- Debug shape mismatches or stride bugs.
+- Extend the model loader with new tensor layouts.
+
+Use the links above to jump straight to definitions while coding in Cursor.

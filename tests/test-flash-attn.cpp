@@ -1,375 +1,277 @@
-#include "log.h"
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "log.h"
 
-#include <cmath>
-#include <cstdio>
-#include <cstdlib>
-#include <cassert>
-#include <string>
-#include <vector>
-#include <numeric> // For std::iota if needed, or manual loops
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
-#endif
+// Reference implementation of attention using matmul and softmax
+// This function mimics the fallback path in llama-graph.cpp when flash attention is not available
+ggml_tensor * reference_attention(
+    struct ggml_context * ctx,
+    struct ggml_tensor * q,
+    struct ggml_tensor * k,
+    struct ggml_tensor * v,
+    struct ggml_tensor * mask,
+    float scale,
+    float max_bias,
+    bool v_trans,
+    struct ggml_tensor * kq_bias = nullptr,
+    struct ggml_tensor * v_mla = nullptr,
+    float soft_cap = 0.0f) {
 
-#if defined(__GNUC__)
-#pragma GCC diagnostic ignored "-Wdouble-promotion"
-#endif
+    // Calculate attention scores: Q*K^T
+    ggml_tensor * kq = ggml_mul_mat(ctx, k, q);
 
-#undef MIN
-#undef MAX
-#define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+    // Set precision to F32 for better numerical stability
+    ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
-//
-// logging
-//
+    // Apply soft capping if needed
+    if (soft_cap > 0.0f) {
+        kq = ggml_scale(ctx, kq, 1.0f / soft_cap);
+        kq = ggml_tanh(ctx, kq);
+        kq = ggml_scale(ctx, kq, soft_cap);
+    }
 
-#if (GGML_DEBUG >= 1)
-#define GGML_PRINT_DEBUG(...) printf(__VA_ARGS__)
-#else
-#define GGML_PRINT_DEBUG(...)
-#endif
+    // Add bias if provided
+    if (kq_bias != nullptr) {
+        kq = ggml_add(ctx, kq, kq_bias);
+    }
 
-#if (GGML_DEBUG >= 5)
-#define GGML_PRINT_DEBUG_5(...) printf(__VA_ARGS__)
-#else
-#define GGML_PRINT_DEBUG_5(...)
-#endif
+    // Apply softmax with mask and scale
+    kq = ggml_soft_max_ext(ctx, kq, mask, scale, max_bias);
 
-#if (GGML_DEBUG >= 10)
-#define GGML_PRINT_DEBUG_10(...) printf(__VA_ARGS__)
-#else
-#define GGML_PRINT_DEBUG_10(...)
-#endif
+    // Prepare V for multiplication
+    ggml_tensor * v_ready = v;
+    if (!v_trans) {
+        v_ready = ggml_cont(ctx, ggml_transpose(ctx, v));
+    }
 
-#define GGML_PRINT(...) printf(__VA_ARGS__)
+    // Calculate attention output: V * softmax(Q*K^T)
+    ggml_tensor * kqv = ggml_mul_mat(ctx, v_ready, kq);
 
-static float frand(void) {
-    return (float)rand()/(float)RAND_MAX;
-}
+    // Apply MLA if provided (for MQA->MHA conversion)
+    if (v_mla != nullptr) {
+        kqv = ggml_mul_mat(ctx, v_mla, kqv);
+    }
 
-static struct ggml_tensor * get_ones_tensor_f32(
-        struct ggml_context * ctx0,
-        int ndims,
-        const int64_t ne[]) {
-    struct ggml_tensor * result = ggml_new_tensor(ctx0, GGML_TYPE_F32, ndims, ne);
-    ggml_set_f32(result, 1.0f);
+    // Rearrange dimensions
+    ggml_tensor * result = ggml_permute(ctx, kqv, 0, 2, 1, 3);
+
+    // Get final 2D shape
+    const int n_head = q->ne[2];
+    const int n_tokens = q->ne[1];
+    result = ggml_cont_2d(ctx, result, result->ne[0] * n_head, n_tokens);
+
     return result;
 }
 
-static struct ggml_tensor * get_random_tensor_f32(
-        struct ggml_context * ctx0,
-        int ndims,
-        const int64_t ne[],
-        float fmin,
-        float fmax) {
-    struct ggml_tensor * result = ggml_new_tensor(ctx0, GGML_TYPE_F32, ndims, ne);
+int main(int argc, char ** argv) {
+    (void)argc;
+    (void)argv;
 
-    // Initialize with random data
-    float *data = (float *)result->data;
-    for (int i = 0; i < ggml_nelements(result); ++i) {
-        data[i] = i % static_cast<int>(fmax - fmin) + fmin;
-    }
-    return result;
-}
+    printf("Testing Flash Attention\n");
 
-static struct ggml_tensor * get_ones_tensor_f16(
-        struct ggml_context * ctx0,
-        int ndims,
-        const int64_t ne[]) {
-    struct ggml_tensor * result = ggml_new_tensor(ctx0, GGML_TYPE_F16, ndims, ne);
-    ggml_set_f32(result, 1.0f); // ggml_set_f32 handles conversion to f16 internally
-    return result;
-}
-
-static struct ggml_tensor * get_random_tensor_f16(
-        struct ggml_context * ctx0,
-        int ndims,
-        const int64_t ne[],
-        float fmin,
-        float fmax) {
-    struct ggml_tensor * result = ggml_new_tensor(ctx0, GGML_TYPE_F16, ndims, ne);
-
-    // Initialize with random data
-    ggml_fp16_t *data = (ggml_fp16_t *)result->data;
-    for (int i = 0; i < ggml_nelements(result); ++i) {
-        float val = i % static_cast<int>(fmax - fmin) + fmin;
-        data[i] = ggml_fp32_to_fp16(val);
-    }
-    return result;
-}
-
-static std::string ggml_tensor_shape_string(const ggml_tensor * t) {
-    std::string str;
-    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        str += std::to_string(t->ne[i]);
-        if (i + 1 < GGML_MAX_DIMS && t->ne[i+1] > 0) { // Print comma only if next dim exists
-             if (i < GGML_MAX_DIMS -1 && t->ne[i+1] != 0 ) { // check if there is a next dimension
-                bool has_more_dims = false;
-                for(int j=i+1; j < GGML_MAX_DIMS; ++j) {
-                    if (t->ne[j] != 0 && t->ne[j] != 1) { // only count meaningful dims
-                        has_more_dims = true;
-                        break;
-                    }
-                }
-                if(has_more_dims || (i<2 && t->ne[i+1] > 1)) str += ", "; // Heuristic for 1D/2D vs higher D
-             }
-        }
-    }
-    // Remove trailing comma and space if any for tensors with fewer than MAX_DIMS
-    if (str.length() > 2 && str.substr(str.length() - 2) == ", ") {
-        str = str.substr(0, str.length() - 2);
-    }
-    return str;
-}
-
-static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * graph, int n_threads) {
-    struct ggml_cplan plan = ggml_graph_plan(graph, n_threads, nullptr);
-
-    if (plan.work_size > 0) {
-        buf.resize(plan.work_size);
-        plan.work_data = buf.data();
-    } else {
-        plan.work_data = nullptr; // Ensure work_data is null if work_size is 0
-    }
-
-    ggml_graph_compute(graph, &plan);
-}
-
-static void ggml_print_tensor_summary(const char* title, const ggml_tensor *t) {
-    if (!t) return;
-    LOG("%s: %s, Type: %s, Shape: [%s]\n",
-        title,
-        (t->name[0] != '\0' ? t->name : "(unnamed)"),
-        ggml_type_name(t->type),
-        ggml_tensor_shape_string(t).c_str());
-}
-
-static void ggml_print_tensor_data(const ggml_tensor * t, uint8_t * data_ptr_override, int64_t n_to_print) {
-    ggml_print_tensor_summary("Tensor Data Dump", t);
-
-    uint8_t * data_to_print = data_ptr_override;
-    if (!data_to_print) {
-        LOG(" (Data not available or not on host for direct printing)\n");
-        return;
-    }
-    if (ggml_is_quantized(t->type)) {
-        LOG(" (Quantized tensor - data printing not implemented for this example)\n");
-        return;
-    }
-
-    GGML_ASSERT(n_to_print > 0);
-    float sum = 0;
-    const int64_t* ne = t->ne;
-    const size_t* nb = t->nb;
-    ggml_type type = t->type;
-
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LOG("                                     [\n");
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n_to_print && ne[2] > 2*n_to_print) {
-                LOG("                                      ..., \n");
-                i2 = ne[2] - n_to_print;
-            }
-            LOG("                                      [\n");
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n_to_print && ne[1] > 2*n_to_print) {
-                    LOG("                                       ..., \n");
-                    i1 = ne[1] - n_to_print;
-                }
-                LOG("                                       [");
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n_to_print && ne[0] > 2*n_to_print) {
-                        LOG("..., ");
-                        i0 = ne[0] - n_to_print;
-                    }
-                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-                    float v;
-                    if (type == GGML_TYPE_F16) {
-                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data_to_print[i]);
-                    } else if (type == GGML_TYPE_F32) {
-                        v = *(float *) &data_to_print[i];
-                    } else if (type == GGML_TYPE_I32) {
-                        v = (float) *(int32_t *) &data_to_print[i];
-                    } else if (type == GGML_TYPE_I16) {
-                        v = (float) *(int16_t *) &data_to_print[i];
-                    } else if (type == GGML_TYPE_I8) {
-                        v = (float) *(int8_t *) &data_to_print[i];
-                    } else {
-                        LOG("Unsupported type for printing: %s\n", ggml_type_name(type));
-                        GGML_ABORT("fatal error: unsupported tensor type in ggml_print_tensor_data");
-                    }
-                    LOG("%12.4f", v);
-                    sum += v;
-                    if (i0 < ne[0] - 1) LOG(", ");
-                }
-                LOG("],\n");
-            }
-            LOG("                                      ],\n");
-        }
-        LOG("                                     ]\n");
-        LOG("                                     sum = %f\n", sum);
-    }
-}
-
-static void get_tensor_data_if_needed(struct ggml_tensor * t, std::vector<uint8_t>& buffer, uint8_t** data_ptr) {
-    const bool is_host = ggml_backend_buffer_is_host(t->buffer);
-    if (is_host) {
-        *data_ptr = (uint8_t *)t->data;
-    } else {
-        if (t->data == nullptr && ggml_nbytes(t) > 0) {     // Tensor might have data on device but t->data is null if not mapped
-            LOG("Tensor %s data is on device and not mapped to host, attempting to fetch.\n", (t->name[0] != '\0' ? t->name : "(unnamed)"));
-        } else if (t->data == nullptr && ggml_nbytes(t) == 0) {
-             LOG("Tensor %s has no data (0 bytes).\n", (t->name[0] != '\0' ? t->name : "(unnamed)"));
-            *data_ptr = nullptr;
-            return;
-        }
-        auto n_bytes = ggml_nbytes(t);
-        buffer.resize(n_bytes);
-        ggml_backend_tensor_get(t, buffer.data(), 0, n_bytes);
-        *data_ptr = buffer.data();
-    }
-}
-
-// helper to print a tensor (first few elements)
-static void print_tensor_brief(const struct ggml_tensor * tensor, const char * name) {
-    printf("%s: shape(%ld, %ld, %ld, %ld), type %s, backend %d\n",
-        name, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
-        ggml_type_name(tensor->type), 0);
-    if (tensor->data == nullptr) {
-        printf("  (data is null - graph not computed or offloaded?)\n");
-        return;
-    }
-    const float * data = (const float *)tensor->data;
-    int n_to_print = (int)MIN(10, ggml_nelements(tensor));
-    printf("  Data: ");
-    for (int i = 0; i < n_to_print; ++i) {
-        printf("%.4f ", data[i]);
-    }
-    if (ggml_nelements(tensor) > n_to_print) {
-        printf("...");
-    }
-    printf("\n\n");
-}
-
-int main(int /*argc*/, const char ** /*argv*/) {
-    srand(2024); // for reproducibility
-
+    // Initialize ggml context
     struct ggml_init_params params = {
-        /* .mem_size   = */ 256 * 1024 * 1024, // 256 MB, Flash Attention can be memory intensive
-        /* .mem_buffer = */ NULL,
-        /* .no_alloc   = */ false,
+        /*.mem_size   =*/ 128*1024*1024, // GGML_DEFAULT_GRAPH_SIZE
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ false,
     };
 
-    std::vector<uint8_t> work_buffer;
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        fprintf(stderr, "Failed to initialize context\n");
+        return 1;
+    }
 
-    struct ggml_context * ctx0 = ggml_init(params);
+    // 使用小一点的参数，避免内存问题
+    const int n_embd  = 4096;    // 嵌入维度
+    const int n_head  = 32;     // 头数
+    const int n_tokens = 32;    // 序列长度
+    const int d_head  = n_embd / n_head; // 每个头的维度 = 8
+    const int batch_size = 1;
 
-    // Define tensor dimensions for Flash Attention
-    // Q: (head_dim, seq_len_q, n_head, batch_size)
-    // K: (head_dim, seq_len_kv, n_head_kv, batch_size)
-    // V: (head_dim, seq_len_kv, n_head_kv, batch_size)
-    // Result: (head_dim, seq_len_q, n_head, batch_size) - Note: ggml_flash_attn_ext output has permuted shape
+    printf("Parameters: embd=%d, heads=%d, tokens=%d, d_head=%d\n", n_embd, n_head, n_tokens, d_head);
 
-    const int64_t batch_size  = 1;
-    const int64_t n_head      = 1;      // Query heads
-    const int64_t n_head_kv   = 1;      // KV heads (n_head if not GQA/MQA)
-    const int64_t seq_len_q   = 1;      // Query sequence length
-    const int64_t seq_len_kv  = 1;      // Key/Value sequence length
-    const int64_t head_dim    = 128;    // Dimension of each attention head
+    // 创建QKV输入，使用F16数据类型
+    // Note: As required by flash_attn_ext function, Q, K, V are 3D tensors with shape [d_head, n_tokens, n_head]
+    // For this test, using 4D tensors with batch_size = 1
+    struct ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d_head, n_head, n_tokens,   batch_size);
+    struct ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d_head, n_head, n_tokens,   batch_size);
+    struct ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, d_head, n_head, n_tokens,   batch_size);
 
-    const int64_t ne_q[4] = {head_dim, seq_len_q,  n_head,    batch_size};
-    const int64_t ne_k[4] = {head_dim, seq_len_kv, n_head_kv, batch_size};
-    const int64_t ne_v[4] = {head_dim, seq_len_kv, n_head_kv, batch_size}; // Assuming head_dim_v = head_dim
+    // Seed the random number generator for reproducibility
+    srand((unsigned) time(NULL));
 
-    struct ggml_tensor * q = get_random_tensor_f32(ctx0, 4, ne_q, -128.0f, 128.0f);
-    struct ggml_tensor * k = get_random_tensor_f32(ctx0, 4, ne_k, -128.0f, 128.0f);
-    struct ggml_tensor * v = get_random_tensor_f32(ctx0, 4, ne_v, -128.0f, 128.0f);
-    
-    //> ===================================================================================================
-    //> Print the shapes of Q, K, V tensors
-    //> ===================================================================================================
-    struct ggml_tensor * mask = NULL; // No mask for this basic example
+    // 填充数据 - 使用ggml_fp16_t填充
+    const int n_elements_q = ggml_nelements(q);
+    for (int i = 0; i < n_elements_q; i++) {
+        float rand_q = (float)rand() / RAND_MAX;  // generate in [0,1]
+        ((ggml_fp16_t*)q->data)[i] = ggml_fp32_to_fp16(rand_q);
+    }
 
-    // Convert to float16
-    q = ggml_cast(ctx0, q, GGML_TYPE_F16);
-    k = ggml_cast(ctx0, k, GGML_TYPE_F16);
-    v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+    // Fill K with random data
+    const int n_elements_k = ggml_nelements(k);
+    for (int i = 0; i < n_elements_k; i++) {
+        float rand_k = (float)rand() / RAND_MAX;  // generate in [0,1]
+        ((ggml_fp16_t*)k->data)[i] = ggml_fp32_to_fp16(rand_k);
+    }
 
-    const float scale = 1.0f / sqrtf((float)head_dim);
-    const float max_bias = 0.0f; // No ALIBI
-    const float logit_softcap = 0.0f; // No logit softcapping
+    // Fill V with random data
+    const int n_elements_v = ggml_nelements(v);
+    for (int i = 0; i < n_elements_v; i++) {
+        float rand_v = (float)rand() / RAND_MAX;  // generate in [0,1]
+        ((ggml_fp16_t*)v->data)[i] = ggml_fp32_to_fp16(rand_v);
+    }
 
-    printf("Constructing ggml_flash_attn_ext...\n");
-    struct ggml_tensor * flash_attn_output = ggml_flash_attn_ext(ctx0, q, k, v, mask, scale, max_bias, logit_softcap);
-    ggml_set_name(flash_attn_output, "flash_attn_output");
+    printf("Created F16 tensors with random values: Q(%d els), K(%d els), V(%d els)\n", n_elements_q, n_elements_k, n_elements_v);
 
-    //> ===================================================================================================
-    //> Standard Attention Calculation for comparison
-    //> ===================================================================================================
-    printf("\nConstructing Standard Attention path...\n");
-    struct ggml_tensor * q_std = ggml_cast(ctx0, ggml_dup(ctx0, q), GGML_TYPE_F32);
-    struct ggml_tensor * k_std = ggml_cast(ctx0, ggml_dup(ctx0, k), GGML_TYPE_F32);
-    struct ggml_tensor * v_std = ggml_cast(ctx0, ggml_dup(ctx0, v), GGML_TYPE_F32);
+    const float scale = 1.0f / sqrtf(d_head);
+    printf("Using scale = %f\n", scale);
 
-    ggml_set_name(q_std, "q_std");
-    ggml_set_name(k_std, "k_std");
-    ggml_set_name(v_std, "v_std");
-
-    struct ggml_tensor * output_std = ggml_mul_mat(ctx0, k_std, q_std);
-    ggml_set_name(output_std, "output_std");
-
-    struct ggml_tensor * output_std_softmax = ggml_soft_max_ext(ctx0, output_std, mask, scale, max_bias);
-    ggml_set_name(output_std_softmax, "output_std_softmax");
-
-    struct ggml_tensor * v_std_permuted = ggml_view_3d(
-        ctx0, 
-        v_std,
-        v_std->ne[1], 
-        v_std->ne[0],
-        v_std->ne[2],
-        ggml_type_size(v_std->type) * v_std->ne[1],
-        ggml_type_size(v_std->type) * v_std->ne[1] * v_std->ne[0],
-        0
+    printf("Calling ggml_flash_attn_ext...\n");
+    struct ggml_tensor * output = ggml_flash_attn_ext(
+        ctx, q, k, v,     // q, k, v 张量
+        NULL,             // mask 参数 (无掩码)
+        scale,            // 缩放因子
+        0.0f,             // 无软上限
+        0.0f              // 无KQ 稀疏性参数
     );
-    ggml_set_name(v_std_permuted, "v_std_permuted");
 
-    struct ggml_tensor * output_std_mul_v = ggml_mul_mat(ctx0, v_std_permuted, output_std_softmax);
-    ggml_set_name(output_std_mul_v, "output_std_mul_v");
+    if (!output) {
+        fprintf(stderr, "Flash attention returned NULL\n");
+        ggml_free(ctx);
+        return 1;
+    }
 
-    //> ===================================================================================================
-    //> Build and compute graph
-    //> ===================================================================================================
-    // Build and compute graph
-    struct ggml_cgraph * gf = ggml_new_graph(ctx0);
-    ggml_build_forward_expand(gf, flash_attn_output);
-    ggml_build_forward_expand(gf, output_std_mul_v); // Add standard attention output to graph
+    printf("Created output tensor with shape [%d, %d, %d]\n", (int)output->ne[0], (int)output->ne[1], (int)output->ne[2]);
 
-    printf("Computing graph...\n");
-    ggml_graph_compute_helper(work_buffer, gf, 1);  // Using 1 thread for simplicity
-    
-    //> Print the data of the flash_attn_output tensor
-    printf("\n--- Flash Attention Output ---\n");
-    uint8_t* q_data = (uint8_t*)malloc(ggml_nbytes(q));
-    std::vector<uint8_t> buffer;
-    get_tensor_data_if_needed(q, buffer, &q_data);
-    ggml_print_tensor_data(flash_attn_output, q_data, 128);
+    // 构建计算图并执行
+    struct ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, output);
 
+    printf("Executing computation graph...\n");
+    ggml_graph_compute_with_ctx(ctx, graph, 1);
 
-    printf("\n--- Output Tensor ---\n");
-    print_tensor_brief(flash_attn_output, "Flash Attention Output");
+    // ---------------------------------------------------------------------
+    // Compute reference attention for verification
+    // ---------------------------------------------------------------------
+    struct ggml_tensor * ref_out = reference_attention(
+            ctx,
+            q,
+            k,
+            v,
+            /*mask   =*/ NULL,
+            /*scale  =*/ scale,
+            /*max_bias=*/ 0.0f,
+            /*v_trans=*/ false);
 
-    printf("\n--- Standard Attention Output ---\n");
-    print_tensor_brief(output_std_mul_v, "Standard Attention Output");
+    struct ggml_cgraph * graph_ref = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph_ref, ref_out);
 
-    // Expected output shape from ggml.c: { v->ne[0], q->ne[2], q->ne[1], q->ne[3] }
-    // Which is (head_dim, n_head, seq_len_q, batch_size)
-    printf("\nExpected output shape: (%lld, %lld, %lld, %lld)\n", head_dim, n_head, seq_len_q, batch_size);
+    printf("Executing reference attention graph...\n");
+    ggml_graph_compute_with_ctx(ctx, graph_ref, 1);
 
-    ggml_free(ctx0);
+    // ---------------------------------------------------------------------
+    // Compare results
+    // ---------------------------------------------------------------------
+    // The output sequence length is determined by q's sequence length (q->ne[1])
+    const int output_seq_len = q->ne[1];
+    const int total_elements_to_compare = d_head * n_head * output_seq_len;
 
-    return 0;
-} 
+    float max_abs_diff = 0.0f;
+
+    for (int idx = 0; idx < total_elements_to_compare; ++idx) {
+        float flash_val;
+        float ref_val;
+
+        if (output->type == GGML_TYPE_F16) {
+            flash_val = ggml_fp16_to_fp32(((ggml_fp16_t *) output->data)[idx]);
+        } else {
+            flash_val = ((float *) output->data)[idx];
+        }
+
+        if (ref_out->type == GGML_TYPE_F16) {
+            ref_val = ggml_fp16_to_fp32(((ggml_fp16_t *) ref_out->data)[idx]);
+        } else {
+            ref_val = ((float *) ref_out->data)[idx];
+        }
+
+        float diff = fabsf(flash_val - ref_val);
+        if (diff > max_abs_diff) {
+            max_abs_diff = diff;
+        }
+    }
+
+    printf("Max absolute difference between flash and reference: %.6f\n", max_abs_diff);
+    printf("Comparison result: %s\n", (max_abs_diff < 1e-3f) ? "\033[32mMATCH\033[0m" : "\033[31mMISMATCH\033[0m");
+
+    // ---------------------------------------------------------------------
+    // (Optional) preview a few values from both tensors for manual inspection
+    // ---------------------------------------------------------------------
+    const int preview_batch_items = batch_size < 2 ? batch_size : 2; // Preview first few batch items
+    const int preview_tokens_count = output_seq_len < 2 ? output_seq_len : 2; // Preview first few tokens (from q_len)
+    const int preview_heads_count  = n_head < 2 ? n_head : 2;   // Preview first few heads
+    const int preview_d_elements   = d_head < 128 ? d_head : 128;   // Preview first few elements within a head vector
+
+    printf("\nSample values (flash | reference):\n");
+    for (int b_idx = 0; b_idx < preview_batch_items; ++b_idx) {
+        if (batch_size > 1) {
+            printf("Batch index %d:\n", b_idx);
+        }
+        for (int t_idx = 0; t_idx < preview_tokens_count; ++t_idx) {
+            printf("  Token index %d:\n", t_idx);
+            for (int h_idx = 0; h_idx < preview_heads_count; ++h_idx) {
+                printf("    Head index %d:\n", h_idx);
+                for (int d_idx = 0; d_idx < preview_d_elements; ++d_idx) {
+                    // output is [d_head, q_len, n_head, batch_size]
+                    // ref_out is [d_head*n_head, q_len] (batch_size=1 assumed for ref_out construction)
+                    // All indices are 0-based.
+
+                    // For batch_size=1, output effectively [d_head, output_seq_len, n_head]
+                    // Linear index for output[d_idx, t_idx, h_idx] (assuming batch_idx = 0)
+                    size_t flash_offset = (size_t)b_idx * output->nb[3] + // batch stride
+                                          (size_t)h_idx * output->nb[2] + // head stride
+                                          (size_t)t_idx * output->nb[1] + // token stride
+                                          (size_t)d_idx * output->nb[0];  // d_head element stride (usually type_size)
+
+                    // ref_out is [d_head*n_head, output_seq_len]. (batch_idx = 0 assumed)
+                    // Linear index for ref_out[ (h_idx * d_head + d_idx), t_idx ]
+                    size_t ref_offset = (size_t)t_idx * ref_out->nb[1] + // token stride
+                                       ((size_t)h_idx * d_head + d_idx) * ref_out->nb[0]; // element stride
+
+                    float flash_val = NAN;
+                    float ref_val   = NAN;
+
+                    if (flash_offset < ggml_nbytes(output)) {
+                        if (output->type == GGML_TYPE_F16) {
+                            flash_val = ggml_fp16_to_fp32( ((ggml_fp16_t *) ((char *)output->data + flash_offset))[0] );
+                        } else {
+                            flash_val =                   ((float *)       ((char *)output->data + flash_offset))[0];
+                        }
+                    }
+
+                    if (ref_offset < ggml_nbytes(ref_out)) {
+                        if (ref_out->type == GGML_TYPE_F16) {
+                           ref_val = ggml_fp16_to_fp32( ((ggml_fp16_t *) ((char *)ref_out->data + ref_offset))[0] );
+                        } else {
+                           ref_val =                   ((float *)       ((char *)ref_out->data + ref_offset))[0];
+                        }
+                    }
+                    printf("      d_element %d: %.5f | %.5f\n", d_idx, flash_val, ref_val);
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Clean up
+    // ---------------------------------------------------------------------
+    ggml_free(ctx);
+    printf("Test completed.\n");
+
+    return (max_abs_diff < 1e-3f && total_elements_to_compare > 0) ? 0 : 1;
+}

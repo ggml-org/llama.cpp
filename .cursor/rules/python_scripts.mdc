@@ -23,3 +23,36 @@ These scripts are typically run from the command line, e.g., `python scripts/con
 Refer to the specific script's arguments (often available via `-h` or `--help`) or the project [`README.md`](mdc:README.md) for detailed usage instructions.
 
 The [`scripts/`](mdc:scripts) directory may contain other useful Python utilities.
+
+# llama.cpp Examples Project Structure
+
+## Project Background
+### GGML and llama.cpp Relationship
+- **GGML (Georgi Gerganov Machine Learning)** is a lightweight machine learning library
+- `llama.cpp` is a primary implementation built on GGML, focusing on efficient LLM inference
+- Key characteristics:
+  - Designed for running large language models on consumer hardware
+  - Enables quantization and optimized model loading
+  - Supports low-memory and edge device deployments
+
+## Core Technologies
+- **Quantization**: Reduces model size and computational requirements
+- **Efficient Inference**: Optimized for CPU and low-power devices
+- **Model Format**: Uses GGUF (GGML Unified Format) for model representation
+
+## GGML Integration Evidence
+- `gguf/` and `gguf-hash/` directories demonstrate GGML format handling
+- Conversion scripts like [convert_legacy_llama.py](mdc:convert_legacy_llama.py) show model transformation capabilities
+- Multiple example scripts showcase GGML-powered model interactions
+
+## Supported Model Formats
+- Original LLaMA models
+- Quantized models
+- GGUF-formatted models
+- Various community-developed model variants
+
+## Performance Characteristics
+- Low memory footprint
+- Cross-platform compatibility
+- Efficient inference on diverse hardware
+

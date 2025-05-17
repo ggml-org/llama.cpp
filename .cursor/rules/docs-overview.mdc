@@ -1,0 +1,67 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# llama.cpp Documentation Guide
+
+This rule provides an organized index of the markdown documentation under the `docs/` directory, making it easy to jump to any topic while working in Cursor.
+
+---
+
+## 1. Build & Installation
+
+| Topic | File |
+|-------|------|
+| Comprehensive build instructions (multiple platforms, back-ends, CMake flags) | [build.md](mdc:docs/build.md) |
+| Minimal installation steps | [install.md](mdc:docs/install.md) |
+| Docker-based workflow | [docker.md](mdc:docs/docker.md) |
+| Android build & deployment | [android.md](mdc:docs/android.md) |
+
+## 2. Runtime Usage
+
+| Topic | File |
+|-------|------|
+| OpenAI-style function calling with llama.cpp | [function-calling.md](mdc:docs/function-calling.md) |
+| Prompt-engineering guidance for GGUF / llama.cpp models | [llguidance.md](mdc:docs/llguidance.md) |
+
+## 3. Back-end Specific Guides (GPU / Accelerators)
+
+| Accelerator / Library | File |
+|-----------------------|------|
+| CUDA on Fedora | [backend/CUDA-FEDORA.md](mdc:docs/backend/CUDA-FEDORA.md) |
+| SYCL (oneAPI, hipSYCL, etc.) | [backend/SYCL.md](mdc:docs/backend/SYCL.md) |
+| OpenCL | [backend/OPENCL.md](mdc:docs/backend/OPENCL.md) |
+| BLIS (CPU optimized BLAS) | [backend/BLIS.md](mdc:docs/backend/BLIS.md) |
+| CANN (Ascend AI processors) | [backend/CANN.md](mdc:docs/backend/CANN.md) |
+
+## 4. Developer Docs
+
+| Topic | File |
+|-------|------|
+| Adding a new model to the repo | [development/HOWTO-add-model.md](mdc:docs/development/HOWTO-add-model.md) |
+| Performance tips for faster token generation | [development/token_generation_performance_tips.md](mdc:docs/development/token_generation_performance_tips.md) |
+| Debugging the test suite | [development/debugging-tests.md](mdc:docs/development/debugging-tests.md) |
+
+## 5. Multimodal Model Guides
+
+| Model / Topic | File |
+|---------------|------|
+| MobileVLM | [multimodal/MobileVLM.md](mdc:docs/multimodal/MobileVLM.md) |
+| GLM-Edge | [multimodal/glmedge.md](mdc:docs/multimodal/glmedge.md) |
+| GraniteVision | [multimodal/granitevision.md](mdc:docs/multimodal/granitevision.md) |
+| LLaVA | [multimodal/llava.md](mdc:docs/multimodal/llava.md) |
+| Gemma-3 | [multimodal/gemma3.md](mdc:docs/multimodal/gemma3.md) |
+| MiniCPM-v2.5 | [multimodal/minicpmv2.5.md](mdc:docs/multimodal/minicpmv2.5.md) |
+| MiniCPM-v2.6 | [multimodal/minicpmv2.6.md](mdc:docs/multimodal/minicpmv2.6.md) |
+| MiniCPM-Mo2.6 | [multimodal/minicpmo2.6.md](mdc:docs/multimodal/minicpmo2.6.md) |
+
+---
+
+### How to Use This Rule
+
+1. **Quick Jump:** Click any link above to open the referenced Markdown file inside Cursor.
+2. **Search Within Docs:** Use the integrated search (⇧⌘F) to locate additional details across all docs files.
+3. **Stay Updated:** When new documentation is added, extend this table to keep the index current.
+
+These references help you navigate llama.cpp's extensive documentation without leaving the editor.
