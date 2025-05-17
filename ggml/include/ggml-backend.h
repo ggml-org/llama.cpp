@@ -41,6 +41,7 @@ extern "C" {
     GGML_API size_t                ggml_backend_buft_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
     GGML_API bool                  ggml_backend_buft_is_host       (ggml_backend_buffer_type_t buft);
     GGML_API ggml_backend_dev_t    ggml_backend_buft_get_device    (ggml_backend_buffer_type_t buft);
+    GGML_API bool                  ggml_backend_buft_is_split      (ggml_backend_buffer_type_t buft);
 
     //
     // Backend buffer

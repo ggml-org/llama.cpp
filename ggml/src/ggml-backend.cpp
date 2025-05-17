@@ -77,6 +77,10 @@ ggml_backend_dev_t ggml_backend_buft_get_device(ggml_backend_buffer_type_t buft)
     return buft->device;
 }
 
+bool ggml_backend_buft_is_split(ggml_backend_buffer_type_t buft) {
+    return buft->iface.is_split && buft->iface.is_split(buft);
+}
+
 // backend buffer
 
 ggml_backend_buffer_t ggml_backend_buffer_init(
@@ -1971,6 +1975,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void) {
             /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
             /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+            /* .is_split         = */ NULL,
         },
         /* .device  = */ NULL, // FIXME ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ NULL,
@@ -1994,6 +1999,7 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
             /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
             /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+            /* .is_split         = */ NULL,
         },
         /* .device  = */ NULL, // FIXME ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ NULL,

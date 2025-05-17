@@ -689,6 +689,8 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
     GGML_UNUSED(buft);
 }
 
+static bool ggml_backend_buft_is_cuda_split(ggml_backend_buffer_type_t buft);
+
 static const ggml_backend_buffer_type_i ggml_backend_cuda_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_cuda_buffer_type_get_name,
     /* .alloc_buffer     = */ ggml_backend_cuda_buffer_type_alloc_buffer,
@@ -696,6 +698,7 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_buffer_type_interface 
     /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
     /* .get_alloc_size   = */ ggml_backend_cuda_buffer_type_get_alloc_size,
     /* .is_host          = */ NULL,
+    /* .is_split         = */ ggml_backend_buft_is_cuda_split,
 };
 
 ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
@@ -1013,6 +1016,7 @@ static const ggml_backend_buffer_type_i ggml_backend_cuda_split_buffer_type_inte
     /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
     /* .get_alloc_size   = */ ggml_backend_cuda_split_buffer_type_get_alloc_size,
     /* .is_host          = */ ggml_backend_cuda_split_buffer_type_is_host,
+    /* .is_split         = */ ggml_backend_buft_is_cuda_split,
 };
 
 ggml_backend_buffer_type_t ggml_backend_cuda_split_buffer_type(int main_device, const float * tensor_split) {
@@ -1111,6 +1115,7 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
             /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+            /* .is_split         = */ NULL,
         },
         /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), 0),
         /* .context  = */ nullptr,
