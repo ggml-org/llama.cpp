@@ -668,14 +668,20 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     return ggml_cpy(ctx, v_cur, v_view);
 }
 
-void llama_kv_cache_unified::prune_swa(llama_seq_id seq_id, llama_pos p1) {
+void llama_kv_cache_unified::prune_swa(llama_seq_id seq_id, llama_pos pmin, llama_pos pmax) {
     // no pruning is needed when the cache does not use SWA
     GGML_ASSERT(swa_type != LLAMA_SWA_TYPE_NONE && "do not prune non-SWA cache");
+
+    int n_attended = 0;
 
     for (uint32_t i = 0; i < size; ++i) {
         const llama_pos p0 = cells[i].pos;
 
-        if (is_masked_swa(p0, p1)) {
+        if (p0 <= pmin && !is_masked_swa(p0, pmin)) {
+            n_attended++;
+        }
+
+        if (is_masked_swa(p0, pmax)) {
             if (seq_id < 0) {
                 cells[i].seq_id.clear();
             } else if (cells[i].has_seq_id(seq_id)) {
@@ -693,6 +699,10 @@ void llama_kv_cache_unified::prune_swa(llama_seq_id seq_id, llama_pos p1) {
                 cells[i].pos = -1;
             }
         }
+    }
+
+    if (n_attended < std::min<int>(n_swa, pmin)) {
+        LLAMA_LOG_WARN("%s: partial SWA cache detected - possible loss of information, pmin = %d, n_attended = %d, n_swa = %d\n", __func__, pmin, n_attended, n_swa);
     }
 }
 
@@ -1723,8 +1733,8 @@ void llama_kv_cache_unified_iswa::commit() {
     kv_swa ->commit();
 
     // slide the attention window, forgetting/pruning old tokens that are outside the window
-    for (const auto & [seq_id, pos_max] : pending.pos_max) {
-        kv_swa->prune_swa(seq_id, pos_max);
+    for (const auto & [seq_id, entry] : pending.pos) {
+        kv_swa->prune_swa(seq_id, entry.pmin, entry.pmax);
     }
 
     pending.clear();
@@ -1750,17 +1760,19 @@ void llama_kv_cache_unified_iswa::set_full() {
 }
 
 llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch, bool logits_all) {
-    pending.pos_max.clear();
+    pending.clear();
 
     for (int i = 0; i < batch.n_tokens; ++i) {
         for (int s = 0; s < batch.n_seq_id[i]; ++s) {
             const llama_seq_id seq_id = batch.seq_id[i][s];
             const llama_pos    pos    = batch.pos[i];
 
-            if (pending.pos_max.find(seq_id) == pending.pos_max.end()) {
-                pending.pos_max[seq_id] = pos;
+            if (pending.pos.find(seq_id) == pending.pos.end()) {
+                pending.pos[seq_id].pmin = pos;
+                pending.pos[seq_id].pmax = pos;
             } else {
-                pending.pos_max[seq_id] = std::max(pending.pos_max[seq_id], pos);
+                pending.pos[seq_id].pmin = std::min(pending.pos[seq_id].pmin, pos);
+                pending.pos[seq_id].pmax = std::max(pending.pos[seq_id].pmax, pos);
             }
         }
     }

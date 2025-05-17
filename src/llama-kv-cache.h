@@ -178,7 +178,7 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
-    void prune_swa(llama_seq_id seq_id, llama_pos p1);
+    void prune_swa(llama_seq_id seq_id, llama_pos pmin, llama_pos pmax);
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
@@ -381,11 +381,16 @@ private:
     const llama_hparams & hparams;
 
     struct {
+        struct entry {
+            llama_pos pmin;
+            llama_pos pmax;
+        };
+
         void clear() {
-            pos_max.clear();
+            pos.clear();
         }
 
-        std::unordered_map<llama_seq_id, llama_pos> pos_max;
+        std::unordered_map<llama_seq_id, entry> pos;
     } pending;
 
     std::unique_ptr<llama_kv_cache_unified> kv_base;
