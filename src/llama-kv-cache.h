@@ -318,6 +318,7 @@ public:
                          bool   v_trans,
                          bool   offload,
                      uint32_t   kv_size,
+                         bool   swa_full,
                      uint32_t   n_seq_max,
                      uint32_t   n_batch,
                      uint32_t   padding);
@@ -380,6 +381,8 @@ public:
 private:
     const llama_hparams & hparams;
 
+    bool do_prune = true;
+
     struct {
         struct entry {
             llama_pos pmin;
@@ -390,6 +393,7 @@ private:
             pos.clear();
         }
 
+        // used to perform SWA pruning of old tokens
         std::unordered_map<llama_seq_id, entry> pos;
     } pending;
 

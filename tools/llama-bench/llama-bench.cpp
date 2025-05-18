@@ -991,6 +991,7 @@ struct cmd_params_instance {
         cparams.flash_attn   = flash_attn;
         cparams.embeddings   = embeddings;
         cparams.op_offload   = !no_op_offload;
+        cparams.swa_full     = false;
 
         return cparams;
     }

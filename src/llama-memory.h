@@ -7,8 +7,8 @@ struct llama_memory_params {
     ggml_type type_k;
     ggml_type type_v;
 
-    // parameters for other types of memory
-    // ...
+    // use full-size SWA cache
+    bool swa_full;
 };
 
 // general concept of LLM memory

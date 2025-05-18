@@ -1656,27 +1656,38 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
                      bool   v_trans,
                      bool   offload,
                  uint32_t   kv_size,
+                     bool   swa_full,
                  uint32_t   n_seq_max,
                  uint32_t   n_batch,
                  uint32_t   padding) : hparams(model.hparams) {
     llama_kv_cache_unified::layer_filter_cb filter_base = [&](int32_t il) { return !model.hparams.is_swa(il); };
     llama_kv_cache_unified::layer_filter_cb filter_swa  = [&](int32_t il) { return  model.hparams.is_swa(il); };
 
-    const uint32_t kv_size_base = kv_size;
-    const uint32_t kv_size_swa  = std::min(kv_size, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, padding));
+    const uint32_t size_base = kv_size;
 
-    LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, kv_size_base);
+    uint32_t size_swa = std::min(size_base, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, padding));
+
+    // when using full-size SWA cache, we set the SWA cache size to be equal to the base cache size and disable pruning
+    if (swa_full) {
+        LLAMA_LOG_WARN("%s: using full-size SWA cache (ref: %s)\n",
+                __func__, "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+
+        size_swa = size_base;
+        do_prune = false;
+    }
+
+    LLAMA_LOG_INFO("%s: creating non-SWA KV cache, size = %u cells\n", __func__, size_base);
 
     kv_base = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_base), type_k, type_v,
-            v_trans, offload, kv_size_base, padding,
+            v_trans, offload, size_base, padding,
             0, LLAMA_SWA_TYPE_NONE);
 
-    LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, kv_size_swa);
+    LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_swa), type_k, type_v,
-            v_trans, offload, kv_size_swa,  padding,
+            v_trans, offload, size_swa, padding,
             hparams.n_swa, hparams.swa_type);
 }
 
@@ -1733,8 +1744,11 @@ void llama_kv_cache_unified_iswa::commit() {
     kv_swa ->commit();
 
     // slide the attention window, forgetting/pruning old tokens that are outside the window
-    for (const auto & [seq_id, entry] : pending.pos) {
-        kv_swa->prune_swa(seq_id, entry.pmin, entry.pmax);
+    if (do_prune) {
+        for (const auto & [seq_id, entry] : pending.pos) {
+            kv_swa->prune_swa(seq_id, entry.pmin, entry.pmax);
+        }
+
     }
 
     pending.clear();
@@ -1762,17 +1776,19 @@ void llama_kv_cache_unified_iswa::set_full() {
 llama_sbatch llama_kv_cache_unified_iswa::sbatch_init(const llama_batch & batch, bool logits_all) {
     pending.clear();
 
-    for (int i = 0; i < batch.n_tokens; ++i) {
-        for (int s = 0; s < batch.n_seq_id[i]; ++s) {
-            const llama_seq_id seq_id = batch.seq_id[i][s];
-            const llama_pos    pos    = batch.pos[i];
+    if (do_prune) {
+        for (int i = 0; i < batch.n_tokens; ++i) {
+            for (int s = 0; s < batch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = batch.seq_id[i][s];
+                const llama_pos    pos    = batch.pos[i];
 
-            if (pending.pos.find(seq_id) == pending.pos.end()) {
-                pending.pos[seq_id].pmin = pos;
-                pending.pos[seq_id].pmax = pos;
-            } else {
-                pending.pos[seq_id].pmin = std::min(pending.pos[seq_id].pmin, pos);
-                pending.pos[seq_id].pmax = std::max(pending.pos[seq_id].pmax, pos);
+                if (pending.pos.find(seq_id) == pending.pos.end()) {
+                    pending.pos[seq_id].pmin = pos;
+                    pending.pos[seq_id].pmax = pos;
+                } else {
+                    pending.pos[seq_id].pmin = std::min(pending.pos[seq_id].pmin, pos);
+                    pending.pos[seq_id].pmax = std::max(pending.pos[seq_id].pmax, pos);
+                }
             }
         }
     }

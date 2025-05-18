@@ -13227,6 +13227,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.n_ctx,
+                            params.swa_full,
                             cparams.n_seq_max,
                             cparams.n_batch,
                             padding);

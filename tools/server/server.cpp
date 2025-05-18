@@ -3203,7 +3203,8 @@ struct server_context {
 
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
                                 if (llama_kv_self_seq_pos_min(ctx, slot.id) > 0) {
-                                    SLT_WRN(slot, "%s", "forcing full prompt re-processing due to lack of cache data\n");
+                                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                                            "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
                                     slot.n_past = 0;
                                 }
                             }

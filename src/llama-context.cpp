@@ -177,8 +177,9 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k =*/ params.type_k,
-            /*.type_v =*/ params.type_v,
+            /*.type_k   =*/ params.type_k,
+            /*.type_v   =*/ params.type_v,
+            /*.swa_full =*/ params.swa_full,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
@@ -2092,6 +2093,7 @@ llama_context_params llama_context_default_params() {
         /*.flash_attn                  =*/ false,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
+        /*.swa_full                    =*/ true,
     };
 
     return result;
