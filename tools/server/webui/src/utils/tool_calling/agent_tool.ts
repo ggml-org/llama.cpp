@@ -1,3 +1,4 @@
+import StorageUtils from '../storage';
 import {
   ToolCallRequest,
   ToolCallOutput,
@@ -8,7 +9,7 @@ import {
 export abstract class AgentTool {
   constructor(
     public readonly id: string,
-    private readonly isEnabledCallback: () => boolean,
+    public readonly name: string,
     public readonly toolDescription: string,
     public readonly parameters: ToolCallParameters
   ) {}
@@ -42,7 +43,7 @@ export abstract class AgentTool {
    * @returns enabled status.
    */
   public get enabled(): boolean {
-    return this.isEnabledCallback();
+    return StorageUtils.getConfig()[`tool_${this.id}_enabled`] ?? false;
   }
 
   /**

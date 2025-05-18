@@ -11,8 +11,11 @@ import {
   FunnelIcon,
   HandRaisedIcon,
   SquaresPlusIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
+import { AVAILABLE_TOOLS } from '../utils/tool_calling/register_tools';
+import { AgentTool } from '../utils/tool_calling/agent_tool';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -162,6 +165,40 @@ const SETTING_SECTIONS: SettingSection[] = [
   {
     title: (
       <>
+        <WrenchScrewdriverIcon className={ICON_CLASSNAME} />
+        Tool Calling
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CHECKBOX,
+        label: 'Enable response streaming',
+        key: 'streamResponse',
+      },
+      // Fields will be dynamically generated based on AVAILABLE_TOOLS
+      ...Array.from(AVAILABLE_TOOLS.values()).map(
+        (tool: AgentTool) =>
+          ({
+            type: SettingInputType.CHECKBOX,
+            label: (
+              <>
+                <span className="font-semibold">{tool.name || tool.id}</span>
+                {tool.toolDescription && (
+                  <small className="text-xs block mt-1 opacity-70">
+                    <strong>Agent tool description: </strong>
+                    {tool.toolDescription}
+                  </small>
+                )}
+              </>
+            ),
+            key: `tool_${tool.id}_enabled` as SettKey,
+          }) as SettingFieldInput
+      ),
+    ],
+  },
+  {
+    title: (
+      <>
         <SquaresPlusIcon className={ICON_CLASSNAME} />
         Advanced
       </>
@@ -253,21 +290,6 @@ const SETTING_SECTIONS: SettingSection[] = [
           </>
         ),
         key: 'pyIntepreterEnabled',
-      },
-      {
-        type: SettingInputType.CHECKBOX,
-        label: (
-          <>
-            <b>Enable JavaScript tool use</b>
-            <br />
-            <small className="text-xs">
-              This alows LLM to use browser your browser console as tool. If
-              model supports function calling, it can use the console to do e.g.
-              data analysis etc. by itself.
-            </small>
-          </>
-        ),
-        key: 'jsInterpreterToolUse',
       },
     ],
   },

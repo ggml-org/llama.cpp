@@ -28,7 +28,7 @@ export class JSReplAgentTool extends AgentTool {
   constructor() {
     super(
       JSReplAgentTool.ID,
-      () => StorageUtils.getConfig().jsInterpreterToolUse,
+      'Javascript interpreter',
       'Executes JavaScript code in a sandboxed iframe. The code should be self-contained valid javascript. You can use console.log(variable) to print out intermediate values, which will be captured.',
       {
         type: 'object',

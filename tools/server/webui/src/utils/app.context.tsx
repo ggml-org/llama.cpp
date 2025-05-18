@@ -191,13 +191,10 @@ export const AppContextProvider = ({
         .filter((tool) => tool.enabled)
         .map((tool) => tool.specs);
 
-      // stream does not support tool-use (yet?)
-      const streamResponse = enabledTools.length === 0;
-
       // prepare params
       const params = {
         messages,
-        stream: streamResponse,
+        stream: config.streamResponse,
         cache_prompt: true,
         samplers: config.samplers,
         temperature: config.temperature,
@@ -246,7 +243,7 @@ export const AppContextProvider = ({
       let lastMsgId = pendingMsg.id;
       let shouldContinueChain = false;
 
-      if (streamResponse) {
+      if (params.stream) {
         const chunks = getSSEStreamAsync(fetchResponse);
         for await (const chunk of chunks) {
           // const stop = chunk.stop;
