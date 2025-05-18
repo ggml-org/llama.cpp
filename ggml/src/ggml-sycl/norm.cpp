@@ -5,11 +5,13 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
 
     const int nrows = item_ct1.get_group_range(2);
     const int nchannels = item_ct1.get_group_range(1);
+    const int nthreads = item_ct1.get_local_range(2);
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
     const int row     = item_ct1.get_group(2);
 
     const int tid = item_ct1.get_local_id(2);
+    const int nwarps = nthreads / WARP_SIZE;
 
     x += sample  * stride_sample + channel * stride_channel + row * stride_row;
     dst += ((sample * nchannels + channel) * nrows + row) * ncols;
@@ -30,8 +32,12 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
             s_sum[warp_id] = mean_var;
         }
         item_ct1.barrier(sycl::access::fence_space::local_space);
-
-        mean_var = s_sum[lane_id];
+        mean_var = 0.f;
+        size_t nreduce = nwarps / WARP_SIZE;
+        for (size_t i = 0; i < nreduce; i += 1)
+        {
+            mean_var += s_sum[lane_id + i * WARP_SIZE];
+        }
         mean_var = warp_reduce_sum(mean_var, item_ct1);
     }
 
@@ -139,8 +145,10 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
     const int row     = item_ct1.get_group(2);
+    const int nthreads = item_ct1.get_local_range(2);
 
     const int tid = item_ct1.get_local_id(2);
+    const int nwarps = nthreads / WARP_SIZE;
 
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
@@ -164,7 +172,12 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
         }
 
         item_ct1.barrier(sycl::access::fence_space::local_space);
-        tmp = s_sum[lane_id];
+        size_t nreduce = nwarps / WARP_SIZE;
+        tmp = 0.f;
+        for (size_t i = 0; i < nreduce; i += 1)
+        {
+            tmp += s_sum[lane_id + i * WARP_SIZE];
+        }
         tmp = warp_reduce_sum(tmp, item_ct1);
     }
 
