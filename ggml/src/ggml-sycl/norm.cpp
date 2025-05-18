@@ -3,12 +3,12 @@
 static void norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
 
-    const int nrows = item_ct1.get_group_range(2);
+    const int nrows = item_ct1.get_group_range(0);
     const int nchannels = item_ct1.get_group_range(1);
     const int nthreads = item_ct1.get_local_range(2);
-    const int sample  = item_ct1.get_group(0);
+    const int sample  = item_ct1.get_group(2);
     const int channel = item_ct1.get_group(1);
-    const int row     = item_ct1.get_group(2);
+    const int row     = item_ct1.get_group(0);
 
     const int tid = item_ct1.get_local_id(2);
     const int nwarps = nthreads / WARP_SIZE;
@@ -140,11 +140,11 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
 static void rms_norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, float* s_sum, int block_size) {
 
-    const int nrows = item_ct1.get_group_range(2);
+    const int nrows = item_ct1.get_group_range(0);
     const int nchannels = item_ct1.get_group_range(1);
-    const int sample  = item_ct1.get_group(0);
+    const int sample  = item_ct1.get_group(2);
     const int channel = item_ct1.get_group(1);
-    const int row     = item_ct1.get_group(2);
+    const int row     = item_ct1.get_group(0);
     const int nthreads = item_ct1.get_local_range(2);
 
     const int tid = item_ct1.get_local_id(2);
@@ -237,10 +237,10 @@ static void norm_f32_sycl(const float * x, float * dst, const int ncols, const i
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample,
         const float eps, queue_ptr stream, int device) {
 
-    const sycl::range<3> global_dims(nsamples, nchannels, nrows);
+    const sycl::range<3> global_dims(nrows, nchannels, nsamples);
     GGML_ASSERT(ncols % WARP_SIZE == 0);
     if (ncols < 1024) {
-        const sycl::range<3> block_dims(1, 1, WARP_SIZE); // Equivalent to CUDA's (WARP_SIZE, 1, 1)
+        const sycl::range<3> block_dims(1, 1, WARP_SIZE);
         stream->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
@@ -324,7 +324,7 @@ static void rms_norm_f32_sycl(const float* x, float* dst, const int ncols, const
     GGML_ASSERT(ncols % WARP_SIZE == 0);
     // printf("%s ncols=%d, nrows=%d, WARP_SIZE=%d\n", __func__, ncols, nrows, WARP_SIZE);
 
-    const sycl::range<3> global_dims(nsamples, nchannels, nrows);
+    const sycl::range<3> global_dims(nrows, nchannels, nsamples);
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
         stream->submit([&](sycl::handler& cgh) {
