@@ -1102,6 +1102,9 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         mparams.tensor_buft_overrides = params.tensor_buft_overrides.data();
     }
 
+    mparams.progress_callback           = params.load_progress_callback;
+    mparams.progress_callback_user_data = params.load_progress_callback_user_data;
+
     return mparams;
 }
 
