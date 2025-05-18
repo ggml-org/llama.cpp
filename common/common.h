@@ -428,6 +428,25 @@ struct common_params {
 
     // common params
     std::string out_file; // output filename for all example programs
+
+    // set internally by positional argument handler
+    std::string custom_model_endpoint = ""; // custom model endpoint (e.g. for HF mirrors)
+    std::string get_model_endpoint() {
+        if (!custom_model_endpoint.empty()) {
+            return custom_model_endpoint;
+        }
+        // otherwise, we read it from the environment variable
+        const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
+        // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
+        const char * hf_endpoint_env = getenv("HF_ENDPOINT");
+        const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
+        std::string model_endpoint = "https://huggingface.co/";
+        if (endpoint_env) {
+            model_endpoint = endpoint_env;
+            if (model_endpoint.back() != '/') model_endpoint += '/';
+        }
+        return model_endpoint;
+    }
 };
 
 // call once at the start of a program if it uses libcommon
@@ -547,8 +566,6 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
-
-std::string                   get_model_endpoint();
 
 //
 // Batch utils
