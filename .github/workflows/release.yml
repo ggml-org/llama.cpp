@@ -6,54 +6,7 @@ on:
       create_release:
         description: 'Create new release'
         required: true
-        type: booleanname: Create Release
-
-on:
-  workflow_dispatch: # allows manual triggering
-    inputs:
-      create_release:
-        description: 'Create new release'
-        required: true
         type: boolean
-  push:
-    branches:
-      - master
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
-  cancel-in-progress: true
-
-jobs:
-  macOS-latest:
-    runs-on: macOS-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Dependencies
-        run: |
-          brew update
-          brew install sdl2 cmake
-
-      - name: Build
-        run: |
-          cmake -B build
-          cmake --build build --config Release
-
-      - name: Pack artifacts
-        run: |
-          cp LICENSE ./build/bin/
-          zip -r my_project-${{ github.run_id }}-bin-macos.zip ./build/bin/*
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          path: my_project-${{ github.run_id }}-bin-macos.zip
-          name: my_project-bin-macos.zip
   push:
     branches:
       - master
