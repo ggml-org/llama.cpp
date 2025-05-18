@@ -171,11 +171,8 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
 
-    // Note: The value of head isn't only used to optimize searching
-    // for a free KV slot. llama_decode_impl also uses it, so it
-    // cannot be freely changed after a slot has been allocated.
-    uint32_t head = 0;
-    uint32_t size = 0;
+    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
+    uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
 
     // computed before each graph build
@@ -343,11 +340,8 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
 
-    // Note: The value of head isn't only used to optimize searching
-    // for a free KV slot. llama_decode_impl also uses it, so it
-    // cannot be freely changed after a slot has been allocated.
-    uint32_t head = 0;
-    uint32_t size = 0;
+    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
+    uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
 
     // computed before each graph build

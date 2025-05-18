@@ -443,6 +443,25 @@ void string_replace_all(std::string & s, const std::string & search, const std::
     s = std::move(builder);
 }
 
+bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
+    return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
+}
+size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
+    if (!str.empty() && !stop.empty()) {
+        const char text_last_char = str.back();
+        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
+            if (stop[char_index] == text_last_char) {
+                const auto current_partial = stop.substr(0, char_index + 1);
+                if (string_ends_with(str, current_partial)) {
+                    return str.size() - char_index - 1;
+                }
+            }
+        }
+    }
+
+    return std::string::npos;
+}
+
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
     return std::regex_replace(s, special_chars, "\\$0");
@@ -1096,7 +1115,6 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.n_threads         = params.cpuparams.n_threads;
     cparams.n_threads_batch   = params.cpuparams_batch.n_threads == -1 ?
                                 params.cpuparams.n_threads : params.cpuparams_batch.n_threads;
-    cparams.logits_all        = params.logits_all;
     cparams.embeddings        = params.embedding;
     cparams.rope_scaling_type = params.rope_scaling_type;
     cparams.rope_freq_base    = params.rope_freq_base;
@@ -1114,6 +1132,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.flash_attn        = params.flash_attn;
     cparams.no_perf           = params.no_perf;
+    cparams.op_offload        = !params.no_op_offload;
 
     if (params.reranking) {
         cparams.embeddings    = true;
@@ -1561,6 +1580,23 @@ common_control_vector_data common_control_vector_load(const std::vector<common_c
     if (result.n_embd == -1) {
         LOG_ERR("%s: no valid control vector files passed\n", __func__);
         result.data.clear();
+    }
+
+    return result;
+}
+
+ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride) {
+    const int64_t ne_datapoint = llama_n_ctx(ctx);
+    const int64_t ndata        = (tokens.size() - ne_datapoint - 1) / stride;
+    ggml_opt_dataset_t result = ggml_opt_dataset_init(
+        GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
+
+    llama_token * data   = (llama_token *) ggml_opt_dataset_data(result)->data;
+    llama_token * labels = (llama_token *) ggml_opt_dataset_labels(result)->data;
+
+    for (int64_t idata = 0; idata < ndata; ++idata) {
+        memcpy(data   + idata*ne_datapoint, tokens.data() + idata*stride + 0, ne_datapoint*sizeof(llama_token));
+        memcpy(labels + idata*ne_datapoint, tokens.data() + idata*stride + 1, ne_datapoint*sizeof(llama_token));
     }
 
     return result;

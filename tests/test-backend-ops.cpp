@@ -823,7 +823,7 @@ struct test_case {
 
         ggml_build_forward_expand(gf, out);
         ggml_graph_cpy(gf, gb);
-        ggml_build_backward_expand(ctx.get(), ctx.get(), gb, false);
+        ggml_build_backward_expand(ctx.get(), gb, nullptr);
         if (expect.size() != 1 || expect[0] != 0.0f) {
             GGML_ASSERT(ggml_graph_n_nodes(gb) > ggml_graph_n_nodes(gf));
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
@@ -1026,7 +1026,7 @@ struct test_example : public test_case {
         // Step 3: return the output tensor.
         return out;
     }
-    // In order to also check the gradients for your op, add calls like ggml_set_param(ctx, a)
+    // In order to also check the gradients for your op, add calls like ggml_set_param(a)
     // immediately after you create the tensors.
     // This is optional and only makes sense if a backward pass has actually been implemented for the new op.
 };
@@ -1058,7 +1058,7 @@ struct test_unary : public test_case {
             auto ne = ne_a; ne[0] *= 3;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             if (grad_supported) {
-                ggml_set_param(ctx, a);
+                ggml_set_param(a);
             }
             ggml_set_name(a, "a");
 
@@ -1067,7 +1067,7 @@ struct test_unary : public test_case {
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             if (grad_supported) {
-                ggml_set_param(ctx, a);
+                ggml_set_param(a);
             }
             ggml_set_name(a, "a");
         }
@@ -1133,7 +1133,7 @@ struct test_get_rows : public test_case {
 
         const bool grad_supported = ggml_is_matrix(in) && ggml_is_vector(rows);
         if (grad_supported) {
-            ggml_set_param(ctx, in);
+            ggml_set_param(in);
             // rows is a constant input -> no gradients
         }
 
@@ -1322,7 +1322,7 @@ struct test_repeat : public test_case {
         ggml_set_name(target, "target");
 
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, src);
+        ggml_set_param(src);
         ggml_set_name(src, "src");
 
         ggml_tensor * out = ggml_repeat(ctx, src, target);
@@ -1406,7 +1406,7 @@ struct test_dup : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, src);
+        ggml_set_param(src);
         ggml_set_name(src, "src");
 
         if (_use_permute) {
@@ -1442,7 +1442,7 @@ struct test_set : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
-        ggml_set_param(ctx, src);
+        ggml_set_param(src);
         ggml_set_name(src, "src");
 
         auto ne_dst = ne;
@@ -1450,7 +1450,7 @@ struct test_set : public test_case {
             ne_dst[i] *= 2;
         }
         ggml_tensor* dst = ggml_new_tensor(ctx, type_dst, 4, ne_dst.data());
-        ggml_set_param(ctx, dst);
+        ggml_set_param(dst);
         ggml_set_name(dst, "dst");
 
         size_t offset = 0;
@@ -1498,7 +1498,7 @@ struct test_cpy : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type_src, 4, ne.data());
-        ggml_set_param(ctx, src);
+        ggml_set_param(src);
         ggml_set_name(src, "src");
 
         if (_src_use_permute) {
@@ -1536,7 +1536,7 @@ struct test_cont : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * src = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, src);
+        ggml_set_param(src);
         ggml_set_name(src, "src");
 
         src = ggml_transpose(ctx, src);
@@ -1583,8 +1583,8 @@ struct test_bin_bcast : public test_case {
         // The backward pass supports broadcasting only for GGML_ADD:
         const bool grad_supported = op == ggml_add || ggml_are_same_shape(a, b);
         if (grad_supported) {
-            ggml_set_param(ctx, a);
-            ggml_set_param(ctx, b);
+            ggml_set_param(a);
+            ggml_set_param(b);
         }
 
         ggml_tensor * out = op(ctx, a, b);
@@ -1632,11 +1632,11 @@ struct test_add1 : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * b = ggml_new_tensor_1d(ctx, type, 1);
-        // ggml_set_param(ctx, b); // TODO: implement
+        // ggml_set_param(b); // TODO: implement
         ggml_set_name(b, "b");
 
         ggml_tensor * out = ggml_add1(ctx, a, b);
@@ -1667,7 +1667,7 @@ struct test_scale : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_scale(ctx, a, scale);
@@ -1762,7 +1762,7 @@ struct test_rms_norm : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         if (v) {
@@ -2028,9 +2028,9 @@ struct test_mul_mat : public test_case {
             b = ggml_new_tensor_4d(ctx, type_b, ne_b[per[0]], ne_b[per[1]], ne_b[per[2]], ne_b[per[3]]);
             if (!ggml_is_quantized(type_a)) {
                 if (bs[1] == 1 && nr[1] == 1) {
-                    ggml_set_param(ctx, a);
+                    ggml_set_param(a);
                 }
-                ggml_set_param(ctx, b);
+                ggml_set_param(b);
             }
             ggml_set_name(a, "a");
             ggml_set_name(b, "b");
@@ -2040,22 +2040,29 @@ struct test_mul_mat : public test_case {
             ggml_set_name(a, "a_permuted");
             ggml_set_name(b, "b_permuted");
         } else {
-
             if (v) {
                 a = ggml_new_tensor_4d(ctx, type_a, k*2, m, bs[0],       bs[1]);
                 b = ggml_new_tensor_4d(ctx, type_b, k*2, n, bs[0]*nr[0], bs[1]*nr[1]);
+
+                if (!ggml_is_quantized(type_a)) {
+                    if (bs[1] == 1 && nr[1] == 1) {
+                        ggml_set_param(a);
+                    }
+                    ggml_set_param(b);
+                }
 
                 a = ggml_view_4d(ctx, a, k, m, bs[0],       bs[1],       a->nb[1], a->nb[2], a->nb[3], 0);
                 b = ggml_view_4d(ctx, b, k, n, bs[0]*nr[0], bs[1]*nr[1], b->nb[1], b->nb[2], b->nb[3], 0);
             } else {
                 a = ggml_new_tensor_4d(ctx, type_a, k, m, bs[0],       bs[1]);
                 b = ggml_new_tensor_4d(ctx, type_b, k, n, bs[0]*nr[0], bs[1]*nr[1]);
-            }
-            if (!ggml_is_quantized(type_a)) {
-                if (bs[1] == 1 && nr[1] == 1) {
-                    ggml_set_param(ctx, a);
+
+                if (!ggml_is_quantized(type_a)) {
+                    if (bs[1] == 1 && nr[1] == 1) {
+                        ggml_set_param(a);
+                    }
+                    ggml_set_param(b);
                 }
-                ggml_set_param(ctx, b);
             }
             ggml_set_name(a, "a");
             ggml_set_name(b, "b");
@@ -2204,7 +2211,7 @@ struct test_sqr : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_sqr(ctx, a);
@@ -2233,7 +2240,7 @@ struct test_sqrt : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_sqrt(ctx, a);
@@ -2273,7 +2280,7 @@ struct test_log : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_log(ctx, a);
@@ -2309,7 +2316,7 @@ struct test_sin : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_sin(ctx, a);
@@ -2352,7 +2359,7 @@ struct test_cos : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_cos(ctx, a);
@@ -2432,7 +2439,7 @@ struct test_diag_mask_inf : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_diag_mask_inf(ctx, a, n_past);
@@ -2471,7 +2478,7 @@ struct test_soft_max : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * mask = nullptr;
@@ -2553,7 +2560,7 @@ struct test_rope : public test_case {
             auto ne = ne_a; ne[0] *= 2; ne[1] *= 4; ne[2] *= 3;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             if (forward) {
-                ggml_set_param(ctx, a);
+                ggml_set_param(a);
             }
             ggml_set_name(a, "a");
 
@@ -2562,7 +2569,7 @@ struct test_rope : public test_case {
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             if (forward) {
-                ggml_set_param(ctx, a);
+                ggml_set_param(a);
             }
             ggml_set_name(a, "a");
         }
@@ -2676,7 +2683,7 @@ struct test_pool2d : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, type_input, 4, ne_input.data());
-        ggml_set_param(ctx, input);
+        ggml_set_param(input);
         ggml_set_name(input, "input");
 
         ggml_tensor * out = ggml_pool_2d(ctx, input, pool_type, k0, k1, s0, s1, p0, p1);
@@ -2752,7 +2759,7 @@ struct test_im2col : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, type_input, 4, ne_input.data());
-        ggml_set_param(ctx, input);
+        ggml_set_param(input);
         ggml_set_name(input, "input");
 
         ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
@@ -2929,7 +2936,7 @@ struct test_sum : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_sum(ctx, a);
@@ -2958,7 +2965,7 @@ struct test_sum_rows : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_sum_rows(ctx, a);
@@ -2983,7 +2990,7 @@ struct test_mean : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_mean(ctx, a);
@@ -3129,11 +3136,11 @@ struct test_acc : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
-        ggml_set_param(ctx, a);
+        ggml_set_param(a);
         ggml_set_name(a, "a");
 
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne_b.data());
-        ggml_set_param(ctx, b);
+        ggml_set_param(b);
         ggml_set_name(b, "b");
 
         ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], b->nb[1]);
@@ -3370,7 +3377,7 @@ struct test_cross_entropy_loss : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * logits = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(ctx, logits);
+        ggml_set_param(logits);
         ggml_set_name(logits, "logits");
 
         ggml_tensor * labels = ggml_new_tensor(ctx, type, 4, ne.data());
@@ -3452,7 +3459,7 @@ struct test_opt_step_adamw : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
-        ggml_set_param(ctx, a); // Despite tensor a having gradients the output tensor will not.
+        ggml_set_param(a); // Despite tensor a having gradients the output tensor will not.
         ggml_set_name(a, "a");
 
         ggml_tensor * grad = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);

@@ -103,7 +103,7 @@ shared FLOAT_TYPE buf_a[BM * SHMEM_STRIDE];
 shared FLOAT_TYPE buf_b[BN * SHMEM_STRIDE];
 
 #ifdef MUL_MAT_ID
-shared u16vec2 row_ids[3072];
+shared u16vec2 row_ids[4096];
 #endif // MUL_MAT_ID
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)

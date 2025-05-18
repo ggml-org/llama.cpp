@@ -42,6 +42,7 @@ void ggml_sycl_host_free(void* ptr);
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_prioritize_dmmv;
 
 #define GGML_SYCL_DEBUG(...)        \
   do {                              \
@@ -114,17 +115,12 @@ static void crash() {
   GGML_ABORT("SYCL error");
 }
 
-#define SYCL_CHECK(err)                     \
-  do {                                      \
-    auto err_ = (err);                      \
-    if (err_ != 0)                          \
-      ggml_sycl_error(                      \
-          #err,                             \
-          __func__,                         \
-          __FILE__,                         \
-          __LINE__,                         \
-          "Meet error in this line code!"); \
-  } while (0)
+#define SYCL_CHECK(err)                                                                                    \
+    do {                                                                                                   \
+        auto err_ = (err);                                                                                 \
+        if (err_ != 0)                                                                                     \
+            ggml_sycl_error(#err, __func__, __FILE__, __LINE__, "Exception caught in this line of code."); \
+    } while (0)
 
 #if DPCT_COMPAT_RT_VERSION >= 11100
 #define GGML_SYCL_ASSUME(x) __builtin_assume(x)

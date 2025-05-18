@@ -14,6 +14,12 @@
 #include <thread>
 #include <unordered_map>
 
+// Quantization types. Changes to this struct must be replicated in quantize.cpp
+struct tensor_quantization {
+    std::string name;
+    ggml_type quant = GGML_TYPE_COUNT;
+};
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -46,12 +52,6 @@ struct quantize_state_impl {
         : model(model)
         , params(params)
         {}
-};
-
-// changes to this struct must be replicated in quantize.cpp
-struct tensor_quantization {
-    std::string name;
-    ggml_type quant = GGML_TYPE_COUNT;
 };
 
 static void llama_tensor_dequantize_impl(
@@ -519,7 +519,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         nthread = std::thread::hardware_concurrency();
     }
 
-    // mmap consistently increases speed Linux, and also increases speed on Windows with
+    // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
     constexpr bool use_mmap = true;
@@ -529,7 +529,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     llama_model_kv_override * kv_overrides = nullptr;
     if (params->kv_overrides) {
-        auto v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
+        auto * v = (std::vector<llama_model_kv_override>*)params->kv_overrides;
         kv_overrides = v->data();
     }
 
@@ -796,17 +796,19 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 // unless the user specifies a type
                 if (params->tensor_types) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
+                    const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
-                        if (std::regex pattern(tname); std::regex_search(tensor->name, pattern)) {
-                            if (qtype != new_type) {
-                                LLAMA_LOG_DEBUG("(overriding %s -> %s), ", ggml_type_name(new_type), ggml_type_name(qtype));
+                        if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
+                            if  (qtype != new_type) {
+                                LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
+                                new_type = qtype;
+                                break; // if two or more types are specified for the tensor, first match wins
                             }
-                            new_type = qtype;
-                            break;
                         }
                     }
                 }
             }
+
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = params->token_embedding_type;
             }

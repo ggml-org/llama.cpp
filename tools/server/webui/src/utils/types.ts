@@ -49,7 +49,10 @@ export interface Message {
   children: Message['id'][];
 }
 
-type MessageExtra = MessageExtraTextFile | MessageExtraContext; // TODO: will add more in the future
+export type MessageExtra =
+  | MessageExtraTextFile
+  | MessageExtraImageFile
+  | MessageExtraContext;
 
 export interface MessageExtraTextFile {
   type: 'textFile';
@@ -57,12 +60,33 @@ export interface MessageExtraTextFile {
   content: string;
 }
 
+export interface MessageExtraImageFile {
+  type: 'imageFile';
+  name: string;
+  base64Url: string;
+}
+
 export interface MessageExtraContext {
   type: 'context';
+  name: string;
   content: string;
 }
 
-export type APIMessage = Pick<Message, 'role' | 'content' | 'tool_calls'>;
+export type APIMessageContentPart =
+  | {
+      type: 'text';
+      text: string;
+    }
+  | {
+      type: 'image_url';
+      image_url: { url: string };
+    };
+
+export type APIMessage = {
+  role: Message['role'];
+  tool_calls?: ToolCallRequest[];
+  content: string | APIMessageContentPart[];
+};
 
 export interface Conversation {
   id: string; // format: `conv-{timestamp}`
@@ -123,4 +147,15 @@ export interface ToolCallOutput {
   type: 'function_call_output';
   call_id: string;
   output: string;
+}
+
+// a non-complete list of props, only contains the ones we need
+export interface LlamaCppServerProps {
+  build_info: string;
+  model_path: string;
+  n_ctx: number;
+  modalities?: {
+    vision: boolean;
+  };
+  // TODO: support params
 }

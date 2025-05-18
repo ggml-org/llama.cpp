@@ -3,11 +3,11 @@ import react from '@vitejs/plugin-react';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 import path from 'node:path';
 import fs from 'node:fs';
-import zlib from 'node:zlib';
+import * as fflate from 'fflate';
 
 /* eslint-disable */
 
-const MAX_BUNDLE_SIZE = 1.5 * 1024 * 1024; // only increase when absolutely necessary
+const MAX_BUNDLE_SIZE = 2 * 1024 * 1024; // only increase when absolutely necessary
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -33,9 +33,10 @@ const BUILD_PLUGINS = [
       },
       writeBundle() {
         const outputIndexHtml = path.join(config.build.outDir, 'index.html');
-        const content =
+        let content =
           GUIDE_FOR_FRONTEND + '\n' + fs.readFileSync(outputIndexHtml, 'utf-8');
-        const compressed = zlib.gzipSync(Buffer.from(content, 'utf-8'), {
+        content = content.replace(/\r/g, ''); // remove windows-style line endings
+        const compressed = fflate.gzipSync(Buffer.from(content, 'utf-8'), {
           level: 9,
         });
 
@@ -71,6 +72,7 @@ export default defineConfig({
   server: {
     proxy: {
       '/v1': 'http://localhost:8080',
+      '/props': 'http://localhost:8080',
     },
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',

@@ -40,7 +40,7 @@ using json = nlohmann::ordered_json;
 
 std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_LLAVA,
-    // TODO: add LLAMA_EXAMPLE_SERVER when it's ready
+    LLAMA_EXAMPLE_SERVER,
 };
 
 static std::string read_file(const std::string & fname) {
@@ -2098,13 +2098,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
-        {"--perplexity", "--all-logits"},
-        string_format("return logits for all tokens in the batch (default: %s)", params.logits_all ? "true" : "false"),
-        [](common_params & params) {
-            params.logits_all = true;
-        }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
-    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {
@@ -2211,32 +2204,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_CONT_BATCHING"));
     add_opt(common_arg(
         {"--mmproj"}, "FILE",
-        "path to a multimodal projector file. see tools/mtmd/README.md",
+        "path to a multimodal projector file. see tools/mtmd/README.md\n"
+        "note: if -hf is used, this argument can be omitted",
         [](common_params & params, const std::string & value) {
             params.mmproj.path = value;
         }
-    ).set_examples(mmproj_examples));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ"));
     add_opt(common_arg(
         {"--mmproj-url"}, "URL",
         "URL to a multimodal projector file. see tools/mtmd/README.md",
         [](common_params & params, const std::string & value) {
             params.mmproj.url = value;
         }
-    ).set_examples(mmproj_examples));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
     add_opt(common_arg(
         {"--no-mmproj"},
         "explicitly disable multimodal projector, useful when using -hf",
         [](common_params & params) {
             params.no_mmproj = true;
         }
-    ).set_examples(mmproj_examples));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ"));
     add_opt(common_arg(
         {"--no-mmproj-offload"},
         "do not offload multimodal projector to GPU",
         [](common_params & params) {
             params.mmproj_use_gpu = false;
         }
-    ).set_examples(mmproj_examples));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
         {"--image"}, "FILE",
         "path to an image file. use with multimodal models. Specify multiple times for batching",
@@ -2444,6 +2438,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--no-op-offload"},
+        string_format("disable offloading host tensor operations to device (default: %s)", params.no_op_offload ? "true" : "false"),
+        [](common_params & params) {
+            params.no_op_offload = true;
+        }
+    ));
+    add_opt(common_arg(
         {"--lora"}, "FNAME",
         "path to LoRA adapter (can be repeated to use multiple adapters)",
         [](common_params & params, const std::string & value) {
@@ -2584,7 +2585,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_junk = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+    ).set_examples({LLAMA_EXAMPLE_PASSKEY, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"--pos"}, "N",
         string_format("position of the passkey in the junk text (default: %d)", params.i_pos),
@@ -2635,12 +2636,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--parse-special"},
+        string_format("prase special tokens (chat, tool, etc) (default: %s)", params.parse_special ? "true" : "false"),
+        [](common_params & params) {
+            params.parse_special = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"-pps"},
         string_format("is the prompt shared across parallel sequences (default: %s)", params.is_pp_shared ? "true" : "false"),
         [](common_params & params) {
             params.is_pp_shared = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}));
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
@@ -2872,6 +2880,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--no-prefill-assistant"},
+        string_format(
+            "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"
+        ),
+        [](common_params & params) {
+            params.prefill_assistant = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_PREFILL_ASSISTANT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
