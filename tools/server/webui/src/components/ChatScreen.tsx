@@ -14,6 +14,7 @@ import { useChatTextarea, ChatTextareaApi } from './useChatTextarea.ts';
  */
 export interface MessageDisplay {
   msg: Message | PendingMessage;
+  chainedParts?: (Message | PendingMessage)[]; // For merging consecutive assistant/tool messages
   siblingLeafNodeIds: Message['id'][];
   siblingCurrIdx: number;
   isPending?: boolean;
@@ -47,7 +48,7 @@ function getListMessageDisplay(
   for (const msg of msgs) {
     nodeMap.set(msg.id, msg);
   }
-  // find leaf node from a message node
+
   const findLeafNode = (msgId: Message['id']): Message['id'] => {
     let currNode: Message | undefined = nodeMap.get(msgId);
     while (currNode) {
@@ -56,18 +57,73 @@ function getListMessageDisplay(
     }
     return currNode?.id ?? -1;
   };
-  // traverse the current nodes
-  for (const msg of currNodes) {
-    const parentNode = nodeMap.get(msg.parent ?? -1);
-    if (!parentNode) continue;
-    const siblings = parentNode.children;
-    if (msg.type !== 'root') {
-      res.push({
-        msg,
-        siblingLeafNodeIds: siblings.map(findLeafNode),
-        siblingCurrIdx: siblings.indexOf(msg.id),
-      });
+
+  const processedIds = new Set<Message['id']>();
+
+  for (const currentMessage of currNodes) {
+    if (processedIds.has(currentMessage.id) || currentMessage.type === 'root') {
+      continue;
     }
+
+    const displayMsg = currentMessage;
+    const chainedParts: (Message | PendingMessage)[] = [];
+    processedIds.add(displayMsg.id);
+
+    if (displayMsg.role === 'assistant') {
+      let currentLinkInChain = displayMsg; // Start with the initial assistant message
+
+      // Loop to chain subsequent tool calls and their assistant responses
+      while (true) {
+        if (currentLinkInChain.children.length !== 1) {
+          // Stop if there isn't a single, clear next step in the chain
+          // or if the current link has no children.
+          break;
+        }
+
+        const childId = currentLinkInChain.children[0];
+        const childNode = nodeMap.get(childId);
+
+        if (!childNode || processedIds.has(childNode.id)) {
+          // Child not found or already processed, end of chain
+          break;
+        }
+
+        // Scenario 1: Current is Assistant, next is Tool
+        if (
+          currentLinkInChain.role === 'assistant' &&
+          childNode.role === 'tool'
+        ) {
+          chainedParts.push(childNode);
+          processedIds.add(childNode.id);
+          currentLinkInChain = childNode; // Continue chain from the tool message
+        }
+        // Scenario 2: Current is Tool, next is Assistant
+        else if (
+          currentLinkInChain.role === 'tool' &&
+          childNode.role === 'assistant'
+        ) {
+          chainedParts.push(childNode);
+          processedIds.add(childNode.id);
+          currentLinkInChain = childNode; // Continue chain from the assistant message
+          // This assistant message might make further tool calls
+        }
+        // Scenario 3: Pattern broken (e.g., Assistant -> Assistant, or Tool -> Tool)
+        else {
+          break; // Pattern broken, end of this specific tool-use chain
+        }
+      }
+    }
+
+    const parentNode = nodeMap.get(displayMsg.parent ?? -1);
+    if (!parentNode && displayMsg.type !== 'root') continue; // Skip if parent not found for non-root
+
+    const siblings = parentNode ? parentNode.children : [];
+    res.push({
+      msg: displayMsg,
+      chainedParts: chainedParts.length > 0 ? chainedParts : undefined,
+      siblingLeafNodeIds: siblings.map(findLeafNode),
+      siblingCurrIdx: siblings.indexOf(displayMsg.id),
+    });
   }
   return res;
 }
@@ -138,13 +194,33 @@ export default function ChatScreen() {
       return;
     textarea.setValue('');
     scrollToBottom(false);
+
+    // Determine the ID of the actual last message to use as parent
+    let parentMessageId: Message['id'] | null = null;
+    const lastMessageDisplayItem = messages.at(-1);
+
+    if (lastMessageDisplayItem) {
+      if (
+        lastMessageDisplayItem.chainedParts &&
+        lastMessageDisplayItem.chainedParts.length > 0
+      ) {
+        // If the last display item has chained parts, the true last message is the last part of that chain
+        parentMessageId =
+          lastMessageDisplayItem.chainedParts.at(-1)?.id ??
+          lastMessageDisplayItem.msg.id;
+      } else {
+        // Otherwise, it's the main message of the last display item
+        parentMessageId = lastMessageDisplayItem.msg.id;
+      }
+    }
+    // If messages is empty (e.g., new chat), parentMessageId will remain null.
+    // sendMessage handles parentId = null correctly for starting new conversations.
     setCurrNodeId(-1);
-    // get the last message node
-    const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
+
     if (
       !(await sendMessage(
         currConvId,
-        lastMsgNodeId,
+        parentMessageId, // Use the correctly determined parent ID
         lastInpMsg,
         currExtra,
         onChunk
@@ -243,11 +319,13 @@ export default function ChatScreen() {
             <ChatMessage
               key={msg.msg.id}
               msg={msg.msg}
+              chainedParts={msg.chainedParts}
               siblingLeafNodeIds={msg.siblingLeafNodeIds}
               siblingCurrIdx={msg.siblingCurrIdx}
               onRegenerateMessage={handleRegenerateMessage}
               onEditMessage={handleEditMessage}
               onChangeSibling={setCurrNodeId}
+              isPending={msg.isPending}
             />
           ))}
         </div>

@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { ToolCallArgsDisplay } from './tool_calling/ToolCallArgsDisplay';
+import { ToolCallResultDisplay } from './tool_calling/ToolCallResultDisplay';
 
 interface SplitMessage {
   content: PendingMessage['content'];
@@ -13,6 +15,7 @@ interface SplitMessage {
 
 export default function ChatMessage({
   msg,
+  chainedParts,
   siblingLeafNodeIds,
   siblingCurrIdx,
   id,
@@ -22,6 +25,7 @@ export default function ChatMessage({
   isPending,
 }: {
   msg: Message | PendingMessage;
+  chainedParts?: (Message | PendingMessage)[];
   siblingLeafNodeIds: Message['id'][];
   siblingCurrIdx: number;
   id?: string;
@@ -48,8 +52,11 @@ export default function ChatMessage({
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
-  // for reasoning model, we split the message into content, thought, and tool output
-  const { content, thought, isThinking }: SplitMessage = useMemo(() => {
+  const {
+    content: mainDisplayableContent,
+    thought,
+    isThinking,
+  }: SplitMessage = useMemo(() => {
     if (
       msg.content === null ||
       (msg.role !== 'assistant' && msg.role !== 'tool')
@@ -65,12 +72,10 @@ export default function ChatMessage({
     actualContent += thinkSplit[0];
 
     while (thinkSplit[1] !== undefined) {
-      // <think> tag found
       thinkSplit = thinkSplit[1].split('</think>', 2);
       thought += thinkSplit[0];
       isThinking = true;
       if (thinkSplit[1] !== undefined) {
-        // </think> closing tag found
         isThinking = false;
         thinkSplit = thinkSplit[1].split('<think>', 2);
         actualContent += thinkSplit[0];
@@ -79,9 +84,18 @@ export default function ChatMessage({
 
     return { content: actualContent, thought, isThinking };
   }, [msg]);
+
   if (!viewingChat) return null;
 
   const toolCalls = msg.tool_calls ?? null;
+
+  const hasContentInMainMsg =
+    mainDisplayableContent && mainDisplayableContent.trim() !== '';
+  const hasContentInChainedParts = chainedParts?.some(
+    (part) => part.content && part.content.trim() !== ''
+  );
+  const entireTurnHasSomeDisplayableContent =
+    hasContentInMainMsg || hasContentInChainedParts;
 
   return (
     <div className="group" id={id}>
@@ -98,7 +112,6 @@ export default function ChatMessage({
             'chat-bubble-base-300': msg.role !== 'user',
           })}
         >
-          {/* textarea for editing message */}
           {editingContent !== null && (
             <>
               <textarea
@@ -127,21 +140,16 @@ export default function ChatMessage({
               </button>
             </>
           )}
-          {/* not editing content, render message */}
           {editingContent === null && (
             <>
-              {content === null ? (
+              {mainDisplayableContent === null &&
+              !toolCalls &&
+              !chainedParts?.length ? (
                 <>
-                  {toolCalls ? null : (
-                    <>
-                      {/* show loading dots for pending message */}
-                      <span className="loading loading-dots loading-md"></span>
-                    </>
-                  )}
+                  <span className="loading loading-dots loading-md"></span>
                 </>
               ) : (
                 <>
-                  {/* render message as markdown */}
                   <div dir="auto">
                     {thought && (
                       <details
@@ -152,7 +160,6 @@ export default function ChatMessage({
                           {isPending && isThinking ? (
                             <span>
                               <span
-                                v-if="isGenerating"
                                 className="loading loading-spinner loading-md mr-2"
                                 style={{ verticalAlign: 'middle' }}
                               ></span>
@@ -182,71 +189,69 @@ export default function ChatMessage({
                           Extra content
                         </summary>
                         <div className="collapse-content">
-                          {msg.extra.map(
-                            (extra, i) =>
-                              extra.type === 'textFile' ? (
-                                <div key={extra.name}>
-                                  <b>{extra.name}</b>
-                                  <pre>{extra.content}</pre>
-                                </div>
-                              ) : extra.type === 'context' ? (
-                                <div key={i}>
-                                  <pre>{extra.content}</pre>
-                                </div>
-                              ) : null // TODO: support other extra types
+                          {msg.extra.map((extra, i) =>
+                            extra.type === 'textFile' ? (
+                              <div key={extra.name}>
+                                <b>{extra.name}</b>
+                                <pre>{extra.content}</pre>
+                              </div>
+                            ) : extra.type === 'context' ? (
+                              <div key={i}>
+                                <pre>{extra.content}</pre>
+                              </div>
+                            ) : null
                           )}
                         </div>
                       </details>
                     )}
 
-                    {msg.role === 'tool' ? (
-                      <details
-                        className="collapse bg-base-200 collapse-arrow mb-4"
-                        open={true}
-                      >
-                        <summary className="collapse-title">
-                          <b>Tool call result</b>
-                        </summary>
-                        <div className="collapse-content">
-                          <MarkdownDisplay
-                            content={content}
-                            isGenerating={false} // Tool results are not "generating"
-                          />
-                        </div>
-                      </details>
+                    {msg.role === 'tool' && mainDisplayableContent ? (
+                      <ToolCallResultDisplay content={mainDisplayableContent} />
                     ) : (
-                      <MarkdownDisplay
-                        content={content}
-                        isGenerating={isPending}
-                      />
+                      mainDisplayableContent &&
+                      mainDisplayableContent.trim() !== '' && (
+                        <MarkdownDisplay
+                          content={mainDisplayableContent}
+                          isGenerating={isPending}
+                        />
+                      )
                     )}
                   </div>
                 </>
               )}
               {toolCalls &&
-                toolCalls.map((toolCall, i) => (
-                  <details
-                    key={i}
-                    className="collapse bg-base-200 collapse-arrow mb-4"
-                    open={false} // todo: make this configurable like showThoughtInProgress
-                  >
-                    <summary className="collapse-title">
-                      <b>Tool call:</b> {toolCall.function.name}
-                    </summary>
-
-                    <div className="collapse-content">
-                      <div className="font-bold mb-1">Arguments:</div>
-                      <pre className="whitespace-pre-wrap bg-base-300 p-2 rounded">
-                        {JSON.stringify(
-                          JSON.parse(toolCall.function.arguments),
-                          null,
-                          2
-                        )}
-                      </pre>
-                    </div>
-                  </details>
+                toolCalls.map((toolCall) => (
+                  <ToolCallArgsDisplay key={toolCall.id} toolCall={toolCall} />
                 ))}
-              {/* render timings if enabled */}
+
+              {chainedParts?.map((part) => (
+                <React.Fragment key={part.id}>
+                  {part.role === 'tool' && part.content && (
+                    <ToolCallResultDisplay
+                      content={part.content}
+                      baseClassName="collapse bg-base-200 collapse-arrow mb-4 mt-2"
+                    />
+                  )}
+
+                  {part.role === 'assistant' && part.content && (
+                    <div dir="auto" className="mt-2">
+                      <MarkdownDisplay
+                        content={part.content}
+                        isGenerating={!!isPending}
+                      />
+                    </div>
+                  )}
+
+                  {part.tool_calls &&
+                    part.tool_calls.map((toolCall) => (
+                      <ToolCallArgsDisplay
+                        key={toolCall.id}
+                        toolCall={toolCall}
+                        baseClassName="collapse bg-base-200 collapse-arrow mb-4 mt-2"
+                      />
+                    ))}
+                </React.Fragment>
+              ))}
               {timings && config.showTokensPerSecond && (
                 <div className="dropdown dropdown-hover dropdown-top mt-2">
                   <div
@@ -275,8 +280,7 @@ export default function ChatMessage({
         </div>
       </div>
 
-      {/* actions for each message */}
-      {msg.content !== null && (
+      {(entireTurnHasSomeDisplayableContent || msg.role === 'user') && (
         <div
           className={classNames({
             'flex items-center gap-2 mx-4 mt-2 mb-2': true,
@@ -308,7 +312,6 @@ export default function ChatMessage({
               </button>
             </div>
           )}
-          {/* user message */}
           {msg.role === 'user' && (
             <button
               className="badge btn-mini show-on-hover"
@@ -318,28 +321,34 @@ export default function ChatMessage({
               ✍️ Edit
             </button>
           )}
-          {/* assistant message */}
           {msg.role === 'assistant' && (
             <>
               {!isPending && (
                 <button
                   className="badge btn-mini show-on-hover mr-2"
                   onClick={() => {
-                    if (msg.content !== null) {
+                    if (entireTurnHasSomeDisplayableContent) {
                       onRegenerateMessage(msg as Message);
                     }
                   }}
-                  disabled={msg.content === null}
+                  disabled={!entireTurnHasSomeDisplayableContent}
                 >
                   🔄 Regenerate
                 </button>
               )}
             </>
           )}
-          <CopyButton
-            className="badge btn-mini show-on-hover mr-2"
-            content={msg.content}
-          />
+          {entireTurnHasSomeDisplayableContent && (
+            <CopyButton
+              className="badge btn-mini show-on-hover mr-2"
+              content={
+                msg.content ??
+                chainedParts?.find((p) => p.role === 'assistant' && p.content)
+                  ?.content ??
+                ''
+              }
+            />
+          )}
         </div>
       )}
     </div>

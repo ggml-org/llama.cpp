@@ -286,7 +286,6 @@ export const AppContextProvider = ({
 
         if (messageFromAPI.content) {
           newContent = messageFromAPI.content;
-          console.log(newContent);
         }
 
         // Process tool calls
