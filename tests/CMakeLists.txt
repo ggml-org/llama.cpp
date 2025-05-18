@@ -178,3 +178,8 @@ target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
+
+# Add test_qlutattn_quants
+add_executable(test-qlutattn-quants ${CMAKE_CURRENT_SOURCE_DIR}/test_qlutattn_quants.cpp)
+target_link_libraries(test-qlutattn-quants PRIVATE ggml common)
+target_compile_features(test-qlutattn-quants PRIVATE cxx_std_11)

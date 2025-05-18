@@ -397,7 +397,10 @@ extern "C" {
         GGML_TYPE_TMAC_W4G64_1      = 45,
         GGML_TYPE_TMAC_W4G128_0     = 46,
         GGML_TYPE_TMAC_W4G128_1     = 47,
-        GGML_TYPE_COUNT   = 48,
+        GGML_TYPE_QLUTATTN_W1G128   = 48,
+        GGML_TYPE_QLUTATTN_W2G128   = 49,
+        GGML_TYPE_QLUTATTN_W4G128   = 50,
+        GGML_TYPE_COUNT   = 51,
     };
 
     // precision

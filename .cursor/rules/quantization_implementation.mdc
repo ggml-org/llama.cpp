@@ -1,0 +1,61 @@
+---
+description: 
+globs: ggml/*,ggml-quants.c
+alwaysApply: false
+---
+# Quantization Implementation in llama.cpp
+
+This rule describes the quantization process and implementation in llama.cpp, using Q4_0 as an example quantization type.
+
+## Quantization Type Definition
+
+The quantization types are defined in [ggml/src/ggml-common.h](mdc:ggml/src/ggml-common.h). Each type has its specific block structure. For Q4_0:
+
+```c
+typedef struct {
+    ggml_half d;           // delta (scale)
+    uint8_t qs[QK4_0 / 2]; // quantized values
+} block_q4_0;
+```
+
+Key characteristics:
+- Uses 4-bit quantization (hence Q4_0)
+- Block size QK4_0 = 32 elements
+- Each block contains a scale factor (d) and quantized values
+
+## Quantization Process
+
+The quantization process is implemented in [ggml/src/ggml-quants.c](mdc:ggml/src/ggml-quants.c) with these key components:
+
+1. **Quantization Function**: `quantize_row_q4_0_impl`
+   - Input: Float array
+   - Output: Quantized blocks (block_q4_0)
+   - Process:
+     - Calculates variance (sigma2) for weight scaling
+     - Processes input in blocks of 32 elements
+     - Converts each block to 4-bit integers (-8 to 7 range)
+     - Stores scale factor and quantized values
+
+2. **Dequantization Function**: `dequantize_row_q4_0`
+   - Input: Quantized blocks
+   - Output: Reconstructed float array
+   - Process:
+     - Extracts scale factor (d)
+     - Unpacks 4-bit values
+     - Reconstructs original values using scale factor
+
+## Python Integration
+
+The quantization process is also integrated into Python conversion scripts like [convert_hf_to_gguf.py](mdc:convert_hf_to_gguf.py), which includes:
+
+- BitDistiller-style quantization implementation
+- Support for different bit widths
+- Zero-point adjustment options
+- Group size configurations
+
+## Implementation Flow
+
+1. Original tensor → Quantization → block_q4_0 storage format
+2. Storage → Dequantization → Reconstructed tensor
+
+This quantization scheme balances compression ratio with computational efficiency, making it suitable for running large language models on consumer hardware.
