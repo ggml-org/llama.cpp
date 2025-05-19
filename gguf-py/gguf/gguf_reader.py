@@ -134,12 +134,12 @@ class GGUFReader:
         offs = 0
 
         # Check for GGUF magic
-        if self._get(offs, np.uint32, override_order = '<')[0] != GGUF_MAGIC:
+        if self._get(offs, np.dtype(np.uint32), override_order = '<')[0] != GGUF_MAGIC:
             raise ValueError('GGUF magic invalid')
         offs += 4
 
         # Check GGUF version
-        temp_version = self._get(offs, np.uint32)
+        temp_version = self._get(offs, np.dtype(np.uint32))
         if temp_version[0] & 65535 == 0:
             # If we get 0 here that means it's (probably) a GGUF file created for
             # the opposite byte order of the machine this script is running on.
@@ -162,7 +162,7 @@ class GGUFReader:
         offs += self._push_field(ReaderField(offs, 'GGUF.version', [temp_version], [0], [GGUFValueType.UINT32]))
 
         # Check tensor count and kv count
-        temp_counts = self._get(offs, np.uint64, 2)
+        temp_counts = self._get(offs, np.dtype(np.uint64), 2)
         offs += self._push_field(ReaderField(offs, 'GGUF.tensor_count', [temp_counts[:1]], [0], [GGUFValueType.UINT64]))
         offs += self._push_field(ReaderField(offs, 'GGUF.kv_count', [temp_counts[1:]], [0], [GGUFValueType.UINT64]))
         tensor_count, kv_count = temp_counts
@@ -212,8 +212,8 @@ class GGUFReader:
         return 0 if skip_sum else sum(int(part.nbytes) for part in field.parts)
 
     def _get_str(self, offset: int) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.uint8]]:
-        slen = self._get(offset, np.uint64)
-        return slen, self._get(offset + 8, np.uint8, slen[0].item())
+        slen = self._get(offset, np.dtype(np.uint64))
+        return slen, self._get(offset + 8, np.dtype(np.uint8), slen[0].item())
 
     def _get_field_parts(
         self, orig_offs: int, raw_type: int,
@@ -234,9 +234,9 @@ class GGUFReader:
             return int(val.nbytes), [val], [0], types
         # Handle arrays.
         if gtype == GGUFValueType.ARRAY:
-            raw_itype = self._get(offs, np.uint32)
+            raw_itype = self._get(offs, np.dtype(np.uint32))
             offs += int(raw_itype.nbytes)
-            alen = self._get(offs, np.uint64)
+            alen = self._get(offs, np.dtype(np.uint64))
             offs += int(alen.nbytes)
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
@@ -261,19 +261,19 @@ class GGUFReader:
         offs += int(name_len.nbytes + name_data.nbytes)
 
         # Get Tensor Dimensions Count
-        n_dims = self._get(offs, np.uint32)
+        n_dims = self._get(offs, np.dtype(np.uint32))
         offs += int(n_dims.nbytes)
 
         # Get Tensor Dimension Array
-        dims = self._get(offs, np.uint64, n_dims[0].item())
+        dims = self._get(offs, np.dtype(np.uint64), n_dims[0].item())
         offs += int(dims.nbytes)
 
         # Get Tensor Encoding Scheme Type
-        raw_dtype = self._get(offs, np.uint32)
+        raw_dtype = self._get(offs, np.dtype(np.uint32))
         offs += int(raw_dtype.nbytes)
 
         # Get Tensor Offset
-        offset_tensor = self._get(offs, np.uint64)
+        offset_tensor = self._get(offs, np.dtype(np.uint64))
         offs += int(offset_tensor.nbytes)
 
         return ReaderField(
@@ -288,7 +288,7 @@ class GGUFReader:
             orig_offs = offs
             kv_klen, kv_kdata = self._get_str(offs)
             offs += int(kv_klen.nbytes + kv_kdata.nbytes)
-            raw_kv_type = self._get(offs, np.uint32)
+            raw_kv_type = self._get(offs, np.dtype(np.uint32))
             offs += int(raw_kv_type.nbytes)
             parts: list[npt.NDArray[Any]] = [kv_klen, kv_kdata, raw_kv_type]
             idxs_offs = len(parts)
@@ -352,7 +352,7 @@ class GGUFReader:
                 item_type = np.dtype(np.int64)
             else:
                 item_count = n_bytes
-                item_type = np.uint8
+                item_type = np.dtype(np.uint8)
                 np_dims = quant_shape_to_byte_shape(np_dims, ggml_type)
             tensors.append(ReaderTensor(
                 name = tensor_name,
