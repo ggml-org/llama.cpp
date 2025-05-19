@@ -13,7 +13,9 @@ extern "C" {
 
 // NOTE: these functions are defined as GGML_API because they used by the CPU backend
 
-// Quantization
+//> ===================================================================================================
+//> Quantization
+//> ===================================================================================================
 GGML_API void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q4_1_ref(const float * GGML_RESTRICT x, block_q4_1 * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_q5_0_ref(const float * GGML_RESTRICT x, block_q5_0 * GGML_RESTRICT y, int64_t k);
@@ -37,7 +39,14 @@ GGML_API void quantize_row_iq4_xs_ref (const float * GGML_RESTRICT x, block_iq4_
 GGML_API void quantize_row_iq3_s_ref  (const float * GGML_RESTRICT x, block_iq3_s   * GGML_RESTRICT y, int64_t k);
 GGML_API void quantize_row_iq2_s_ref  (const float * GGML_RESTRICT x, block_iq2_s   * GGML_RESTRICT y, int64_t k);
 
-// Dequantization
+//> Add quantize_qlutattn_w1g128, quantize_qlutattn_w2g128, quantize_qlutattn_w4g128
+GGML_API void quantize_row_qlutattn_w1g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w1g128 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_qlutattn_w2g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w2g128 * GGML_RESTRICT y, int64_t k);
+GGML_API void quantize_row_qlutattn_w4g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w4g128 * GGML_RESTRICT y, int64_t k);
+
+//> ===================================================================================================
+//> Dequantization
+//> ===================================================================================================
 GGML_API void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_q5_0(const block_q5_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
@@ -65,7 +74,14 @@ GGML_API void dequantize_row_iq4_nl (const block_iq4_nl  * GGML_RESTRICT x, floa
 GGML_API void dequantize_row_iq4_xs (const block_iq4_xs  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_iq3_s  (const block_iq3_s   * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
 
-// Quantization utilizing an importance matrix (a.k.a. "Activation aWare Quantization")
+//> Add dequantize_qlutattn_w1g128, dequantize_qlutattn_w2g128, dequantize_qlutattn_w4g128
+GGML_API void dequantize_row_qlutattn_w1g128(const block_qlutattn_w1g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_qlutattn_w2g128(const block_qlutattn_w2g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_qlutattn_w4g128(const block_qlutattn_w4g128 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+
+//> ===================================================================================================
+//> Quantization utilizing an importance matrix (a.k.a. "Activation aWare Quantization")
+//> ===================================================================================================
 GGML_API size_t quantize_iq2_xxs(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_iq2_xs (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_iq2_s  (const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
@@ -91,14 +107,10 @@ GGML_API size_t quantize_q5_1(const float * GGML_RESTRICT src, void * GGML_RESTR
 GGML_API size_t quantize_q8_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 GGML_API size_t quantize_q8_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
-//> Added QLUTATTN quantization.
-GGML_API void quantize_row_qlutattn_w1g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w1g128 * GGML_RESTRICT y, int64_t k);
-GGML_API void quantize_row_qlutattn_w2g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w2g128 * GGML_RESTRICT y, int64_t k);
-GGML_API void quantize_row_qlutattn_w4g128_ref(const float * GGML_RESTRICT x, block_qlutattn_w4g128 * GGML_RESTRICT y, int64_t k);
-
-GGML_API size_t quantize_qlutattn_w1g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
-GGML_API size_t quantize_qlutattn_w2g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
-GGML_API size_t quantize_qlutattn_w4g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
+//> Add quantize_qlutattn_w1g128, quantize_qlutattn_w2g128, quantize_qlutattn_w4g128
+// GGML_API size_t quantize_qlutattn_w1g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
+// GGML_API size_t quantize_qlutattn_w2g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
+// GGML_API size_t quantize_qlutattn_w4g128(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * GGML_RESTRICT quant_weights);
 
 GGML_API void iq2xs_init_impl(enum ggml_type type);
 GGML_API void iq2xs_free_impl(enum ggml_type type);

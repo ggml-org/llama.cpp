@@ -106,7 +106,7 @@ static float clampf(float v, float lo, float hi) {
     return v;
 }
 
-static void quantize_qlutattn(
+static void pseudo_quantize_qlutattn(
     const float* input,
     int8_t* quantized,
     float* scales,
@@ -160,7 +160,7 @@ static void quantize_qlutattn(
     }
 }
 
-static void dequantize_qlutattn(
+static void pseudo_dequantize_qlutattn(
     const int8_t* quantized,
     float* dequantized,
     const float* scales,
@@ -208,7 +208,7 @@ static void test_qlutattn_quantization(int n_elements) {
     std::vector<float> original_data(n_elements);
     random_fill(original_data, -1.0f, 1.0f);
     
-    const int n_bit = 2;
+    const int n_bit = 4;
     const int q_group_size = 128;
     const int num_groups = n_elements / q_group_size;
 
@@ -216,7 +216,7 @@ static void test_qlutattn_quantization(int n_elements) {
     std::vector<float> scales(num_groups, 0.0f);
     std::vector<float> zeros(num_groups, 0.0f);
 
-    quantize_qlutattn(
+    pseudo_quantize_qlutattn(
         original_data.data(),
         quantized_data.data(),
         scales.data(),
@@ -228,7 +228,7 @@ static void test_qlutattn_quantization(int n_elements) {
 
     std::vector<float> dequantized_data(n_elements, 0.0f);
 
-    dequantize_qlutattn(
+    pseudo_dequantize_qlutattn(
         quantized_data.data(),
         dequantized_data.data(),
         scales.data(),
@@ -237,6 +237,21 @@ static void test_qlutattn_quantization(int n_elements) {
         n_bit,
         q_group_size
     );
+    
+    // Print quantized values for inspection
+    printf("\nQuantized values:\n");
+    for (int i = 0; i < n_elements; ++i) {
+        printf("%d ", quantized_data[i]);
+        if ((i+1) % 16 == 0) printf("\n");
+    }
+    printf("\n");
+
+    // Print scale and zero point values
+    printf("\nScale and zero point values per group:\n");
+    for (int g = 0; g < num_groups; ++g) {
+        printf("Group %d: scale = %f, zero = %f\n", g, scales[g], zeros[g]);
+    }
+    printf("\n");
 
     // 反量化（直接用量化输出即为反量化结果，因为pseudo_quantize_qlutattn输出的output就是反量化的浮点值）
     // 计算误差
@@ -269,7 +284,7 @@ int main() {
     printf("Running quantization tests...\n");
     
     // Test with different sizes
-    test_qlutattn_quantization(128);  // One group
+    test_qlutattn_quantization(256);  // One group
    
     printf("\nAll quantization tests completed successfully.\n");
     

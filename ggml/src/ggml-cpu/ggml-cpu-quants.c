@@ -1821,6 +1821,18 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 #endif
 }
 
+void quantize_row_qlutattn_w1g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_qlutattn_w1g128_ref(x, y, k);
+}
+
+void quantize_row_qlutattn_w2g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_qlutattn_w2g128_ref(x, y, k);
+}
+
+void quantize_row_qlutattn_w4g128(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_qlutattn_w4g128_ref(x, y, k);
+}
+
 //===================================== Dot products =================================
 
 //

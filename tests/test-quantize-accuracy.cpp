@@ -47,7 +47,7 @@ static void * align_with_offset(void * ptr, int offset) {
 }
 
 // Calculate error metrics
-static void calculate_error_metrics(const float * original, const float * reconstructed, size_t n, 
+static void calculate_error_metrics(const float * original, const float * reconstructed, size_t n,
                                    float & max_error, float & avg_error, float & rms_error,
                                    float & max_rel_error, float & avg_rel_error) {
     max_error = 0.0f;
@@ -55,13 +55,13 @@ static void calculate_error_metrics(const float * original, const float * recons
     rms_error = 0.0f;
     max_rel_error = 0.0f;
     avg_rel_error = 0.0f;
-    
+
     for (size_t i = 0; i < n; i++) {
         float error = fabsf(original[i] - reconstructed[i]);
         max_error = std::max(max_error, error);
         avg_error += error;
         rms_error += error * error;
-        
+
         // Calculate relative error (avoid division by zero)
         if (fabsf(original[i]) > 1e-6f) {
             float rel_error = error / fabsf(original[i]);
@@ -69,7 +69,7 @@ static void calculate_error_metrics(const float * original, const float * recons
             avg_rel_error += rel_error;
         }
     }
-    
+
     avg_error /= n;
     rms_error = sqrtf(rms_error / n);
     avg_rel_error /= n;
@@ -79,16 +79,16 @@ static void calculate_error_metrics(const float * original, const float * recons
 static float calculate_snr(const float * original, const float * reconstructed, size_t n) {
     float signal_power = 0.0f;
     float noise_power = 0.0f;
-    
+
     for (size_t i = 0; i < n; i++) {
         signal_power += original[i] * original[i];
         float noise = original[i] - reconstructed[i];
         noise_power += noise * noise;
     }
-    
+
     // Avoid division by zero
     if (noise_power < 1e-10f) return 100.0f; // arbitrary high value for near-zero noise
-    
+
     return 10.0f * log10f(signal_power / noise_power);
 }
 
@@ -125,33 +125,33 @@ static void print_csv_header() {
 static void run_test_for_type(ggml_type type, const float * input_data, float * quantized_data, float * output_data, size_t test_size, bool verbose, bool csv_output) {
     const auto * qfns     = ggml_get_type_traits(type);
     const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
-    
+
     if (!csv_output) {
         printf("=== Testing %s ===\n", ggml_type_name(type));
     }
-    
+
     // Initialize quantization for this type
     ggml_quantize_init(type);
-    
+
     // Quantize using CPU implementation
     qfns_cpu->from_float(input_data, quantized_data, test_size);
-    
+
     // Dequantize back to float
     qfns->to_float(quantized_data, output_data, test_size);
-    
+
     // Calculate errors
     float max_error, avg_error, rms_error, max_rel_error, avg_rel_error;
     calculate_error_metrics(input_data, output_data, test_size, max_error, avg_error, rms_error, max_rel_error, avg_rel_error);
-    
+
     // Calculate SNR
     float snr = calculate_snr(input_data, output_data, test_size);
-    
+
     // Calculate compression ratio
     size_t float_size = test_size * sizeof(float);
     size_t quantized_size = ggml_row_size(type, test_size);
     float compression_ratio = float_size / (float)quantized_size;
     float bits_per_val = 8.0f * quantized_size / test_size;
-    
+
     if (csv_output) {
         // Output in CSV format
         printf("%s,%.2f,%.2f,%.6f,%.6f,%.6f,%.6f,%.6f,%.2f\n",
@@ -172,27 +172,27 @@ static void run_test_for_type(ggml_type type, const float * input_data, float * 
         printf("Max relative error: %.6f%%\n", max_rel_error * 100.0f);
         printf("Avg relative error: %.6f%%\n", avg_rel_error * 100.0f);
         printf("SNR:                %.2f dB\n", snr);
-        printf("Compression ratio: %.2f:1 (%.2f bits per value)\n", 
+        printf("Compression ratio: %.2f:1 (%.2f bits per value)\n",
               compression_ratio, bits_per_val);
-        
+
         // Print the original/reconstructed values if verbose
         if (verbose) {
             printf("\nOriginal vs Reconstructed values:\n");
             for (size_t j = 0; j < std::min(test_size, size_t(20)); j++) {
-                printf("[%4zu] %.6f -> %.6f (error: %.6f)\n", 
+                printf("[%4zu] %.6f -> %.6f (error: %.6f)\n",
                       j, input_data[j], output_data[j], fabsf(input_data[j] - output_data[j]));
             }
-            
+
             // If test size is large, print the last few values
             if (test_size > 20) {
                 printf("...\n");
                 for (size_t j = test_size - 5; j < test_size; j++) {
-                    printf("[%4zu] %.6f -> %.6f (error: %.6f)\n", 
+                    printf("[%4zu] %.6f -> %.6f (error: %.6f)\n",
                           j, input_data[j], output_data[j], fabsf(input_data[j] - output_data[j]));
                 }
             }
         }
-        
+
         printf("\n");
     }
 }
@@ -286,18 +286,21 @@ int main(int argc, char * argv[]) {
         const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
 
         // Skip if type not included or not a quantizable type
-        if (!params.include_types.empty() && 
-            ggml_type_name(type) && 
+        if (!params.include_types.empty() &&
+            ggml_type_name(type) &&
             std::find(params.include_types.begin(), params.include_types.end(), ggml_type_name(type)) == params.include_types.end()) {
+            // printf("skipping %s due to NOT in include_types.\n", ggml_type_name(type));
             continue;
         }
 
         if (qfns_cpu->from_float && qfns->to_float) {
             run_test_for_type(type, input_data, quantized_data, output_data, params.test_size, params.verbose, params.csv_output);
+        } else {
+            // printf("skipping %s due to NO to_float.\n", ggml_type_name(type));
         }
     }
 
     ggml_free(ctx);
 
     return 0;
-} 
+}
