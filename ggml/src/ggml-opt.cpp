@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cinttypes>
-#include <map>
 #include <random>
 #include <vector>
 
@@ -250,66 +249,6 @@ struct ggml_opt_params ggml_opt_default_params(
         /*get_opt_pars    =*/ ggml_opt_get_default_optimizer_params,
         /*get_opt_pars_ud =*/ nullptr,
     };
-}
-
-static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_map, ggml_context * ctx, ggml_tensor * tensor) {
-    if (!tensor) {
-        return nullptr;
-    }
-
-    if (tensor_map.find(tensor) != tensor_map.end()) {
-        return tensor_map[tensor];
-    }
-
-    ggml_tensor * new_tensor = ggml_dup_tensor(ctx, tensor);
-    tensor_map[tensor] = new_tensor;
-
-    new_tensor->op = tensor->op;
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        new_tensor->nb[i] = tensor->nb[i];
-    }
-    new_tensor->flags = tensor->flags;
-    memcpy(new_tensor->op_params, tensor->op_params, sizeof(tensor->op_params));
-    strcpy(new_tensor->name, tensor->name);
-    new_tensor->data = tensor->data;
-    new_tensor->buffer = tensor->buffer;
-    new_tensor->extra = tensor->extra;
-    new_tensor->view_offs = tensor->view_offs;
-    new_tensor->view_src = map_tensor(tensor_map, ctx, tensor->view_src);
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        new_tensor->src[i] = map_tensor(tensor_map, ctx, tensor->src[i]);
-    }
-
-    return new_tensor;
-}
-
-static ggml_cgraph * dup_graph(ggml_context * ctx, ggml_cgraph * src) {
-    std::map<ggml_tensor *, ggml_tensor *> tensor_map;
-
-    ggml_cgraph * dst = ggml_new_graph_custom(ctx, src->size, /*grads =*/ true);
-
-    for (int i = 0; i < src->n_leafs; i++) {
-        ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->leafs[i]));
-    }
-    GGML_ASSERT(dst->n_leafs == src->n_leafs);
-    for (int i = 0; i < src->n_nodes; i++) {
-        ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->nodes[i]));
-    }
-    GGML_ASSERT(dst->n_nodes == src->n_nodes);
-    for (int i = 0; i < src->n_nodes; ++i) {
-        const size_t igrad_src = ggml_hash_find(&src->visited_hash_set, src->nodes[i]);
-        const size_t igrad_dst = ggml_hash_find(&dst->visited_hash_set, dst->nodes[i]);
-
-        GGML_ASSERT(igrad_src != GGML_HASHSET_FULL);
-        GGML_ASSERT(ggml_bitset_get(src->visited_hash_set.used, igrad_src));
-        GGML_ASSERT(igrad_dst != GGML_HASHSET_FULL);
-        GGML_ASSERT(ggml_bitset_get(dst->visited_hash_set.used, igrad_dst));
-
-        dst->grads[igrad_dst]     = src->grads[igrad_src];
-        dst->grad_accs[igrad_dst] = src->grad_accs[igrad_src];
-    }
-
-    return dst;
 }
 
 static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
@@ -738,7 +677,8 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
         ggml_free(opt_ctx->ctx_copy);
         opt_ctx->ctx_copy = ggml_init(params);
 
-        opt_ctx->allocated_graph_copy = dup_graph(opt_ctx->ctx_copy, graph);
+        opt_ctx->allocated_graph_copy = ggml_new_graph_custom(opt_ctx->ctx_copy, graph->size, /*grads =*/ true);
+        dup_graph(opt_ctx->ctx_copy, graph, opt_ctx->allocated_graph_copy);
     } else {
         opt_ctx->allocated_graph_copy = graph;
     }
