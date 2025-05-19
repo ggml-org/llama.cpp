@@ -7562,8 +7562,8 @@ static void ggml_compute_forward_ssm_scan_f32(
                         svfloat32_t vs0 = GGML_F32_VEC_LOAD(&s0[i1*nc+k]);
 
                         svfloat32_t t1 = GGML_F32_VEC_MUL(vdt_soft_plus,vA);
-                        t1 = exp_ps_sve(svptrue_b32(), t1); 
-                        svfloat32_t t2 = GGML_F32_VEC_MUL(vx_dt,vB); 
+                        t1 = exp_ps_sve(svptrue_b32(), t1);
+                        svfloat32_t t2 = GGML_F32_VEC_MUL(vx_dt,vB);
 
                         vs0 = GGML_F32_VEC_FMA(vs0, t1, t2);
                         r1_vector = GGML_F32_VEC_ADD(GGML_F32_VEC_MUL(vs0, vC), r1_vector);
@@ -8247,7 +8247,7 @@ static void ggml_compute_forward_gla_f32(
         #if defined(__ARM_FEATURE_SVE)
             gla_vector_size = svcntw();
         #else
-            gla_vector_size = GLA_VECTOR_SIZE
+            gla_vector_size = GLA_VECTOR_SIZE;
         #endif
         const int64_t vec_count = head_size / gla_vector_size;
 

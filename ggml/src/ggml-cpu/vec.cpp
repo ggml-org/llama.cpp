@@ -36,7 +36,6 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         svfloat32_t ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8;
         svfloat32_t ay1,ay2,ay3,ay4,ay5,ay6,ay7,ay8;
         for ( int i = 0; i < np; i += ggml_f32_step) {
-        
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
             sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
@@ -68,17 +67,14 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
             ax8 = GGML_F32_VEC_LOAD(x + i + 7*ggml_f32_epr);
             ay8 = GGML_F32_VEC_LOAD(y + i + 7*ggml_f32_epr);
             sum8 = GGML_F32_VEC_FMA(ax8, ay8, sum8);
-
         }
-        // leftovers 
+        // leftovers
         // Since 8 unrolls are done in above loop, leftovers lie in range [0, ggml_f32_step] which is handled in below loop
         const int np2 = (n & ~(ggml_f32_epr - 1));
         for ( int i = np; i < np2; i += ggml_f32_epr) {
-        
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
             sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
-
         }
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
         if(np2<n){

@@ -172,7 +172,6 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
             ay2 = GGML_F32_VEC_FMA(ax2, vx, ay2);
 
             GGML_F32_VEC_STORE(y + i + 1*ggml_f32_epr, ay2);
-            
         }
         // leftovers
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
@@ -259,7 +258,7 @@ inline static void ggml_vec_mad_f32_unroll(const int n, const int xs, const int 
 
 #if defined(GGML_SIMD)
     #if defined(__ARM_FEATURE_SVE)
-        // scalar Route to scalar implementation       //TODO: Write SVE code 
+        // scalar Route to scalar implementation       //TODO: Write SVE code
         for (int k = 0; k < GGML_VEC_MAD_UNROLL; ++k) {
             for (int i = 0; i < n; ++i) {
                 y[i] += x[k][i]*v[k][0];
@@ -312,8 +311,7 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
 #if defined(GGML_USE_ACCELERATE)
     vDSP_vsmul(y, 1, &v, y, 1, n);
 #elif defined(GGML_SIMD)
-    #if defined(__ARM_FEATURE_SVE)
-        
+    #if defined(__ARM_FEATURE_SVE)        
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
         const int ggml_f32_step = 2 * ggml_f32_epr;
@@ -322,7 +320,6 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
         const int np = (n & ~(ggml_f32_step - 1));
         svfloat32_t ay1,ay2;
         for ( int i = 0; i < np; i += ggml_f32_step) {
-            
             ay1 = GGML_F32_VEC_LOAD(y + i);
             ay1 = GGML_F32_VEC_MUL(ay1, vx);
             GGML_F32_VEC_STORE(y + i, ay1);
@@ -330,7 +327,6 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
             ay2 = GGML_F32_VEC_LOAD(y + i + 1*ggml_f32_epr);
             ay2 = GGML_F32_VEC_MUL(ay2, vx);
             GGML_F32_VEC_STORE(y + i + 1*ggml_f32_epr, ay2);
-
         }
         // leftovers
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
@@ -589,7 +585,7 @@ inline static ggml_fp16_t ggml_silu_f16(ggml_fp16_t x) {
 #error "ref: https://github.com/ggml-org/llama.cpp/pull/7154#issuecomment-2143844461"
 #endif
 
-/* Below function was borrowed from the GitHub repository: 
+/* Below function was borrowed from the GitHub repository:
 https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/src/nodes/kernels/scaled_attn/common.hpp */
 #if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
     inline static svfloat32_t exp_ps_sve(svbool_t pg, svfloat32_t src) {
