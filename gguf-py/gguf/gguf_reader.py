@@ -106,7 +106,7 @@ class ReaderTensor(NamedTuple):
     n_elements: int
     n_bytes: int
     data_offset: int
-    data: np.ndarray
+    data: npt.NDArray[Any]
     field: ReaderField
 
 
