@@ -53,7 +53,7 @@ virtgpu_ioctl_map(struct virtgpu *gpu, uint32_t gem_handle, size_t size)
       .handle = gem_handle,
       .pad = 0,
    };
-   printf("virtgpu_ioctl_map(%ld)\n", size);
+
    if (virtgpu_ioctl(gpu, DRM_IOCTL_VIRTGPU_MAP, &args))
       return NULL;
 
@@ -61,7 +61,7 @@ virtgpu_ioctl_map(struct virtgpu *gpu, uint32_t gem_handle, size_t size)
                     args.offset);
    if (ptr == MAP_FAILED)
       return NULL;
-   printf("virtgpu_ioctl_map(%ld) --> %p | %p\n", size, ptr, *(void **)ptr);
+
    return ptr;
 }
 
