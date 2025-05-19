@@ -13,31 +13,31 @@
 
 uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_backend_init_fct_p);
 
-typedef uint32_t (*backend_dispatch_t)(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+typedef uint32_t (*backend_dispatch_t)(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 /* *** */
 
-uint32_t backend_reg_get_device_count(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_reg_get_device_count(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 /* device */
-uint32_t backend_device_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_get_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_supports_op(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_get_buffer_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_device_get_props(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_device_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_get_description(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_get_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_supports_op(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_get_buffer_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_get_props(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 /* buffer-type */
-uint32_t backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_buffer_type_get_alignment(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_buffer_type_get_max_size(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_buffer_type_get_alignment(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_buffer_type_get_max_size(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 /* buffer */
-uint32_t backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
-uint32_t backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec);
+uint32_t backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
 {

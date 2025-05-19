@@ -20,7 +20,10 @@ typedef uintptr_t apir_buffer_handle_t;
 typedef uint32_t (*apir_backend_initialize_t)(void);
 typedef void (*apir_backend_deinit_t)(void);
 
-typedef uint32_t (*apir_backend_dispatch_t)(uint32_t cmd_type,
+struct vn_dispatch_context;
+struct virgl_apir_context;
+
+typedef uint32_t (*apir_backend_dispatch_t)(uint32_t cmd_type, struct virgl_apir_context *ctx,
                                             char *dec_cur, const char *dec_end,
                                             char *enc_cur, const char *enc_end,
                                             char **enc_cur_after
@@ -51,3 +54,14 @@ typedef enum ApirBackendCommandType {
   // last command_type index + 1
   APIR_BACKEND_DISPATCH_TABLE_COUNT = 15,
 } ApirBackendCommandType;
+
+
+struct virgl_apir_callbacks {
+  void *(*get_shmem_ptr)(struct vn_dispatch_context *ctx, uint32_t res_id);
+} ;
+
+struct virgl_apir_context {
+  struct vn_dispatch_context *virgl_ctx;
+
+  struct virgl_apir_callbacks iface;
+};

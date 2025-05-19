@@ -7,7 +7,8 @@
 #include "ggml-backend.h"
 
 uint32_t
-backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_t buffer;
   buffer = vn_decode_ggml_buffer(dec);
 
@@ -20,7 +21,8 @@ backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
 }
 
 uint32_t
-backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   UNUSED(enc);
 
   ggml_backend_buffer_t buffer;

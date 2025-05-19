@@ -117,3 +117,15 @@ static inline void
 vn_decode_ggml_status(struct vn_cs_decoder *dec, enum ggml_status *status) {
   vn_cs_decoder_read(dec, sizeof(*status), status, sizeof(*status));
 }
+
+/* vn_renderer_shmem */
+
+static inline void
+vn_encode_virtgpu_shmem_res_id(struct vn_cs_encoder *enc, uint32_t shmem_res_id) {
+  vn_encode_uint32_t(enc, &shmem_res_id);
+}
+
+static inline void
+vn_decode_virtgpu_shmem_res_id(struct vn_cs_decoder *dec, uint32_t *shmem_res_id) {
+  vn_decode_uint32_t(dec, shmem_res_id);
+}

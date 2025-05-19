@@ -7,7 +7,8 @@
 #include "ggml-backend.h"
 
 uint32_t
-backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
 
@@ -21,7 +22,8 @@ backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *de
 }
 
 uint32_t
-backend_buffer_type_get_alignment(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_type_get_alignment(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
 
@@ -32,7 +34,8 @@ backend_buffer_type_get_alignment(struct vn_cs_encoder *enc, struct vn_cs_decode
 }
 
 uint32_t
-backend_buffer_type_get_max_size(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_type_get_max_size(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
 
@@ -43,7 +46,8 @@ backend_buffer_type_get_max_size(struct vn_cs_encoder *enc, struct vn_cs_decoder
 }
 
 uint32_t
-backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
 
@@ -54,7 +58,8 @@ backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec
 }
 
 uint32_t
-backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
 

@@ -58,7 +58,7 @@ extern "C" {
     return backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
   }
 
-  uint32_t apir_backend_dispatcher(uint32_t cmd_type,
+  uint32_t apir_backend_dispatcher(uint32_t cmd_type, struct virgl_apir_context *ctx,
 				   char *dec_cur, const char *dec_end,
 				   char *enc_cur, const char *enc_end,
 				   char **enc_cur_after) {
@@ -82,7 +82,7 @@ extern "C" {
     }
 
     backend_dispatch_t forward_fct = apir_backend_dispatch_table[cmd_type];
-    uint32_t ret = forward_fct(enc, dec);
+    uint32_t ret = forward_fct(enc, dec, ctx);
 
     *enc_cur_after = enc->cur;
 
