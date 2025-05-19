@@ -46,6 +46,8 @@ static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer
 static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
   NOT_IMPLEMENTED;
 
+  STOP_HERE;
+
   UNUSED(buffer);
   UNUSED(tensor);
   UNUSED(data);
@@ -56,6 +58,8 @@ static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer
 
 static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
   NOT_IMPLEMENTED;
+
+  STOP_HERE;
 
   return true;
 
@@ -76,6 +80,8 @@ static void ggml_remoting_buffer_memset(remoting_buffer& dst, size_t offset, uin
 static void ggml_remoting_buffer_memset_async(remoting_context& ctx, remoting_buffer& dst, size_t offset, uint32_t c, size_t size) {
   NOT_IMPLEMENTED;
 
+  STOP_HERE;
+
   UNUSED(ctx);
   UNUSED(dst);
   UNUSED(c);
@@ -88,12 +94,16 @@ static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uin
   UNUSED(value);
 
   NOT_IMPLEMENTED;
+
+  STOP_HERE;
 }
 
 static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffer) {
   UNUSED(buffer);
 
   NOT_IMPLEMENTED;
+
+    STOP_HERE;
 }
 
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
