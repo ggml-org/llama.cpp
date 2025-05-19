@@ -32,8 +32,8 @@ backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
   // safe to remove the const qualifier here
   tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec);
 
-  void *data;
-  vn_decode_uintptr_t(dec, (uintptr_t *) &data);
+  uint32_t shmem_res_id;
+  vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
   size_t offset;
   vn_decode_size_t(dec, &offset);
@@ -41,10 +41,26 @@ backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
   size_t size;
   vn_decode_size_t(dec, &size);
 
-  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
-       buffer, tensor, data, offset, size);
+  void *shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
 
-  //buffer->iface.set_tensor(buffer, tensor, data, offset, size);
+  if (!shmem_data) {
+    FATAL("Couldn't get the shmem addr from virgl :/");
+  }
+
+#if 0
+  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
+       buffer, tensor, shmem_data, offset, size);
+#endif
+#if 0
+  void **addr = (void **)(uintptr_t)shmem_data;
+  for (int i = 0; i <= 10; i++) {
+    INFO("%s: %p | %llx", __func__, addr, *addr);
+    addr++;
+  }
+  INFO("\n");
+#endif
+
+  buffer->iface.set_tensor(buffer, tensor, shmem_data, offset, size);
 
   return 0;
 }
