@@ -19,7 +19,6 @@
         },
       };
       // Redirect the iframe's console.log
-      const originalConsoleLog = console.log; // Keep a reference if needed
       console.log = iframeConsole.log.bind(iframeConsole);
 
       window.addEventListener('message', (event) => {

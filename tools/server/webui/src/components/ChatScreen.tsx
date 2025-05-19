@@ -218,7 +218,7 @@ export default function ChatScreen() {
     if (
       !(await sendMessage(
         currConvId,
-        parentMessageId, // Use the correctly determined parent ID
+        parentMessageId,
         lastInpMsg,
         extraContext.items,
         onChunk

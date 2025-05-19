@@ -59,6 +59,8 @@ export default function ChatMessage({
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
+  // for reasoning model, we split the message into content and thought
+  // TODO: implement this as remark/rehype plugin in the future
   const {
     content: mainDisplayableContent,
     thought,
@@ -79,10 +81,12 @@ export default function ChatMessage({
     actualContent += thinkSplit[0];
 
     while (thinkSplit[1] !== undefined) {
+      // <think> tag found
       thinkSplit = thinkSplit[1].split('</think>', 2);
       thought += thinkSplit[0];
       isThinking = true;
       if (thinkSplit[1] !== undefined) {
+        // </think> closing tag found
         isThinking = false;
         thinkSplit = thinkSplit[1].split('<think>', 2);
         actualContent += thinkSplit[0];
@@ -129,6 +133,7 @@ export default function ChatMessage({
             'chat-bubble bg-transparent': !isUser,
           })}
         >
+          {/* textarea for editing message */}
           {editingContent !== null && (
             <>
               <textarea
@@ -157,12 +162,14 @@ export default function ChatMessage({
               </button>
             </>
           )}
+          {/* not editing content, render message */}
           {editingContent === null && (
             <>
               {mainDisplayableContent === null &&
               !toolCalls &&
               !chainedParts?.length ? (
                 <>
+                  {/* show loading dots for pending message */}
                   <span className="loading loading-dots loading-md"></span>
                 </>
               ) : (
@@ -224,6 +231,7 @@ export default function ChatMessage({
                     ))}
                 </React.Fragment>
               ))}
+              {/* render timings if enabled */}
               {timings && config.showTokensPerSecond && (
                 <div className="dropdown dropdown-hover dropdown-top mt-2">
                   <div
@@ -252,6 +260,7 @@ export default function ChatMessage({
         </div>
       </div>
 
+      {/* actions for each message */}
       {(entireTurnHasSomeDisplayableContent || msg.role === 'user') && (
         <div
           className={classNames({
@@ -290,6 +299,7 @@ export default function ChatMessage({
               </button>
             </div>
           )}
+          {/* user message */}
           {msg.role === 'user' && (
             <BtnWithTooltips
               className="btn-mini w-8 h-8"
@@ -300,6 +310,7 @@ export default function ChatMessage({
               <PencilSquareIcon className="h-4 w-4" />
             </BtnWithTooltips>
           )}
+          {/* assistant message */}
           {msg.role === 'assistant' && (
             <>
               {!isPending && (

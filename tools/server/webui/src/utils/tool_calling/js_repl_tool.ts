@@ -157,18 +157,4 @@ export class JSReplAgentTool extends AgentTool {
       this.iframe!.contentWindow!.postMessage(message, '*');
     });
   }
-
-  // public dispose(): void {
-  //   if (this.iframe) {
-  //     document.body.removeChild(this.iframe);
-  //     this.iframe = null;
-  //   }
-  //   if (this.messageHandler) {
-  //     window.removeEventListener('message', this.messageHandler);
-  //     this.messageHandler = null;
-  //   }
-  //   this.pendingCalls.clear();
-  //   this.resolveIframeReady = null;
-  //   this.rejectIframeReady = null;
-  // }
 }
