@@ -102,6 +102,7 @@ virtgpu_shmem_create(struct virtgpu *gpu, size_t size)
    shmem->base.mmap_ptr = ptr;
    shmem->base.refcount.count = 1;
    shmem->base.gem_handle = gem_handle;
+   shmem->base.shmem = shmem;
 
    return &shmem->base;
 }

@@ -25,6 +25,8 @@ struct vn_renderer_shmem {
    int64_t cache_timestamp;
 
    uint32_t gem_handle;
+
+   struct virtgpu_shmem *shmem;
 };
 
 struct vn_renderer_shmem *virtgpu_shmem_create(struct virtgpu *gpu, size_t size);
