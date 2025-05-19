@@ -4,6 +4,7 @@
 
 #include <climits>
 #include <cstdarg>
+#include <cinttypes>
 #include <string>
 #include <map>
 #include <sstream>
@@ -44,7 +45,7 @@
 // tensor name constants
 //
 
-#define TN_POS_EMBD        "%s.position_embd.weight"
+#define TN_POS_EMBD        "v.position_embd.weight"
 #define TN_CLASS_EMBD      "v.class_embd"
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backwrad compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
@@ -110,6 +111,7 @@ enum projector_type {
     PROJECTOR_TYPE_PIXTRAL,
     PROJECTOR_TYPE_QWEN25VL,
     PROJECTOR_TYPE_INTERNVL,
+    PROJECTOR_TYPE_LLAMA4,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -125,6 +127,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
     { PROJECTOR_TYPE_INTERNVL,  "internvl"},
+    { PROJECTOR_TYPE_LLAMA4,    "llama4"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -239,6 +242,11 @@ struct clip_image_u8_batch {
 
 struct clip_image_f32_batch {
     std::vector<clip_image_f32_ptr> entries;
+
+    // for llava-uhd style models, we need to know the grid size
+    // note: entries.size() == grid_x * grid_y + 1 (one overview image)
+    int grid_x = 0;
+    int grid_y = 0;
 
     clip_image_f32_batch clone() const {
         clip_image_f32_batch new_batch;
@@ -355,6 +363,70 @@ static std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
             }
         default:
             return gguf_data_to_str(type, gguf_get_val_data(ctx_gguf, i), 0);
+    }
+}
+
+//
+// debugging
+//
+
+static void print_tensor_shape(ggml_tensor * t) {
+    printf("%s.shape = [", t->name);
+    for (int i = 0; i < ggml_n_dims(t); ++i) {
+        printf("%" PRId64, t->ne[i]);
+        if (i < ggml_n_dims(t) - 1) {
+            printf(", ");
+        }
+    }
+    printf("]\n");
+}
+
+static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
+    ggml_type type = t->type;
+    int64_t * ne = t->ne;
+    size_t * nb = t->nb;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        printf("%s.data: [\n", t->name);
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            if (i2 == n && ne[2] > 2*n) {
+                printf("     ..., \n");
+                i2 = ne[2] - n;
+            }
+            printf("     [\n");
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                if (i1 == n && ne[1] > 2*n) {
+                    printf("      ..., \n");
+                    i1 = ne[1] - n;
+                }
+                printf("      [");
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    if (i0 == n && ne[0] > 2*n) {
+                        printf("..., ");
+                        i0 = ne[0] - n;
+                    }
+                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+                    float v;
+                    if (type == GGML_TYPE_F16) {
+                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+                    } else if (type == GGML_TYPE_F32) {
+                        v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I32) {
+                        v = (float) *(int32_t *) &data[i];
+                    } else if (type == GGML_TYPE_I16) {
+                        v = (float) *(int16_t *) &data[i];
+                    } else if (type == GGML_TYPE_I8) {
+                        v = (float) *(int8_t *) &data[i];
+                    } else {
+                        GGML_ABORT("fatal error");
+                    }
+                    printf("%8.4f", v);
+                    if (i0 < ne[0] - 1) printf(", ");
+                }
+                printf("],\n");
+            }
+            printf("     ],\n");
+        }
+        printf("    ]\n");
     }
 }
 

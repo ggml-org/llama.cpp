@@ -6,10 +6,6 @@ import re
 import torch
 import numpy as np
 from gguf import *
-from typing import cast
-from torch.nn import ModuleList
-from transformers.models.clip.modeling_clip import CLIPVisionTransformer
-from transformers import PreTrainedModel
 from transformers import CLIPModel, CLIPProcessor, CLIPVisionModel, SiglipVisionModel
 
 TEXT = "clip.text"
@@ -166,13 +162,13 @@ if args.use_f32:
     ftype = 0
 
 if args.clip_model_is_siglip:
-    model: PreTrainedModel = SiglipVisionModel.from_pretrained(dir_model)
+    model = SiglipVisionModel.from_pretrained(dir_model)
     processor = None
 elif args.clip_model_is_vision or args.clip_model_is_openclip:
-    model: PreTrainedModel = CLIPVisionModel.from_pretrained(dir_model)
+    model = CLIPVisionModel.from_pretrained(dir_model)
     processor = None
 else:
-    model: PreTrainedModel = CLIPModel.from_pretrained(dir_model)
+    model = CLIPModel.from_pretrained(dir_model)
     processor = CLIPProcessor.from_pretrained(dir_model)
 
 fname_middle = None
@@ -354,14 +350,9 @@ if has_llava_projector:
     # By default, we drop the last layer for llava projector
     # models unless we have explicitly set vision feature layers
     if feature_layers is None:
-        vision_model = cast(CLIPVisionTransformer, model.vision_model)
-        encoder_layers = vision_model.encoder.layers
-        encoder_layers.pop(-1)
+        model.vision_model.encoder.layers.pop(-1)
     else:
-        vision_model = cast(CLIPVisionTransformer, model.vision_model)
-        encoder_layers = vision_model.encoder.layers
-        encoder_layers = cast(ModuleList, encoder_layers)
-        encoder_layers.__init__(encoder_layers[:max(feature_layers)])
+        model.vision_model.encoder.layers = model.vision_model.encoder.layers[:max(feature_layers)]
 
     projector = torch.load(args.llava_projector)
     for name, data in projector.items():
@@ -384,7 +375,7 @@ for name, data in state_dict.items():
         continue
 
     name = get_tensor_name(name)
-    data = np.ascontiguousarray(data.detach().cpu().squeeze().numpy())
+    data = data.squeeze().numpy()
 
     n_dims = len(data.shape)
 
@@ -392,16 +383,16 @@ for name, data in state_dict.items():
     ftype_cur = 0
     if n_dims == 4:
         print(f"tensor {name} is always saved in f16")
-        data = np.asarray(data, dtype=np.float16)
+        data = data.astype(np.float16)
         ftype_cur = 1
     elif ftype == 1:
         if name[-7:] == ".weight" and n_dims == 2:
             print("  Converting to float16")
-            data = np.asarray(data, dtype=np.float16)
+            data = data.astype(np.float16)
             ftype_cur = 1
         else:
             print("  Converting to float32")
-            data = np.asarray(data, dtype=np.float32)
+            data = data.astype(np.float32)
             ftype_cur = 0
     else:
         if data.dtype != np.float32:
