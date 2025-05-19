@@ -40,24 +40,27 @@ static size_t ggml_backend_remoting_reg_get_device_count(ggml_backend_reg_t reg)
 
   IMPLEMENTED;
 
-  struct virtgpu *gpu = apir_initialize();
-  if (!gpu) {
-    WARNING("apir_initialize failed :/");
-    return 0;
-  }
-
-  return apir_device_get_count(gpu);
+  return ggml_backend_remoting_get_device_count();
 }
 
-static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_t reg, size_t device) {
-  static std::vector<ggml_backend_dev_t> devices;
+static std::vector<ggml_backend_dev_t> devices;
 
+ggml_backend_dev_t ggml_backend_remoting_get_device(size_t device) {
+  GGML_ASSERT(device < devices.size());
+  return devices[device];
+}
+
+static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
   IMPLEMENTED;
+
+  if (devices.size() > 0) {
+    INFO("%s: already initialized\n", __func__);
+  }
 
   struct virtgpu *gpu = apir_initialize();
   if (!gpu) {
-    WARNING("apir_initialize failed :/");
-    return 0;
+    FATAL("apir_initialize failed :/");
+    return;
   }
 
   static bool initialized = false;
@@ -67,7 +70,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
     std::lock_guard<std::mutex> lock(mutex);
     if (!initialized) {
 
-      for (size_t i = 0; i < ggml_backend_remoting_reg_get_device_count(reg); i++) {
+      for (int i = 0; i < ggml_backend_remoting_get_device_count(); i++) {
         ggml_backend_remoting_device_context *ctx = new ggml_backend_remoting_device_context;
         char desc[256] = "API Remoting device";
 
@@ -85,9 +88,14 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
       initialized = true;
     }
   }
+}
 
-  GGML_ASSERT(device < devices.size());
-  return devices[device];
+static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_t reg, size_t device) {
+  UNUSED(reg);
+
+  IMPLEMENTED;
+
+  return ggml_backend_remoting_get_device(device);
 }
 
 static const char *ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
@@ -109,6 +117,7 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     FATAL("apir_initialize failed :/");
     return NULL;
   }
+
   static ggml_backend_reg reg = {
     /* .api_version = */ GGML_BACKEND_API_VERSION,
     /* .iface       = */ ggml_backend_remoting_reg_i,
@@ -116,5 +125,8 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
   };
 
   RMT_LOG_DEBUG("ggml_backend_remoting_frontend_reg() hello :wave:");
+
+  ggml_backend_remoting_reg_init_devices(&reg);
+
   return &reg;
 }
