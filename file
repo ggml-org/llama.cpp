@@ -1,0 +1,1 @@
+docker pull ghcr.io/power-of-attorney/llama.cpp:server-cuda-b5402
