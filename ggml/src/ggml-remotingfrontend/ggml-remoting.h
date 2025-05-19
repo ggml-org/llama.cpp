@@ -61,8 +61,6 @@ struct ggml_backend_remoting_buffer_context {
 };
 
 static inline apir_buffer_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
-
-//  return buffer?0:1;
   struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) buffer->context;
 
   return context->handle;
