@@ -7055,7 +7055,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
             const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + (iq2 + i_gqa)*nbq2 + iq3*nbq3));
             q_to_vec_dot(pq, Q_q[i_gqa], DK);
-  
+
             const uint32_t h = iq2 + i_gqa;
             slope[i_gqa] = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
         }
