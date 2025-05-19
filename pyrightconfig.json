@@ -20,7 +20,7 @@
     },
   ],
   "exclude": [
-    "tools/legacy",
+    "tools/mtmd/legacy-models",
     "tests"
   ]
  }
