@@ -951,7 +951,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     }
 
     json to_json_oaicompat_chat() {
-        bool first = n_decoded == 0;
+        bool first = n_decoded == 1;
         std::time_t t = std::time(0);
         json choices;
 
