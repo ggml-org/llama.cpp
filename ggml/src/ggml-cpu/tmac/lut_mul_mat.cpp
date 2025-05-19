@@ -500,22 +500,26 @@ size_t ggml_backend_tmac_desired_wsize(const struct ggml_tensor * dst) {
 }
 
 size_t ggml_tmac_get_nbytes(const struct ggml_tensor * tensor) {
-    const int bits = get_type_bits(tensor->type);
+    if (is_tmac_type(tensor->type)) {
+        const int bits = get_type_bits(tensor->type);
 
-    int k = tensor->ne[0];
-    int m = tensor->ne[1];  // `n` in llama.cpp
+        int k = tensor->ne[0];
+        int m = tensor->ne[1];  // `n` in llama.cpp
 
-    struct tmac_kernel_config * kernel_config = find_tmac_kernel_config(m, k, bits);
-    if (kernel_config == nullptr) {
-        ggml_tmac_tune_kernel_config(tensor, m, k);
-        kernel_config = find_tmac_kernel_config(m, k, bits);
+        struct tmac_kernel_config * kernel_config = find_tmac_kernel_config(m, k, bits);
+        if (kernel_config == nullptr) {
+            ggml_tmac_tune_kernel_config(tensor, m, k);
+            kernel_config = find_tmac_kernel_config(m, k, bits);
+        }
+
+        const int scales_size = ggml_tmac_get_scales_size(kernel_config, m, k);
+        // Currently, always uses float to store scales or zero points
+        size_t nbytes = k * m / 8 * bits + scales_size * sizeof(float);
+        nbytes = GGML_PAD(nbytes, GGUF_DEFAULT_ALIGNMENT);
+        return nbytes;
+    } else {
+        return ggml_nbytes(tensor);
     }
-
-    const int scales_size = ggml_tmac_get_scales_size(kernel_config, m, k);
-    // Currently, always uses float to store scales or zero points
-    size_t nbytes = k * m / 8 * bits + scales_size * sizeof(float);
-    nbytes = GGML_PAD(nbytes, GGUF_DEFAULT_ALIGNMENT);
-    return nbytes;
 }
 
     
@@ -1030,7 +1034,7 @@ void ggml_backend_tmac_convert_weight(struct ggml_tensor * tensor, const void * 
 // m = batch_size
 // n = output_dim
 // t-mac llama.cpp n and m swapped
-void ggml_tmac_mul_mat_task_init(void * src1, void * qlut, void * lut_scales, void * lut_biases, int n, int k, int m, int bits) {
+static inline void ggml_tmac_mul_mat_task_init(void * src1, void * qlut, void * lut_scales, void * lut_biases, int n, int k, int m, int bits) {
     struct tmac_kernel_config * kernel_config = find_tmac_kernel_config(n, k, bits);
     if (kernel_config == nullptr) {
         throw std::runtime_error("ggml_tmac_mul_mat_task_init: Failed to find kernel config for m" + std::to_string(n) + "_k" + std::to_string(k) + "_b" + std::to_string(bits));
@@ -1038,7 +1042,7 @@ void ggml_tmac_mul_mat_task_init(void * src1, void * qlut, void * lut_scales, vo
     lut_ctor_int8_g4(src1, lut_scales, lut_biases, qlut, k, kernel_config);
 }
 
-void ggml_tmac_mul_mat_task_compute(void * src0, void * scales, void * qlut, void * lut_scales, void * lut_biases, void * dst, int n, int k, int m, int bits) {
+static inline void ggml_tmac_mul_mat_task_compute(void * src0, void * scales, void * qlut, void * lut_scales, void * lut_biases, void * dst, int n, int k, int m, int bits) {
     struct tmac_kernel_config * kernel_config = find_tmac_kernel_config(n, k, bits);
     if (kernel_config == nullptr) {
         GGML_LOG_INFO("Failed to find kernel config for m%d_k%d_b%d\n", n, k, bits);
