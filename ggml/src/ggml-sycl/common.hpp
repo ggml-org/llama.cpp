@@ -15,6 +15,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <string>
 
 #include "dpct/helper.hpp"
 #include "ggml-sycl.h"
@@ -490,4 +491,59 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+template <int N, class T>
+void debug_print_array(const std::string& prefix, const T array[N]) {
+    std::stringstream ss;
+    ss << prefix << "=[";
+    for (std::size_t i = 0; i < N - 1; ++i) {
+        ss << array[i] << ", ";
+    }
+    if constexpr (N > 0) {
+        ss << array[N - 1];
+    }
+    ss << "]";
+    GGML_SYCL_DEBUG("%s", ss.str().c_str());
+}
+
+inline void debug_print_tensor(const std::string& prefix, const ggml_tensor* tensor) {
+    GGML_SYCL_DEBUG("%s=", prefix.c_str());
+    if (tensor) {
+        GGML_SYCL_DEBUG("'%s':type=%s", tensor->name, ggml_type_name(tensor->type));
+        debug_print_array<GGML_MAX_DIMS>(";ne", tensor->ne);
+        debug_print_array<GGML_MAX_DIMS>(";nb", tensor->nb);
+        if (!ggml_is_contiguous(tensor)) {
+            GGML_SYCL_DEBUG(";strided");
+        }
+        if (ggml_is_permuted(tensor)) {
+            GGML_SYCL_DEBUG(";permuted");
+        }
+    } else {
+        GGML_SYCL_DEBUG("nullptr");
+    }
+}
+
+struct scope_op_debug_print {
+  scope_op_debug_print(const std::string& func, const ggml_tensor* dst, std::size_t num_src, const std::string& suffix = "") : func(func) {
+    if (!g_ggml_sycl_debug) {
+        return;
+    }
+    GGML_SYCL_DEBUG("call %s:", func.c_str());
+    debug_print_tensor(" dst", dst);
+    if (dst) {
+        for (std::size_t i = 0; i < num_src; ++i) {
+            debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
+        }
+    }
+    GGML_SYCL_DEBUG("%s\n", suffix.c_str());
+  }
+
+  ~scope_op_debug_print() {
+    GGML_SYCL_DEBUG("call %s done\n", func.c_str());
+  }
+
+  private:
+    std::string func;
+};
+
 #endif // GGML_SYCL_COMMON_HPP

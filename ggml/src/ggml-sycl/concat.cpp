@@ -159,6 +159,7 @@ static void concat_f32_sycl_non_cont(
 }
 
 void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+  scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
   const ggml_tensor *src0 = dst->src[0];
   const ggml_tensor *src1 = dst->src[1];
   queue_ptr stream = ctx.stream();
