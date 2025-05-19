@@ -4,7 +4,9 @@
 #  Copyright (C) 2025 Intel Corporation
 #  SPDX-License-Identifier: MIT
 
-export ONEAPI_DEVICE_SELECTOR="level_zero:0"
+# If you want more control, DPC++ Allows selecting a specific device through the
+# following environment variable
+#export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 source /opt/intel/oneapi/setvars.sh
 
 #export GGML_SYCL_DEBUG=1

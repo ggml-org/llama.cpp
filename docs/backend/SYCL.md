@@ -252,7 +252,7 @@ sycl-ls
 
 - **Intel GPU**
 
-When targeting an intel GPU, the user should expect one or more level-zero devices among the available SYCL devices. Please make sure that at least one GPU is present, for instance `[level_zero:gpu]` in the sample output below:
+When targeting an intel GPU, the user should expect one or more devices among the available SYCL devices. Please make sure that at least one GPU is present via `sycl-ls`, for instance `[level_zero:gpu]` in the sample output below:
 
 ```
 [opencl:acc][opencl:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.10.0.17_160000]
@@ -767,7 +767,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
 ## Q&A
 
-- Error:  `error while loading shared libraries: libsycl.so.8: cannot open shared object file: No such file or directory`.
+- Error:  `error while loading shared libraries: libsycl.so: cannot open shared object file: No such file or directory`.
 
   - Potential cause: Unavailable oneAPI installation or not set ENV variables.
   - Solution: Install *oneAPI base toolkit* and enable its ENV through: `source /opt/intel/oneapi/setvars.sh`.
