@@ -962,15 +962,18 @@ struct server_task_result_cmpl_partial : server_task_result {
                                             {"delta", json{{"role", "assistant"}}}}});
             } else {
                 // We have to send this as two updates to conform to openai behavior
+                // initial_ret is the role message for stream=True
                 json initial_ret = json{{"choices", json::array({json{
                                         {"finish_reason", nullptr},
                                         {"index", 0},
                                         {"delta", json{
-                                            {"role", "assistant"}
+                                            {"role", "assistant"},
+                                            {"content", ""}
                                         }}}})},
                             {"created", t},
                             {"id", oaicompat_cmpl_id},
                             {"model", oaicompat_model},
+                            {"system_fingerprint", build_info},
                             {"object", "chat.completion.chunk"}};
 
                 json second_ret = json{
@@ -982,7 +985,18 @@ struct server_task_result_cmpl_partial : server_task_result {
                             {"created", t},
                             {"id", oaicompat_cmpl_id},
                             {"model", oaicompat_model},
+                            {"system_fingerprint", build_info},
                             {"object", "chat.completion.chunk"}};
+
+                if (prob_output.probs.size() > 0) {
+                    second_ret["choices"][0]["logprobs"] = json{
+                        {"content", completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs)},
+                    };
+                }
+
+                if (timings.prompt_n >= 0) {
+                    second_ret.push_back({"timings", timings.to_json()});
+                }
 
                 return std::vector<json>({initial_ret, second_ret});
             }
