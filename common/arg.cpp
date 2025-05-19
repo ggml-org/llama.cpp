@@ -2585,7 +2585,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_junk = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PASSKEY}));
+    ).set_examples({LLAMA_EXAMPLE_PASSKEY, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"--pos"}, "N",
         string_format("position of the passkey in the junk text (default: %d)", params.i_pos),
@@ -2648,7 +2648,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.is_pp_shared = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_BENCH}));
+    ).set_examples({LLAMA_EXAMPLE_BENCH, LLAMA_EXAMPLE_PARALLEL}));
     add_opt(common_arg(
         {"-npp"}, "n0,n1,...",
         "number of prompt tokens",
@@ -2880,6 +2880,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--no-prefill-assistant"},
+        string_format(
+            "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"
+        ),
+        [](common_params & params) {
+            params.prefill_assistant = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_PREFILL_ASSISTANT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),

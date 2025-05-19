@@ -52,13 +52,20 @@ export function BtnWithTooltips({
   tooltipsContent: string;
   disabled?: boolean;
 }) {
+  // the onClick handler is on the container, so screen readers can safely ignore the inner button
+  // this prevents the label from being read twice
   return (
-    <div className="tooltip tooltip-bottom" data-tip={tooltipsContent}>
+    <div
+      className="tooltip tooltip-bottom"
+      data-tip={tooltipsContent}
+      role="button"
+      onClick={onClick}
+    >
       <button
         className={`${className ?? ''} flex items-center justify-center`}
-        onClick={onClick}
         disabled={disabled}
         onMouseLeave={onMouseLeave}
+        aria-hidden={true}
       >
         {children}
       </button>

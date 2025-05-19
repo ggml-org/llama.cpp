@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "npm run format && tsc -b && vite build",
     "format": "eslint . && prettier --write .",
     "lint": "eslint .",
     "preview": "vite preview"
@@ -21,6 +21,7 @@
     "dexie": "^4.0.11",
     "highlight.js": "^11.10.0",
     "katex": "^0.16.15",
+    "pdfjs-dist": "^5.2.133",
     "postcss": "^8.4.49",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -47,6 +48,7 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.16",
+    "fflate": "^0.8.2",
     "globals": "^15.14.0",
     "prettier": "^3.4.2",
     "sass-embedded": "^1.83.4",

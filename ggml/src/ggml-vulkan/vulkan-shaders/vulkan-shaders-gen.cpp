@@ -215,7 +215,7 @@ static std::mutex compile_count_mutex;
 static std::condition_variable compile_count_cond;
 
 void string_to_spv_func(const std::string& _name, const std::string& in_fname, const std::map<std::string, std::string>& defines, bool fp16 = true, bool coopmat = false, bool coopmat2 = false, bool f16acc = false) {
-    std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_coopmat" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
+    std::string name = _name + (f16acc ? "_f16acc" : "") + (coopmat ? "_cm1" : "") + (coopmat2 ? "_cm2" : (fp16 ? "" : "_fp32"));
     std::string out_fname = join_paths(output_dir, name + ".spv");
     std::string in_path = join_paths(input_dir, in_fname);
 
@@ -424,6 +424,7 @@ void process_shaders() {
     // flash attention
     for (const auto& f16acc : {false, true}) {
         std::string acctype = f16acc ? "float16_t" : "float";
+        std::string acctypev4 = f16acc ? "f16vec4" : "vec4";
 
         for (const auto& tname : type_names) {
             if (tname == "f32") {
@@ -439,6 +440,16 @@ void process_shaders() {
                 std::string data_a_key = "DATA_A_" + to_uppercase(tname);
                 string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn_cm2.comp",
                     merge_maps(base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"ACC_TYPE", acctype}, {"DEQUANTFUNC", "dequantFunc"+to_uppercase(tname) }, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname) }}), true, false, true, f16acc);
+            }
+#endif
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+            if (tname == "f16") {
+                string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn_cm1.comp",
+                    merge_maps(base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"ACC_TYPE", acctype}, {"ACC_TYPEV4", acctypev4}, {"COOPMAT", "1"}}), true, true, false, f16acc);
+            } else if (tname == "q4_0" || tname == "q8_0") {
+                std::string data_a_key = "DATA_A_" + to_uppercase(tname);
+                string_to_spv("flash_attn_f32_f16_" + tname, "flash_attn_cm1.comp",
+                    merge_maps(base_dict, {{data_a_key, "1"}, {"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"ACC_TYPE", acctype}, {"ACC_TYPEV4", acctypev4}, {"BLOCK_SIZE", "QUANT_K_"+to_uppercase(tname)}, {"COOPMAT", "1"}}), true, true, false, f16acc);
             }
 #endif
             if (tname == "f16") {

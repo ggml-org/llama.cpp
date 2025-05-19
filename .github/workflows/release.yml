@@ -238,14 +238,19 @@ jobs:
       matrix:
         include:
           - build: 'cpu-x64'
+            arch: 'x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
           #- build: 'openblas-x64'
+          #  arch: 'x64'
           #  defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
+            arch: 'x64'
             defines: '-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
           - build: 'cpu-arm64'
+            arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF'
           - build: 'opencl-adreno-arm64'
+            arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
 
     steps:
@@ -312,6 +317,8 @@ jobs:
       - name: libCURL
         id: get_libcurl
         uses: ./.github/actions/windows-setup-curl
+        with:
+          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
 
       - name: Build
         id: cmake_build
@@ -339,7 +346,7 @@ jobs:
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          Copy-Item $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\libcurl-x64.dll
+          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
           7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts

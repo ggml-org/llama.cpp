@@ -2069,6 +2069,9 @@ class Llama4Model(LlamaModel):
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             name_up = name.replace("gate_up_proj", "up_proj.weight")

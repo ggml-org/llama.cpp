@@ -109,7 +109,7 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
 ])
 def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None):
     global server
-    n_predict = 512
+    n_predict = 1024
     # server = ServerPreset.stories15m_moe()
     server.jinja = True
     server.n_predict = n_predict
