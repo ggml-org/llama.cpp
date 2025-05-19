@@ -13,6 +13,9 @@
 #define BUFFER_TO_HANDLE(name) \
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->handle
 
+#define GET_DEVICE_CONTEXT() \
+  (struct ggml_backend_remoting_device_context *) ggml_backend_remoting_get_device(0)->context \
+
 #define NOT_IMPLEMENTED							\
   do {									\
     static bool first = true;						\
@@ -51,6 +54,8 @@ struct ggml_backend_remoting_device_context {
   std::string name;
   std::string description;
 
+  std::vector<std::tuple<void*, size_t, struct vn_renderer_shmem *>> shared_memory;
+
   struct virtgpu *gpu;
 };
 
@@ -71,6 +76,7 @@ extern const struct ggml_backend_device_i ggml_backend_remoting_device_interface
 extern const ggml_backend_buffer_type_i ggml_backend_remoting_host_buffer_type_interface;
 extern const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface;
 
+ggml_backend_dev_t ggml_backend_remoting_get_device(size_t device);
 ggml_backend_buffer_type_t ggml_backend_remoting_host_buffer_type();
 ggml_backend_t ggml_backend_remoting_device_init(ggml_backend_dev_t dev, const char * params);
 ggml_backend_buffer_type_t ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev);
