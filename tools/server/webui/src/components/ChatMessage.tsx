@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState, Fragment } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
@@ -72,14 +72,11 @@ export default function ChatMessage({
     ) {
       return { content: msg.content };
     }
-
     let actualContent = '';
     let thought = '';
     let isThinking = false;
     let thinkSplit = msg.content.split('<think>', 2);
-
     actualContent += thinkSplit[0];
-
     while (thinkSplit[1] !== undefined) {
       // <think> tag found
       thinkSplit = thinkSplit[1].split('</think>', 2);
@@ -204,7 +201,7 @@ export default function ChatMessage({
                 ))}
 
               {chainedParts?.map((part) => (
-                <React.Fragment key={part.id}>
+                <Fragment key={part.id}>
                   {part.role === 'tool' && part.content && (
                     <ToolCallResultDisplay
                       content={part.content}
@@ -229,7 +226,7 @@ export default function ChatMessage({
                         baseClassName="collapse bg-base-200 collapse-arrow mb-4 mt-2"
                       />
                     ))}
-                </React.Fragment>
+                </Fragment>
               ))}
               {/* render timings if enabled */}
               {timings && config.showTokensPerSecond && (

@@ -117,6 +117,7 @@ export function filterThoughtFromMsgs(messages: APIMessage[]) {
       return msg;
     }
     // assistant message is always a string
+    // except when tool_calls is present - it can be null then
     const contentStr = msg.content as string | null;
     let content;
     if (msg.role === 'assistant' && contentStr !== null) {

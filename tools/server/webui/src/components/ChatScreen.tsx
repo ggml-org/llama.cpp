@@ -62,6 +62,7 @@ function getListMessageDisplay(
     nodeMap.set(msg.id, msg);
   }
 
+  // find leaf node from a message node
   const findLeafNode = (msgId: Message['id']): Message['id'] => {
     let currNode: Message | undefined = nodeMap.get(msgId);
     while (currNode) {
