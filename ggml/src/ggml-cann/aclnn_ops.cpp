@@ -542,7 +542,7 @@ void ggml_cann_pad(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
     // padding: value in the array means how much distance will be padding.
-    // the position of elements in the array means which dirction to padding,
+    // the position of elements in the array means which direction to padding,
     // each position means: [dim0.front, dim0.behind, dim1.front, dim1.behind,
     //                       dim2.front, dim2.behind, dim3.front, dim3.behind]
     int64_t paddings[] = {
@@ -864,7 +864,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_cann_release_resources(ctx, acl_src, acl_dst, acl_gamma, acl_rstd);
 }
 
-// TODO: performace is low.
+// TODO: performance is low.
 void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
                          float value) {
     ggml_tensor* src = dst->src[0];
