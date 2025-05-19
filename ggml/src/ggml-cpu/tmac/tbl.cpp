@@ -837,11 +837,11 @@ void qgemm_lut_int8_g4(
     for (int32_t k_outer = 0; k_outer < k_outer_max; k_outer++) {
         uint8_t * a = ((uint8_t *)A) + k_outer * bm * kfactor / ngroups_per_elem;
         tmac_float_type * scales = one_scale ? (tmac_float_type *)Scales :
-                              has_zero_point ? ((tmac_float_type *)Scales) + (k_outer * act_group_size / q_group_size) * m * 2:
-                                               ((tmac_float_type *)Scales) + (k_outer * act_group_size / q_group_size) * m;
+                              has_zero_point ? ((tmac_float_type *)Scales) + k_outer * m * 2:
+                                               ((tmac_float_type *)Scales) + k_outer * m;
         int8_t * lut = ((int8_t *)LUT) + k_outer * kfactor * int(pow(2, g));
-        tmac_float_type * lut_scales = ((tmac_float_type *)LUT_Scales) + k_outer;  // k_outer * kfactor * g / act_group_size == k_outer
-        tmac_float_type * lut_biases = ((tmac_float_type *)LUT_Biases) + k_outer;  // k_outer * kfactor * g / act_group_size == k_outer
+        tmac_float_type * lut_scales = ((tmac_float_type *)LUT_Scales) + (k_outer * q_group_size / act_group_size);  // k_outer * kfactor * g / act_group_size == k_outer
+        tmac_float_type * lut_biases = ((tmac_float_type *)LUT_Biases) + (k_outer * q_group_size / act_group_size);  // k_outer * kfactor * g / act_group_size == k_outer
 
         if (has_scale && kfactor == 8 && bits == 2 && actk == 8 && has_zero_point && !one_scale) {
             tbl_g4_int8_float_update_impl<true, 8, 2, 8, false, true, false>(
