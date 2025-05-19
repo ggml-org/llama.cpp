@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <signal.h>
 #include <termios.h>
+#include <string.h>
 #endif
 
 #define ANSI_COLOR_RED     "\x1b[31m"
@@ -50,6 +51,21 @@ namespace console {
 #else
     static FILE*     tty              = nullptr;
     static termios   initial_state;
+#endif
+
+#if !defined(_WIN32)
+    static bool locale_isvalid( const char * l )
+    {
+        return !(l == nullptr || l[0] == '\0' || (strcasestr(l, "utf-8") == nullptr && strcasestr(l, "utf8") == nullptr));
+    }
+
+    static bool locale_setverify( int c, const char * l )
+    {
+        setlocale(c, l);
+        auto locale = setlocale(c, nullptr);
+
+        return !strcmp( l, locale );
+    }
 #endif
 
     //
@@ -115,6 +131,17 @@ namespace console {
         }
 
         setlocale(LC_ALL, "");
+        auto locale = setlocale(LC_ALL, nullptr);
+
+        if (!locale_isvalid(locale)) {
+            auto lang = getenv("LANG");
+            if (!locale_isvalid(lang) || !locale_setverify(LC_ALL, lang)) {
+                locale_setverify(LC_ALL, "C.UTF-8") || locale_setverify(LC_ALL, "C.utf8") || setlocale(LC_ALL, "");
+            }
+        }
+
+        auto usedlocale = setlocale(LC_ALL, nullptr);
+        fprintf(stderr,"Console: using '%s' locale.\n", usedlocale);
 #endif
     }
 
