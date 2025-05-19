@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Sequence
 from math import log2, ceil
 
+from numpy.typing import DTypeLike
+
 from .constants import GGML_QUANT_SIZES, GGMLQuantizationType, QK_K
 from .lazy import LazyNumpyTensor
 
@@ -24,7 +26,7 @@ def quant_shape_from_byte_shape(shape: Sequence[int], quant_type: GGMLQuantizati
 
 
 # This is faster than np.vectorize and np.apply_along_axis because it works on more than one row at a time
-def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.ndarray, otype: np.dtype[Any], oshape: tuple[int, ...]) -> np.ndarray:
+def _apply_over_grouped_rows(func: Callable[[np.ndarray], np.ndarray], arr: np.ndarray, otype: DTypeLike, oshape: tuple[int, ...]) -> np.ndarray:
     rows = arr.reshape((-1, arr.shape[-1]))
     osize = 1
     for dim in oshape:

@@ -181,7 +181,7 @@ class GGUFReader:
         self.data_offset = offs
         self._build_tensors(offs, tensors_fields)
 
-    _DT = TypeVar('_DT', bound = np.dtype[Any])
+    _DT = TypeVar('_DT', bound = npt.DTypeLike)
 
     # Fetch a key/value metadata field by key.
     def get_field(self, key: str) -> Union[ReaderField, None]:
@@ -192,7 +192,7 @@ class GGUFReader:
         return self.tensors[idx]
 
     def _get(
-        self, offset: int, dtype: np.dtype[Any], count: int = 1, override_order: None | Literal['I', 'S', '<'] = None,
+        self, offset: int, dtype: npt.DTypeLike, count: int = 1, override_order: None | Literal['I', 'S', '<'] = None,
     ) -> np.ndarray:
         count = int(count)
         itemsize = int(np.empty([], dtype = dtype).itemsize)
@@ -328,7 +328,7 @@ class GGUFReader:
             block_size, type_size = GGML_QUANT_SIZES[ggml_type]
             n_bytes = n_elems * type_size // block_size
             data_offs = int(start_offs + offset_tensor[0])
-            item_type: np.dtype[Any]
+            item_type: npt.DTypeLike
             if ggml_type == GGMLQuantizationType.F16:
                 item_count = n_elems
                 item_type = np.dtype(np.float16)
