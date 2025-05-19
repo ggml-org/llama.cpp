@@ -16,7 +16,8 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
     x += sample  * stride_sample + channel * stride_channel + row * stride_row;
     dst += ((sample * nchannels + channel) * nrows + row) * ncols;
 
-    sycl::float2 mean_var{0.f, 0.f};
+    sycl::float2 mean_var = sycl::float2(0.f, 0.f);
+
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
         mean_var.x() += xi;
@@ -42,7 +43,7 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
     }
 
     const float mean = mean_var.x() / ncols;
-    const float var  = mean_var.y() / ncols - mean * mean;
+    const float var = mean_var.y() / ncols - mean * mean;
     const float inv_std = sycl::rsqrt(var + eps);
 
     for (int col = tid; col < ncols; col += block_size) {
@@ -240,7 +241,7 @@ static void norm_f32_sycl(const float * x, float * dst, const int ncols, const i
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
     GGML_ASSERT(ncols % WARP_SIZE == 0);
     if (ncols < 1024) {
-        const sycl::range<3> block_dims(1, 1, WARP_SIZE); // Equivalent to CUDA's (WARP_SIZE, 1, 1)
+        const sycl::range<3> block_dims(1, 1, WARP_SIZE);
         stream->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
@@ -260,8 +261,8 @@ static void norm_f32_sycl(const float * x, float * dst, const int ncols, const i
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
         stream->submit([&](sycl::handler& cgh) {
-            auto s_sum_acc_ct1 = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
-
+            sycl::local_accessor<sycl::float2, 1> s_sum_acc_ct1(
+                            sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
