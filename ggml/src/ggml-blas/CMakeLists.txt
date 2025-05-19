@@ -73,6 +73,10 @@ if (BLAS_FOUND)
     message(STATUS "BLAS found, Includes: ${BLAS_INCLUDE_DIRS}")
 
     target_compile_options(ggml-blas PRIVATE ${BLAS_LINKER_FLAGS})
+    # GCC on apple complains about vector conversions
+    if (APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_compile_options(ggml-blas PRIVATE -flax-vector-conversions)
+    endif ()
 
     if (${BLAS_INCLUDE_DIRS} MATCHES "mkl" AND (${GGML_BLAS_VENDOR} MATCHES "Generic" OR ${GGML_BLAS_VENDOR} MATCHES "Intel"))
         add_compile_definitions(GGML_BLAS_USE_MKL)
