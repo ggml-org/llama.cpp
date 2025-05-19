@@ -32,8 +32,17 @@
 #define STOP_HERE \
   thks_bye()
 
-#define IMPLEMENTED \
+#define IMPLEMENTED							\
   printf("INFO: ### reached implemented function %s\n", __func__)
+
+#define IMPLEMENTED_ONCE						\
+  do {									\
+    static bool first = true;						\
+    if (first) {							\
+      printf("INFO: ### reached implemented function %s\n", __func__);  \
+      first = false;							\
+    }									\
+  } while(0)
 
 #define RMT_LOG_DEBUG(msg) std::cerr << msg << std::endl
 
