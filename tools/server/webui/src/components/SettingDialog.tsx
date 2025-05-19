@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { ReactElement, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -53,8 +53,8 @@ enum SettingInputType {
 
 interface SettingFieldInput {
   type: Exclude<SettingInputType, SettingInputType.CUSTOM>;
-  label: string | React.ReactElement;
-  help?: string | React.ReactElement;
+  label: string | ReactElement;
+  help?: string | ReactElement;
   key: SettKey;
 }
 

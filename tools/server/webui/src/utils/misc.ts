@@ -103,7 +103,7 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
     return {
       role: msg.role,
       content: contentArr,
-    } as APIMessage;
+    };
   }) as APIMessage[];
 }
 

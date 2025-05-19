@@ -61,7 +61,6 @@ function getListMessageDisplay(
   for (const msg of msgs) {
     nodeMap.set(msg.id, msg);
   }
-
   // find leaf node from a message node
   const findLeafNode = (msgId: Message['id']): Message['id'] => {
     let currNode: Message | undefined = nodeMap.get(msgId);
@@ -71,9 +70,8 @@ function getListMessageDisplay(
     }
     return currNode?.id ?? -1;
   };
-
   const processedIds = new Set<Message['id']>();
-
+  // traverse the current nodes
   for (const currentMessage of currNodes) {
     if (processedIds.has(currentMessage.id) || currentMessage.type === 'root') {
       continue;
