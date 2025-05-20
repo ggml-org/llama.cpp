@@ -283,7 +283,7 @@ llama_batch_allocr::llama_batch_allocr(struct llama_batch in_batch, llama_pos p0
     if (!batch.pos) {
         pos.resize(batch.n_tokens);
         for (int32_t i = 0; i < batch.n_tokens; i++) {
-            pos[i] = i + p0;
+            pos[i] = p0 + i + 1;
         }
         batch.pos = pos.data();
     }

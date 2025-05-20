@@ -13209,7 +13209,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         GGML_TYPE_F32,
                         GGML_TYPE_F32,
                         cparams.offload_kqv,
-                        std::max((uint32_t) 1, cparams.n_seq_max));
+                        std::max((uint32_t) 1, cparams.n_seq_max),
+                        cparams.n_seq_max);
             } break;
         default:
             {
@@ -13226,8 +13227,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             params.type_v,
                             !cparams.flash_attn,
                             cparams.offload_kqv,
-                            cparams.n_ctx,
                             params.swa_full,
+                            cparams.n_ctx,
                             cparams.n_seq_max,
                             cparams.n_batch,
                             padding);
@@ -13240,6 +13241,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.n_ctx,
+                            cparams.n_seq_max,
                             padding,
                             hparams.n_swa,
                             hparams.swa_type);

@@ -857,11 +857,17 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -1;
     }
 
+    if (!inp_batch.pos) {
+        if (inp_batch.seq_id) {
+            LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
+            return -1;
+        }
+    }
+
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
     // temporary allocate memory for the input batch if needed
-    // TODO: this is incorrect for multiple sequences because get_pos_max() is the maximum across all sequences
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->get_pos_max() + 1);
+    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->seq_pos_max(0));
 
     const llama_batch & batch = batch_allocr.batch;
 
@@ -2292,22 +2298,47 @@ int32_t llama_apply_adapter_cvec(
 // kv cache
 //
 
+// deprecated
 int32_t llama_kv_self_n_tokens(const llama_context * ctx) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return 0;
     }
 
-    return kv->get_n_tokens();
+    int32_t res = 0;
+
+    for (uint32_t s = 0; s < ctx->get_cparams().n_seq_max; s++) {
+        const llama_pos p0 = kv->seq_pos_min(s);
+        const llama_pos p1 = kv->seq_pos_max(s);
+
+        if (p0 >= 0) {
+            res += (p1 - p0) + 1;
+        }
+    }
+
+    return res;
 }
 
+// deprecated
+// note: this is the same as above - will be removed anyway, so it's ok
 int32_t llama_kv_self_used_cells(const llama_context * ctx) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return 0;
     }
 
-    return kv->get_used_cells();
+    int32_t res = 0;
+
+    for (uint32_t s = 0; s < ctx->get_cparams().n_seq_max; s++) {
+        const llama_pos p0 = kv->seq_pos_min(s);
+        const llama_pos p1 = kv->seq_pos_max(s);
+
+        if (p0 >= 0) {
+            res += (p1 - p0) + 1;
+        }
+    }
+
+    return res;
 }
 
 void llama_kv_self_clear(llama_context * ctx) {

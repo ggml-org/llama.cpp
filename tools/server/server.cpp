@@ -1137,9 +1137,6 @@ struct server_task_result_metrics : server_task_result {
     int n_tasks_deferred;
     int64_t t_start;
 
-    int32_t kv_cache_tokens_count;
-    int32_t kv_cache_used_cells;
-
     // TODO: somehow reuse server_metrics in the future, instead of duplicating the fields
     uint64_t n_prompt_tokens_processed_total = 0;
     uint64_t t_prompt_processing_total       = 0;
@@ -1178,9 +1175,6 @@ struct server_task_result_metrics : server_task_result {
 
             { "n_decode_total",                  n_decode_total },
             { "n_busy_slots_total",              n_busy_slots_total },
-
-            { "kv_cache_tokens_count",           kv_cache_tokens_count },
-            { "kv_cache_used_cells",             kv_cache_used_cells },
 
             { "slots",                           slots_data },
         };
@@ -2771,9 +2765,6 @@ struct server_context {
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred.size();
                     res->t_start             = metrics.t_start;
 
-                    res->kv_cache_tokens_count = llama_kv_self_n_tokens(ctx);
-                    res->kv_cache_used_cells   = llama_kv_self_used_cells(ctx);
-
                     res->n_prompt_tokens_processed_total = metrics.n_prompt_tokens_processed_total;
                     res->t_prompt_processing_total       = metrics.t_prompt_processing_total;
                     res->n_tokens_predicted_total        = metrics.n_tokens_predicted_total;
@@ -3883,14 +3874,6 @@ int main(int argc, char ** argv) {
                     {"name",  "predicted_tokens_seconds"},
                     {"help",  "Average generation throughput in tokens/s."},
                     {"value",  res_metrics->n_tokens_predicted ? 1.e3 / res_metrics->t_tokens_generation * res_metrics->n_tokens_predicted : 0.}
-            },{
-                    {"name",  "kv_cache_usage_ratio"},
-                    {"help",  "KV-cache usage. 1 means 100 percent usage."},
-                    {"value",  1. * res_metrics->kv_cache_used_cells / params.n_ctx}
-            },{
-                    {"name",  "kv_cache_tokens"},
-                    {"help",  "KV-cache tokens."},
-                    {"value",  (uint64_t) res_metrics->kv_cache_tokens_count}
             },{
                     {"name",  "requests_processing"},
                     {"help",  "Number of requests processing."},

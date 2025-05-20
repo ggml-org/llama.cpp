@@ -30,13 +30,14 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                      bool    v_trans,
                      bool    offload,
                  uint32_t    kv_size,
-                 uint32_t    padding,
+                 uint32_t    n_seq_max,
+                 uint32_t    n_pad,
                  uint32_t    n_swa,
-           llama_swa_type    swa_type) : model(model), hparams(model.hparams), v_trans(v_trans), padding(padding), n_swa(n_swa), swa_type(swa_type) {
-    GGML_ASSERT(kv_size % padding == 0 && "kv_size must be a multiple of padding");
+           llama_swa_type    swa_type) :
+    model(model), hparams(model.hparams), v_trans(v_trans),
+    n_seq_max(n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
-    this->type_k = type_k;
-    this->type_v = type_v;
+    GGML_ASSERT(kv_size % n_pad == 0);
 
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
@@ -129,8 +130,8 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
 
-        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6d cells, %3d layers), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(),
+        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+                (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
@@ -442,7 +443,7 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
 void llama_kv_cache_unified::defrag_sched(float thold) {
     // - do not defrag small contexts (i.e. < 2048 tokens)
     // - count the padding towards the number of used tokens
-    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - (float(used + padding)/n)) : 0.0f;
+    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - (float(used + n_pad)/n)) : 0.0f;
 
     // queue defragmentation for next llama_kv_cache_update
     if (fragmentation > thold) {
@@ -558,27 +559,13 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // after enough generations, the benefit from this heuristic disappears
     // if we start defragmenting the cache, the benefit from this will be more important
-    n = std::min(size, std::max(padding, GGML_PAD(cell_max(), padding)));
+    n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));
 
 #ifdef FIND_SLOT_DEBUG
     LLAMA_LOG_WARN("end:   n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
 #endif
 
     return true;
-}
-
-int32_t llama_kv_cache_unified::get_n_tokens() const {
-    int32_t result = 0;
-
-    for (uint32_t i = 0; i < size; i++) {
-        result += cells[i].seq_id.size();
-    }
-
-    return result;
-}
-
-int32_t llama_kv_cache_unified::get_used_cells() const {
-    return used;
 }
 
 bool llama_kv_cache_unified::get_can_shift() const {
@@ -800,16 +787,6 @@ void llama_kv_cache_unified::set_input_pos_bucket(ggml_tensor * dst, const llama
             }
         }
     }
-}
-
-llama_pos llama_kv_cache_unified::get_pos_max() const {
-    llama_pos pos_max = -1;
-
-    for (const auto & cell : cells) {
-        pos_max = std::max(pos_max, cell.pos);
-    }
-
-    return pos_max;
 }
 
 size_t llama_kv_cache_unified::total_size() const {
@@ -1501,11 +1478,8 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
                 llama_seq_id seq_id;
                 io.read_to(&seq_id, sizeof(seq_id));
 
-                // TODO: llama_kv_cache_unified should have a notion of max sequences
-                //if (seq_id < 0 || (uint32_t) seq_id >= llama_n_seq_max(ctx)) {
-                if (seq_id < 0) {
-                    //LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, llama_n_seq_max(ctx));
-                    LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, inf)\n", __func__, seq_id);
+                if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
+                    LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, n_seq_max);
                     return false;
                 }
 
@@ -1655,17 +1629,17 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
                 ggml_type   type_v,
                      bool   v_trans,
                      bool   offload,
-                 uint32_t   kv_size,
                      bool   swa_full,
+                 uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_batch,
-                 uint32_t   padding) : hparams(model.hparams) {
+                 uint32_t   n_pad) : hparams(model.hparams) {
     llama_kv_cache_unified::layer_filter_cb filter_base = [&](int32_t il) { return !model.hparams.is_swa(il); };
     llama_kv_cache_unified::layer_filter_cb filter_swa  = [&](int32_t il) { return  model.hparams.is_swa(il); };
 
     const uint32_t size_base = kv_size;
 
-    uint32_t size_swa = std::min(size_base, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, padding));
+    uint32_t size_swa = std::min(size_base, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, n_pad));
 
     // when using full-size SWA cache, we set the SWA cache size to be equal to the base cache size and disable pruning
     if (swa_full) {
@@ -1680,14 +1654,14 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
 
     kv_base = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_base), type_k, type_v,
-            v_trans, offload, size_base, padding,
+            v_trans, offload, size_base, n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_swa), type_k, type_v,
-            v_trans, offload, size_swa, padding,
+            v_trans, offload, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type);
 }
 
@@ -1810,18 +1784,6 @@ bool llama_kv_cache_unified_iswa::find_slot(const llama_ubatch & batch) {
     return res;
 }
 
-int32_t llama_kv_cache_unified_iswa::get_n_tokens()   const {
-    return kv_base->get_n_tokens();
-}
-
-int32_t llama_kv_cache_unified_iswa::get_used_cells() const {
-    return kv_base->get_used_cells();
-}
-
-llama_pos llama_kv_cache_unified_iswa::get_pos_max() const {
-    return kv_base->get_pos_max();
-}
-
 bool llama_kv_cache_unified_iswa::get_can_shift() const {
     return kv_base->get_size() == kv_swa->get_size();
 }
@@ -1853,18 +1815,16 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   offload,
-                 uint32_t   kv_size) : hparams(model.hparams) {
+                 uint32_t   kv_size,
+                 uint32_t   n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer;
 
-    LLAMA_LOG_INFO("%s: kv_size = %d, type_k = '%s', type_v = '%s', n_layer = %d\n",
-            __func__, kv_size, ggml_type_name(type_k), ggml_type_name(type_v), n_layer);
+    LLAMA_LOG_INFO("%s: kv_size = %u, n_seq_max = %u, type_k = '%s', type_v = '%s', n_layer = %d\n",
+            __func__, kv_size, n_seq_max, ggml_type_name(type_k), ggml_type_name(type_v), n_layer);
 
     head = 0;
     size = kv_size;
     used = 0;
-
-    this->type_k = type_k;
-    this->type_v = type_v;
 
     cells.clear();
     cells.resize(kv_size);
@@ -2203,8 +2163,8 @@ void llama_kv_cache_recurrent::commit() {
     pending.ranges.clear();
 }
 
-bool llama_kv_cache_recurrent::update(llama_context & lctx) {
-    GGML_UNUSED(lctx);
+bool llama_kv_cache_recurrent::update(llama_context & ctx) {
+    GGML_UNUSED(ctx);
     return false;
 }
 
@@ -2265,7 +2225,7 @@ bool llama_kv_cache_recurrent::find_slot(
             if (seq_id < 0 || (uint32_t) seq_id >= size) {
                 // too big seq_id
                 // TODO: would it be possible to resize the cache instead?
-                LLAMA_LOG_ERROR("%s: seq_id=%d >= n_seq_max=%d Try using a bigger --parallel value\n", __func__, seq_id, size);
+                LLAMA_LOG_ERROR("%s: seq_id=%d >= n_seq_max=%u Try using a bigger --parallel value\n", __func__, seq_id, n_seq_max);
                 return false;
             }
             if (j > 0) {
@@ -2406,29 +2366,6 @@ bool llama_kv_cache_recurrent::find_slot(
 
     // sanity check
     return n >= n_seqs;
-}
-
-int32_t llama_kv_cache_recurrent::get_n_tokens() const {
-    int32_t result = 0;
-
-    for (uint32_t i = 0; i < size; i++) {
-        result += cells[i].seq_id.size();
-    }
-
-    return result;
-}
-
-int32_t llama_kv_cache_recurrent::get_used_cells() const {
-    return used;
-}
-
-llama_pos llama_kv_cache_recurrent::get_pos_max() const {
-    llama_pos pos_max = -1;
-    for (const auto & cell : cells) {
-        pos_max = std::max(pos_max, cell.pos);
-    }
-
-    return pos_max;
 }
 
 bool llama_kv_cache_recurrent::get_can_shift() const {
