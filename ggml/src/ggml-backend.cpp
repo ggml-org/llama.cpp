@@ -1157,7 +1157,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             const bool src0_on_split_buffer = node->src[0] && node->src[0]->buffer &&
                 ggml_backend_buft_is_split(ggml_backend_buffer_get_type(node->src[0]->buffer));
             GGML_ASSERT(!src0_on_split_buffer || node->op == GGML_OP_MUL_MAT);
-            need_new_split = src0_on_split_buffer != split->tensor_parallel;
+            if (src0_on_split_buffer != split->tensor_parallel) {
+                need_new_split = true;
+            }
 
             if (need_new_split && !src0_on_split_buffer && split->tensor_parallel) {
                 split->i_end = i;
