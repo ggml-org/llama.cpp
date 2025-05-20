@@ -580,33 +580,30 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 ## OPENVINO
 
-### Build openvino-llama
+### Build openvino
 
-  ```bash
-  git lfs install --skip-smudge
-  git clone https://github.com/intel-sandbox/openvino-llama.git -b dev_ggml_frontend
-  cd openvino-llama
-  git submodule update --init --recursive
+```bash
+git clone https://github.com/openvinotoolkit/openvino.git
+cd openvino
+git submodule update --init --recursive
+export OPENVINO_DIR=$(pwd)
 
-  export OPENVINO_LLAMA_PATH=$(pwd)
-  ```
+sudo ./install_build_dependencies.sh
 
-  Before building, change "ENABLE_OV_GGML_FRONTEND" from true to false in the CMakePresets.json file since we already have the code from the ov side in this branch of llama.cpp (`full_backend`). You could also build the master branch of ov instead.
-
-  ```
-  cmake --preset Release
-  cmake --build build/Release
-  ```
+mkdir -p build/Release && cd build/Release
+cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_DEBUG_CAPS=ON ../..
+```
 
 ### Build llama.cpp-ov
 
-  ```bash
-  git clone https://github.com/intel-sandbox/llama.cpp-ov.git -b full_backend
-  cd llama.cpp-ov
+```bash
+git clone https://github.com/intel-sandbox/llama.cpp-ov.git
+cd llama.cpp-ov
+git switch dev_backend_openvino
 
-  cmake --preset ReleaseOV
-  cmake --build build/ReleaseOV
-  ```
+cmake --preset ReleaseOV
+cmake --build build/ReleaseOV
+```
 
 Download the test model file [Phi-3-mini-4k-instruct-fp16.gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf) from hugging face website.
   ``` bash
@@ -614,12 +611,10 @@ Download the test model file [Phi-3-mini-4k-instruct-fp16.gguf](https://huggingf
   ```
 
 Execute the following command to test.
-  ```bash
-  export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-  # Currently GGML_OPENVINO_WEIGHT_AS_INPUT has better performance
-  export GGML_OPENVINO_WEIGHT_AS_INPUT=1
-  ./build/ReleaseOV/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
-  ```
+```bash
+export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+./build/ReleaseOV/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
+```
 
 Environment variables:
 - GGML_OPENVINO_WEIGHT_AS_INPUT:
