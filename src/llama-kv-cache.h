@@ -20,6 +20,12 @@ struct llama_model;
 struct llama_context;
 
 struct llama_kv_cache : public llama_memory_i {
+
+    // some child types need to perform different caching for each layer, so
+    // this callback can be used to determine which layers a given cache should
+    // be used for
+    using layer_filter_cb = std::function<bool(int32_t il)>;
+
     virtual ~llama_kv_cache() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
@@ -67,9 +73,6 @@ struct llama_kv_cache : public llama_memory_i {
 class llama_kv_cache_unified : public llama_kv_cache {
 public:
     static uint32_t get_padding(const llama_cparams & cparams);
-
-    // this callback is used to filter out layers that should not be included in the cache
-    using layer_filter_cb = std::function<bool(int32_t il)>;
 
     llama_kv_cache_unified(
             const llama_model &  model,
