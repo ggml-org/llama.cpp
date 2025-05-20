@@ -93,11 +93,11 @@ class __Quant(ABC):
         cls.block_size, cls.type_size = GGML_QUANT_SIZES[qtype]
         cls.__quantize_lazy = LazyNumpyTensor._wrap_fn(
             cls.__quantize_array,
-            meta_noop=(np.dtype(np.uint8), cls.__shape_to_bytes)
+            meta_noop=(np.uint8, cls.__shape_to_bytes)
         )
         cls.__dequantize_lazy = LazyNumpyTensor._wrap_fn(
             cls.__dequantize_array,
-            meta_noop=(np.dtype(np.float32), cls.__shape_from_bytes)
+            meta_noop=(np.float32, cls.__shape_from_bytes)
         )
         assert qtype not in _type_traits
         _type_traits[qtype] = cls
@@ -165,12 +165,12 @@ class __Quant(ABC):
 
     @classmethod
     def __quantize_array(cls, array: np.ndarray) -> np.ndarray:
-        return _apply_over_grouped_rows(cls.quantize_rows, arr=array, otype=np.dtype(np.uint8), oshape=cls.__shape_to_bytes(array.shape))
+        return _apply_over_grouped_rows(cls.quantize_rows, arr=array, otype=np.uint8, oshape=cls.__shape_to_bytes(array.shape))
 
     @classmethod
     def __dequantize_array(cls, array: np.ndarray) -> np.ndarray:
         cls.init_grid()
-        return _apply_over_grouped_rows(cls.dequantize_rows, arr=array, otype=np.dtype(np.float32), oshape=cls.__shape_from_bytes(array.shape))
+        return _apply_over_grouped_rows(cls.dequantize_rows, arr=array, otype=np.float32, oshape=cls.__shape_from_bytes(array.shape))
 
     @classmethod
     def __quantize_lazy(cls, lazy_tensor: LazyNumpyTensor, /) -> Any:

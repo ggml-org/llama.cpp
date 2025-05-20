@@ -1,3 +1,4 @@
+#
 # GGUF file reading/modification support. For API usage information,
 # please see the files scripts/ for some fairly simple examples.
 #
@@ -13,7 +14,6 @@ import numpy as np
 import numpy.typing as npt
 
 from .quants import quant_shape_to_byte_shape
-
 
 if __name__ == "__main__":
     from pathlib import Path
@@ -134,12 +134,12 @@ class GGUFReader:
         offs = 0
 
         # Check for GGUF magic
-        if self._get(offs, np.dtype(np.uint32), override_order = '<')[0] != GGUF_MAGIC:
+        if self._get(offs, np.uint32, override_order = '<')[0] != GGUF_MAGIC:
             raise ValueError('GGUF magic invalid')
         offs += 4
 
         # Check GGUF version
-        temp_version = self._get(offs, np.dtype(np.uint32))
+        temp_version = self._get(offs, np.uint32)
         if temp_version[0] & 65535 == 0:
             # If we get 0 here that means it's (probably) a GGUF file created for
             # the opposite byte order of the machine this script is running on.
@@ -162,7 +162,7 @@ class GGUFReader:
         offs += self._push_field(ReaderField(offs, 'GGUF.version', [temp_version], [0], [GGUFValueType.UINT32]))
 
         # Check tensor count and kv count
-        temp_counts = self._get(offs, np.dtype(np.uint64), 2)
+        temp_counts = self._get(offs, np.uint64, 2)
         offs += self._push_field(ReaderField(offs, 'GGUF.tensor_count', [temp_counts[:1]], [0], [GGUFValueType.UINT64]))
         offs += self._push_field(ReaderField(offs, 'GGUF.kv_count', [temp_counts[1:]], [0], [GGUFValueType.UINT64]))
         tensor_count, kv_count = temp_counts
@@ -193,7 +193,7 @@ class GGUFReader:
 
     def _get(
         self, offset: int, dtype: npt.DTypeLike, count: int = 1, override_order: None | Literal['I', 'S', '<'] = None,
-    ) -> np.ndarray:
+    ) -> npt.NDArray[Any]:
         count = int(count)
         itemsize = int(np.empty([], dtype = dtype).itemsize)
         end_offs = offset + itemsize * count
@@ -212,8 +212,8 @@ class GGUFReader:
         return 0 if skip_sum else sum(int(part.nbytes) for part in field.parts)
 
     def _get_str(self, offset: int) -> tuple[npt.NDArray[np.uint64], npt.NDArray[np.uint8]]:
-        slen = self._get(offset, np.dtype(np.uint64))
-        return slen, self._get(offset + 8, np.dtype(np.uint8), slen[0].item())
+        slen = self._get(offset, np.uint64)
+        return slen, self._get(offset + 8, np.uint8, slen[0])
 
     def _get_field_parts(
         self, orig_offs: int, raw_type: int,
@@ -230,19 +230,19 @@ class GGUFReader:
         # Check if it's a simple scalar type.
         nptype = self.gguf_scalar_to_np.get(gtype)
         if nptype is not None:
-            val = self._get(offs, np.dtype(nptype))
+            val = self._get(offs, nptype)
             return int(val.nbytes), [val], [0], types
         # Handle arrays.
         if gtype == GGUFValueType.ARRAY:
-            raw_itype = self._get(offs, np.dtype(np.uint32))
+            raw_itype = self._get(offs, np.uint32)
             offs += int(raw_itype.nbytes)
-            alen = self._get(offs, np.dtype(np.uint64))
+            alen = self._get(offs, np.uint64)
             offs += int(alen.nbytes)
             aparts: list[npt.NDArray[Any]] = [raw_itype, alen]
             data_idxs: list[int] = []
             # FIXME: Handle multi-dimensional arrays properly instead of flattening
             for idx in range(alen[0]):
-                curr_size, curr_parts, curr_idxs, curr_types = self._get_field_parts(offs, raw_itype[0].item())
+                curr_size, curr_parts, curr_idxs, curr_types = self._get_field_parts(offs, raw_itype[0])
                 if idx == 0:
                     types += curr_types
                 idxs_offs = len(aparts)
@@ -261,19 +261,19 @@ class GGUFReader:
         offs += int(name_len.nbytes + name_data.nbytes)
 
         # Get Tensor Dimensions Count
-        n_dims = self._get(offs, np.dtype(np.uint32))
+        n_dims = self._get(offs, np.uint32)
         offs += int(n_dims.nbytes)
 
         # Get Tensor Dimension Array
-        dims = self._get(offs, np.dtype(np.uint64), n_dims[0].item())
+        dims = self._get(offs, np.uint64, n_dims[0])
         offs += int(dims.nbytes)
 
         # Get Tensor Encoding Scheme Type
-        raw_dtype = self._get(offs, np.dtype(np.uint32))
+        raw_dtype = self._get(offs, np.uint32)
         offs += int(raw_dtype.nbytes)
 
         # Get Tensor Offset
-        offset_tensor = self._get(offs, np.dtype(np.uint64))
+        offset_tensor = self._get(offs, np.uint64)
         offs += int(offset_tensor.nbytes)
 
         return ReaderField(
@@ -288,11 +288,11 @@ class GGUFReader:
             orig_offs = offs
             kv_klen, kv_kdata = self._get_str(offs)
             offs += int(kv_klen.nbytes + kv_kdata.nbytes)
-            raw_kv_type = self._get(offs, np.dtype(np.uint32))
+            raw_kv_type = self._get(offs, np.uint32)
             offs += int(raw_kv_type.nbytes)
             parts: list[npt.NDArray[Any]] = [kv_klen, kv_kdata, raw_kv_type]
             idxs_offs = len(parts)
-            field_size, field_parts, field_idxs, field_types = self._get_field_parts(offs, raw_kv_type[0].item())
+            field_size, field_parts, field_idxs, field_types = self._get_field_parts(offs, raw_kv_type[0])
             parts += field_parts
             self._push_field(ReaderField(
                 orig_offs,
@@ -331,28 +331,28 @@ class GGUFReader:
             item_type: npt.DTypeLike
             if ggml_type == GGMLQuantizationType.F16:
                 item_count = n_elems
-                item_type = np.dtype(np.float16)
+                item_type = np.float16
             elif ggml_type == GGMLQuantizationType.F32:
                 item_count = n_elems
-                item_type = np.dtype(np.float32)
+                item_type = np.float32
             elif ggml_type == GGMLQuantizationType.F64:
                 item_count = n_elems
-                item_type = np.dtype(np.float64)
+                item_type = np.float64
             elif ggml_type == GGMLQuantizationType.I8:
                 item_count = n_elems
-                item_type = np.dtype(np.int8)
+                item_type = np.int8
             elif ggml_type == GGMLQuantizationType.I16:
                 item_count = n_elems
-                item_type = np.dtype(np.int16)
+                item_type = np.int16
             elif ggml_type == GGMLQuantizationType.I32:
                 item_count = n_elems
-                item_type = np.dtype(np.int32)
+                item_type = np.int32
             elif ggml_type == GGMLQuantizationType.I64:
                 item_count = n_elems
-                item_type = np.dtype(np.int64)
+                item_type = np.int64
             else:
                 item_count = n_bytes
-                item_type = np.dtype(np.uint8)
+                item_type = np.uint8
                 np_dims = quant_shape_to_byte_shape(np_dims, ggml_type)
             tensors.append(ReaderTensor(
                 name = tensor_name,
