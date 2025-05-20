@@ -47,11 +47,11 @@ extern int g_ggml_sycl_prioritize_dmmv;
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
-#define LIKELY(expr) __builtin_expect(expr, true)
-#define UNLIKELY(expr) __builtin_expect(expr, false)
+#    define LIKELY(expr)   __builtin_expect(expr, true)
+#    define UNLIKELY(expr) __builtin_expect(expr, false)
 #else
-#define LIKELY(expr) (expr)
-#define UNLIKELY(expr) (expr)
+#    define LIKELY(expr)   (expr)
+#    define UNLIKELY(expr) (expr)
 #endif
 
 #define GGML_SYCL_DEBUG(...)              \
@@ -540,23 +540,23 @@ inline void debug_print_tensor(const std::string & prefix, const ggml_tensor * t
 }
 
 struct scope_op_debug_print {
-  scope_op_debug_print(const std::string& func, const ggml_tensor* dst, std::size_t num_src, const std::string& suffix = "") : func(func) {
-    if (LIKELY(!g_ggml_sycl_debug)) {
-        return;
-    }
-    GGML_SYCL_DEBUG("[SYCL][OP] call %s:", func.c_str());
-    debug_print_tensor(" dst", dst);
-    if (dst) {
-        for (std::size_t i = 0; i < num_src; ++i) {
-            debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
+    scope_op_debug_print(const std::string & func, const ggml_tensor * dst, std::size_t num_src,
+                         const std::string & suffix = "") :
+        func(func) {
+        if (LIKELY(!g_ggml_sycl_debug)) {
+            return;
         }
+        GGML_SYCL_DEBUG("[SYCL][OP] call %s:", func.c_str());
+        debug_print_tensor(" dst", dst);
+        if (dst) {
+            for (std::size_t i = 0; i < num_src; ++i) {
+                debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
+            }
+        }
+        GGML_SYCL_DEBUG("%s\n", suffix.c_str());
     }
-    GGML_SYCL_DEBUG("%s\n", suffix.c_str());
-  }
 
-  ~scope_op_debug_print() {
-    GGML_SYCL_DEBUG("[SYCL][OP] call %s done\n", func.c_str());
-  }
+    ~scope_op_debug_print() { GGML_SYCL_DEBUG("[SYCL][OP] call %s done\n", func.c_str()); }
 
   private:
     std::string func;
