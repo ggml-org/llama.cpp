@@ -413,7 +413,7 @@ static void ggml_tmac_tune_kernel_config(const struct ggml_tensor * tensor, int 
                 }
 
                 for (int kfactor: kfactors) {
-                    if (kfactor < kernel_config.actk) {
+                    if ((kfactor < kernel_config.actk) || (kfactor * kernel_config.g > kernel_config.q_group_size)) {
                         continue;
                     }
 
@@ -455,7 +455,7 @@ static void ggml_tmac_tune_kernel_config(const struct ggml_tensor * tensor, int 
 
         int largest_kfactor = 0;
         for (int kfactor: kfactors) {
-            if (kfactor < kernel_config.actk) {
+            if ((kfactor < kernel_config.actk) || (kfactor * kernel_config.g > kernel_config.q_group_size)) {
                 continue;
             }
             if (kfactor > largest_kfactor) {
@@ -468,8 +468,8 @@ static void ggml_tmac_tune_kernel_config(const struct ggml_tensor * tensor, int 
 
     // Save the results
     insert_or_assign_tmac_kernel_config(M, K, bits, best_kcfg);
-    GGML_LOG_INFO("Tuned kernel config: M=%d, N=%d, K=%d, bm=%d, kfactor=%d, bits=%d, g=%d, ngroups_per_elem=%d, q_group_size=%d, act_group_size=%d\n",
-                    M, N, K, best_kcfg.bm, best_kcfg.kfactor, bits, best_kcfg.g, best_kcfg.ngroups_per_elem, best_kcfg.q_group_size, best_kcfg.act_group_size);
+    GGML_LOG_INFO("Tuned kernel config: M=%d, N=%d, K=%d, bm=%d, kfactor=%d, bits=%d, actk=%d, g=%d, ngroups_per_elem=%d, q_group_size=%d, act_group_size=%d\n",
+                    M, N, K, best_kcfg.bm, best_kcfg.kfactor, bits, best_kcfg.actk, best_kcfg.g, best_kcfg.ngroups_per_elem, best_kcfg.q_group_size, best_kcfg.act_group_size);
 }
 
 

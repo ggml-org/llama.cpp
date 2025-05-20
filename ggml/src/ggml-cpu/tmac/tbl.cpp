@@ -834,14 +834,30 @@ void qgemm_lut_int8_g4(
     tbl_int32_reset(bm * sizeof(tmac_float_type) / sizeof(int32_t), (&(((int32_t*)CBits)[0])));
     
     int32_t k_outer_max = K / (kfactor * g);
+    int32_t scale_gs = q_group_size / (kfactor * g);
+    int32_t scale_idx_shfr = 0;
+    if (scale_gs == 1) {
+        scale_idx_shfr = 0;
+    } else if (scale_gs == 2) {
+        scale_idx_shfr = 1;
+    } else if (scale_gs == 4) {
+        scale_idx_shfr = 2;
+    } else if (scale_gs == 8) {
+        scale_idx_shfr = 3;
+    } else {
+        fprintf(stderr, "q_group_size=%d, kfactor=%d, g=%d\n", q_group_size, kfactor, g);
+        fprintf(stderr, "Unsupported scale group size over kfactor. Expected {1,2,4,8}, got %d.\n", scale_gs);
+        throw std::runtime_error("");
+    }
+
     for (int32_t k_outer = 0; k_outer < k_outer_max; k_outer++) {
         uint8_t * a = ((uint8_t *)A) + k_outer * bm * kfactor / ngroups_per_elem;
         tmac_float_type * scales = one_scale ? (tmac_float_type *)Scales :
-                              has_zero_point ? ((tmac_float_type *)Scales) + k_outer * m * 2:
-                                               ((tmac_float_type *)Scales) + k_outer * m;
+                              has_zero_point ? ((tmac_float_type *)Scales) + (k_outer >> scale_idx_shfr) * m * 2:
+                                               ((tmac_float_type *)Scales) + (k_outer >> scale_idx_shfr) * m;
         int8_t * lut = ((int8_t *)LUT) + k_outer * kfactor * int(pow(2, g));
-        tmac_float_type * lut_scales = ((tmac_float_type *)LUT_Scales) + (k_outer * q_group_size / act_group_size);  // k_outer * kfactor * g / act_group_size == k_outer
-        tmac_float_type * lut_biases = ((tmac_float_type *)LUT_Biases) + (k_outer * q_group_size / act_group_size);  // k_outer * kfactor * g / act_group_size == k_outer
+        tmac_float_type * lut_scales = ((tmac_float_type *)LUT_Scales) + (k_outer * kfactor * g / act_group_size);
+        tmac_float_type * lut_biases = ((tmac_float_type *)LUT_Biases) + (k_outer * kfactor * g / act_group_size);
 
         if (has_scale && kfactor == 8 && bits == 2 && actk == 8 && has_zero_point && !one_scale) {
             tbl_g4_int8_float_update_impl<true, 8, 2, 8, false, true, false>(
