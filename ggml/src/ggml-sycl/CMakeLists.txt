@@ -52,13 +52,13 @@ target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
 
-# The nightly dpcpp compiler recently stopped shipping libOpenCL
+# The nightly dpcpp compiler may not ship libOpenCL
 # When using a nightly build of oneDNN built with the said nightly compiler, it links against the target OpenCL::OpenCL
-# For context,this line in the oneDNN CMake:
+# For context, this line in the oneDNN CMake:
 # https://github.com/uxlfoundation/oneDNN/blob/743e4273d18bcb0e733723bf9289f14e8366687f/cmake/SYCL.cmake#L127
 # and when using this build of oneDNN in llama, it would expect the target OpenCL::OpenCL to be available.
 # Hence the below find_package call is required. At the time of writing, the release compiler
-# ships libOpenCL,hence only finding the package when the compiler is clang (nightly).
+# ships libOpenCL, hence only finding the package when the compiler is clang (nightly).
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
            find_package(OpenCL REQUIRED)
