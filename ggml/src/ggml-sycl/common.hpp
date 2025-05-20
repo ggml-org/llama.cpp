@@ -506,7 +506,7 @@ void debug_print_array(const std::string& prefix, const T array[N]) {
     GGML_SYCL_DEBUG("%s", ss.str().c_str());
 }
 
-inline void debug_print_tensor(const std::string& prefix, const ggml_tensor* tensor) {
+inline void debug_print_tensor(const std::string& prefix, const ggml_tensor* tensor, const std::string& suffix = "") {
     GGML_SYCL_DEBUG("%s=", prefix.c_str());
     if (tensor) {
         GGML_SYCL_DEBUG("'%s':type=%s", tensor->name, ggml_type_name(tensor->type));
@@ -521,6 +521,7 @@ inline void debug_print_tensor(const std::string& prefix, const ggml_tensor* ten
     } else {
         GGML_SYCL_DEBUG("nullptr");
     }
+    GGML_SYCL_DEBUG("%s", suffix.c_str());
 }
 
 struct scope_op_debug_print {
@@ -528,7 +529,7 @@ struct scope_op_debug_print {
     if (!g_ggml_sycl_debug) {
         return;
     }
-    GGML_SYCL_DEBUG("call %s:", func.c_str());
+    GGML_SYCL_DEBUG("[SYCL][OP] call %s:", func.c_str());
     debug_print_tensor(" dst", dst);
     if (dst) {
         for (std::size_t i = 0; i < num_src; ++i) {
@@ -539,7 +540,7 @@ struct scope_op_debug_print {
   }
 
   ~scope_op_debug_print() {
-    GGML_SYCL_DEBUG("call %s done\n", func.c_str());
+    GGML_SYCL_DEBUG("[SYCL][OP] call %s done\n", func.c_str());
   }
 
   private:
