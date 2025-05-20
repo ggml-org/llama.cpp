@@ -26,6 +26,7 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 		       ggml_tensor *tensor, const void *data, size_t offset, size_t size) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
+
 #if 0
   INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
     buffer_handle, tensor, data, offset, size);
@@ -33,7 +34,7 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
 
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
-  vn_encode_ggml_tensor(encoder, tensor, TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR);
+  vn_encode_ggml_tensor(encoder, tensor);
 
   struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
   if (!shmem) {
@@ -64,7 +65,8 @@ apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_TENSOR);
 
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
-  vn_encode_ggml_tensor(encoder, tensor, TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR);
+  vn_encode_ggml_tensor(encoder, tensor);
+
   struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
   if (!shmem) {
     FATAL("Couldn't allocate the guest-host shared buffer :/");

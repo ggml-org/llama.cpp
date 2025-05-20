@@ -30,7 +30,7 @@ backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
 
   ggml_tensor *tensor;
   // safe to remove the const qualifier here
-  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec, TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR);
+  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor(dec);
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -73,9 +73,10 @@ backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
   ggml_backend_buffer_t buffer;
   buffer = vn_decode_ggml_buffer(dec);
 
-  ggml_tensor *tensor;
+
+  const ggml_tensor *tensor;
   // safe to remove the const qualifier here
-  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec, TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR);
+  tensor = vn_decode_ggml_tensor(dec);
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -90,8 +91,6 @@ backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
     if (!shmem_data) {
     FATAL("Couldn't get the shmem addr from virgl :/");
   }
-
-  INFO("GET_TENSOR");
 
   UNUSED(buffer);
   UNUSED(tensor);
