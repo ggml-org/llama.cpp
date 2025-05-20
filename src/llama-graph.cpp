@@ -1291,10 +1291,6 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     if (wo_b) {
-        //cb(cur, "kqv_wo", il);
-    }
-
-    if (wo_b) {
         cur = ggml_add(ctx0, cur, wo_b);
     }
 
