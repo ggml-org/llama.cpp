@@ -9,6 +9,84 @@
 #include <iostream>
 #include <vector>
 
+#ifdef GGML_WEBGPU_DEBUG
+#define WEBGPU_LOG_DEBUG(msg) std::cout << msg << std::endl
+#else
+#define WEBGPU_LOG_DEBUG(msg) ((void) 0)
+#endif // GGML_WEBGPU_DEBUG
+
+
+struct webgpu_context {
+    wgpu::Instance instance;
+    // an adapter can only be used to create one device
+    wgpu::Adapter adapter;
+    // we only support one device for now
+    wgpu::Device device;
+};
+
+static bool webgpu_context_initialized = false;
+static webgpu_context webgpu_ctx;
+
+static void ggml_webgpu_context_init() {
+    if (webgpu_context_initialized) {
+        return;
+    }
+    WEBGPU_LOG_DEBUG("ggml_webgpu_context_init()");
+
+    wgpu::InstanceDescriptor instanceDescriptor{};
+    instanceDescriptor.capabilities.timedWaitAnyEnable = true;
+    webgpu_ctx.instance = wgpu::CreateInstance(&instanceDescriptor);
+    GGML_ASSERT(webgpu_ctx.instance != nullptr);
+
+    wgpu::RequestAdapterOptions options = {};
+    wgpu::Adapter adapter;
+
+    auto callback = [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char *message, void *userdata) {
+        if (status != wgpu::RequestAdapterStatus::Success) {
+            GGML_LOG_ERROR("ggml_webgpu: Failed to get an adapter: %s\n", message);
+            return;
+        }
+        *static_cast<wgpu::Adapter *>(userdata) = adapter;
+    };
+
+    auto callbackMode = wgpu::CallbackMode::WaitAnyOnly;
+    void *userdata = &webgpu_ctx.adapter;
+    webgpu_ctx.instance.WaitAny(webgpu_ctx.instance.RequestAdapter(&options, callbackMode, callback, userdata), UINT64_MAX);
+    GGML_ASSERT(webgpu_ctx.adapter != nullptr);
+
+    wgpu::DeviceDescriptor deviceDescriptor;
+    deviceDescriptor.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous, 
+        [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+    });
+    deviceDescriptor.SetUncapturedErrorCallback(
+        [](const wgpu::Device& device, wgpu::ErrorType reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+    });
+    webgpu_ctx.instance.WaitAny(webgpu_ctx.adapter.RequestDevice(&deviceDescriptor, callbackMode,
+        [](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+            if (status != wgpu::RequestDeviceStatus::Success) {
+                GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
+                return;
+            }
+            webgpu_ctx.device = std::move(device);
+        }),
+        UINT64_MAX
+    );
+    GGML_ASSERT(webgpu_ctx.device != nullptr);
+
+    wgpu::DawnAdapterPropertiesPowerPreference power_props{};
+    wgpu::AdapterInfo info{};
+    info.nextInChain = &power_props;
+    webgpu_ctx.adapter.GetInfo(&info);
+    GGML_LOG_INFO("ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | device_desc: %s\n", 
+        info.vendorID, info.vendor.data, info.architecture.data, info.deviceID, info.device.data, info.description.data);
+
+    webgpu_context_initialized = true;
+}
+
 static ggml_backend_i ggml_backend_webgpu_interface = {
     /* .get_name                = */ NULL,
     /* .free                    = */ NULL,
@@ -74,45 +152,6 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
         /* .context     = */ nullptr,
     };
     // need to init webgpu here
-    wgpu::InstanceDescriptor instanceDescriptor{};
-  instanceDescriptor.capabilities.timedWaitAnyEnable = true;
-  wgpu::Instance instance = wgpu::CreateInstance(&instanceDescriptor);
-  if (instance == nullptr) {
-    std::cerr << "Instance creation failed!\n";
-    return nullptr;
-  }
-  // Synchronously request the adapter.
-  wgpu::RequestAdapterOptions options = {};
-  wgpu::Adapter adapter;
-
-  auto callback = [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char *message, void *userdata) {
-    if (status != wgpu::RequestAdapterStatus::Success) {
-      std::cerr << "Failed to get an adapter:" << message;
-      return;
-    }
-    *static_cast<wgpu::Adapter *>(userdata) = adapter;
-  };
-
-
-  auto callbackMode = wgpu::CallbackMode::WaitAnyOnly;
-  void *userdata = &adapter;
-  instance.WaitAny(instance.RequestAdapter(&options, callbackMode, callback, userdata), UINT64_MAX);
-  if (adapter == nullptr) {
-    std::cerr << "RequestAdapter failed!\n";
-    return nullptr;
-  }
-
-  wgpu::DawnAdapterPropertiesPowerPreference power_props{};
-
-  wgpu::AdapterInfo info{};
-  info.nextInChain = &power_props;
-
-  adapter.GetInfo(&info);
-  std::cout << "VendorID: " << std::hex << info.vendorID << std::dec << "\n";
-  std::cout << "Vendor: " << info.vendor << "\n";
-  std::cout << "Architecture: " << info.architecture << "\n";
-  std::cout << "DeviceID: " << std::hex << info.deviceID << std::dec << "\n";
-  std::cout << "Name: " << info.device << "\n";
-  std::cout << "Driver description: " << info.description << "\n";
+    ggml_webgpu_context_init();
     return &reg;
 }
