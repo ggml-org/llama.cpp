@@ -90,6 +90,7 @@ vn_cs_decoder_use_inplace(struct vn_cs_decoder *dec,
 
   return addr;
 }
+
 /*
  * read/write
  */

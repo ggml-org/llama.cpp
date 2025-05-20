@@ -86,6 +86,23 @@ vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
   return tensor;
 }
 
+/* tensor array */
+
+static inline void
+vn_encode_ggml_tensor_array(struct vn_cs_encoder *enc, ggml_tensor **addr, size_t count)
+{
+  size_t buffer_size = sizeof(*addr) * count;
+  vn_encode(enc, buffer_size, addr, buffer_size);
+}
+
+static inline ggml_tensor **
+vn_decode_ggml_tensor_array_inplace(struct vn_cs_decoder *dec, size_t count)
+{
+  size_t buffer_size = sizeof(ggml_tensor*) * count;
+
+  return (ggml_tensor **)(uintptr_t) vn_cs_decoder_use_inplace(dec, buffer_size);
+}
+
 /* *** ggml_backend_buffer_type_t *** */
 
 // ggml_backend_buffer_type_t is a POINTER (to a struct).
@@ -132,7 +149,7 @@ vn_decode_ggml_buffer(struct vn_cs_decoder *dec) {
 
 static inline void
 vn_encode_ggml_status(struct vn_cs_encoder *enc, const enum ggml_status *status) {
-  vn_cs_encoder_write(enc, sizeof(*status), &status, sizeof(*status));
+  vn_cs_encoder_write(enc, sizeof(*status), status, sizeof(*status));
 }
 
 static inline void
@@ -155,8 +172,29 @@ vn_decode_virtgpu_shmem_res_id(struct vn_cs_decoder *dec, uint32_t *shmem_res_id
 /* ggml_cgraph */
 
 static inline size_t
-vn_encode_sizeof_ggml_cgraph(ggml_cgraph *cgraph) {
-  return sizeof(*cgraph);
+vn_encode_sizeof_ggml_cgraph_data(ggml_cgraph *cgraph) {
+  /* must match the encoding of vn_encode_ggml_cgraph and vn_encode_ggml_tensor */
+  size_t size = 0;
+
+  size += sizeof(ggml_tensor*) * cgraph->n_nodes;
+
+  size_t tensor_size = sizeof(ggml_tensor);
+  INFO("tensor_size: %lu", tensor_size);
+  size += tensor_size * cgraph->n_nodes;
+
+  for (int i = 0; i < cgraph->n_nodes; i++) {
+    ggml_tensor *tensor = cgraph->nodes[i];
+    if (tensor->buffer) {
+      size += sizeof(apir_buffer_handle_t);
+    }
+    if (tensor->view_src) {
+      size += tensor_size;
+    }
+    for (int j = 0; tensor->src[j]; j++) {
+      size += tensor_size;
+    }
+  }
+  return size;
 }
 
 static inline void
@@ -180,12 +218,15 @@ vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph, struct vn_
     FATAL("Cannot pass cgraphs with visited_hash_set");
   }
 
-  if (!secondary_enc) {
-    return;
-  }
-
   size_t cgraph_size = sizeof(*cgraph);
   vn_cs_encoder_write(enc, cgraph_size, cgraph, cgraph_size);
+
+  vn_encode_ggml_tensor_array(secondary_enc, cgraph->nodes, cgraph->n_nodes);
+
+  for (int i = 0; i < cgraph->n_nodes; i++) {
+    ggml_tensor *tensor = cgraph->nodes[i];
+    vn_encode_ggml_tensor(secondary_enc, tensor);
+  }
 }
 
 static inline ggml_cgraph *
@@ -194,8 +235,11 @@ vn_decode_ggml_cgraph(struct vn_cs_decoder *dec, struct vn_cs_decoder *secondary
   // modify the shared memory data to fix the `src` pointers.
   ggml_cgraph *cgraph = (ggml_cgraph *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_cgraph));
 
-  if (!secondary_dec) {
-    return NULL;
+  cgraph->nodes = vn_decode_ggml_tensor_array_inplace(secondary_dec, cgraph->n_nodes);
+
+  for (int i = 0; i < cgraph->n_nodes; i++) {
+    cgraph->nodes[i] = (ggml_tensor *)(uintptr_t) vn_decode_ggml_tensor_inplace(secondary_dec);
   }
+
   return cgraph;
 }
