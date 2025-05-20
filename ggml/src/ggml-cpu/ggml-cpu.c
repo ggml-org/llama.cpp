@@ -593,7 +593,7 @@ void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
     int cores_per_numa = g_state.numa.nodes[0].n_cpus;
     int numa_nodes = n_threads / cores_per_numa;
     int remaining_cores = n_threads % cores_per_numa;
-    if (numa_nodes <= 1 || remaining_cores) {
+    if ((numa_nodes != GGML_NUMA_MIGRATE_NODES) || remaining_cores) {
         ggml_barrier(tp);
         return;
     }
