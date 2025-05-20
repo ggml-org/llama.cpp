@@ -21,6 +21,31 @@ struct vn_cs_decoder {
 };
 
 /*
+ * new encoder and decoder
+ */
+
+static struct vn_cs_decoder
+vn_cs_new_decoder(const char *ptr, size_t size) {
+  struct vn_cs_decoder dec = {
+      .cur = ptr,
+      .end = ptr + size,
+  };
+
+  return dec;
+}
+
+static struct vn_cs_encoder
+vn_cs_new_encoder(char *ptr, size_t size) {
+  struct vn_cs_encoder enc = {
+      .cur = ptr,
+      .start = ptr,
+      .end = ptr + size,
+  };
+
+  return enc;
+}
+
+/*
  * encode peek
  */
 

@@ -154,16 +154,48 @@ vn_decode_virtgpu_shmem_res_id(struct vn_cs_decoder *dec, uint32_t *shmem_res_id
 
 /* ggml_cgraph */
 
+static inline size_t
+vn_encode_sizeof_ggml_cgraph(ggml_cgraph *cgraph) {
+  return sizeof(*cgraph);
+}
+
 static inline void
-vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph) {
+vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph, struct vn_cs_encoder *secondary_enc) {
   UNUSED(enc);
   UNUSED(cgraph);
 
+  if (cgraph->n_leafs) {
+    FATAL("Cannot pass cgraphs with leaves");
+  }
+  if (cgraph->size) {
+    FATAL("Cannot pass cgraphs with size");
+  }
+  if (cgraph->grads) {
+    FATAL("Cannot pass cgraphs with grads");
+  }
+  if (cgraph->grad_accs) {
+    FATAL("Cannot pass cgraphs with grad_accs");
+  }
+  if (cgraph->visited_hash_set.size || cgraph->visited_hash_set.used || cgraph->visited_hash_set.keys) {
+    FATAL("Cannot pass cgraphs with visited_hash_set");
+  }
+
+  if (!secondary_enc) {
+    return;
+  }
+
+  size_t cgraph_size = sizeof(*cgraph);
+  vn_cs_encoder_write(enc, cgraph_size, cgraph, cgraph_size);
 }
 
 static inline ggml_cgraph *
-vn_decode_ggml_cgraph(struct vn_cs_decoder *dec) {
-  UNUSED(dec);
+vn_decode_ggml_cgraph(struct vn_cs_decoder *dec, struct vn_cs_decoder *secondary_dec) {
+  // it safe to remove the `const` qualifier here, we *do* want to
+  // modify the shared memory data to fix the `src` pointers.
+  ggml_cgraph *cgraph = (ggml_cgraph *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_cgraph));
 
-  return NULL;
+  if (!secondary_dec) {
+    return NULL;
+  }
+  return cgraph;
 }

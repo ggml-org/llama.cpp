@@ -10,13 +10,25 @@ apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE);
 
-  vn_encode_ggml_cgraph(encoder, cgraph);
+  size_t size = vn_encode_sizeof_ggml_cgraph(cgraph);
+  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
+  if (!shmem) {
+    FATAL("Couldn't allocate the guest-host shared buffer :/");
+  }
+  vn_encode_size_t(encoder, &size);
+
+  char *shmem_data = (char *) shmem->mmap_ptr;
+  struct vn_cs_encoder secondary_enc = vn_cs_new_encoder(shmem_data, size);
+
+  vn_encode_ggml_cgraph(encoder, cgraph, &secondary_enc);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
   vn_decode_ggml_status(decoder, &status);
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
+
+  virtgpu_shmem_destroy(gpu, shmem->shmem);
 
   return status;
 }
