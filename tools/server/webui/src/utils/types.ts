@@ -133,9 +133,6 @@ export interface ToolCallSpec {
     parameters: ToolCallParameters;
   };
 }
-export type ToolCallType = NonNullable<
-  (Message | PendingMessage)['tool_calls']
->[number];
 
 export interface ToolCallParameters {
   type: 'object';

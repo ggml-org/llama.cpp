@@ -1,10 +1,10 @@
-import { ToolCallType } from '../../utils/types';
+import { ToolCallRequest } from '../../utils/types';
 
 export const ToolCallArgsDisplay = ({
   toolCall,
   baseClassName = 'collapse bg-base-200 collapse-arrow mb-4',
 }: {
-  toolCall: ToolCallType;
+  toolCall: ToolCallRequest;
   baseClassName?: string;
 }) => {
   return (

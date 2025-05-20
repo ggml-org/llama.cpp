@@ -48,7 +48,7 @@ export const CONFIG_DEFAULT = {
   ...Object.fromEntries(
     Array.from(AVAILABLE_TOOLS.values()).map((tool: AgentTool) => [
       `tool_${tool.id}_enabled`,
-      false, // Default value for tool enabled state (e.g., false for opt-in)
+      false,
     ])
   ),
 };

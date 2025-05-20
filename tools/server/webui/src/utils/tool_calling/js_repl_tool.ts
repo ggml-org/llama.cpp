@@ -1,4 +1,3 @@
-import StorageUtils from '../storage';
 import { ToolCallRequest, ToolCallOutput, ToolCallParameters } from '../types';
 import { AgentTool } from './agent_tool';
 

@@ -62,11 +62,15 @@ export const copyStr = (textToCopy: string) => {
 export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
   return messages.map((msg) => {
     if (msg.role !== 'user' || !msg.extra) {
-      return {
+      const apiMessage = {
         role: msg.role,
         content: msg.content,
-        tool_calls: msg.tool_calls,
       } as APIMessage;
+
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        apiMessage.tool_calls = msg.tool_calls;
+      }
+      return apiMessage;
     }
 
     // extra content first, then user text message in the end
