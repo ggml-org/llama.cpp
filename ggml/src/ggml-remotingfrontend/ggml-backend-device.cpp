@@ -1,8 +1,5 @@
 #include "ggml-remoting.h"
 
-#define DEV_TO_GPU(name) \
-  ((struct ggml_backend_remoting_device_context *) (name)->context)->gpu
-
 static const char *
 ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
   IMPLEMENTED_ONCE;

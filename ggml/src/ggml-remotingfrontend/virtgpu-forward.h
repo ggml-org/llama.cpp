@@ -35,3 +35,7 @@ void apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_han
 			    const ggml_tensor *tensor, void *data, size_t offset, size_t size);
 void apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 		       uint8_t value);
+
+/* backend */
+
+ggml_status apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph);

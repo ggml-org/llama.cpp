@@ -8,6 +8,7 @@
 
 extern ggml_backend_reg_t reg;
 extern ggml_backend_dev_t dev;
+extern ggml_backend_t bck;
 
 #define NOT_IMPLEMENTED							\
   do {									\

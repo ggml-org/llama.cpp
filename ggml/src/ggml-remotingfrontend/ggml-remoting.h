@@ -10,6 +10,9 @@
 #include "ggml-backend.h"
 #include "virtgpu.h"
 
+#define DEV_TO_GPU(name) \
+  ((struct ggml_backend_remoting_device_context *) (name)->context)->gpu
+
 #define BUFFER_TO_HANDLE(name) \
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->handle
 

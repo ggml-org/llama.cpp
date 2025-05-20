@@ -41,6 +41,9 @@ uint32_t backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decod
 uint32_t backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 uint32_t backend_buffer_clear(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
+/* backend */
+uint32_t backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+
 static inline const char *backend_dispatch_command_name(ApirBackendCommandType type)
 {
   switch (type) {
@@ -67,6 +70,8 @@ static inline const char *backend_dispatch_command_name(ApirBackendCommandType t
   case APIR_COMMAND_TYPE_BUFFER_GET_TENSOR: return "backend_buffer_get_tensor";
   case APIR_COMMAND_TYPE_BUFFER_CLEAR: return "backend_buffer_clear";
 
+  /* backend */
+  case APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE: return "backend_graph_compute";
   default: return "unknown";
   }
 }
@@ -94,4 +99,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
   [APIR_COMMAND_TYPE_BUFFER_SET_TENSOR] = backend_buffer_set_tensor,
   [APIR_COMMAND_TYPE_BUFFER_GET_TENSOR] = backend_buffer_get_tensor,
   [APIR_COMMAND_TYPE_BUFFER_CLEAR] = backend_buffer_clear,
+
+  /* backend */
+  [APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE] = backend_graph_compute,
 };

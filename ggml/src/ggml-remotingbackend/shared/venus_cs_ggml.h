@@ -151,3 +151,19 @@ static inline void
 vn_decode_virtgpu_shmem_res_id(struct vn_cs_decoder *dec, uint32_t *shmem_res_id) {
   vn_decode_uint32_t(dec, shmem_res_id);
 }
+
+/* ggml_cgraph */
+
+static inline void
+vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph) {
+  UNUSED(enc);
+  UNUSED(cgraph);
+
+}
+
+static inline ggml_cgraph *
+vn_decode_ggml_cgraph(struct vn_cs_decoder *dec) {
+  UNUSED(dec);
+
+  return NULL;
+}

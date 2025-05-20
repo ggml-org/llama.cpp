@@ -53,8 +53,11 @@ typedef enum ApirBackendCommandType {
   APIR_COMMAND_TYPE_BUFFER_GET_TENSOR = 15,
   APIR_COMMAND_TYPE_BUFFER_CLEAR = 16,
 
+  /* backend */
+  APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE = 17,
+
   // last command_type index + 1
-  APIR_BACKEND_DISPATCH_TABLE_COUNT = 17,
+  APIR_BACKEND_DISPATCH_TABLE_COUNT = 18,
 } ApirBackendCommandType;
 
 

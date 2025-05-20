@@ -18,10 +18,11 @@ static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, g
   UNUSED(backend);
   UNUSED(cgraph);
 
-  NEXT;
-  NOT_IMPLEMENTED;
+  struct virtgpu *gpu = DEV_TO_GPU(backend->device);
 
-  return GGML_STATUS_SUCCESS;
+  BEING_IMPLEMENTED;
+
+  return apir_backend_graph_compute(gpu, cgraph);
 }
 
 static ggml_backend_i ggml_backend_remoting_interface = {
