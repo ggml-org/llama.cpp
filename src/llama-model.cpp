@@ -13210,7 +13210,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         // checks
         default:
             {
-                if (llm_arch_is_hybrid(arch)) {
+                if (llm_arch_is_hybrid_recurrent(arch)) {
                     // make vectors of recurrent and non-recurrent layer indices
                     std::vector<size_t> recurrent_layers;
                     std::vector<size_t> unified_layers;
@@ -13859,8 +13859,8 @@ bool llama_model_is_recurrent(const llama_model * model) {
     return llm_arch_is_recurrent(model->arch);
 }
 
-bool llama_model_is_hybrid(const llama_model * model) {
-    return llm_arch_is_hybrid(model->arch);
+bool llama_model_is_hybrid_recurrent(const llama_model * model) {
+    return llm_arch_is_hybrid_recurrent(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
