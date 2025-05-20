@@ -330,7 +330,6 @@ struct common_params {
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
-    bool dump_kv_cache     = false; // dump the KV cache contents for debugging purposes
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
@@ -621,16 +620,6 @@ std::string common_detokenize(
               const struct llama_vocab * vocab,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
-
-//
-// KV cache utils
-//
-
-// Dump the KV cache view with the number of sequences per cell.
-void common_kv_cache_dump_view(const llama_kv_cache_view & view, int row_size = 80);
-
-// Dump the KV cache view showing individual sequences in each cell (long output).
-void common_kv_cache_dump_view_seqs(const llama_kv_cache_view & view, int row_size = 40);
 
 //
 // Embedding utils

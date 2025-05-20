@@ -50,8 +50,6 @@ int main(int argc, char ** argv) {
     const int N = 5;  // n-gram size
     const int G = 15; // max verification n-grams
 
-    const bool dump_kv_cache = params.dump_kv_cache;
-
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -152,9 +150,6 @@ int main(int argc, char ** argv) {
     // here we keep adding new n-grams as we go
     ngram_container ngrams_observed(llama_vocab_n_tokens(vocab), N, G);
 
-    // debug
-    struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, W + G + 1);
-
     const auto t_dec_start = ggml_time_us();
 
     // sample first token
@@ -172,12 +167,6 @@ int main(int argc, char ** argv) {
     }
 
     while (true) {
-        // debug
-        if (dump_kv_cache) {
-            llama_kv_cache_view_update(ctx, &kvc_view);
-            common_kv_cache_dump_view_seqs(kvc_view, 40);
-        }
-
         // build the mask from https://lmsys.org/blog/2023-11-21-lookahead-decoding/
         //
         // Example for W = 5, N = 4, G = 2:
@@ -472,8 +461,6 @@ int main(int argc, char ** argv) {
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
-
-    llama_kv_cache_view_free(&kvc_view);
 
     llama_batch_free(batch);
 

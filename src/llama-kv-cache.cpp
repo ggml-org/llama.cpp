@@ -2888,38 +2888,3 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 
     return true;
 }
-
-//
-// kv cache view
-//
-
-llama_kv_cache_view llama_kv_cache_view_init(const llama_kv_cache & kv, int32_t n_seq_max) {
-    llama_kv_cache_view result = {
-        /*.n_cells            = */ 0,
-        /*.n_seq_max          = */ n_seq_max,
-        /*.token_count        = */ 0,
-        /*.used_cells         = */ kv.get_used_cells(),
-        /*.max_contiguous     = */ 0,
-        /*.max_contiguous_idx = */ -1,
-        /*.cells              = */ nullptr,
-        /*.cells_sequences    = */ nullptr,
-    };
-
-    return result;
-}
-
-void llama_kv_cache_view_free(llama_kv_cache_view * view) {
-    if (view->cells != nullptr) {
-        free(view->cells);
-        view->cells = nullptr;
-    }
-    if (view->cells_sequences != nullptr) {
-        free(view->cells_sequences);
-        view->cells_sequences = nullptr;
-    }
-}
-
-void llama_kv_cache_view_update(llama_kv_cache_view * , const llama_kv_cache * ) {
-    // TODO: will be removed soon, keep this for now to avoid too many changes in
-    //       https://github.com/ggml-org/llama.cpp/pull/13194
-}

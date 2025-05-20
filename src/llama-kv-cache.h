@@ -534,12 +534,3 @@ private:
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
-
-
-//
-// kv cache view
-//
-
-llama_kv_cache_view llama_kv_cache_view_init(const llama_kv_cache & kv, int32_t n_seq_max);
-
-void llama_kv_cache_view_update(llama_kv_cache_view * view, const llama_kv_cache * kv);
