@@ -3014,3 +3014,240 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 
     return true;
 }
+
+//
+// llama_kv_cache_hybrid
+//
+llama_kv_cache_hybrid::llama_kv_cache_hybrid(
+    const llama_hparams            & hparams,
+          std::vector<child_cache>   children) :
+    m_hparams(hparams),
+    m_children(
+        [](std::vector<child_cache>& caches) -> std::set<std::unique_ptr<llama_kv_cache>> {
+            // Sort the caches by the lowest layer ID so the order is repeatable
+            for (auto & cache : caches) {
+                GGML_ASSERT(cache.layer_ids.size() > 0);
+                std::sort(cache.layer_ids.begin(), cache.layer_ids.end());
+            }
+            std::sort(caches.begin(), caches.end(), [](const child_cache & a, const child_cache & b) {
+                return a.layer_ids[0] < b.layer_ids[0];
+            });
+            std::set<std::unique_ptr<llama_kv_cache>> unique_caches;
+            for (auto & cache : caches) {
+                unique_caches.emplace(cache.child.release());
+            }
+            return unique_caches;
+        }(children)
+    ),
+    m_has_recurrent(
+        [](const std::set<std::unique_ptr<llama_kv_cache>> & caches) -> bool {
+            for (const auto & cache : caches) {
+                if (dynamic_cast<llama_kv_cache_recurrent *>(cache.get())) {
+                    return true;
+                }
+            }
+            return false;
+        }(m_children)
+    )
+{
+    // Ensure at least one child
+    GGML_ASSERT(m_children.size() > 0);
+
+    // Ensure layers are not overlapping and are concurrent
+    std::set<size_t> seen_layers;
+    size_t max_layer = 0;
+    for (const auto & cache : children) {
+        for (const auto & layer_id : cache.layer_ids) {
+            GGML_ASSERT(seen_layers.find(layer_id) == seen_layers.end());
+            seen_layers.insert(layer_id);
+            if (layer_id > max_layer) {
+                max_layer = layer_id;
+            }
+        }
+    }
+    LLAMA_LOG_DEBUG("max_layer=%zu, seen_layers.size()=%zu\n", max_layer, seen_layers.size());
+    GGML_ASSERT(max_layer + 1 == seen_layers.size());
+}
+
+void llama_kv_cache_hybrid::clear() {
+    for (const auto & cache : m_children) {
+        cache->clear();
+    }
+}
+
+bool llama_kv_cache_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    // First check if we can do this removal. This checks all children so that
+    // no mutation happens before we know if it's possible
+    if (!can_seq_rm(seq_id, p0, p1)) {
+        return false;
+    }
+
+    // Do the removal from each child which should never fail
+    for (const auto & cache : m_children) {
+        const bool failed = cache->seq_rm(seq_id, p0, p1);
+        GGML_ASSERT(!failed);
+    }
+    return true;
+}
+
+void llama_kv_cache_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    for (const auto & cache : m_children) {
+        cache->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+    }
+}
+
+void llama_kv_cache_hybrid::seq_keep(llama_seq_id seq_id) {
+    for (const auto & cache : m_children) {
+        cache->seq_keep(seq_id);
+    }
+}
+
+void llama_kv_cache_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+    for (const auto & cache : m_children) {
+        cache->seq_add(seq_id, p0, p1, delta);
+    }
+}
+
+void llama_kv_cache_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+    for (const auto & cache : m_children) {
+        cache->seq_div(seq_id, p0, p1, d);
+    }
+}
+
+llama_pos llama_kv_cache_hybrid::seq_pos_min(llama_seq_id seq_id) const {
+    llama_pos min_pos = -1;
+    for (const auto & cache : m_children) {
+        const auto child_min_pos = cache->seq_pos_min(seq_id);
+        min_pos = min_pos == -1 ? child_min_pos : std::min(min_pos, child_min_pos);
+    }
+    return min_pos;
+}
+
+llama_pos llama_kv_cache_hybrid::seq_pos_max(llama_seq_id seq_id) const {
+    llama_pos max_pos = 0;
+    for (const auto & cache : m_children) {
+        max_pos = std::max(max_pos, cache->seq_pos_max(seq_id));
+    }
+    return max_pos;
+}
+
+void llama_kv_cache_hybrid::restore() {
+    for (const auto & cache : m_children) {
+        cache->restore();
+    }
+}
+
+void llama_kv_cache_hybrid::commit() {
+    for (const auto & cache : m_children) {
+        cache->commit();
+    }
+}
+
+bool llama_kv_cache_hybrid::update(llama_context & ctx) {
+    bool updated = false;
+    for (const auto & cache : m_children) {
+        updated = cache->update(ctx) || updated;
+    }
+    return updated;
+}
+
+void llama_kv_cache_hybrid::defrag_sched(float thold) {
+    for (const auto & cache : m_children) {
+        cache->defrag_sched(thold);
+    }
+}
+
+void llama_kv_cache_hybrid::set_full() {
+    for (const auto & cache : m_children) {
+        cache->set_full();
+    }
+}
+
+bool llama_kv_cache_hybrid::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    for (const auto & cache : m_children) {
+        if (!cache->can_seq_rm(seq_id, p0, p1)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+llama_sbatch llama_kv_cache_hybrid::sbatch_init(const llama_batch & batch, bool logits_all) {
+    // If any of the caches are recurrent, require equal split
+    return llama_sbatch(batch, m_hparams.n_embd, !m_has_recurrent, logits_all);
+}
+
+llama_ubatch llama_kv_cache_hybrid::ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const {
+    if (embd_pooled) {
+        // Pooled embeddings cannot be split across ubatches (yet)
+        return sbatch.split_seq(n_ubatch);
+    }
+    if (m_has_recurrent) {
+        return sbatch.split_equal(n_ubatch);
+    }
+    return sbatch.split_simple(n_ubatch);
+}
+
+bool llama_kv_cache_hybrid::find_slot(const llama_ubatch & batch) {
+    bool found = true;
+    for (const auto & cache : m_children) {
+        found = cache->find_slot(batch) && found;
+    }
+    return found;
+}
+
+int32_t llama_kv_cache_hybrid::get_n_tokens() const {
+    // The number of tokens should be the same across all child caches
+    int32_t n_tokens = -1;
+    for (const auto & cache : m_children) {
+        const auto cache_n_tokens = cache->get_n_tokens();
+        GGML_ASSERT(n_tokens == -1 || cache_n_tokens == n_tokens);
+        n_tokens = cache_n_tokens;
+    }
+    return n_tokens;
+}
+
+int32_t llama_kv_cache_hybrid::get_used_cells() const {
+    // TODO: Is this correct?
+    // Return the largest number of used cells
+    int32_t used_cells = -1;
+    for (const auto & cache : m_children) {
+        used_cells = std::max(used_cells, cache->get_used_cells());
+    }
+    return used_cells;
+}
+
+llama_pos llama_kv_cache_hybrid::get_pos_max() const {
+    llama_pos pos_max = -1;
+    for (const auto & cache : m_children) {
+        pos_max = std::max(pos_max, cache->get_pos_max());
+    }
+    return pos_max;
+}
+
+bool llama_kv_cache_hybrid::get_can_shift() const {
+    // TODO: Is this correct?
+    // If any children can shift, return true
+    for (const auto & cache : m_children) {
+        if (cache->get_can_shift()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void llama_kv_cache_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+    // Write each cache state in order. Note that order is guaranteed at
+    // initialization by using an ordered set sorted by lowest layer ID
+    for (const auto & cache : m_children) {
+        cache->state_write(io, seq_id);
+    }
+}
+
+void llama_kv_cache_hybrid::state_read(llama_io_read_i  & io, llama_seq_id seq_id) {
+    // Read each cache state in order. Note that order is guaranteed at
+    // initialization by using an ordered set sorted by lowest layer ID
+    for (const auto & cache : m_children) {
+        cache->state_read(io, seq_id);
+    }
+}

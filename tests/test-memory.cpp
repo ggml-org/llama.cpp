@@ -218,6 +218,72 @@ static void test_llama_kv_cache_recurrent_constructor() {
     );
 }
 
+/*- Hybrid Cache -------------------------------------------------------------*/
+
+/* Test that the hybrid cache can be constructed and destructed safely */
+static void test_llama_kv_cache_hybrid_constructor() {
+    auto model = _make_model(
+        /* arch          =*/ LLM_ARCH_LLAMA,
+        /* n_layer       =*/ 4,
+        /* n_embd_head_k =*/ 4,
+        /* n_embd_head_v =*/ 4,
+        /* n_head        =*/ 0,
+        /* n_head_kv     =*/ 0
+    );
+    auto recurrent_filter = [](int32_t il) {
+        return il == 0 || il == 2;
+    };
+    auto unified_filter = [&recurrent_filter](int32_t il) {
+        return !recurrent_filter(il);
+    };
+    auto& n_head_arr = model->hparams.n_head_arr;
+    n_head_arr[0] = 16;
+    n_head_arr[1] = 32;
+    n_head_arr[2] = 16;
+    n_head_arr[3] = 32;
+    auto& n_head_kv_arr = model->hparams.n_head_kv_arr;
+    n_head_kv_arr[0] = 16;
+    n_head_kv_arr[1] = 8;
+    n_head_kv_arr[2] = 16;
+    n_head_kv_arr[3] = 8;
+
+    std::unique_ptr<llama_kv_cache_unified> u_cache(
+        new llama_kv_cache_unified(
+            /* model    */ *model,
+            /* filter   */ unified_filter,
+            /* type_k   */ GGML_TYPE_F32,
+            /* type_v   */ GGML_TYPE_F16,
+            /* v_trans  */ false,
+            /* offload  */ false,
+            /* kv_size  */ 10,
+            /* padding  */ 10,
+            /* n_swa    */ 0,
+            /* swa_type */ LLAMA_SWA_TYPE_NONE
+        )
+    );
+    auto * u_cache_ptr = u_cache.get();
+    std::unique_ptr<llama_kv_cache_recurrent> r_cache (
+        new llama_kv_cache_recurrent(
+            /* model   */ *model,
+            /* filter  */ recurrent_filter,
+            /* type_k  */ GGML_TYPE_F32,
+            /* type_v  */ GGML_TYPE_F16,
+            /* offload */ false,
+            /* kv_size */ 10
+        )
+    );
+    auto * r_cache_ptr = r_cache.get();
+
+    std::vector<llama_kv_cache_hybrid::child_cache> children;
+    children.emplace_back(std::move(u_cache), std::vector<size_t>{1, 3});
+    children.emplace_back(std::move(r_cache), std::vector<size_t>{0, 2});
+
+    llama_kv_cache_hybrid cache(model->hparams, std::move(children));
+
+    GGML_ASSERT(cache.get_child_cache<llama_kv_cache_unified>() == u_cache_ptr);
+    GGML_ASSERT(cache.get_child_cache<llama_kv_cache_recurrent>() == r_cache_ptr);
+}
+
 /*- Main ---------------------------------------------------------------------*/
 
 int main(int argc, char* argv[]) {
@@ -226,5 +292,7 @@ int main(int argc, char* argv[]) {
     RUN_TEST(test_llama_kv_cache_unified_single_seq);
     // Recurrent Cache Tests
     RUN_TEST(test_llama_kv_cache_recurrent_constructor);
+    // Hybrid Cache Tests
+    RUN_TEST(test_llama_kv_cache_hybrid_constructor);
     return 0;
 }

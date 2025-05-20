@@ -439,3 +439,101 @@ private:
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
+
+//
+// llama_kv_cache_hybrid
+//
+
+// utilizes multiple different cache types with each layer assigned to exactly
+//   one cache. This is typically used for hybrid attention / recurrent caching
+
+class llama_kv_cache_hybrid : public llama_kv_cache {
+public:
+
+    struct child_cache {
+        std::unique_ptr<llama_kv_cache> child;
+        std::vector<size_t>             layer_ids;
+
+        child_cache(std::unique_ptr<llama_kv_cache> child_, std::vector<size_t> layer_ids_)
+            : child(std::move(child_)), layer_ids(std::move(layer_ids_)) {}
+    };
+
+    llama_kv_cache_hybrid(
+        const llama_hparams            & hparams,
+              std::vector<child_cache>   children);
+
+    virtual ~llama_kv_cache_hybrid() = default;
+
+    // getters for specific child cache type
+    // NOTE: This will fail if there are multiple of the given type
+    template<typename child_t>
+    const child_t * get_child_cache() const {
+        const child_t * child = nullptr;
+        for (const auto & child_cache : m_children) {
+            const child_t * child_cast = dynamic_cast<const child_t *>(child_cache.get());
+            if (child_cast) {
+                GGML_ASSERT(!child);
+                child = child_cast;
+            }
+        }
+        return child;
+    }
+
+    //
+    // llama_memory_i
+    //
+
+    void clear() override;
+
+    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
+    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
+    void seq_keep(llama_seq_id seq_id) override;
+    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos delta) override;
+    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
+
+    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
+    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    //
+    // llama_kv_cache
+    //
+
+    void restore() override;
+    void commit()  override;
+
+    bool update(llama_context & ctx) override;
+
+    void defrag_sched(float thold) override;
+
+    void set_full() override;
+
+    bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const override;
+
+    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
+
+    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
+
+    // updates the cache head
+    // Note: On success, it's important that cache.head points
+    // to the first cell of the slot.
+    bool find_slot(const llama_ubatch & batch) override;
+
+    int32_t get_n_tokens()   const override;
+    int32_t get_used_cells() const override;
+
+    // TODO: better data structures to reduce the cost of this operation
+    llama_pos get_pos_max() const override;
+
+    bool get_can_shift() const override;
+
+    // state write/load
+
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) override;
+
+private:
+
+    const llama_hparams                             & m_hparams;
+    const std::set<std::unique_ptr<llama_kv_cache>>   m_children; // Ordered for state IO
+    const bool                                        m_has_recurrent;
+};
