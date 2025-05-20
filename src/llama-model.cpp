@@ -117,6 +117,31 @@ static const std::map<llama_rope_scaling_type, const char *> LLAMA_ROPE_SCALING_
     { LLAMA_ROPE_SCALING_TYPE_LONGROPE,   "longrope"   },
 };
 
+// RAII helper for temporary buffer assignment
+struct buffer_guard {
+    explicit buffer_guard(ggml_tensor * t, ggml_backend_buffer_type_t buft) : t(t) {
+        t->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    }
+    ~buffer_guard() {
+        if (t->buffer) {
+            ggml_backend_buffer_free(t->buffer);
+            t->buffer = nullptr;
+        }
+    }
+    ggml_tensor * t;
+};
+
+// cache for operation support checks
+struct op_support_key {
+    ggml_backend_dev_t        dev;
+    ggml_backend_buffer_type_t buft;
+    ggml_op                   op;
+    bool operator<(const op_support_key & other) const {
+        return std::tie(dev, buft, op) < std::tie(other.dev, other.buft, other.op);
+    }
+};
+static std::map<op_support_key, bool> g_op_support_cache;
+
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type) {
     return LLAMA_ROPE_SCALING_TYPES.at(rope_scaling_type);
 }
@@ -134,6 +159,12 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
 // checks if the weight tensor can be used with the specified buffer type and device
 static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w, ggml_op op, ggml_backend_buffer_type_t buft, ggml_backend_dev_t dev) {
     GGML_ASSERT(w != nullptr);
+
+    op_support_key key { dev, buft, op };
+    auto it = g_op_support_cache.find(key);
+    if (it != g_op_support_cache.end()) {
+        return it->second;
+    }
 
     if (op == GGML_OP_NONE) {
         return true;
@@ -245,10 +276,10 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
 
     // create a temporary dummy buffer for the weight so that supports_op can check the buffer type
     GGML_ASSERT(w->buffer == nullptr);
-    w->buffer = ggml_backend_buft_alloc_buffer(buft, 0);
+    buffer_guard guard(w, buft);
     bool op_supported = ggml_backend_dev_supports_op(dev, op_tensor);
-    ggml_backend_buffer_free(w->buffer);
-    w->buffer = nullptr;
+
+    g_op_support_cache[key] = op_supported;
 
     return op_supported;
 }
@@ -262,7 +293,9 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
     for (const auto & cur : buft_list) {
         ggml_backend_dev_t cur_dev = cur.first;
         ggml_backend_buffer_type_t cur_buft = cur.second;
-        if (weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
+        bool should_offload = ggml_backend_dev_type(cur_dev) != GGML_BACKEND_DEVICE_TYPE_CPU ?
+                              ggml_backend_dev_offload_op(cur_dev, tensor) : true;
+        if (should_offload && weight_buft_supported(hparams, tensor, op, cur_buft, cur_dev)) {
             return cur_buft;
         }
     }

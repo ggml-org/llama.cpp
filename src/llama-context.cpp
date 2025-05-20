@@ -87,9 +87,13 @@ llama_context::llama_context(
     // this is required by GPU kernels in order to avoid out-of-bounds accesses (e.g. ggml_flash_attn_ext)
     // ref: https://github.com/ggerganov/llama.cpp/pull/5021
     // TODO: this padding is not needed for the cache-less context so we should probably move it to llama_context_kv_self
-    if (cparams.n_batch < GGML_KQ_MASK_PAD) {
-        LLAMA_LOG_WARN("%s: n_batch is less than GGML_KQ_MASK_PAD - increasing to %d\n", __func__, GGML_KQ_MASK_PAD);
-        cparams.n_batch = GGML_KQ_MASK_PAD;
+    bool gpu_backend = model.params.n_gpu_layers > 0;
+    if (gpu_backend && cparams.causal_attn) {
+        uint32_t padded = GGML_PAD(cparams.n_batch, GGML_KQ_MASK_PAD);
+        if (padded != cparams.n_batch) {
+            LLAMA_LOG_WARN("%s: n_batch padded from %u to %u due to GPU requirements\n", __func__, cparams.n_batch, padded);
+            cparams.n_batch = padded;
+        }
     }
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
