@@ -1161,28 +1161,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 need_new_split = true;
             }
 
-            if (need_new_split && !src0_on_split_buffer && split->tensor_parallel) {
-                split->i_end = i;
-
-                // FIXME
-                const int n_gpus = sched->n_backends - 1;
-                GGML_ASSERT(split->backend_id != sched->n_backends - 1);
-                for (int j = 0; j < n_gpus; j++) {
-                    if (j == split->backend_id) {
-                        continue;
-                    }
-
-                    i_split++;
-                    if (i_split >= sched->splits_capacity) {
-                        sched->splits_capacity *= 2;
-                        sched->splits = (ggml_backend_sched_split *)
-                            realloc(sched->splits, sched->splits_capacity * sizeof(struct ggml_backend_sched_split));
-                        GGML_ASSERT(sched->splits != NULL);
-                    }
-                    sched->splits[i_split] = *split;
-                    sched->splits[i_split].backend_id = j;
-                }
-            }
             if (node_backend_id != cur_backend_id || need_new_split) {
                 split->i_end = i;
                 i_split++;
