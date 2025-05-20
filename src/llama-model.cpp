@@ -13206,6 +13206,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = new llama_kv_cache_recurrent(
                         *this,
+                        nullptr,
                         GGML_TYPE_F32,
                         GGML_TYPE_F32,
                         cparams.offload_kqv,

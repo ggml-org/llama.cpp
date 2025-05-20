@@ -1961,12 +1961,13 @@ const llama_kv_cache_unified_state * llama_kv_cache_unified_iswa_state::get_swa(
 //
 
 llama_kv_cache_recurrent::llama_kv_cache_recurrent(
-        const llama_model & model,
-                ggml_type   type_k,
-                ggml_type   type_v,
-                     bool   offload,
-                 uint32_t   kv_size,
-                 uint32_t   n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
+        const llama_model &  model,
+          layer_filter_cb && filter,
+                ggml_type    type_k,
+                ggml_type    type_v,
+                     bool    offload,
+                 uint32_t    kv_size,
+                 uint32_t    n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer;
 
     LLAMA_LOG_INFO("%s: kv_size = %u, n_seq_max = %u, type_k = '%s', type_v = '%s', n_layer = %d\n",
@@ -2008,6 +2009,11 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
     v_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
+        if (filter && !filter(i)) {
+            LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, i);
+            continue;
+        }
+
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
 
