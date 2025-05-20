@@ -2,7 +2,6 @@
   "extraPaths": ["gguf-py"],
   "pythonVersion": "3.10",
   "pythonPlatform": "All",
-  "reportInvalidTypeForm": false,
   "reportUnusedImport": "warning",
   "reportDuplicateImport": "error",
   "reportDeprecated": "warning",
@@ -23,4 +22,4 @@
   "exclude": [
     "tools/mtmd/legacy-models",
   ]
- }
+}
