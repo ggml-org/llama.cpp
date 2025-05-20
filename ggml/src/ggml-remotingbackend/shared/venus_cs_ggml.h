@@ -14,16 +14,17 @@ static inline void
 vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor) {
   size_t tensor_size = sizeof(*tensor);
 
-  if (tensor->view_src) {
-    FATAL("Cannot pass tensors with view_src");
-  }
   if (tensor->extra) {
     FATAL("Cannot pass tensors with extra");
   }
 
   if (tensor->src[0] && tensor->buffer) {
-    // not sure if the buffer needs to be updated inside the src tensors or not
-    FATAL("Cannot pass tensors with src and buffer");
+    static int first = 1;
+    if (first) {
+      // not sure if the buffer needs to be updated inside the src tensors or not
+      WARNING("Cannot pass tensors with src and buffer");
+      first = 0;
+    }
   }
 
   vn_cs_encoder_write(enc, tensor_size, tensor, tensor_size);
@@ -37,9 +38,20 @@ vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor) {
     vn_encode_ggml_buffer_handle(enc, &buffer_handle);
   }
 
+  if (tensor->view_src) {
+    vn_cs_encoder_write(enc, tensor_size, tensor->view_src, tensor_size);
+  }
+
   for (int i = 0; tensor->src[i]; i++) {
-    const ggml_tensor *src_tensor = tensor->src[i];
-    vn_cs_encoder_write(enc, tensor_size, src_tensor, tensor_size);
+    const ggml_tensor *tensor_src = tensor->src[i];
+    vn_cs_encoder_write(enc, tensor_size, tensor_src, tensor_size);
+
+#if 0
+    if (tensor_src->buffer) {
+      apir_buffer_handle_t src_buffer_handle = ggml_buffer_to_apir_handle(tensor_src->buffer);
+      vn_encode_ggml_buffer_handle(enc, &src_buffer_handle);
+    }
+#endif
   }
 }
 
@@ -56,9 +68,19 @@ vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
     tensor->buffer = vn_decode_ggml_buffer(dec);
   }
 
+  if (tensor->view_src) {
+    ggml_tensor *tensor_view_src = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
+    tensor->view_src = tensor_view_src;
+  }
+
   for (int i = 0; tensor->src[i]; i++) {
-    ggml_tensor *src_tensor = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
-    tensor->src[i] = src_tensor; // overwrite op->src[i] pointer with the actual location of the src tensor
+    ggml_tensor *tensor_src = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
+    tensor->src[i] = tensor_src; // overwrite op->src[i] pointer with the actual location of the src tensor
+#if 0
+    if (tensor_src->buffer) {
+      tensor_src->buffer = vn_decode_ggml_buffer(dec);
+    }
+#endif
   }
 
   return tensor;

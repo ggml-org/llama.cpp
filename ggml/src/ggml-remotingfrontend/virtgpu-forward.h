@@ -31,3 +31,7 @@ void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_hand
 enum ggml_status apir_buffer_init_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle, ggml_tensor *tensor);
 void apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 			    ggml_tensor *tensor, const void *data, size_t offset, size_t size);
+void apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+			    const ggml_tensor *tensor, void *data, size_t offset, size_t size);
+void apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+		       uint8_t value);

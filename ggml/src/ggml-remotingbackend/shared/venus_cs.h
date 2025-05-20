@@ -116,6 +116,20 @@ vn_encode(struct vn_cs_encoder *enc, size_t size, const void *data, size_t data_
  * typed encode/decode
  */
 
+/* uint8_t */
+
+static inline void
+vn_encode_uint8_t(struct vn_cs_encoder *enc, const uint8_t *val)
+{
+  vn_encode(enc, sizeof(int), val, sizeof(*val));
+}
+
+static inline void
+vn_decode_uint8_t(struct vn_cs_decoder *dec, uint8_t *val)
+{
+  vn_decode(dec, sizeof(int), val, sizeof(*val));
+}
+
 /* uint64_t */
 
 static inline size_t

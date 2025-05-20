@@ -41,7 +41,7 @@ ggml_backend_remoting_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
 static ggml_backend_buffer_t
 ggml_backend_remoting_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-  BEING_IMPLEMENTED;
+  IMPLEMENTED;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
   struct ggml_backend_remoting_device_context *device_ctx = GET_DEVICE_CONTEXT();
@@ -69,7 +69,7 @@ static const char *
 ggml_backend_remoting_host_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
   UNUSED(buft);
 
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   return "GUEST host buffer";
 }
@@ -78,18 +78,16 @@ static size_t
 ggml_backend_remoting_host_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
   UNUSED(buft);
 
-  NOT_IMPLEMENTED;
-  STOP_HERE;
+  IMPLEMENTED_ONCE;
 
-  return 4096;
+  return 64; // not 100% sure ...
 }
 
 static bool
 ggml_backend_remoting_host_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
   UNUSED(buft);
 
-  IMPLEMENTED;
-  STOP_HERE;
+  IMPLEMENTED_ONCE;
 
   return true;
 }

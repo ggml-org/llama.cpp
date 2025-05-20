@@ -54,7 +54,7 @@ static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
   IMPLEMENTED;
 
   if (devices.size() > 0) {
-    INFO("%s: already initialized\n", __func__);
+    INFO("%s: already initialized", __func__);
   }
 
   struct virtgpu *gpu = apir_initialize();

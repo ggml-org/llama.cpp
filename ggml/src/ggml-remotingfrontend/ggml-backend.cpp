@@ -3,7 +3,7 @@
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
   UNUSED(backend);
 
-  NOT_IMPLEMENTED;
+  IMPLEMENTED;
 
   return "API Remoting backend";
 }
@@ -18,6 +18,7 @@ static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, g
   UNUSED(backend);
   UNUSED(cgraph);
 
+  NEXT;
   NOT_IMPLEMENTED;
 
   return GGML_STATUS_SUCCESS;

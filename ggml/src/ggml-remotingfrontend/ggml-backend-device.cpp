@@ -5,7 +5,7 @@
 
 static const char *
 ggml_backend_remoting_device_get_name(ggml_backend_dev_t dev) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
@@ -41,7 +41,7 @@ ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, s
 
 static bool
 ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  //IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
@@ -50,24 +50,33 @@ ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tens
 
 static bool
 ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+  IMPLEMENTED_ONCE;
+
+#if 1
+  bool supported = buft->device == dev;
+  if (!supported) {
+    //WARNING("%s: unsupported buffer type (%s). Double check.", __func__, buft->iface.get_name(buft));
+  }
+
+  return supported;
+#else
   UNUSED(dev);
   UNUSED(buft);
 
-  NOT_IMPLEMENTED;
-
   return true;
+#endif
 }
 
 static bool
 ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  const int min_batch_size = 32;
-
-  NOT_IMPLEMENTED;
-
-  return (op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS) ||
-    (op->ne[2] >= min_batch_size && op->op == GGML_OP_MUL_MAT_ID);
+  IMPLEMENTED_ONCE;
 
   UNUSED(dev);
+  UNUSED(op);
+
+  // related to supports_buft, need to confirm
+
+  return false; // same as ggml-metal
 }
 
 static void
@@ -103,7 +112,7 @@ ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backe
 
 ggml_backend_buffer_type_t
 ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
