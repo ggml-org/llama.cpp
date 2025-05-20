@@ -3702,6 +3702,7 @@ int main(int argc, char ** argv) {
             "/health",
             "/models",
             "/v1/models",
+            "/api/tags"
         };
 
         // If API key is not set, skip validation
@@ -3740,7 +3741,7 @@ int main(int argc, char ** argv) {
             if (req.path == "/" || tmp.back() == "html") {
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
                 res.status = 503;
-            } else if (req.path == "/models" || req.path == "/v1/models") {
+            } else if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags") {
                 // allow the models endpoint to be accessed during loading
                 return true;
             } else {
@@ -4076,7 +4077,21 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "success", true }});
     };
 
-    const auto handle_api_show = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
+    const auto handle_api_show = [&ctx_server, &state, &res_ok](const httplib::Request &, httplib::Response & res) {
+        server_state current_state = state.load();
+        const auto* model = llama_get_model(ctx_server.ctx);
+
+        // Get basic model info
+        char arch_buf[64] = {0};
+        char param_size_buf[64] = {0};
+        llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf));
+        llama_model_meta_val_str(model, "general.parameter_count", param_size_buf, sizeof(param_size_buf));
+
+        json model_meta = nullptr;
+        if (current_state == SERVER_STATE_READY) {
+            model_meta = ctx_server.model_meta();
+        }
+
         json data = {
             {
                 "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -4086,6 +4101,19 @@ int main(int argc, char ** argv) {
                     { "llama.context_length", ctx_server.slots.back().n_ctx, },
                 }
             },
+            {"modelfile", ""}, // Specific to ollama and does not seem to be needed
+            {"parameters", ""}, // TODO: add parameters
+            {"template", common_chat_templates_source(ctx_server.chat_templates.get())},
+            {"details", {
+                {"parent_model", ""}, // TODO: add parent model if available
+                {"format", "gguf"},
+                {"family", arch_buf},
+                {"families", {arch_buf}},
+                {"parameter_size", param_size_buf},
+                {"quantization_level", ""} // TODO: add quantization level if available
+            }},
+            {"model_info", model_meta},
+            {"capabilities", {"completion"}} // TODO: add other capabilities if available
         };
 
         res_ok(res, data);
@@ -4409,8 +4437,43 @@ int main(int argc, char ** argv) {
         if (current_state == SERVER_STATE_READY) {
             model_meta = ctx_server.model_meta();
         }
-
+        // Get file metadata
+        struct stat file_stat;
+        stat(params.model.path.c_str(), &file_stat);
+        
+        // Convert modified time to ISO 8601
+        char modified_buf[64];
+        strftime(modified_buf, sizeof(modified_buf), "%Y-%m-%dT%H:%M:%S%z", localtime(&file_stat.st_mtime));
+        
+        const auto* model = llama_get_model(ctx_server.ctx);
+        char arch_buf[64] = {0};
+        char param_size_buf[64] = {0};
+        llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf));
+        llama_model_meta_val_str(model, "general.parameter_count", param_size_buf, sizeof(param_size_buf));
+        
         json models = {
+            {"models", {
+                { 
+                    {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"modified_at", modified_buf},
+                    {"size", file_stat.st_size},
+                    {"digest", ""}, // TODO: add digest
+                    {"type", "model"},
+                    {"description", ""},
+                    {"tags", {arch_buf}},
+                    {"capabilities", {"completion"}},
+                    {"parameters", ""}, // TODO: add parameters
+                    {"details", {
+                        {"parent_model", ""}, // TODO: Add parent_model
+                        {"format", "gguf"},
+                        {"family", arch_buf},
+                        {"families", {arch_buf}},
+                        {"parameter_size", param_size_buf},
+                        {"quantization_level", ""} // TODO: add quantization level if available
+                    }}
+                }
+            }},
             {"object", "list"},
             {"data", {
                 {
@@ -4420,7 +4483,7 @@ int main(int argc, char ** argv) {
                     {"owned_by", "llamacpp"},
                     {"meta",     model_meta},
                 },
-             }}
+            }}
         };
 
         res_ok(res, models);
@@ -4748,11 +4811,13 @@ int main(int argc, char ** argv) {
     svr->Post("/api/show",            handle_api_show);
     svr->Get ("/models",              handle_models); // public endpoint (no API key check)
     svr->Get ("/v1/models",           handle_models); // public endpoint (no API key check)
+    svr->Get ("/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
     svr->Post("/completion",          handle_completions); // legacy
     svr->Post("/completions",         handle_completions);
     svr->Post("/v1/completions",      handle_completions_oai);
     svr->Post("/chat/completions",    handle_chat_completions);
     svr->Post("/v1/chat/completions", handle_chat_completions);
+    svr->Post("/api/chat",            handle_chat_completions); // ollama specific endpoint
     svr->Post("/infill",              handle_infill);
     svr->Post("/embedding",           handle_embeddings); // legacy
     svr->Post("/embeddings",          handle_embeddings);
