@@ -118,7 +118,7 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 | Ling models                 |   √   |   √  |   √  |
 
 
-### Multimodal
+**Multimodal**
 | Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
 | LLaVA 1.5 models, LLaVA 1.6 models      |   x   |   x  |   x  |
