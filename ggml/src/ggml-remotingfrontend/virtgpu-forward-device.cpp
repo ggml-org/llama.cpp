@@ -140,8 +140,7 @@ apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op) {
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP);
 
-  vn_encode_ggml_tensor(encoder, op);
-
+  vn_encode_ggml_tensor(encoder, op, TENSOR_MAX_DEPTH_DEVICE_SUPPORTS_OP);
 
   REMOTE_CALL(gpu, encoder, decoder);
 

@@ -70,3 +70,8 @@ struct virgl_apir_context {
 
   struct virgl_apir_callbacks iface;
 };
+
+#define TENSOR_MAX_DEPTH_DEVICE_SUPPORTS_OP 2
+#define TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR 2
+#define TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR 2
+#define TENSOR_MAX_DEPTH_CGRAPH_DATA 10

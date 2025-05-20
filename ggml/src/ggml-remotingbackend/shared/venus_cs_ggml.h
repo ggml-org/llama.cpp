@@ -10,24 +10,37 @@ vn_encode_ggml_buffer_handle(struct vn_cs_encoder *enc, const apir_buffer_handle
 static inline ggml_backend_buffer_t
 vn_decode_ggml_buffer(struct vn_cs_decoder *dec);
 
+/* ggml_tensor */
+
+static inline size_t
+vn_encode_sizeof_ggml_tensor(const ggml_tensor *tensor, int depth_to_go) {
+  /* must match the encoding vn_encode_ggml_tensor */
+  size_t size = 0;
+  size_t tensor_size = sizeof(ggml_tensor);
+
+  size += tensor_size; // the main tensor
+
+  if (depth_to_go != 0) {
+    if (tensor->view_src) {
+      size += vn_encode_sizeof_ggml_tensor(tensor->view_src, depth_to_go-1);
+    }
+
+    for (int i = 0; tensor->src[i]; i++) {
+      size += vn_encode_sizeof_ggml_tensor(tensor->src[i], depth_to_go-1);
+    }
+  }
+  return size;
+}
+
 static inline void
-vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor) {
+vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor, int depth_to_go) {
   size_t tensor_size = sizeof(*tensor);
 
   if (tensor->extra) {
     FATAL("Cannot pass tensors with extra");
   }
 
-  if (tensor->src[0] && tensor->buffer) {
-    static int first = 1;
-    if (first) {
-      // not sure if the buffer needs to be updated inside the src tensors or not
-      WARNING("Cannot pass tensors with src and buffer");
-      first = 0;
-    }
-  }
-
-  vn_cs_encoder_write(enc, tensor_size, tensor, tensor_size);
+  ggml_tensor *cs_tensor = (ggml_tensor *) vn_cs_encoder_write(enc, tensor_size, tensor, tensor_size);
 
   // tensor->data is a pointer inside the device buffer. No need to touch it
   // tensor->buffer is a pointer to a buffer. Encoding the buffer handle in sequence.
@@ -35,52 +48,40 @@ vn_encode_ggml_tensor(struct vn_cs_encoder *enc, const ggml_tensor *tensor) {
 
   if (tensor->buffer) {
     apir_buffer_handle_t buffer_handle = ggml_buffer_to_apir_handle(tensor->buffer);
-    vn_encode_ggml_buffer_handle(enc, &buffer_handle);
+    cs_tensor->buffer = (ggml_backend_buffer *) buffer_handle;
   }
 
-  if (tensor->view_src) {
-    vn_cs_encoder_write(enc, tensor_size, tensor->view_src, tensor_size);
-  }
-
-  for (int i = 0; tensor->src[i]; i++) {
-    const ggml_tensor *tensor_src = tensor->src[i];
-    vn_cs_encoder_write(enc, tensor_size, tensor_src, tensor_size);
-
-#if 0
-    if (tensor_src->buffer) {
-      apir_buffer_handle_t src_buffer_handle = ggml_buffer_to_apir_handle(tensor_src->buffer);
-      vn_encode_ggml_buffer_handle(enc, &src_buffer_handle);
+  if (depth_to_go != 0) {
+    if (tensor->view_src) {
+      vn_encode_ggml_tensor(enc, tensor->view_src, depth_to_go-1);
     }
-#endif
+
+    for (int i = 0; tensor->src[i]; i++) {
+      vn_encode_ggml_tensor(enc, tensor->src[i], depth_to_go-1);
+    }
   }
 }
 
-static inline const ggml_tensor *
-vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec) {
+static inline ggml_tensor *
+vn_decode_ggml_tensor_inplace(struct vn_cs_decoder *dec, int depth_to_go) {
 
   // it safe to remove the `const` qualifier here, we *do* want to
   // modify the shared memory data to fix the `src` pointers.
   ggml_tensor *tensor = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
 
   // tensor->data is a pointer inside the device buffer. No need to touch it
-  // tensor->buffer is a pointer to a buffer. Decode the buffer handle encoded in sequence.
-  if (tensor->buffer) {
-    tensor->buffer = vn_decode_ggml_buffer(dec);
-  }
+  // tensor->buffer has already been updated to the correct pointer
 
-  if (tensor->view_src) {
-    ggml_tensor *tensor_view_src = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
-    tensor->view_src = tensor_view_src;
-  }
-
-  for (int i = 0; tensor->src[i]; i++) {
-    ggml_tensor *tensor_src = (ggml_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, sizeof(ggml_tensor));
-    tensor->src[i] = tensor_src; // overwrite op->src[i] pointer with the actual location of the src tensor
-#if 0
-    if (tensor_src->buffer) {
-      tensor_src->buffer = vn_decode_ggml_buffer(dec);
+  if (depth_to_go != 0) {
+    if (tensor->view_src) {
+      ggml_tensor *tensor_view_src = vn_decode_ggml_tensor_inplace(dec, depth_to_go-1);
+      tensor->view_src = tensor_view_src;
     }
-#endif
+
+    for (int i = 0; tensor->src[i]; i++) {
+      ggml_tensor *tensor_src_i = vn_decode_ggml_tensor_inplace(dec, depth_to_go-1);
+      tensor->src[i] = tensor_src_i;
+    }
   }
 
   return tensor;
@@ -176,24 +177,16 @@ vn_encode_sizeof_ggml_cgraph_data(ggml_cgraph *cgraph) {
   /* must match the encoding of vn_encode_ggml_cgraph and vn_encode_ggml_tensor */
   size_t size = 0;
 
+  // don't include the `ggml_cgraph`, only it's data
+
+  // include the array of tensors
   size += sizeof(ggml_tensor*) * cgraph->n_nodes;
 
-  size_t tensor_size = sizeof(ggml_tensor);
-  INFO("tensor_size: %lu", tensor_size);
-  size += tensor_size * cgraph->n_nodes;
-
+  // include the size of all the tensors
   for (int i = 0; i < cgraph->n_nodes; i++) {
-    ggml_tensor *tensor = cgraph->nodes[i];
-    if (tensor->buffer) {
-      size += sizeof(apir_buffer_handle_t);
-    }
-    if (tensor->view_src) {
-      size += tensor_size;
-    }
-    for (int j = 0; tensor->src[j]; j++) {
-      size += tensor_size;
-    }
+    size += vn_encode_sizeof_ggml_tensor(cgraph->nodes[i], TENSOR_MAX_DEPTH_CGRAPH_DATA);
   }
+
   return size;
 }
 
@@ -225,7 +218,7 @@ vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph, struct vn_
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
     ggml_tensor *tensor = cgraph->nodes[i];
-    vn_encode_ggml_tensor(secondary_enc, tensor);
+    vn_encode_ggml_tensor(secondary_enc, tensor, TENSOR_MAX_DEPTH_CGRAPH_DATA);
   }
 }
 
@@ -238,7 +231,7 @@ vn_decode_ggml_cgraph(struct vn_cs_decoder *dec, struct vn_cs_decoder *secondary
   cgraph->nodes = vn_decode_ggml_tensor_array_inplace(secondary_dec, cgraph->n_nodes);
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
-    cgraph->nodes[i] = (ggml_tensor *)(uintptr_t) vn_decode_ggml_tensor_inplace(secondary_dec);
+    cgraph->nodes[i] = (ggml_tensor *)(uintptr_t) vn_decode_ggml_tensor_inplace(secondary_dec, TENSOR_MAX_DEPTH_CGRAPH_DATA);
   }
 
   return cgraph;

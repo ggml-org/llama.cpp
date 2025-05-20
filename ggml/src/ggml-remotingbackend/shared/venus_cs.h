@@ -105,7 +105,7 @@ vn_cs_decoder_read(struct vn_cs_decoder *dec,
     dec->cur += size;
 }
 
-static inline void
+static inline char *
 vn_cs_encoder_write(struct vn_cs_encoder *enc,
                     size_t size,
                     const void *val,
@@ -114,9 +114,12 @@ vn_cs_encoder_write(struct vn_cs_encoder *enc,
   assert(val_size <= size);
   assert(size <= ((size_t) (enc->end - enc->cur)));
 
+  char *write_addr = enc->cur;
   /* we should not rely on the compiler to optimize away memcpy... */
-  memcpy(enc->cur, val, val_size);
+  memcpy(write_addr, val, val_size);
   enc->cur += size;
+
+  return write_addr;
 }
 
 /*

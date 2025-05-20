@@ -30,7 +30,7 @@ backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
 
   ggml_tensor *tensor;
   // safe to remove the const qualifier here
-  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec);
+  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec, TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR);
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -75,7 +75,7 @@ backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
 
   ggml_tensor *tensor;
   // safe to remove the const qualifier here
-  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec);
+  tensor = (ggml_tensor *) (uintptr_t) vn_decode_ggml_tensor_inplace(dec, TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR);
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);

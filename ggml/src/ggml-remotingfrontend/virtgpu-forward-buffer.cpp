@@ -33,7 +33,7 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
 
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
-  vn_encode_ggml_tensor(encoder, tensor);
+  vn_encode_ggml_tensor(encoder, tensor, TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR);
 
   struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
   if (!shmem) {
@@ -64,7 +64,7 @@ apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_TENSOR);
 
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
-  vn_encode_ggml_tensor(encoder, tensor);
+  vn_encode_ggml_tensor(encoder, tensor, TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR);
   struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
   if (!shmem) {
     FATAL("Couldn't allocate the guest-host shared buffer :/");
