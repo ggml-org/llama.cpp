@@ -3255,7 +3255,7 @@ template<
     typename kd4x4_t, // key type in device memory
     short nl_k,
     void (*deq_k)(device const kd4x4_t *, short, thread k4x4_t &),
-    typename vd4x4_t, // key type in device memory
+    typename vd4x4_t, // value type in device memory
     short nl_v,
     void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
     short DK,        // K head size
@@ -3776,7 +3776,7 @@ template<
     typename kd4_t, // key type in device memory
     short nl_k,
     void (*deq_k_t4)(device const kd4_t *, short, thread k4_t &),
-    typename vd4_t, // key type in device memory
+    typename vd4_t, // value type in device memory
     short nl_v,
     void (*deq_v_t4)(device const vd4_t *, short, thread v4_t &),
     short DK,       // K head size
