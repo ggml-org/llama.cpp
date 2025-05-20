@@ -631,17 +631,25 @@ static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_
     return new_tensor;
 }
 
-static void dup_graph(ggml_context * ctx, const ggml_cgraph * src, ggml_cgraph * dst) {
+static void dup_graph(ggml_context * ctx, const ggml_cgraph * src, ggml_cgraph * dst, bool expand) {
     std::map<ggml_tensor *, ggml_tensor *> tensor_map;
 
-    for (int i = 0; i < src->n_leafs; i++) {
-        ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->leafs[i]));
+    if (expand) {
+        for (int i = 0; i < src->n_leafs; i++) {
+            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->leafs[i]));
+        }
+        for (int i = 0; i < src->n_nodes; i++) {
+            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->nodes[i]));
+        }
+    } else {
+        for (int i = 0; i < src->n_leafs; i++) {
+            dst->leafs[dst->n_leafs++] = map_tensor(tensor_map, ctx, src->leafs[i]);
+        }
+        for (int i = 0; i < src->n_nodes; i++) {
+            dst->nodes[dst->n_nodes++] = map_tensor(tensor_map, ctx, src->nodes[i]);
+        }
     }
     GGML_ASSERT(dst->n_leafs == src->n_leafs);
-
-    for (int i = 0; i < src->n_nodes; i++) {
-        ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->nodes[i]));
-    }
     GGML_ASSERT(dst->n_nodes == src->n_nodes);
 
     if (src->grads) {
