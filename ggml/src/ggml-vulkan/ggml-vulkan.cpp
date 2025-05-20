@@ -4505,9 +4505,7 @@ static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, 
     }
     return aligned ? mmp->a_l : mmp->l;
 
-#ifndef GGML_VULKAN_DEBUG
     GGML_UNUSED(src1_type);
-#endif
 }
 
 static uint32_t ggml_vk_guess_matmul_pipeline_align(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, int m, int n, ggml_type src0_type, ggml_type src1_type) {
