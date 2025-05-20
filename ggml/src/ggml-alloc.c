@@ -66,10 +66,22 @@ static bool ggml_op_can_inplace(enum ggml_op op) {
     }
 }
 
+// return the next offset aligned to the specified power-of-two boundary
+// optimized to avoid expensive modulo operations for common alignments
 static size_t aligned_offset(const void * buffer, size_t offset, size_t alignment) {
     assert(alignment && !(alignment & (alignment - 1))); // power of 2
-    size_t align = (alignment - (((uintptr_t)buffer + offset) % alignment)) % alignment;
-    return offset + align;
+
+    uintptr_t addr = (uintptr_t) buffer + offset;
+
+    switch (alignment) {
+        case 16: return offset + ((-addr) & 15);
+        case 32: return offset + ((-addr) & 31);
+        case 64: return offset + ((-addr) & 63);
+        default: {
+            size_t mask = alignment - 1;
+            return offset + ((-addr) & mask);
+        }
+    }
 }
 
 // tallocr
