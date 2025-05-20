@@ -36,7 +36,6 @@
     "remark-math": "^6.0.0",
     "tailwindcss": "^4.1.1",
     "textlinestream": "^1.1.1",
-    "unist-util-visit": "^5.0.0",
     "vite-plugin-singlefile": "^2.0.3"
   },
   "devDependencies": {
