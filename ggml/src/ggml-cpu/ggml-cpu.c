@@ -34,6 +34,7 @@
 #include <limits.h>
 #include <stdarg.h>
 #include <signal.h>
+#include <numa.h>
 #if defined(__gnu_linux__)
 #include <syscall.h>
 #endif
@@ -440,6 +441,13 @@ struct ggml_threadpool {
     atomic_int n_graph;       // incremented when there is work to be done (i.e each graph)
     atomic_int GGML_CACHE_ALIGN n_barrier;
     atomic_int GGML_CACHE_ALIGN n_barrier_passed;
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    atomic_int GGML_CACHE_ALIGN *n_barrier_node[GGML_NUMA_MIGRATE_NODES];
+    atomic_int GGML_CACHE_ALIGN *n_barrier_passed_node[GGML_NUMA_MIGRATE_NODES];
+    atomic_int GGML_CACHE_ALIGN *n_barrier_passed_last;
+#endif
+
     atomic_int GGML_CACHE_ALIGN current_chunk; // currently processing chunk during Mat_Mul, shared between all the threads.
 
     // these are atomic as an annotation for thread-sanitizer
@@ -505,6 +513,10 @@ struct ggml_numa_nodes {
 #else
     uint32_t cpuset; // no NUMA support outside of Linux at this time. Use a portable datatype
 #endif
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    bool even_distributed;
+#endif
 };
 
 //
@@ -552,6 +564,74 @@ void ggml_barrier(struct ggml_threadpool * tp) {
     #else
     atomic_thread_fence(memory_order_seq_cst);
     #endif
+#endif
+}
+
+#ifdef GGML_USE_NUMA_MIGRATE
+static int get_node_from_cpu(int cpu, int cores_per_numa) {
+    return cpu / cores_per_numa;
+}
+#endif
+
+void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
+#ifndef GGML_USE_NUMA_MIGRATE
+    UNUSED(ith);
+    UNUSED(node_n);
+    ggml_barrier(tp);
+    return;
+#else
+    if ((g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_MIGRATE) || !g_state.numa.even_distributed) {
+        ggml_barrier(tp);
+        return;
+    }
+
+    int n_threads = atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed);
+    if (n_threads == 1) {
+        return;
+    }
+
+    int cores_per_numa = g_state.numa.nodes[0].n_cpus;
+    int numa_nodes = n_threads / cores_per_numa;
+    int remaining_cores = n_threads % cores_per_numa;
+    if (numa_nodes <= 1 || remaining_cores) {
+        ggml_barrier(tp);
+        return;
+    }
+
+    if (node_n == GGML_BARRIER_NODE_LAST) {
+        node_n = tp->cgraph->n_nodes;
+    }
+
+    int node = get_node_from_cpu(ith, cores_per_numa);
+
+    int n_passed = atomic_load_explicit(tp->n_barrier_passed_node[node], memory_order_relaxed);
+
+    // enter barrier (full seq-cst fence)
+    int n_barrier = atomic_fetch_add_explicit(tp->n_barrier_node[node], 1, memory_order_seq_cst);
+
+    if (n_barrier == (cores_per_numa - 1)) {
+        // last thread of current numa node
+        atomic_store_explicit(tp->n_barrier_node[node], 0, memory_order_seq_cst);
+
+        int n_passed_node = atomic_fetch_add_explicit(&tp->n_barrier_passed_last[node_n], 1, memory_order_seq_cst);
+
+        if (n_passed_node == (numa_nodes - 1)) { // last numa node cpu
+            atomic_fetch_add_explicit(tp->n_barrier_passed_node[node], 1, memory_order_seq_cst);
+            atomic_store_explicit(&tp->n_barrier_passed_last[node_n], 0, memory_order_seq_cst);
+        } else {
+            while (atomic_load_explicit(&tp->n_barrier_passed_last[node_n], memory_order_relaxed)) {
+                ggml_thread_cpu_relax();
+            }
+            atomic_fetch_add_explicit(tp->n_barrier_passed_node[node], 1, memory_order_seq_cst);
+        }
+
+        return;
+    }
+
+    // wait for other threads
+    while (atomic_load_explicit(tp->n_barrier_passed_node[node], memory_order_seq_cst) == n_passed) {
+        ggml_thread_cpu_relax();
+    }
 #endif
 }
 
@@ -631,6 +711,10 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
         struct ggml_numa_node * node = &g_state.numa.nodes[n];
         GGML_PRINT_DEBUG("CPUs on node %u:", n);
         node->n_cpus = 0;
+
+#ifdef GGML_USE_NUMA_MIGRATE
+        g_state.numa.even_distributed = true;
+#endif
         for (uint32_t c = 0; c < g_state.numa.total_cpus; ++c) {
             rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u/cpu%u", n, c);
             GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
@@ -640,6 +724,11 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             }
         }
         GGML_PRINT_DEBUG("\n");
+#ifdef GGML_USE_NUMA_MIGRATE
+        if ((n != 0) && (g_state.numa.nodes[n].n_cpus != g_state.numa.nodes[0].n_cpus)) {
+            g_state.numa.even_distributed = false;
+        }
+#endif
     }
 
     if (ggml_is_numa()) {
@@ -2070,6 +2159,30 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
+
+#ifdef GGML_USE_NUMA_MIGRATE
+static void set_numa_migrate_affinity(int core_no) {
+    // Check if the core number is valid
+    if (core_no < 0 || core_no >= (int)g_state.numa.total_cpus) {
+        printf("%s, Warn: core_no not between 0 and %d, failback.\n", __func__, g_state.numa.total_cpus);
+        return;
+    }
+
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset); // Initialize the CPU set
+
+    CPU_SET(core_no, &cpuset); // Set the specified core
+
+    // Set the thread's CPU affinity
+    int result = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (result != 0) {
+        printf("failed to set core_no affinity: %d\n", core_no);
+        perror("set_affinity");
+        exit (1);
+    }
+}
+#endif
+
 static void set_numa_thread_affinity(int thread_n) {
     if (!ggml_is_numa()) {
         return;
@@ -2095,6 +2208,11 @@ static void set_numa_thread_affinity(int thread_n) {
                 fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n",strerror(rv));
             }
             return;
+#ifdef GGML_USE_NUMA_MIGRATE
+        case GGML_NUMA_STRATEGY_MIGRATE:
+            set_numa_migrate_affinity(thread_n);
+            return;
+#endif
         default:
             return;
     }
@@ -2840,10 +2958,36 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.threadpool=*/ tp,
     };
 
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+    struct timespec t0, t1, t2, t3, t4;
+    long d12, d32, d43;
+    bool log_time = true;
+    int log_node_n = 0;
+    if (log_time) {
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+    }
+#endif
+
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
-
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+        if ((node->op == GGML_OP_MUL_MAT)) {
+            log_node_n = node_n;
+            log_time = true;
+        } else {
+            log_time = false;
+        }
+        if (log_time) {
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+        }
+#endif
         ggml_compute_forward(&params, node);
+
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+        if (log_time) {
+            clock_gettime(CLOCK_MONOTONIC, &t2);
+        }
+#endif
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
@@ -2852,11 +2996,28 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         }
 
         if (node_n + 1 < cgraph->n_nodes) {
-            ggml_barrier(state->threadpool);
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+            if (log_time) {
+                clock_gettime(CLOCK_MONOTONIC, &t3);
+            }
+#endif
+
+            ggml_barrier_numa_aware(state->threadpool, state->ith, node_n);
+
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+            if (log_time) {
+                clock_gettime(CLOCK_MONOTONIC, &t4);
+                d12 = (t2.tv_sec - t1.tv_sec) * 1e9 + (t2.tv_nsec - t1.tv_nsec);
+                d32 = (t3.tv_sec - t2.tv_sec) * 1e9 + (t3.tv_nsec - t2.tv_nsec);
+                d43 = (t4.tv_sec - t3.tv_sec) * 1e9 + (t4.tv_nsec - t3.tv_nsec);
+                printf("%s, op: %d, ith: %d, cpu: %d, d12: %ld, d32: %ld, d43: %ld, t1: %ld, t2: %ld, t3: %ld, t4: %ld\n", \
+                    __func__, node->op, state->ith, sched_getcpu(), d12, d32, d43, t1.tv_nsec, t2.tv_nsec, t3.tv_nsec, t4.tv_nsec);
+            }
+#endif
         }
     }
 
-    ggml_barrier(state->threadpool);
+    ggml_barrier_numa_aware(state->threadpool, state->ith, GGML_BARRIER_NODE_LAST);
 
     return 0;
 }
@@ -3021,6 +3182,21 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->n_graph          = 0;
         threadpool->n_barrier        = 0;
         threadpool->n_barrier_passed = 0;
+
+#ifdef GGML_USE_NUMA_MIGRATE
+        for (int node = 0; node < GGML_NUMA_MIGRATE_NODES; node++) {
+            threadpool->n_barrier_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node);
+            *threadpool->n_barrier_node[node] = 0;
+            threadpool->n_barrier_passed_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node);
+            *threadpool->n_barrier_passed_node[node] = 0;
+        }
+
+        threadpool->n_barrier_passed_last = (atomic_int *)malloc((threadpool->cgraph->n_nodes + 1) * sizeof(atomic_int));
+        for (int i = 0; i < threadpool->cgraph->n_nodes + 1; i++) {
+            threadpool->n_barrier_passed_last[i] = 0;
+        }
+#endif
+
         threadpool->current_chunk    = 0;
         threadpool->stop             = false;
         threadpool->pause            = tpp->paused;

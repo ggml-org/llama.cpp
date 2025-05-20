@@ -686,6 +686,10 @@ llama_model_loader::llama_model_loader(
         use_mmap = false;
     }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    use_mmap = false;
+#endif
+
     this->use_mmap = use_mmap;
     this->check_tensors = check_tensors;
 }

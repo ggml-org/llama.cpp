@@ -413,7 +413,11 @@ static ggml_backend_buffer_t ggml_backend_cpu_kleidiai_buffer_type_alloc_buffer(
 }
 
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    return ggml_backend_get_page_size();
+#else
     return TENSOR_ALIGNMENT;
+#endif
 
     GGML_UNUSED(buft);
 }

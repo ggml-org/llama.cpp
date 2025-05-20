@@ -6111,7 +6111,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             from_float((float *) ((char *) src1->data + i11 * nb11), (void *) (wdata + i11 * nbw1), ne10);
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier_numa_aware(params->threadpool, ith, GGML_BARRIER_NODE_LAST);
 
         const void * src1_wdata      = params->wdata;
         const size_t src1_col_stride = ggml_row_size(PARAM_TYPE, ne10);
@@ -6219,7 +6219,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             }
         }
 
-        ggml_barrier(params->threadpool);
+        ggml_barrier_numa_aware(params->threadpool, ith, GGML_BARRIER_NODE_LAST);
 
         // compute each matrix multiplication in sequence
         for (int cur_a = 0; cur_a < n_as; ++cur_a) {
@@ -6359,7 +6359,11 @@ static ggml_backend_buffer_t ggml_backend_cpu_aarch64_buffer_type_alloc_buffer(g
 }
 
 static size_t ggml_backend_cpu_aarch64_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    return ggml_backend_get_page_size();
+#else
     return TENSOR_ALIGNMENT;
+#endif
 
     GGML_UNUSED(buft);
 }
