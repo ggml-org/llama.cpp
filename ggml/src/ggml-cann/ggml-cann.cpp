@@ -31,7 +31,7 @@
 #include <mutex>
 #include <queue>
 #include <chrono>
-#include <set>
+#include <unordered_set>
 #include <optional>
 
 #include "ggml-impl.h"
@@ -101,17 +101,17 @@ int32_t ggml_cann_get_device() {
 std::optional<std::string> get_env(const std::string& name) {
     const char* val = std::getenv(name.c_str());
     if (!val) return std::nullopt;
-    return std::string(val);
+    std::string res = std::string(val);
+    std::transform(res.begin(), res.end(), res.begin(), ::tolower);
+    return res;
 }
 
 /**
  * @brief Verify whether the environment variable is a valid value.
  */
 bool parse_bool(const std::string& value) {
-    std::string res = value;
-    std::transform(res.begin(), res.end(), res.begin(), ::tolower);
-    std::set<std::string> valid_values = {"on", "1", "yes", "y", "enable", "true"};
-    return valid_values.find(res) != valid_values.end();
+    std::unordered_set<std::string> valid_values = {"on", "1", "yes", "y", "enable", "true"};
+    return valid_values.find(value) != valid_values.end();
 }
 
 /**
@@ -753,7 +753,6 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
 std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(
     int device) {
     std::string mem_pool_type = get_env("GGML_CANN_MEM_POOL").value_or("");
-    std::transform(mem_pool_type.begin(), mem_pool_type.end(), mem_pool_type.begin(), ::tolower);
 
     if (mem_pool_type == "prio") {
         GGML_LOG_INFO("%s: device %d use buffer pool with priority queue\n", __func__, device);
