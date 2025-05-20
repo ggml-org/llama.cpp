@@ -1173,6 +1173,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 {
                     const ggml_cgraph tmp = ggml_graph_view(graph, split->i_start, split->i_end);
                     if (split->tensor_parallel && split->backend_id > 0) {
+                        split->graph = *ggml_new_graph_custom(sched->ctx, tmp.size, /*grads =*/ false);
                         dup_graph(sched->ctx, &tmp, &split->graph, /*expand =*/ false);
                     } else {
                         split->graph = tmp;
