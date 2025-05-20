@@ -327,12 +327,13 @@ private:
 class llama_kv_cache_recurrent : public llama_kv_cache {
 public:
     llama_kv_cache_recurrent(
-            const llama_model & model,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                         bool   offload,
-                     uint32_t   kv_size,
-                     uint32_t   n_seq_max);
+            const llama_model &  model,
+              layer_filter_cb && filter,
+                    ggml_type    type_k,
+                    ggml_type    type_v,
+                         bool    offload,
+                     uint32_t    kv_size,
+                     uint32_t    n_seq_max);
 
     ~llama_kv_cache_recurrent() = default;
 

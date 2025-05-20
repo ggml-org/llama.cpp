@@ -209,6 +209,7 @@ static void test_llama_kv_cache_recurrent_constructor() {
     auto model = _make_model(LLM_ARCH_MAMBA);
     llama_kv_cache_recurrent cache(
         /* model     */ *model,
+        /* filter    */ nullptr,
         /* type_k    */ GGML_TYPE_F32,
         /* type_v    */ GGML_TYPE_F16,
         /* offload   */ false,
