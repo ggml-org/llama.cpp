@@ -9262,8 +9262,7 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
     try {
         ptr = ggml_vk_host_malloc(vk_instance.devices[0], size);
     } catch (vk::SystemError& e) {
-        std::cerr << "ggml_vulkan: Failed to allocate pinned memory." << std::endl;
-        std::cerr << "ggml_vulkan: " << e.what() << std::endl;
+        GGML_LOG_WARN("ggml_vulkan: Failed to allocate pinned memory (%s)\n", e.what());
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
