@@ -8,6 +8,7 @@
  - [DataType Supports](#datatype-supports)
  - [Docker](#docker)
  - [Linux](#linux)
+ - [Environment variable setup](#environment-variable-setup)
  - [TODO](#todo)
 
 
@@ -279,6 +280,30 @@ cmake --build build --config release
 
 ### **GitHub contribution**:
 Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team check/address them without delay.
+
+
+## Environment variable setup
+
+### GGML_CANN_ASYNC_MODE
+
+ `GGML_CANN_ASYNC_MODE` controls whether asynchronous commit mode is enabled(default closed state), which can help speed up model execution. Yes, enable, y, 1, on ,true(case insensitive) are all valid values to enable `GGML_CANN_ASYNC_MODE`, such as `export GGML_CANN_ASYNC_MODE=yEs`.
+
+
+
+### GGML_CANN_MEM_POOL
+
+three cases here:
+
+- By setting `export GGML_CANN_MEM_POOL=pRio` (the value is case-insensitive), you specify the use of a priority queue-based memory pool.
+
+- Legacy memory pools are enabled when VMM is not available or when `export GGML_CANN_MEM_POOL=leg` is set.
+
+- default VMM
+
+### GGML_CANN_DISABLE_BUF_POOL_CLEAN
+
+`GGML_CANN_DISABLE_BUF_POOL_CLEAN` is used to disable the buffer pool cleaning feature.
+ The values **yes**, **enable**, **y**, **1**, **on**, and **true** (case-insensitive) are all valid to enable `GGML_CANN_DISABLE_BUF_POOL_CLEAN`. such as `export GGML_CANN_DISABLE_BUF_POOL_CLEAN=yEs`.
 
 
 ## TODO
