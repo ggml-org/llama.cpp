@@ -1277,8 +1277,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         sched->graph.size = graph_size;
         sched->graph.nodes = (ggml_tensor **) realloc(sched->graph.nodes, graph_size * sizeof(struct ggml_tensor *));
         sched->graph.leafs = (ggml_tensor **) realloc(sched->graph.leafs, graph_size * sizeof(struct ggml_tensor *));
-        GGML_ASSERT(sched->graph.nodes != nullptr);
-        GGML_ASSERT(sched->graph.leafs != nullptr);
+        GGML_ASSERT(sched->graph.nodes != NULL);
+        GGML_ASSERT(sched->graph.leafs != NULL);
     }
     sched->graph.n_nodes = 0;
     sched->graph.n_leafs = 0;
