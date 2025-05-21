@@ -135,11 +135,7 @@ static size_t ggml_backend_tmac_buffer_type_get_alignment(ggml_backend_buffer_ty
 
 static size_t ggml_backend_tmac_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     // T-MAC version of ggml_nbytes
-    if (is_tmac_type(tensor->type)){
-        return ggml_tmac_get_nbytes(tensor);
-    }
-  
-    return ggml_nbytes(tensor);
+    return ggml_tmac_get_nbytes(tensor);  
 
     GGML_UNUSED(buft);
 }

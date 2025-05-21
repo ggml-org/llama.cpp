@@ -1088,11 +1088,6 @@ bool llama_model_loader::load_all_data(
         }
 
         size_done += n_size;
-
-// #if defined(GGML_USE_TMAC)
-//         // Do pre-transformation to reduce first-run latency
-//         ggml_tmac_transform_tensor(cur);
-// #endif
     }
 
     // free temporary resources used for async uploads

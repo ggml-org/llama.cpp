@@ -86,20 +86,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         get_target_property(cdefs ${GGML_CPU_NAME} COMPILE_DEFINITIONS)
         message(STATUS "GGML_CPU_NAME: ${GGML_CPU_NAME} COMPILE_DEFINITIONS: ${cdefs}")
 
-        # set(GGML_HEADERS_TMAC
-        #     ggml-cpu/tmac/lut_ctor.h
-        #     ggml-cpu/tmac/tbl.h
-        #     ggml-cpu/tmac/ggml-tmac.h
-        #     ../../common/log.h
-        #     )
-        # set(GGML_SOURCES_TMAC
-        #     ggml-cpu/tmac/lut_ctor.cpp
-        #     ggml-cpu/tmac/tbl.cpp
-        #     ggml-cpu/tmac/ggml-tmac.cpp
-        #     ../../common/log.cpp
-        #     )
-        # list (APPEND GGML_CPU_SOURCES ${GGML_SOURCES_TMAC} ${GGML_HEADERS_TMAC})
-
         if ((NOT ${CMAKE_C_COMPILER_ID} MATCHES "Clang") OR
             (NOT ${CMAKE_CXX_COMPILER_ID} MATCHES "Clang"))
             message(FATAL_ERROR "Clang is required for T-MAC compilation")
