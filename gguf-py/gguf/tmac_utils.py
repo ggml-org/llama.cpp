@@ -166,6 +166,6 @@ def preprocess_for_t_mac(
     w_packed = tighten_bit_array(w, bits)
 
     if zeros is not None:
-        return np.concatenate([w_packed, scales.astype(np.float32).copy().view(np.uint8).flatten(), zeros.astype(np.float32).copy().view(np.uint8).flatten()])
+        return np.concatenate([w_packed, scales.astype(np.float16).copy().view(np.uint8).flatten(), zeros.astype(np.float16).copy().view(np.uint8).flatten()])
     else:
-        return np.concatenate([w_packed, scales.astype(np.float32).copy().view(np.uint8).flatten()])
+        return np.concatenate([w_packed, scales.astype(np.float16).copy().view(np.uint8).flatten()])

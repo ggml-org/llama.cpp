@@ -513,8 +513,8 @@ size_t ggml_tmac_get_nbytes(const struct ggml_tensor * tensor) {
         }
 
         const int scales_size = ggml_tmac_get_scales_size(kernel_config, m, k);
-        // Currently, always uses float to store scales or zero points
-        size_t nbytes = k * m / 8 * bits + scales_size * sizeof(float);
+        // Currently, always uses float16 to store scales or zero points
+        size_t nbytes = k * m / 8 * bits + scales_size * sizeof(ggml_fp16_t);
         nbytes = GGML_PAD(nbytes, GGUF_DEFAULT_ALIGNMENT);
         return nbytes;
     } else {
@@ -557,7 +557,7 @@ struct BlockQ40TypeAccessor {
 
     static tmac_float_type get_scale(const void * data, int idx) {
         ggml_fp16_t d = ((const block_t *) data)[idx / group_size].d;
-        if (sizeof(tmac_float_type) == 2) {
+        if constexpr (sizeof(tmac_float_type) == 2) {
             tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&d);
             return *fp16dp;
         } else {
@@ -577,15 +577,25 @@ struct BlockI2TypeAccessor {
     }
 
     static tmac_float_type get_scale(const void * data, int idx, int group_size) {
-        const float * ss = (const float *) data;
-        float s = ss[idx / group_size];
-        return (tmac_float_type) s;
+        const ggml_fp16_t * ss = (const ggml_fp16_t *) data;
+        ggml_fp16_t s = ss[idx / group_size];
+        if constexpr (sizeof(tmac_float_type) == 2) {
+            tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&s);
+            return *fp16dp;
+        } else {
+            return ggml_fp16_to_fp32(s);
+        }
     }
 
     static tmac_float_type get_zero_point(const void * data, int idx, int group_size) {
-        const float * zs = (const float *) data;
-        float z = zs[idx / group_size];
-        return (tmac_float_type) z;
+        const ggml_fp16_t * zs = (const ggml_fp16_t *) data;
+        ggml_fp16_t z = zs[idx / group_size];
+        if constexpr (sizeof(tmac_float_type) == 2) {
+            tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&z);
+            return *fp16dp;
+        } else {
+            return ggml_fp16_to_fp32(z);
+        }
     }
 };
 
@@ -600,15 +610,25 @@ struct BlockI4TypeAccessor {
     }
 
     static tmac_float_type get_scale(const void * data, int idx, int group_size) {
-        const float * ss = (const float *) data;
-        float s = ss[idx / group_size];
-        return (tmac_float_type) s;
+        const ggml_fp16_t * ss = (const ggml_fp16_t *) data;
+        ggml_fp16_t s = ss[idx / group_size];
+        if constexpr (sizeof(tmac_float_type) == 2) {
+            tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&s);
+            return *fp16dp;
+        } else {
+            return ggml_fp16_to_fp32(s);
+        }
     }
 
     static tmac_float_type get_zero_point(const void * data, int idx, int group_size) {
-        const float * zs = (const float *) data;
-        float z = zs[idx / group_size];
-        return (tmac_float_type) z;
+        const ggml_fp16_t * zs = (const ggml_fp16_t *) data;
+        ggml_fp16_t z = zs[idx / group_size];
+        if constexpr (sizeof(tmac_float_type) == 2) {
+            tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&z);
+            return *fp16dp;
+        } else {
+            return ggml_fp16_to_fp32(z);
+        }
     }
 };
 
@@ -673,7 +693,7 @@ struct BlockTQ10TypeAccessor {
 
     static tmac_float_type get_scale(const void * data, int idx, int group_size) {
         ggml_fp16_t d = ((const block_t *) data)[idx / group_size].d;
-        if (sizeof(tmac_float_type) == 2) {
+        if constexpr (sizeof(tmac_float_type) == 2) {
             tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&d);
             return *fp16dp;
         } else {
@@ -700,7 +720,7 @@ struct BlockTQ20TypeAccessor {
 
     static tmac_float_type get_scale(const void * data, int idx, int group_size) {
         ggml_fp16_t d = ((const block_t *) data)[idx / group_size].d;
-        if (sizeof(tmac_float_type) == 2) {
+        if constexpr (sizeof(tmac_float_type) == 2) {
             tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&d);
             return *fp16dp;
         } else {
@@ -948,12 +968,12 @@ static inline void ggml_tmac_transform_tensor(struct ggml_tensor * tensor, const
         }
         threads.clear();
 
-        const float * int_n_scales = (const float * ) ((const uint8_t *) origin_data + k * m / 8);
-        const float * int_n_zero_points = int_n_scales + scales_size / 2;
+        const ggml_fp16_t * int_n_scales = (const ggml_fp16_t * ) ((const uint8_t *) origin_data + k * m / 8);
+        const ggml_fp16_t * int_n_zero_points = int_n_scales + scales_size / 2;
 
         if (scales_size < m / bits) {  // BitNet-like scale (m_groups,)
             for (int i = 0; i < scales_size; i++) {
-                scales[i] = (tmac_float_type) int_n_scales[i];
+                scales[i] = BlockI2TypeAccessor::get_scale(int_n_scales, i, 1);
             }
         } else {
             // TODO: move if-else outside the loop
@@ -1100,7 +1120,7 @@ void ggml_backend_tmac_mul_mat(const struct ggml_compute_params * params, struct
     }
 
     for (int ine11 = ith; ine11 < ne11; ine11 += nth) {
-        if (sizeof(tmac_float_type) == 2) {
+        if constexpr (sizeof(tmac_float_type) == 2) {
             // TODO: can we reuse the src1->data memory?
             ggml_fp32_to_fp16_row((const float *) src1->data + ne10 * ine11, (ggml_fp16_t *) act_input + ne10 * ine11, ne10);
         }
@@ -1119,11 +1139,9 @@ void ggml_backend_tmac_mul_mat(const struct ggml_compute_params * params, struct
 
     ggml_barrier(params->threadpool);
 
-    tmac_float_type * act_output;
-    if (sizeof(tmac_float_type) == 2) {
+    tmac_float_type * act_output = (tmac_float_type *) (dst->data);
+    if constexpr (sizeof(tmac_float_type) == 2) {
         act_output = tmac_f_ptr;
-    } else {
-        act_output = (tmac_float_type *) (dst->data);
     }
 
     const int n_tile_num = wt->n_tile_num;
@@ -1186,23 +1204,9 @@ void ggml_backend_tmac_mul_mat(const struct ggml_compute_params * params, struct
                                                 lut_biases + lut_scales_offset,
                                                 act_output + dst_offset,
                                                 ne01, ne00, 1, bits);
-                if (sizeof(tmac_float_type) == 2) {
+                if constexpr (sizeof(tmac_float_type) == 2) {
                     ggml_fp16_to_fp32_row((const ggml_fp16_t *) act_output + dst_offset, (float *) dst->data + dst_offset, chunk_size0);
                 }
-                // if ((!strcmp(src0->name, "blk.0.attn_q.weight")) && current_chunk == 0) {
-                //     printf("\n\n\n\nC_value:\n\n\n");
-                //     for (int jj = 0; jj < 128; jj++) {
-                //         printf("%f ", ((float *)act_output)[dst_offset + jj]);
-                //     }
-                //     printf("\n");
-                // }
-                // if ((!strcmp(src0->name, "blk.0.attn_q.weight")) && current_chunk == 0) {
-                //     printf("\n\n\n\ndst->data:\n\n\n");
-                //     for (int jj = 0; jj < 128; jj++) {
-                //         printf("%f ", ((float *)dst->data)[dst_offset + jj]);
-                //     }
-                //     printf("\n");
-                // }
             }
         }
 

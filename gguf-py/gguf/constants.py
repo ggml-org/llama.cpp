@@ -2036,14 +2036,14 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     # -   which is not compatible with the "blocking" philosophy of here.
     # - During inference, the accurate nbytes info will be known through ggml_tmac_get_nbytes.
     GGMLQuantizationType.TMAC_BN_0:         (64,  64 * 2 // 8),
-    GGMLQuantizationType.TMAC_W2G64_0:      (64,  4 + 64 * 2 // 8),
-    GGMLQuantizationType.TMAC_W2G64_1:      (64,  4 + 4 + 64 * 2 // 8),
-    GGMLQuantizationType.TMAC_W2G128_0:     (128, 4 + 128 * 2 // 8),
-    GGMLQuantizationType.TMAC_W2G128_1:     (128, 4 + 4 + 128 * 2 // 8),
-    GGMLQuantizationType.TMAC_W4G64_0:      (64,  4 + 64 * 4 // 8),
-    GGMLQuantizationType.TMAC_W4G64_1:      (64,  4 + 4 + 64 * 4 // 8),
-    GGMLQuantizationType.TMAC_W4G128_0:     (128, 4 + 128 * 4 // 8),
-    GGMLQuantizationType.TMAC_W4G128_1:     (128, 4 + 4 + 128 * 4 // 8),
+    GGMLQuantizationType.TMAC_W2G64_0:      (64,  2 + 64 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G64_1:      (64,  2 + 2 + 64 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G128_0:     (128, 2 + 128 * 2 // 8),
+    GGMLQuantizationType.TMAC_W2G128_1:     (128, 2 + 2 + 128 * 2 // 8),
+    GGMLQuantizationType.TMAC_W4G64_0:      (64,  2 + 64 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G64_1:      (64,  2 + 2 + 64 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G128_0:     (128, 2 + 128 * 4 // 8),
+    GGMLQuantizationType.TMAC_W4G128_1:     (128, 2 + 2 + 128 * 4 // 8),
 }
 
 
