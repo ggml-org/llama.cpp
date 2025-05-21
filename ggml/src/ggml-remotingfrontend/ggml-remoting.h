@@ -49,7 +49,7 @@
     static bool first = true;						\
     if (first) {							\
       printf("INFO: ### reached implemented function %s\n", __func__);  \
-      first = false;							\
+      first = true;							\
     }									\
   } while(0)
 

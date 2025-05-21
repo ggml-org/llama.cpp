@@ -3,7 +3,7 @@
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
   UNUSED(backend);
 
-  IMPLEMENTED_ONCE;
+  //IMPLEMENTED_ONCE;
 
   return "API Remoting backend";
 }

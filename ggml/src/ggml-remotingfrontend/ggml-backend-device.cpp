@@ -38,16 +38,21 @@ ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, s
 
 static bool
 ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  IMPLEMENTED_ONCE;
+#if 1
+  UNUSED(dev);
+  UNUSED(op);
 
+  return true; // same as ggml-rpc
+#else
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_supports_op(gpu, op);
+#endif
 }
 
 static bool
 ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-  IMPLEMENTED_ONCE;
+  //IMPLEMENTED_ONCE;
 
 #if 1
   bool supported = buft->device == dev;
@@ -66,7 +71,7 @@ ggml_backend_remoting_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_
 
 static bool
 ggml_backend_remoting_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-  IMPLEMENTED_ONCE;
+  //IMPLEMENTED_ONCE;
 
   UNUSED(dev);
   UNUSED(op);
