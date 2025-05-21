@@ -266,7 +266,7 @@ Since the aclnn interface for flash attention cannot support the logit softcap, 
 
 Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang@pku.edu.cn), Ruiyang Ma (ruiyang@stu.pku.edu.cn), and Guojie Luo (gluo@pku.edu.cn).
 
-Thanks Tuo Dai and Shanni Li from Huawei Technologies Co., Ltd.
+We would like to thank Tuo Dai, Shanni Li, and all of the project maintainers from Huawei Technologies Co., Ltd for their help during the code development and pull request.
 
 ## TODO
 - Support more models and data types.
