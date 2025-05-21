@@ -7358,7 +7358,7 @@ struct llm_build_phi3 : public llm_graph_context {
         ggml_tensor * inp_pos = build_inp_pos();
 
         using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_unified_iswa, llm_graph_input_attn_kv_unified>;
-        inp_attn_type * inp_attn = nullptr;;
+        inp_attn_type * inp_attn = nullptr;
 
         if constexpr (iswa) {
             inp_attn = build_attn_inp_kv_unified_iswa();
