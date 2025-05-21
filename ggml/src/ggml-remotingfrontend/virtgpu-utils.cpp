@@ -184,3 +184,17 @@ util_sparse_array_get(struct util_sparse_array *arr, uint64_t idx)
    uint64_t elem_idx = idx & ((1ull << node_size_log2) - 1);
    return (void *)((char *)node_data + (elem_idx * arr->elem_size));
 }
+
+void *something = NULL;
+void thks_bye () {
+  // break here
+  INFO("thks bye, stopping early and happilly :)");
+  if (!something) { // avoid the [[noreturn]] detection mechanism
+    exit(0);
+  }
+}
+
+void breakpoint() {
+  // break here
+  INFO("breakpoint here :)");
+}

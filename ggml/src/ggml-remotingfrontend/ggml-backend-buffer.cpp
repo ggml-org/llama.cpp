@@ -1,39 +1,96 @@
-#include <memory>
-
 #include "ggml-remoting.h"
 
-void ggml_remoting_destroy_buffer(remoting_buffer& buf) {
-    UNUSED(buf);
+#define BUFFER_TO_GPU(name) \
+  ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
+
+static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
+  //IMPLEMENTED;
+
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  return apir_buffer_get_base(gpu, BUFFER_TO_HANDLE(buffer));
 }
 
-static void ggml_remoting_buffer_write(remoting_buffer& dst, size_t offset, const void * src, size_t size) {
-    UNUSED(dst);
-    UNUSED(offset);
-    UNUSED(src);
-    UNUSED(size);
-}
+static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+  NOT_IMPLEMENTED;
 
-static void ggml_remoting_buffer_read(remoting_buffer& src, size_t offset, void * dst, size_t size) {
-    UNUSED(src);
-    UNUSED(offset);
-    UNUSED(dst);
-    UNUSED(size);
-}
+  STOP_HERE;
 
-static void ggml_remoting_buffer_copy_async(remoting_context& ctx, remoting_buffer& dst, size_t dst_offset, remoting_buffer& src, size_t src_offset, size_t size) {
-  UNUSED(ctx);
-  UNUSED(dst);
-  UNUSED(dst_offset);
-  UNUSED(src);
-  UNUSED(src_offset);
+  UNUSED(buffer);
+  UNUSED(tensor);
+  UNUSED(value);
+  UNUSED(offset);
   UNUSED(size);
 }
 
-static void * const remoting_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
+static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+  IMPLEMENTED_ONCE;
 
-static uint64_t remoting_tensor_offset(const ggml_tensor * tensor) {
-    if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) remoting_ptr_base;
-    }
-    return (uint8_t *) tensor->data - (uint8_t *) remoting_ptr_base;
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+#if 0
+  INFO("%s: data=%p, offset=%lu, size=%lu\n", __func__, data, offset, size);
+#endif
+#if 0
+  void **addr = (void **)(uintptr_t)data;
+  for (int i = 0; i <= 10; i++) {
+    INFO("%s: %p | %llx", __func__, addr, *addr);
+    addr++;
+  }
+  INFO("\n");
+#endif
+  apir_buffer_set_tensor(gpu, BUFFER_TO_HANDLE(buffer), tensor, data, offset, size);
+
+  return;
 }
+
+static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+  IMPLEMENTED_ONCE;
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  apir_buffer_get_tensor(gpu, BUFFER_TO_HANDLE(buffer), tensor, data, offset, size);
+}
+
+
+static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+  NOT_IMPLEMENTED;
+
+  STOP_HERE;
+
+  return true;
+
+  UNUSED(buffer);
+  UNUSED(src);
+  UNUSED(dst);
+}
+
+static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+  IMPLEMENTED;
+
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  apir_buffer_clear(gpu, BUFFER_TO_HANDLE(buffer), value);
+
+  return;
+}
+
+static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+  UNUSED(buffer);
+
+  IMPLEMENTED_ONCE;
+
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  apir_buffer_free_buffer(gpu, BUFFER_TO_HANDLE(buffer));
+}
+
+const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
+  /* .free_buffer     = */ ggml_backend_remoting_buffer_free_buffer,
+  /* .get_base        = */ ggml_backend_remoting_buffer_get_base,
+  /* .init_tensor     = */ NULL,
+  /* .memset_tensor   = */ ggml_backend_remoting_buffer_memset_tensor,
+  /* .set_tensor      = */ ggml_backend_remoting_buffer_set_tensor,
+  /* .get_tensor      = */ ggml_backend_remoting_buffer_get_tensor,
+  /* .cpy_tensor      = */ ggml_backend_remoting_buffer_cpy_tensor,
+  /* .clear           = */ ggml_backend_remoting_buffer_clear,
+  /* .reset           = */ NULL,
+};

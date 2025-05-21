@@ -19,9 +19,12 @@ fi
 
 cmd="bash ./build.$what.sh"
 
+POD_NAME=mac_ai_compiling
+podman machine ssh podman rm $POD_NAME --force
+
 set -x
 podman run \
---name mac_ai_compiling \
+--name $POD_NAME \
 --user root:root \
 --cgroupns host \
 --security-opt label=disable \

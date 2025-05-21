@@ -1,30 +1,29 @@
 #include <cstdio>
 #include <cstdarg>
+#include <cstdlib>
 
-static inline void LOG(const char* fmt, ...) {
-    va_list args;
-    va_start(args, fmt);
-    vprintf(fmt, args);
-    va_end(args);
+#include "ggml-impl.h"
+#include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 
-    printf("\n");
-}
+extern ggml_backend_reg_t reg;
+extern ggml_backend_dev_t dev;
+extern ggml_backend_t bck;
 
-static inline void FATAL(const char* fmt, ...) {
-  printf("FATAL: ");
-  va_list args;
-  va_start(args, fmt);
-  vprintf(fmt, args);
-  va_end(args);
-
-  printf("\n");
-
-  if (!fmt)
-    return; // avoid the noreturn attribute
-
-  exit(1);
-}
+#define NOT_IMPLEMENTED							\
+  do {									\
+    static bool first = true;						\
+    if (first) {							\
+      printf("\nWARN: ###\nWARN: ### reached unimplemented function %s\nWARN: ###\n\n", __func__); \
+      first = false;							\
+    }									\
+  } while(0)
 
 extern "C" {
-  void ggml_backend_remoting_backend_say_hello();
+  uint32_t apir_backend_initialize();
+  void apir_backend_deinit(void);
+  uint32_t apir_backend_dispatcher(uint32_t cmd_type, struct virgl_apir_context *ctx,
+				   char *dec_cur, const char *dec_end,
+				   char *enc_cur, const char *enc_end,
+				   char **enc_cur_after);
 }

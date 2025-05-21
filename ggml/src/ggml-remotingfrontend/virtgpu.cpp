@@ -6,7 +6,25 @@
 #include <cstdlib>
 
 #include "virtgpu.h"
-#include "virtgpu-types.h"
+
+static virt_gpu_result_t virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev);
+static virt_gpu_result_t virtgpu_open(struct virtgpu *gpu);
+
+
+static virt_gpu_result_t virtgpu_init_params(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_init_capset(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_init_context(struct virtgpu *gpu);
+
+static int virtgpu_ioctl_context_init(struct virtgpu *gpu,
+				      enum virgl_renderer_capset capset_id);
+static int
+virtgpu_ioctl_get_caps(struct virtgpu *gpu,
+                       enum virgl_renderer_capset id,
+                       uint32_t version,
+                       void *capset,
+                       size_t capset_size);
+static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
+static void virtgpu_init_renderer_info(struct virtgpu *gpu);
 
 static inline void
 virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
@@ -34,33 +52,24 @@ virtgpu_init_shmem_blob_mem(struct virtgpu *gpu)
    gpu->shmem_blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
 }
 
-void *something = NULL;
-void thks_bye () {
-  // break here
-  INFO("thks bye, stopping early.");
-  if (!something) { // avoid the [[noreturn]] detection mechanism
-    exit(0);
-  }
-}
-
-void
+struct virtgpu *
 create_virtgpu() {
   struct virtgpu *gpu = new struct virtgpu();
 
   util_sparse_array_init(&gpu->shmem_array, sizeof(struct virtgpu_shmem),
 			 1024);
 
-  VkResult result = virtgpu_open(gpu);
-  assert(result == VK_SUCCESS);
+  virt_gpu_result_t result = virtgpu_open(gpu);
+  assert(result == APIR_SUCCESS);
 
   result = virtgpu_init_params(gpu);
-  assert(result == VK_SUCCESS);
+  assert(result == APIR_SUCCESS);
 
   result = virtgpu_init_capset(gpu);
-  assert(result == VK_SUCCESS);
+  assert(result == APIR_SUCCESS);
 
   result = virtgpu_init_context(gpu);
-  assert(result == VK_SUCCESS);
+  assert(result == APIR_SUCCESS);
 
   virtgpu_init_shmem_blob_mem(gpu);
 
@@ -68,29 +77,44 @@ create_virtgpu() {
 
   if (!gpu->reply_shmem) {
     FATAL("%s: failed to create the reply shared memory page :/", __func__);
-    assert(false);
   }
 
-  remote_call(gpu, PK_COMMAND_TYPE_LoadLibrary, 0);
-  remote_call(gpu, PK_COMMAND_TYPE_SayHello, 0);
+  struct vn_cs_encoder *encoder;
+  struct vn_cs_decoder *decoder;
+  int32_t ret;
 
-  thks_bye();
+  encoder = remote_call_prepare(gpu,  VIRGL_APIR_COMMAND_TYPE_LoadLibrary, 0);
+  if (!encoder) {
+    FATAL("%s: failed to prepare the remote call encoder :/", __func__);
+  }
+  decoder = remote_call(gpu, encoder);
+  if (!decoder) {
+    FATAL("%s: failed to kick the remote call :/", __func__);
+  }
+
+  ret = remote_call_finish(encoder, decoder);
+  if (ret != 0) {
+    FATAL("%s: failed to load the APIR backend libraries (code=%d):/", __func__, ret);
+  }
+
+  return gpu;
 }
 
-static VkResult
+
+static virt_gpu_result_t
 virtgpu_open(struct virtgpu *gpu)
 {
    drmDevicePtr devs[8];
    int count = drmGetDevices2(0, devs, ARRAY_SIZE(devs));
    if (count < 0) {
      INFO("failed to enumerate DRM devices");
-     return VK_ERROR_INITIALIZATION_FAILED;
+     return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
-   VkResult result = VK_ERROR_INITIALIZATION_FAILED;
+   virt_gpu_result_t result = APIR_ERROR_INITIALIZATION_FAILED;
    for (int i = 0; i < count; i++) {
       result = virtgpu_open_device(gpu, devs[i]);
-      if (result == VK_SUCCESS)
+      if (result == APIR_SUCCESS)
          break;
    }
 
@@ -99,7 +123,7 @@ virtgpu_open(struct virtgpu *gpu)
    return result;
 }
 
-static VkResult
+static virt_gpu_result_t
 virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
 {
    bool supported_bus = false;
@@ -128,7 +152,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
          }
          vn_log(gpu->instance, "skipping DRM device %s", name);
       }
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
    const char *primary_path = dev->nodes[DRM_NODE_PRIMARY];
@@ -138,7 +162,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
    if (fd < 0) {
       if (VN_DEBUG(INIT))
          vn_log(gpu->instance, "failed to open %s", node_path);
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
    drmVersionPtr version = drmGetVersion(fd);
@@ -155,7 +179,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
       if (version)
          drmFreeVersion(version);
       close(fd);
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
    gpu->fd = fd;
@@ -183,7 +207,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
    if (VN_DEBUG(INIT))
       vn_log(gpu->instance, "using DRM device %s", node_path);
 
-   return VK_SUCCESS;
+   return APIR_SUCCESS;
 }
 
 void
@@ -202,9 +226,7 @@ vn_log(struct remoting_dev_instance *instance, const char *format, ...)
    /* instance may be NULL or partially initialized */
 }
 
-
-
-static VkResult
+static virt_gpu_result_t
 virtgpu_init_context(struct virtgpu *gpu)
 {
    assert(!gpu->capset.version);
@@ -214,13 +236,13 @@ virtgpu_init_context(struct virtgpu *gpu)
          vn_log(gpu->instance, "failed to initialize context: %s",
                 strerror(errno));
       }
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
-   return VK_SUCCESS;
+   return APIR_SUCCESS;
 }
 
-static VkResult
+static virt_gpu_result_t
 virtgpu_init_capset(struct virtgpu *gpu)
 {
    gpu->capset.id = VIRGL_RENDERER_CAPSET_VENUS;
@@ -234,13 +256,13 @@ virtgpu_init_capset(struct virtgpu *gpu)
          vn_log(gpu->instance, "failed to get venus v%d capset: %s",
                 gpu->capset.version, strerror(errno));
       }
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
-   return VK_SUCCESS;
+   return APIR_SUCCESS;
 }
 
-static VkResult
+static virt_gpu_result_t
 virtgpu_init_params(struct virtgpu *gpu)
 {
    const uint64_t required_params[] = {
@@ -255,7 +277,7 @@ virtgpu_init_params(struct virtgpu *gpu)
             vn_log(gpu->instance, "required kernel param %d is missing",
                    (int)required_params[i]);
          }
-         return VK_ERROR_INITIALIZATION_FAILED;
+         return APIR_ERROR_INITIALIZATION_FAILED;
       }
    }
 
@@ -273,7 +295,7 @@ virtgpu_init_params(struct virtgpu *gpu)
       vn_log(gpu->instance,
              "one of required kernel params (%d or %d) is missing",
              (int)VIRTGPU_PARAM_HOST_VISIBLE, (int)VIRTGPU_PARAM_GUEST_VRAM);
-      return VK_ERROR_INITIALIZATION_FAILED;
+      return APIR_ERROR_INITIALIZATION_FAILED;
    }
 
    /* Cross-device feature is optional.  It enables sharing dma-bufs
@@ -287,7 +309,7 @@ virtgpu_init_params(struct virtgpu *gpu)
    /* implied by CONTEXT_INIT uapi */
    gpu->max_timeline_count = 64;
 
-   return VK_SUCCESS;
+   return APIR_SUCCESS;
 }
 
 static int
@@ -351,46 +373,70 @@ virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
 }
 
 
-static int remote_call(
+struct vn_cs_encoder *
+remote_call_prepare(
   struct virtgpu *gpu,
   int32_t cmd_type,
-  int32_t cmd_flags
-  )
+  int32_t cmd_flags)
 {
-
-  /*
-   * Prepare the command encoder buffer
-   */
-
-  char encoder_buffer[4096];
-
-  struct vn_cs_encoder _encoder = {
-    encoder_buffer,
-    encoder_buffer + sizeof(encoder_buffer),
-  };
-  struct vn_cs_encoder *encoder = &_encoder;
-
-  /*
-   * Fill the command encoder buffer
-   */
-
-  /* VkCommandTypeEXT is int32_t */
-  vn_encode_int32_t(encoder, &cmd_type);
-  vn_encode_int32_t(encoder, &cmd_flags);
 
   if (!gpu->reply_shmem) {
     FATAL("%s: the reply shmem page can't be null", __func__);
   }
 
-  uint32_t reply_res_id = gpu->reply_shmem->res_id;
-  vn_encode_uint32_t(encoder, &reply_res_id);
+  /*
+   * Prepare the command encoder and its buffer
+   */
 
-  printf("%s: call %s(flags=0x%x, reply_buf=%d)\n", __func__,
-	 command_name(cmd_type),
-	 cmd_flags, reply_res_id);
+  static char encoder_buffer[4096];
+
+  static struct vn_cs_encoder enc;
+  enc = {
+    encoder_buffer,
+    encoder_buffer,
+    encoder_buffer + sizeof(encoder_buffer),
+  };
 
   /*
-   * Reply notification pointer
+   * Fill the command encoder with the common args:
+   * - cmd_type (int32_t)
+   * - cmd_flags (int32_t)
+   * - reply res id (uint32_t)
+   */
+
+  vn_encode_int32_t(&enc, &cmd_type);
+  vn_encode_int32_t(&enc, &cmd_flags);
+
+  uint32_t reply_res_id = gpu->reply_shmem->res_id;
+  vn_encode_uint32_t(&enc, &reply_res_id);
+
+  return &enc;
+}
+
+int32_t
+remote_call_finish(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec) {
+  if (!enc) {
+    WARNING("Invalid (null) encoder :/");
+  }
+  if (!dec) {
+    FATAL("Invalid (null) decoder :/");
+  }
+  int32_t remote_call_ret;
+  vn_decode_int32_t(dec, &remote_call_ret);
+
+  // encoder and decoder are statically allocated, nothing to do to release them
+
+  return remote_call_ret;
+}
+
+struct vn_cs_decoder *
+remote_call(
+  struct virtgpu *gpu,
+  struct vn_cs_encoder *encoder
+  )
+{
+  /*
+   * Prepare the reply notification pointer
    */
 
   volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) gpu->reply_shmem->mmap_ptr;
@@ -402,8 +448,8 @@ static int remote_call(
 
   struct drm_virtgpu_execbuffer args = {
     .flags = VIRTGPU_EXECBUF_RING_IDX,
-    .size = sizeof(encoder_buffer),
-    .command = (uintptr_t) encoder_buffer,
+    .size = (uint32_t) (encoder->cur - encoder->start),
+    .command = (uintptr_t) encoder->start,
 
     .bo_handles = 0,
     .num_bo_handles = 0,
@@ -433,20 +479,11 @@ static int remote_call(
   }
 
   /*
-   * Read the reply
+   * Prepare the decoder
    */
+  static struct vn_cs_decoder dec;
+  dec.cur = (char *) gpu->reply_shmem->mmap_ptr + sizeof(*atomic_reply_notif);
+  dec.end = (char *) gpu->reply_shmem->mmap_ptr + gpu->reply_shmem->mmap_size;
 
-  struct vn_cs_decoder _dec = {
-    .cur = (char *) gpu->reply_shmem->mmap_ptr + sizeof(*atomic_reply_notif),
-    .end = (char *) gpu->reply_shmem->mmap_ptr + gpu->reply_shmem->mmap_size,
-  };
-  struct vn_cs_decoder *dec = &_dec;
-
-  int32_t rmt_call_ret;
-  vn_decode_int32_t(dec, &rmt_call_ret);
-
-  printf("%s: call %s() --> %d\n", __func__,
-	 command_name(cmd_type), rmt_call_ret);
-
-  return rmt_call_ret;
+  return &dec;
 }

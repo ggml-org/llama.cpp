@@ -7,7 +7,8 @@ else
 fi
 
 MODEL="$HOME/models/llama3.2"
-PROMPT="say nothing"
+#PROMPT="say nothing"
+PROMPT="tell what's Apple metal API"
 $prefix \
     ../build.remoting-frontend/bin/llama-run \
     --ngl 99 \

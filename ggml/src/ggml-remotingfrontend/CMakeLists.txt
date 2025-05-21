@@ -8,12 +8,18 @@ ggml_add_backend_library(ggml-remotingfrontend
                          ggml-backend.cpp
                          ggml-backend-device.cpp
                          ggml-backend-reg.cpp
-                         ggml-buffer-type.cpp
-                         ggml-host-buffer-type.cpp
+                         ggml-backend-buffer-type.cpp
+                         ggml-backend-host-buffer-type.cpp
                          virtgpu.cpp
                          virtgpu-shm.cpp
                          virtgpu-utils.cpp
+                         virtgpu-forward-device.cpp
+                         virtgpu-forward-buffer-type.cpp
+                         virtgpu-forward-buffer.cpp
+                         virtgpu-forward-backend.cpp
+                         virtgpu-forward-impl.h
                          ../../include/ggml-remoting-frontend.h
+                         venus_cs_ggml-rpc-front.cpp
                         )
 
 target_link_libraries(ggml-remotingfrontend PUBLIC drm)

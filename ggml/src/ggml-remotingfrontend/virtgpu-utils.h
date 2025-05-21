@@ -13,6 +13,10 @@
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #define likely(x) __builtin_expect(!!(x), 1)
 
+#ifndef UNUSED
+#define UNUSED(x) (void)(x)
+#endif
+
 /** Checks is a value is a power of two. Does not handle zero. */
 #define IS_POT(v) (((v) & ((v) - 1)) == 0)
 
@@ -24,8 +28,22 @@
 
 #define p_atomic_read(_v) __atomic_load_n((_v), __ATOMIC_ACQUIRE)
 
+void thks_bye();
+void breakpoint();
+
 inline void
 INFO(const char *format, ...) {
+  va_list argptr;
+  va_start(argptr, format);
+  vfprintf(stderr, format, argptr);
+  fprintf(stderr, "\n");
+  va_end(argptr);
+}
+
+inline void
+WARNING(const char *format, ...) {
+  fprintf(stderr, "WARNING: ");
+
   va_list argptr;
   va_start(argptr, format);
   vfprintf(stderr, format, argptr);
@@ -42,7 +60,7 @@ FATAL(const char *format, ...) {
   vfprintf(stderr, format, argptr);
   fprintf(stderr, "\n");
   va_end(argptr);
-  exit(1);
+  assert(false);
 }
 
 static inline bool
