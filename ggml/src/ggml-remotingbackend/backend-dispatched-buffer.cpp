@@ -114,3 +114,16 @@ backend_buffer_clear(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struc
 
   return 0;
 }
+
+uint32_t
+backend_buffer_free_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
+  UNUSED(enc);
+
+  ggml_backend_buffer_t buffer;
+  buffer = vn_decode_ggml_buffer(dec);
+
+  buffer->iface.free_buffer(buffer);
+
+  return 0;
+}

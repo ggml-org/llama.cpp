@@ -76,9 +76,11 @@ static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uin
 static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffer) {
   UNUSED(buffer);
 
-  NOT_IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
-  STOP_HERE;
+  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+
+  apir_buffer_free_buffer(gpu, BUFFER_TO_HANDLE(buffer));
 }
 
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {

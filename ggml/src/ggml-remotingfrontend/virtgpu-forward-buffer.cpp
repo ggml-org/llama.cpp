@@ -99,3 +99,18 @@ apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 }
+
+
+void
+apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
+  struct vn_cs_encoder *encoder;
+  struct vn_cs_decoder *decoder;
+
+  REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_FREE_BUFFER);
+
+  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+
+  REMOTE_CALL(gpu, encoder, decoder);
+
+  REMOTE_CALL_FINISH(gpu, encoder, decoder);
+}
