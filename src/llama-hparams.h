@@ -104,7 +104,18 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     uint32_t n_swa = 0;         // the size of the sliding window (0 - no SWA)
-    uint32_t n_swa_pattern = 1; // by default, all layers use non-sliding-window attention
+    uint32_t n_swa_pattern = 1; // this value n means that every nth layer is dense (i.e. non-SWA)
+                                // by default n == 1, all layers are dense
+                                // note that if n_swa_pattern == 0, all layers are SWA
+                                // example: n_swa_pattern = 3
+                                //   il == 0: swa
+                                //   il == 1: swa
+                                //   il == 2: dense
+                                //   il == 3: swa
+                                //   il == 4: swa
+                                //   il == 5: dense
+                                //   il == 6: swa
+                                //   etc ...
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
