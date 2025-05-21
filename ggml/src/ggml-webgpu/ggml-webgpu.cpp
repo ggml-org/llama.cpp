@@ -19,14 +19,14 @@
 #define WEBGPU_MAX_BUFFERS 32
 
 // When registering the backend, we initialize the WebGPU instance.
-struct webgpu_reg_context {
+struct ggml_backend_webgpu_reg_context {
     wgpu::Instance instance;
     size_t device_count;
     const char * name;
 };
 
 // When getting the (ggml) device, we create a WebGPU adapter and its associated WebGPU device.
-struct webgpu_device_context {
+struct ggml_backend_webgpu_device_context {
     // An adapter can only be used to create one device
     wgpu::Adapter adapter;
     wgpu::Device device;
@@ -34,24 +34,9 @@ struct webgpu_device_context {
     wgpu::StringView device_desc;
 };
 
-struct webgpu_backend_context {
+struct ggml_backend_webgpu_context {
+    std::string name;
     wgpu::Device device;
-};
-
-static ggml_backend_i ggml_backend_webgpu_i = {
-    /* .get_name                = */ NULL,
-    /* .free                    = */ NULL,
-    /* .set_tensor_async        = */ NULL,
-    /* .get_tensor_async        = */ NULL,
-    /* .cpy_tensor_async        = */ NULL,
-    /* .synchronize             = */ NULL,
-    /* .graph_plan_create       = */ NULL,
-    /* .graph_plan_free         = */ NULL,
-    /* .graph_plan_update       = */ NULL,
-    /* .graph_plan_compute      = */ NULL,
-    /* .graph_compute           = */ NULL,
-    /* .event_record            = */ NULL,
-    /* .event_wait              = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_webgpu_guid(void) {
@@ -60,17 +45,17 @@ static ggml_guid_t ggml_backend_webgpu_guid(void) {
 }
 
 static const char * ggml_backend_webgpu_device_get_name(ggml_backend_dev_t dev) {
-    webgpu_device_context * ctx = static_cast<webgpu_device_context *>(dev->context);
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     return ctx->device_name.data;
 }
 
 static const char * ggml_backend_webgpu_device_get_description(ggml_backend_dev_t dev) {
-    webgpu_device_context * ctx = static_cast<webgpu_device_context *>(dev->context);
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     return ctx->device_desc.data;
 }
 
 static void ggml_backend_webgpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    webgpu_device_context * ctx = static_cast<webgpu_device_context *>(dev->context);
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     wgpu::Limits limits;
     ctx->device.GetLimits(&limits);
     // TODO: what do we actually want to return here?
@@ -96,13 +81,44 @@ static void ggml_backend_webgpu_device_get_props(ggml_backend_dev_t dev, struct 
     };
 }
 
+static const char * ggml_backend_webgpu_name(ggml_backend_t backend) {
+    ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *)backend->context;
+    return ctx->name.c_str();
+}
+
+static void ggml_backend_webgpu_free(ggml_backend_t backend) {
+    ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *)backend->context;
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_free(" << ctx->name << ")");
+
+    // TODO: cleanup
+}
+
+static ggml_backend_i ggml_backend_webgpu_i = {
+    /* .get_name                = */ ggml_backend_webgpu_name,
+    /* .free                    = */ ggml_backend_webgpu_free,
+    /* .set_tensor_async        = */ NULL,
+    /* .get_tensor_async        = */ NULL,
+    /* .cpy_tensor_async        = */ NULL,
+    /* .synchronize             = */ NULL,
+    /* .graph_plan_create       = */ NULL,
+    /* .graph_plan_free         = */ NULL,
+    /* .graph_plan_update       = */ NULL,
+    /* .graph_plan_compute      = */ NULL, // TODO
+    /* .graph_compute           = */ NULL,
+    /* .event_record            = */ NULL,
+    /* .event_wait              = */ NULL,
+};
+
 // TODO: Does this need to be thread safe? Is it only called once?
 static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
 
-    webgpu_device_context * dev_ctx = static_cast<webgpu_device_context *>(dev->context);
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_device_init()");
 
-    static webgpu_backend_context backend_ctx;
+    ggml_backend_webgpu_device_context * dev_ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
+
+    static ggml_backend_webgpu_context backend_ctx;
+    backend_ctx.name = GGML_WEBGPU_NAME + std::string(": ") + std::string(dev_ctx->device_name.data);
     backend_ctx.device = dev_ctx->device;
 
     static ggml_backend backend = {
@@ -114,20 +130,85 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     return &backend;
 }
 
+static const char * ggml_backend_webgpu_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
+    return ctx->device_name.data;
+}
+
+static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
+    wgpu::Limits limits;
+    ctx->device.GetLimits(&limits);
+    return limits.minStorageBufferOffsetAlignment;
+}
+
+static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
+    wgpu::Limits limits;
+    ctx->device.GetLimits(&limits);
+    return limits.maxBufferSize;
+}
+
 static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggml_backend_dev_t dev) {
-    static struct ggml_backend_buffer_type ggml_backend_buffer_type_webgpu = {
+    static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type = {
         /* .iface = */ {
-            /* .get_name         = */ NULL,
-            /* .alloc_buffer     = */ NULL,
-            /* .get_alignment    = */ NULL,
-            /* .get_max_size     = */ NULL,
+            /* .get_name         = */ ggml_backend_webgpu_buffer_type_get_name,
+            /* .alloc_buffer     = */ NULL, // TODO
+            /* .get_alignment    = */ ggml_backend_webgpu_buffer_type_get_alignment,
+            /* .get_max_size     = */ ggml_backend_webgpu_buffer_type_get_max_size,
             /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-            /* .is_host          = */ NULL,
+            /* .is_host          = */ NULL, // defaults to false
         },
         /* .device  = */ dev,
         /* .context = */ NULL,
     };
-    return &ggml_backend_buffer_type_webgpu;
+
+    return &ggml_backend_webgpu_buffer_type;
+}
+
+static const char * ggml_backend_webgpu_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(buft);
+    return GGML_WEBGPU_NAME "_Host";
+}
+
+// WebGPU doesn't specify a memory map alignment like Vulkan, so we use the same value as the storage buffer alignment
+static size_t ggml_backend_webgpu_host_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
+    wgpu::Limits limits;
+    ctx->device.GetLimits(&limits);
+    return limits.minStorageBufferOffsetAlignment;
+}
+
+static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+    static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type_host = {
+        /* .iface    = */ {
+            /* .get_name         = */ ggml_backend_webgpu_host_buffer_type_name,
+            /* .alloc_buffer     = */ NULL, // TODO
+            /* .get_alignment    = */ ggml_backend_webgpu_host_buffer_type_get_alignment,
+            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+        },
+        /* .device   = */ dev,
+        /* .context  = */ NULL,
+    };
+
+    return &ggml_backend_webgpu_buffer_type_host;
+}
+
+static bool ggml_backend_webgpu_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+    GGML_UNUSED(dev);
+    return  buft->iface.get_name == ggml_backend_webgpu_buffer_type_get_name;
+}
+
+static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    GGML_UNUSED(dev);
+
+    // what should we support first?
+    switch (op->op) {
+        default:
+            return false;
+    }
 }
 
 static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
@@ -138,10 +219,10 @@ static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
     /* .get_props            = */ ggml_backend_webgpu_device_get_props,
     /* .init_backend         = */ ggml_backend_webgpu_device_init,
     /* .get_buffer_type      = */ ggml_backend_webgpu_device_get_buffer_type,
-    /* .get_host_buffer_type = */ NULL,
+    /* .get_host_buffer_type = */ ggml_backend_webgpu_device_get_host_buffer_type,
     /* .buffer_from_host_ptr = */ NULL,
-    /* .supports_op          = */ NULL,
-    /* .supports_buft        = */ NULL,
+    /* .supports_op          = */ ggml_backend_webgpu_device_supports_op,
+    /* .supports_buft        = */ ggml_backend_webgpu_device_supports_buft,
     /* .offload_op           = */ NULL,
     /* .event_new            = */ NULL,
     /* .event_free           = */ NULL,
@@ -149,12 +230,12 @@ static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
 };
 
 static const char * ggml_backend_webgpu_reg_get_name(ggml_backend_reg_t reg) {
-    webgpu_reg_context * ctx = static_cast<webgpu_reg_context *>(reg->context);
+    ggml_backend_webgpu_reg_context * ctx = static_cast<ggml_backend_webgpu_reg_context *>(reg->context);
     return ctx->name;
 }
 
 static size_t ggml_backend_webgpu_reg_get_device_count(ggml_backend_reg_t reg) {
-    webgpu_reg_context * ctx = static_cast<webgpu_reg_context *>(reg->context);
+    ggml_backend_webgpu_reg_context * ctx = static_cast<ggml_backend_webgpu_reg_context *>(reg->context);
     return ctx->device_count;
 }
 
@@ -164,8 +245,8 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     GGML_ASSERT(index == 0);
     WEBGPU_LOG_DEBUG("ggml_backend_reg_get_device()");
 
-    webgpu_reg_context * reg_ctx = static_cast<webgpu_reg_context *>(reg->context);
-    static webgpu_device_context device_ctx;
+    ggml_backend_webgpu_reg_context * reg_ctx = static_cast<ggml_backend_webgpu_reg_context *>(reg->context);
+    static ggml_backend_webgpu_device_context device_ctx;
 
     wgpu::RequestAdapterOptions options = {};
     auto callback = [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char *message, void *userdata) {
@@ -229,7 +310,7 @@ static const struct ggml_backend_reg_i ggml_backend_webgpu_reg_i = {
 ggml_backend_reg_t ggml_backend_webgpu_reg() {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_reg()");
 
-    static webgpu_reg_context ctx;
+    static ggml_backend_webgpu_reg_context ctx;
     ctx.name = GGML_WEBGPU_NAME;
     ctx.device_count = 1;
 
