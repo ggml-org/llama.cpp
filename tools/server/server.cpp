@@ -4440,20 +4440,20 @@ int main(int argc, char ** argv) {
         // Get file metadata
         struct stat file_stat;
         stat(params.model.path.c_str(), &file_stat);
-        
+
         // Convert modified time to ISO 8601
         char modified_buf[64];
         strftime(modified_buf, sizeof(modified_buf), "%Y-%m-%dT%H:%M:%S%z", localtime(&file_stat.st_mtime));
-        
+
         const auto* model = llama_get_model(ctx_server.ctx);
         char arch_buf[64] = {0};
         char param_size_buf[64] = {0};
         llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf));
         llama_model_meta_val_str(model, "general.parameter_count", param_size_buf, sizeof(param_size_buf));
-        
+
         json models = {
             {"models", {
-                { 
+                {
                     {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
                     {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
                     {"modified_at", modified_buf},
