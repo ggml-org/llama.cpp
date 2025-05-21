@@ -8,7 +8,6 @@ ggml_add_backend_library(ggml-webgpu
                         )
 
 if (GGML_WEBGPU_DEBUG)
-    message(STATUS "GGML_WEBGPU_DEBUG is ON")
     target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_DEBUG=1)
 endif()
 
