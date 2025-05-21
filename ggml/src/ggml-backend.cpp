@@ -1329,7 +1329,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 } else if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id) &&
-                           !ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src->buffer))) {
+                           !(src->buffer && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src->buffer)))) {
                     // create a copy of the input in the split's backend
                     if (tensor_id_copy(src_id, cur_backend_id, 0) == nullptr) {
                         ggml_backend_t backend = sched->backends[cur_backend_id];
