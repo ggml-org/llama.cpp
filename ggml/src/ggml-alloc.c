@@ -948,6 +948,22 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
         ggml_backend_buffer_type_t buft, size_t size,
         ggml_backend_buffer_t ** buffers, size_t * n_buffers) {
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    size_t num_of_tensors = 0;
+    for (struct ggml_tensor * t = first; t != last; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->data == NULL) {
+            if (t->view_src == NULL) {
+                num_of_tensors++;
+            }
+        }
+    }
+    size_t ps = ggml_backend_get_page_size();
+    size_t original_size = size;
+    size += ps * num_of_tensors;
+    GGML_LOG_DEBUG("alloc buffer for NUMA page migration, num of tensors: %ld, size increased from %ld to %ld, increased %ld MiB\n",
+                    num_of_tensors, original_size, size, (size - original_size) / 1024 / 1024);
+#endif
+
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
     if (buffer == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), size);
