@@ -269,4 +269,4 @@ Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang
 Thanks Tuo Dai and Shanni Li from Huawei Technologies Co., Ltd.
 
 ## TODO
-- Support more models and d
+- Support more models and data types.
