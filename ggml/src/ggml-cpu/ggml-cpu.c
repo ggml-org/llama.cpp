@@ -598,10 +598,6 @@ void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
         return;
     }
 
-    if (node_n == GGML_BARRIER_NODE_LAST) {
-        node_n = tp->cgraph->n_nodes;
-    }
-
     int node = get_node_from_cpu(ith, cores_per_numa);
 
     int n_passed = atomic_load_explicit(tp->n_barrier_passed_node[node], memory_order_relaxed);
@@ -3002,7 +2998,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             }
 #endif
 
-            ggml_barrier_numa_aware(state->threadpool, state->ith, node_n);
+            ggml_barrier_numa_aware(state->threadpool, state->ith, node_n % GGML_BARRIER_NODE_LAST);
 
 #ifdef GGML_USE_NUMA_MIGRATE_DEBUG
             if (log_time) {
@@ -3191,8 +3187,8 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
             *threadpool->n_barrier_passed_node[node] = 0;
         }
 
-        threadpool->n_barrier_passed_last = (atomic_int *)malloc((threadpool->cgraph->n_nodes + 1) * sizeof(atomic_int));
-        for (int i = 0; i < threadpool->cgraph->n_nodes + 1; i++) {
+        threadpool->n_barrier_passed_last = (atomic_int *)malloc(GGML_BARRIER_NODE_LAST * sizeof(atomic_int));
+        for (int i = 0; i < GGML_BARRIER_NODE_LAST; i++) {
             threadpool->n_barrier_passed_last[i] = 0;
         }
 #endif
