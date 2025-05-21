@@ -74,6 +74,7 @@
 #include <vector>
 
 #include "ggml-impl.h"
+#include "ggml.h"
 
 #define GGML_COMMON_DECL_C
 
@@ -2611,7 +2612,6 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         aclTensor* acl_src0_f16_tensor = nullptr;
         aclTensor* acl_src1_f16_tensor = nullptr;
         aclTensor* acl_src2_f16_tensor = nullptr;
-        aclTensor* acl_src3_f16_tensor = nullptr;
         aclTensor* acl_dst_f16_tensor  = nullptr;
 
         // Step 1: cast the src0 (Query) to fp16 if needed
@@ -2845,7 +2845,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         int64_t nextTokens = 65535;
         char layout[5] = {'B', 'N', 'S', 'D', 0};
         int64_t sparseMode = 0;
-        int64_t innerPrecise = 2;
+        int64_t innerPrecise = (src0->ne[1] == 1) ? 0 : 2;
         int64_t blockSize = 0;
         int64_t antiquantMode = 0;
         bool softmaxLseFlag = false;
@@ -2915,7 +2915,6 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             ggml_cann_release_resources(ctx, bcast_pse_tensor);
         }
     }else{
-        GGML_ABORT("Function not implemented");
+        GGML_ABORT("Function is not implemented.");
     }
 }
-                                                                         
