@@ -853,45 +853,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
-                // for backward compatibility ; see: https://github.com/ggerganov/llama.cpp/pull/8931
-                if ((hparams.n_layer == 32 || hparams.n_layer == 40) && hparams.n_ctx_train == 4096) {
-                    // default value for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct
-                    LLAMA_LOG_WARN("%s: assuming n_swa = 2047 for Phi-3-mini-4k-instruct and Phi-3-medium-4k-instruct\n", __func__);
+                LLAMA_LOG_WARN("%s: Phi-3 SWA is currently disabled - results might be suboptimal\n", __func__);
 
-                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                // TODO: fix conversion scripts to correctly populate `n_swa` and `n_swa_pattern`
+                hparams.swa_type = LLAMA_SWA_TYPE_NONE;
 
-                    hparams.n_swa = 2047;
-                } else if (hparams.n_layer == 32 && hparams.n_head_kv(0) == 32 && hparams.n_ctx_train == 131072) {
-                    // default value for Phi-3-mini-128k-instruct
-                    LLAMA_LOG_WARN("%s: assuming no SWA for Phi-3-mini-128k-instruct\n", __func__);
-
-                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
-
-                    hparams.n_swa         = hparams.n_ctx_train;
-                    hparams.n_swa_pattern = 1;
-                } else if (hparams.n_layer == 40 && hparams.n_ctx_train == 131072) {
-                    // default value for Phi-3-medium-128k-instruct
-                    LLAMA_LOG_WARN("%s: assuming no SWA for Phi-3-medium-128k-instruct\n", __func__);
-
-                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
-
-                    hparams.n_swa         = hparams.n_ctx_train;
-                    hparams.n_swa_pattern = 1;
-                }
-
-                bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
-                if (!found_swa && hparams.n_swa == 0) {
-                    throw std::runtime_error("invalid value for sliding_window");
-                }
-
-                if (hparams.n_swa > hparams.n_ctx_train) {
-                    LLAMA_LOG_WARN("%s: unexpected n_swa: %d >= %d, disabling SWA\n", __func__, hparams.n_swa, hparams.n_ctx_train);
-
-                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
-
-                    hparams.n_swa         = hparams.n_ctx_train;
-                    hparams.n_swa_pattern = 1;
-                }
+                hparams.n_swa         = 0;
+                hparams.n_swa_pattern = 1;
             } break;
         case LLM_ARCH_PHIMOE:
             {
@@ -7368,8 +7336,9 @@ struct llm_build_phi2 : public llm_graph_context {
     }
 };
 
-struct llm_build_phi3_iswa : public llm_graph_context {
-    llm_build_phi3_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+template<bool iswa>
+struct llm_build_phi3 : public llm_graph_context {
+    llm_build_phi3(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa = hparams.n_embd_v_gqa();
 
@@ -7383,7 +7352,14 @@ struct llm_build_phi3_iswa : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv_unified_iswa();
+        using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_unified_iswa, llm_graph_input_attn_kv_unified>;
+        inp_attn_type * inp_attn = nullptr;;
+
+        if constexpr (iswa) {
+            inp_attn = build_attn_inp_kv_unified_iswa();
+        } else {
+            inp_attn = build_attn_inp_kv_unified();
+        }
 
         for (int il = 0; il < n_layer; ++il) {
             auto * residual = inpL;
@@ -13232,7 +13208,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                 LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
-                if (hparams.n_swa > 0) {
+                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                    GGML_ASSERT(hparams.n_swa_pattern != 1);
+
                     res = new llama_kv_cache_unified_iswa(
                             *this,
                             params.type_k,
@@ -13245,6 +13223,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_batch,
                             padding);
                 } else {
+                    GGML_ASSERT(hparams.n_swa_pattern == 1);
+
                     res = new llama_kv_cache_unified(
                             *this,
                             nullptr,
@@ -13353,7 +13333,11 @@ llm_graph_result_ptr llama_model::build_graph(
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
             {
-                llm = std::make_unique<llm_build_phi3_iswa>(*this, params, gf);
+                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                    llm = std::make_unique<llm_build_phi3<true>> (*this, params, gf);
+                } else {
+                    llm = std::make_unique<llm_build_phi3<false>>(*this, params, gf);
+                }
             } break;
         case LLM_ARCH_PLAMO:
             {
