@@ -2290,7 +2290,6 @@ class BitnetModel(Model):
             from gguf.tmac_utils import is_tmac_ftype
             if self.enable_t_mac and is_tmac_ftype(self.ftype):
                 # transform weight into TMAC_BN_0 format
-                from gguf.tmac_utils import preprocess_for_t_mac
                 data = LazyTorchTensor.to_eager(data_torch).numpy()
                 scale = np.max(np.abs(data))
                 w = np.round(data / scale + 2).astype(np.uint8)
