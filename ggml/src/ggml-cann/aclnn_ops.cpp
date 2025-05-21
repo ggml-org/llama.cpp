@@ -65,6 +65,7 @@
 #include <aclnnop/aclnn_eq_tensor.h>
 #include <aclnnop/aclnn_gt_scalar.h>
 #include <aclnnop/aclnn_pow.h>
+#include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
 #include <float.h>
 
 #include <cmath>
@@ -72,17 +73,7 @@
 #include <exception>
 #include <vector>
 
-#include <iostream>
-#include <fstream>
-#include <string>
-#include <cstring>
-
-#include "aclnnop/aclnn_flash_attention_score.h"
-#include "aclnnop/aclnn_logical_not.h"
-
-#include "ggml-cann/acl_tensor.h"
 #include "ggml-impl.h"
-#include "ggml.h"
 
 #define GGML_COMMON_DECL_C
 
@@ -2623,7 +2614,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         aclTensor* acl_src3_f16_tensor = nullptr;
         aclTensor* acl_dst_f16_tensor  = nullptr;
 
-        // Step 1: cast the src0 (Query) to fp16
+        // Step 1: cast the src0 (Query) to fp16 if needed
         ggml_cann_pool_alloc src0_f16_allocator(ctx.pool());
         void* src0_f16_buffer = nullptr;
 
@@ -2649,6 +2640,9 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             acl_src0_f16_tensor = ggml_cann_create_tensor(src0);
         }
 
+        // Step 2: create the acl tensors for src1 (Key), src2 (Value), 
+        //         and the direct output from FusedInferAttention
+
         acl_src1_f16_tensor = ggml_cann_create_tensor(src1);
         acl_src2_f16_tensor = ggml_cann_create_tensor(src2);
 
@@ -2668,21 +2662,23 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             out_f16_ne, out_f16_nb, GGML_MAX_DIMS
         );
 
-        aclTensor* bcast_pse_tensor = nullptr;
 
+        // Step 3: create the PSEShift tensor if needed
+        //         this tensor is considered as mask (f16) in the llama.cpp
+    
+        aclTensor* bcast_pse_tensor = nullptr;
         int64_t bcast_pse_ne[GGML_MAX_DIMS];
         size_t bcast_pse_nb[GGML_MAX_DIMS];
         ggml_cann_pool_alloc bcast_pse_allocator(ctx.pool());
         void* bcast_pse_buffer = nullptr;
-        if(src3)
+        
+        if(src3 != nullptr){
             bcast_pse_buffer = bcast_pse_allocator.alloc(
                             ggml_nelements(src3) * src0->ne[2] * sizeof(uint16_t));
-
-        if(src3 != nullptr){
-            // broadcast pse
+            
             if(src0->ne[1] > 1){
+                // Case 1: broadcast pse for prefill stage with multiple head
                 aclTensor* acl_mask_f16_tensor = ggml_cann_create_tensor(src3);
-
                 bcast_pse_ne[0] = src3->ne[0];
                 bcast_pse_ne[1] = src3->ne[1];
                 bcast_pse_ne[2] = src0->ne[2];
@@ -2702,6 +2698,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
                 ggml_cann_release_resources(ctx, acl_mask_f16_tensor);
             }else{
+                // Case 2: trunc the first row and broadcast pse for decode stage with multiple head
                 int64_t trunc_pse_ne[GGML_MAX_DIMS] = {src3->ne[0], src0->ne[1], src3->ne[2], src3->ne[3]};
                 size_t* trunc_pse_nb = src3->nb;
 
@@ -2729,6 +2726,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 ggml_cann_release_resources(ctx, acl_mask_f16_trunc_tensor);
             }
 
+            // Compute the slope if needed. Derived from ggml_cann_softmax().
             if(maxBias != 0.0f){
                 // alibi
                 const int64_t ne2_ne3 = src0->ne[2] * src0->ne[3];
@@ -2832,6 +2830,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             }
         }
 
+        // Step 4: set the inputs for FusedInferAttention.
         int kvTensorNum = 1;
         aclTensor* acl_q_tensor = acl_src0_f16_tensor;
         aclTensor* acl_k_tensors[] = {acl_src1_f16_tensor};
@@ -2853,9 +2852,9 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         int64_t keyAntiquantMode = 0;
         int64_t valueAntiquantMode = 0;
 
+        // Step 5: launch the FusedInferAttentionScoreV2 kernel.
         // Refer to https://gitee.com/ascend/cann-ops-adv/blob/master/docs/FusedInferAttentionScoreV2.md
-
-
+        
         GGML_CANN_CALL_ACLNN_OP(ctx, FusedInferAttentionScoreV2,
             acl_q_tensor, acl_k_tensor_list, acl_v_tensor_list, // q, k, v
             bcast_pse_tensor, nullptr, // pse, mask
@@ -2880,7 +2879,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             nullptr // softmaxLse
         );
 
-        // Step 5: post-processing, permute and cast to f32
+        // Step 6: post-processing, permute and cast to f32
+
         int64_t new_dim[] = {0, 2, 1, 3};
         aclTensor* acl_dst_tensor = ggml_cann_create_tensor(dst);
 
@@ -2911,9 +2911,11 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                                          acl_src2_f16_tensor, 
                                          acl_dst_f16_tensor, 
                                          acl_dst_tensor);
-        if(src3)
+        if(src3 != nullptr){
             ggml_cann_release_resources(ctx, bcast_pse_tensor);
+        }
     }else{
-        throw std::runtime_error("Function not implemented");
+        GGML_ABORT("Function not implemented");
     }
 }
+                                                                         

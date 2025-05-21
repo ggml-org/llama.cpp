@@ -45,8 +45,6 @@
 #include <aclnnop/aclnn_cos.h>
 #include <aclnnop/aclnn_log.h>
 #include <aclnnop/aclnn_sign.h>
-#include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
-#include <aclnnop/aclnn_isneginf.h>
 #include "acl_tensor.h"
 #include "common.h"
 
