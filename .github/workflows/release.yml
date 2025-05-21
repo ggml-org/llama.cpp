@@ -239,6 +239,8 @@ jobs:
     steps:
       - name: Clone
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
