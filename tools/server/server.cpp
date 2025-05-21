@@ -4077,21 +4077,7 @@ int main(int argc, char ** argv) {
         res_ok(res, {{ "success", true }});
     };
 
-    const auto handle_api_show = [&ctx_server, &state, &res_ok](const httplib::Request &, httplib::Response & res) {
-        server_state current_state = state.load();
-        const auto* model = llama_get_model(ctx_server.ctx);
-
-        // Get basic model info
-        char arch_buf[64] = {0};
-        char param_size_buf[64] = {0};
-        llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf));
-        llama_model_meta_val_str(model, "general.parameter_count", param_size_buf, sizeof(param_size_buf));
-
-        json model_meta = nullptr;
-        if (current_state == SERVER_STATE_READY) {
-            model_meta = ctx_server.model_meta();
-        }
-
+    const auto handle_api_show = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) {
         json data = {
             {
                 "template", common_chat_templates_source(ctx_server.chat_templates.get()),
@@ -4101,19 +4087,19 @@ int main(int argc, char ** argv) {
                     { "llama.context_length", ctx_server.slots.back().n_ctx, },
                 }
             },
-            {"modelfile", ""}, // Specific to ollama and does not seem to be needed
-            {"parameters", ""}, // TODO: add parameters
+            {"modelfile", ""},
+            {"parameters", ""},
             {"template", common_chat_templates_source(ctx_server.chat_templates.get())},
             {"details", {
-                {"parent_model", ""}, // TODO: add parent model if available
+                {"parent_model", ""},
                 {"format", "gguf"},
-                {"family", arch_buf},
-                {"families", {arch_buf}},
-                {"parameter_size", param_size_buf},
-                {"quantization_level", ""} // TODO: add quantization level if available
+                {"family", ""},
+                {"families", {""}},
+                {"parameter_size", ""},
+                {"quantization_level", ""}
             }},
-            {"model_info", model_meta},
-            {"capabilities", {"completion"}} // TODO: add other capabilities if available
+            {"model_info", ""},
+            {"capabilities", {"completion"}}
         };
 
         res_ok(res, data);
@@ -4437,40 +4423,27 @@ int main(int argc, char ** argv) {
         if (current_state == SERVER_STATE_READY) {
             model_meta = ctx_server.model_meta();
         }
-        // Get file metadata
-        struct stat file_stat;
-        stat(params.model.path.c_str(), &file_stat);
-
-        // Convert modified time to ISO 8601
-        char modified_buf[64];
-        strftime(modified_buf, sizeof(modified_buf), "%Y-%m-%dT%H:%M:%S%z", localtime(&file_stat.st_mtime));
-
-        const auto* model = llama_get_model(ctx_server.ctx);
-        char arch_buf[64] = {0};
-        char param_size_buf[64] = {0};
-        llama_model_meta_val_str(model, "general.architecture", arch_buf, sizeof(arch_buf));
-        llama_model_meta_val_str(model, "general.parameter_count", param_size_buf, sizeof(param_size_buf));
 
         json models = {
             {"models", {
                 {
                     {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
                     {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
-                    {"modified_at", modified_buf},
-                    {"size", file_stat.st_size},
-                    {"digest", ""}, // TODO: add digest
+                    {"modified_at", ""},
+                    {"size", ""},
+                    {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
                     {"type", "model"},
                     {"description", ""},
-                    {"tags", {arch_buf}},
+                    {"tags", {""}},
                     {"capabilities", {"completion"}},
-                    {"parameters", ""}, // TODO: add parameters
+                    {"parameters", ""},
                     {"details", {
-                        {"parent_model", ""}, // TODO: Add parent_model
+                        {"parent_model", ""},
                         {"format", "gguf"},
-                        {"family", arch_buf},
-                        {"families", {arch_buf}},
-                        {"parameter_size", param_size_buf},
-                        {"quantization_level", ""} // TODO: add quantization level if available
+                        {"family", ""},
+                        {"families", {""}},
+                        {"parameter_size", ""},
+                        {"quantization_level", ""}
                     }}
                 }
             }},
