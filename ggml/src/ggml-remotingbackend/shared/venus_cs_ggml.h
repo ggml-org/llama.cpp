@@ -27,6 +27,13 @@ vn_decode_rpc_tensor_inplace(struct vn_cs_decoder *dec) {
   return (rpc_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, rpc_tensor_size);
 }
 
+static inline rpc_tensor *
+vn_decode_rpc_tensor_array_inplace(struct vn_cs_decoder *dec, uint32_t n_tensors) {
+  size_t rpc_tensor_size = sizeof(rpc_tensor) * n_tensors;
+
+  return (rpc_tensor *)(uintptr_t) vn_cs_decoder_use_inplace(dec, rpc_tensor_size);
+}
+
 /* ggml_tensor */
 
 static inline void
@@ -120,37 +127,30 @@ vn_decode_virtgpu_shmem_res_id(struct vn_cs_decoder *dec, uint32_t *shmem_res_id
 /* ggml_cgraph */
 
 static inline size_t
-vn_encode_sizeof_ggml_cgraph_data(ggml_cgraph *cgraph) {
-  /* must match the encoding of vn_encode_ggml_cgraph and vn_encode_ggml_tensor */
-  size_t size = 0;
+vn_serialize_ggml_cgraph(ggml_cgraph *cgraph, std::vector<uint8_t> & cgraph_data) {
+  serialize_graph(cgraph, cgraph_data);
 
-  // don't include the `ggml_cgraph`, only it's data
-
-  // include the array of tensors
-  size += sizeof(ggml_tensor*) * cgraph->n_nodes;
-
-  // include the size of all the tensors
-  for (int i = 0; i < cgraph->n_nodes; i++) {
-    size += vn_encode_sizeof_ggml_tensor(cgraph->nodes[i], TENSOR_MAX_DEPTH_CGRAPH_DATA);
-  }
-  INFO("SIZEOF(cgraph) --> %lu", size);
-  return size;
+  return cgraph_data.size();
 }
 
 static inline void
-vn_encode_ggml_cgraph(struct vn_cs_encoder *enc, ggml_cgraph *cgraph, struct vn_cs_encoder *secondary_enc) {
-  UNUSED(enc);
-  UNUSED(cgraph);
-  UNUSED(secondary_enc);
+vn_encode_cgraph_data(struct vn_cs_encoder *enc, std::vector<uint8_t> & cgraph_data) {
+  size_t cgraph_size = cgraph_data.size();
+
+  vn_encode(enc, cgraph_size, cgraph_data.data(), cgraph_size);
 }
 
 static inline ggml_cgraph *
-vn_decode_ggml_cgraph(struct vn_cs_decoder *dec, struct vn_cs_decoder *secondary_dec) {
-  // it safe to remove the `const` qualifier here, we *do* want to
-  // modify the shared memory data to fix the `src` pointers.
+vn_decode_ggml_cgraph(struct vn_cs_decoder *dec, size_t cgraph_size) {
+  UNUSED(cgraph_size);
 
-  UNUSED(dec);
-  UNUSED(secondary_dec);
+  uint32_t n_nodes;
+  vn_decode_uint32_t(dec, &n_nodes);
+  const uint64_t * nodes = vn_decode_uint64_t_array_inplace(dec, n_nodes);
 
-  return NULL;
+  uint32_t n_tensors;
+  vn_decode_uint32_t(dec, &n_tensors);
+  const rpc_tensor *tensors = vn_decode_rpc_tensor_array_inplace(dec, n_tensors);
+
+  return deserialize_graph(n_nodes, n_tensors, tensors, nodes);
 }

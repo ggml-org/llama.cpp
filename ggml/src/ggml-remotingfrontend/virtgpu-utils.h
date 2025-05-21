@@ -29,6 +29,7 @@
 #define p_atomic_read(_v) __atomic_load_n((_v), __ATOMIC_ACQUIRE)
 
 void thks_bye();
+void breakpoint();
 
 inline void
 INFO(const char *format, ...) {

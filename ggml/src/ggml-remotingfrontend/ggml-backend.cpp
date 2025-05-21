@@ -3,7 +3,7 @@
 static const char * ggml_backend_remoting_get_name(ggml_backend_t backend) {
   UNUSED(backend);
 
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   return "API Remoting backend";
 }
@@ -20,9 +20,7 @@ static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, g
 
   struct virtgpu *gpu = DEV_TO_GPU(backend->device);
 
-  IMPLEMENTED;
-
-  STOP_HERE;
+  IMPLEMENTED_ONCE;
 
   return apir_backend_graph_compute(gpu, cgraph);
 }

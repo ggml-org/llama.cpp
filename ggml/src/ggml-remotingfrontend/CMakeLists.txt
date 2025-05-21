@@ -19,7 +19,7 @@ ggml_add_backend_library(ggml-remotingfrontend
                          virtgpu-forward-backend.cpp
                          virtgpu-forward-impl.h
                          ../../include/ggml-remoting-frontend.h
-                         ../ggml-remotingbackend/shared/venus_cs_ggml-rpc.cpp
+                         venus_cs_ggml-rpc-front.cpp
                         )
 
 target_link_libraries(ggml-remotingfrontend PUBLIC drm)

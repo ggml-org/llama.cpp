@@ -70,5 +70,9 @@ backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder
   apir_buffer_handle_t *buffer_handle = (apir_buffer_handle_t *) buffer;
   vn_encode_ggml_buffer_handle(enc, buffer_handle);
 
+  if (buffer) {
+    track_backend_buffer(buffer);
+  }
+
   return 0;
 }

@@ -38,6 +38,9 @@
 #define STOP_HERE \
   thks_bye()
 
+#define BREAKPOINT \
+  breakpoint()
+
 #define IMPLEMENTED							\
   printf("INFO: ### reached implemented function %s\n", __func__)
 

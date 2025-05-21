@@ -16,12 +16,14 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   context->gpu = gpu;
   context->handle = apir_buffer_type_alloc_buffer(gpu, buft, size);
 
-  return ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
+  ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
+
+  return buffer;
 }
 
 static const char *
 ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-  //IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
@@ -59,7 +61,7 @@ const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
   /* .get_alignment    = */ ggml_backend_remoting_buffer_type_get_alignment,
   /* .get_max_size     = */ ggml_backend_remoting_buffer_type_get_max_size,
   /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-  /* .is_host          = */ ggml_backend_remoting_buffer_type_is_host,
+  /* .is_host          = */ NULL,
 };
 
 /****************************************************************************************/

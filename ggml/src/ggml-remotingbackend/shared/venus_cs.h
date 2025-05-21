@@ -205,6 +205,12 @@ vn_decode_uint64_t_array(struct vn_cs_decoder *dec, uint64_t *val, uint32_t coun
   vn_decode(dec, size, val, size);
 }
 
+static inline const uint64_t *
+vn_decode_uint64_t_array_inplace(struct vn_cs_decoder *dec, uint32_t count)
+{
+  return (uint64_t *)(uintptr_t) vn_cs_decoder_use_inplace(dec, count * sizeof(uint64_t));
+}
+
 /* int32_t */
 
 static inline size_t

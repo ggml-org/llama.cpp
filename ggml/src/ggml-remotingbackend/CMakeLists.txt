@@ -14,7 +14,7 @@ ggml_add_backend_library(ggml-remotingbackend
                          shared/api_remoting.h
                          shared/apir_backend.h
                          shared/venus_cs.h
-                         shared/venus_cs_ggml-rpc.cpp
+                         venus_cs_ggml-rpc-back.cpp
                         )
 
 target_compile_options(ggml-remotingbackend PRIVATE -std=c++20)

@@ -193,3 +193,8 @@ void thks_bye () {
     exit(0);
   }
 }
+
+void breakpoint() {
+  // break here
+  INFO("breakpoint here :)");
+}
