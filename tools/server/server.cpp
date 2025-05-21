@@ -3361,14 +3361,29 @@ struct server_context {
             metrics.on_decoded(slots);
 
             if (ret != 0) {
-                if (n_batch == 1 || ret < 0) {
-                    // if you get here, it means the KV cache is full - try increasing it via the context size
-                    SRV_ERR("failed to decode the batch: KV cache is full - try increasing it via the context size, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
-                    for (auto & slot : slots) {
-                        slot.release();
-                        send_error(slot, "Input prompt is too big compared to KV size. Please try increasing KV size.");
+                {
+                    std::string err;
+
+                    if (n_batch == 1 && ret == 1) {
+                        err = "Context size has been exceeded.";
                     }
-                    break; // break loop of n_batch
+
+                    if (ret == -1) {
+                        err = "Invalid input batch.";
+                    }
+
+                    if (ret < -1) {
+                        err = "Compute error.";
+                    }
+
+                    if (!err.empty()) {
+                        SRV_ERR("%s, i = %d, n_batch = %d, ret = %d\n", err.c_str(), i, n_batch, ret);
+                        for (auto & slot : slots) {
+                            slot.release();
+                            send_error(slot, err);
+                        }
+                        break;
+                    }
                 }
 
                 // retry with half the batch size to try to find a free slot in the KV cache
