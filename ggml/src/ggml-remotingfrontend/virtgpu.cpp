@@ -78,7 +78,7 @@ create_virtgpu() {
   virtgpu_init_shmem_blob_mem(gpu);
 
   gpu->reply_shmem = virtgpu_shmem_create(gpu, 0x4000);
-  gpu->data_shmem = virtgpu_shmem_create(gpu, 0x13b0000); // 19MiB
+  gpu->data_shmem = virtgpu_shmem_create(gpu, 0x1830000); // 24MiB
 
   if (!gpu->reply_shmem) {
     FATAL("%s: failed to create the shared reply memory pages :/", __func__);

@@ -66,6 +66,7 @@ backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder
   size_t size;
   vn_decode_size_t(dec, &size);
 
+  WARNING("NEED TO ALLOCATE FROM PTR INSTEAD");
   ggml_backend_buffer_t buffer = buft->iface.alloc_buffer(buft, size);
   apir_buffer_handle_t *buffer_handle = (apir_buffer_handle_t *) buffer;
   vn_encode_ggml_buffer_handle(enc, buffer_handle);

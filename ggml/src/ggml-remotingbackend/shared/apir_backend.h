@@ -1,6 +1,6 @@
 #pragma once
 
-#define APIR_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-remotingbackend.dylib"
+#define APIR_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend-prod/bin/libggml-remotingbackend.dylib"
 #define APIR_INITIALIZE_FCT_NAME "apir_backend_initialize"
 #define APIR_DEINIT_FCT_NAME "apir_backend_deinit"
 #define APIR_DISPATCH_FCT_NAME "apir_backend_dispatcher"

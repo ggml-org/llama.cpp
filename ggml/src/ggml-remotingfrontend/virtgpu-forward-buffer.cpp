@@ -39,7 +39,7 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   struct vn_renderer_shmem *shmem;
   if (size > gpu->data_shmem->mmap_size) {
     shmem = virtgpu_shmem_create(gpu, size);
-    WARNING("%s: 0x%lx | %dkB | %dMB", __func__, size, (int)size/1024, (int)size/1024/1024);
+    //WARNING("%s: 0x%lx | %dkB | %dMB", __func__, size, (int)size/1024, (int)size/1024/1024);
     if (!shmem) {
       FATAL("Couldn't allocate the guest-host shared buffer :/");
     }

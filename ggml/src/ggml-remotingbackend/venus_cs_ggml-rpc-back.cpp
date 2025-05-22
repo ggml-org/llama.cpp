@@ -14,6 +14,22 @@ track_backend_buffer(ggml_backend_buffer_t buffer) {
   backend_buffers.insert(buffer);
 }
 
+bool
+untrack_backend_buffer(ggml_backend_buffer_t buffer) {
+  auto it = backend_buffers.find(buffer);
+  if (it == backend_buffers.end()) {
+    return false;
+  }
+
+  backend_buffers.erase(it);
+  return true;
+}
+
+std::unordered_set<ggml_backend_buffer_t>
+get_track_backend_buffers() {
+  return backend_buffers;
+}
+
 ggml_tensor *
 deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
   ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,

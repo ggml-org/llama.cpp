@@ -18,6 +18,16 @@ static void *backend_library_handle = NULL;
 
 extern "C" {
   void apir_backend_deinit(void) {
+    auto buffers = get_track_backend_buffers();
+    for (const auto& buffer: buffers) {
+      untrack_backend_buffer(buffer);
+      buffer->iface.free_buffer(buffer);
+    }
+
+    size_t free, total;
+    dev->iface.get_memory(dev, &free, &total);
+    WARNING("%s: free memory: %ld MB\n", __func__, (size_t) free/1024/1024);
+
     if (backend_library_handle) {
       INFO("%s: The GGML backend library was loaded. Unloading it.", __func__);
       dlclose(backend_library_handle);
