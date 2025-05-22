@@ -896,7 +896,7 @@ class GGUFWriter:
     def add_remove_extra_whitespaces(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.REMOVE_EXTRA_WS, value)
 
-    def add_precompiled_charsmap(self, charsmap: Sequence[bytes]) -> None:
+    def add_precompiled_charsmap(self, charsmap: bytes) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]]) -> None:
