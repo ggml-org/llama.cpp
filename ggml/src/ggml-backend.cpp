@@ -1162,6 +1162,16 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 split.i_start = i;
                 split.n_inputs = 0;
             }
+        }
+        split.i_end = graph->n_nodes;
+        // GGML_ASSERT(!split.tensor_parallel);
+        split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
+        splits_no_tp.push_back(split);
+    }
+
+    for (ggml_backend_sched_split & split : splits_no_tp) {
+        for (int i = 0; i < split.graph.n_nodes; i++) {
+            ggml_tensor * node = split.graph.nodes[i];
 
             // find inputs that are not on the same backend
             for (int j = 0; j < GGML_MAX_SRC; j++) {
@@ -1221,10 +1231,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
             }
         }
-        split.i_end = graph->n_nodes;
-        // GGML_ASSERT(!split.tensor_parallel);
-        split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
-        splits_no_tp.push_back(split);
     }
 
     for (size_t i_split = 0; i_split < splits_no_tp.size(); i_split++) {
