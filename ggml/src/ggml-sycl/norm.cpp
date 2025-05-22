@@ -6,7 +6,6 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
 
     const int nrows = item_ct1.get_group_range(2);
     const int nchannels = item_ct1.get_group_range(1);
-    const int nsamples    = item_ct1.get_group_range(0);
 
     const int nthreads = item_ct1.get_local_range(2);
     const int sample  = item_ct1.get_group(0);
@@ -16,8 +15,8 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
     const int tid = item_ct1.get_local_id(2);
     const int nwarps = nthreads / WARP_SIZE;
 
-    const auto strided_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {stride_sample, stride_channel, stride_row}, {sample, channel, row});
-    const auto packed_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
+    const auto strided_offset = calculate_offset<3>({stride_sample, stride_channel, stride_row}, {sample, channel, row});
+    const auto packed_offset = calculate_offset<3>({nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
 
     x += strided_offset;
     dst += packed_offset;
@@ -150,7 +149,6 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
 
     const int nrows = item_ct1.get_group_range(2);
     const int nchannels = item_ct1.get_group_range(1);
-    const int nsamples = item_ct1.get_group_range(0);
 
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
@@ -161,8 +159,8 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
     const int tid = item_ct1.get_local_id(2);
     const int nwarps = nthreads / WARP_SIZE;
 
-    const auto strided_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {stride_sample, stride_channel, stride_row}, {sample, channel, row});
-    const auto packed_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
+    const auto strided_offset = calculate_offset<3>({stride_sample, stride_channel, stride_row}, {sample, channel, row});
+    const auto packed_offset = calculate_offset<3>({nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
 
     x   += strided_offset;
     dst += packed_offset;
