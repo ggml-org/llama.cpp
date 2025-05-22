@@ -14,6 +14,7 @@ import {
 import { BtnWithTooltips } from '../utils/common';
 import { useAppContext } from '../utils/app.context';
 import toast from 'react-hot-toast';
+import { ConfirmModal } from './CustomModals';
 
 export default function Sidebar() {
   const params = useParams();
@@ -23,6 +24,8 @@ export default function Sidebar() {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currConv, setCurrConv] = useState<Conversation | null>(null);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [convToDelete, setConvToDelete] = useState<Conversation | null>(null);
 
   useEffect(() => {
     StorageUtils.getOneConversation(params.convId ?? '').then(setCurrConv);
@@ -44,8 +47,38 @@ export default function Sidebar() {
     [conversations]
   );
 
+  const handleDeleteClick = (conv: Conversation) => {
+    if (isGenerating(conv.id)) {
+      toast.error('Cannot delete conversation while generating');
+      return;
+    }
+    setConvToDelete(conv);
+    setShowConfirmModal(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (convToDelete) {
+      StorageUtils.remove(convToDelete.id);
+      toast.success('Conversation deleted');
+      navigate('/');
+    }
+    setShowConfirmModal(false);
+    setConvToDelete(null);
+  };
+
+  const handleCancelDelete = () => {
+    setShowConfirmModal(false);
+    setConvToDelete(null);
+  };
+
   return (
     <>
+      <ConfirmModal
+        isOpen={showConfirmModal}
+        onClose={handleCancelDelete}
+        onConfirm={handleConfirmDelete}
+        message="Are you sure want to delete this conversation?"
+      />
       <input
         id="toggle-drawer"
         type="checkbox"
@@ -130,23 +163,7 @@ export default function Sidebar() {
                   onSelect={() => {
                     navigate(`/chat/${conv.id}`);
                   }}
-                  onDelete={() => {
-                    if (isGenerating(conv.id)) {
-                      toast.error(
-                        'Cannot delete conversation while generating'
-                      );
-                      return;
-                    }
-                    if (
-                      window.confirm(
-                        'Are you sure to delete this conversation?'
-                      )
-                    ) {
-                      toast.success('Conversation deleted');
-                      StorageUtils.remove(conv.id);
-                      navigate('/');
-                    }
-                  }}
+                  onDelete={() => handleDeleteClick(conv)}
                   onDownload={() => {
                     if (isGenerating(conv.id)) {
                       toast.error(
