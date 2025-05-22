@@ -1110,7 +1110,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         }
         split.i_start = 0;
         split.n_inputs = 0;
-        int cur_backend_id = split.backend_id;
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
@@ -1124,7 +1123,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node_backend_id == cur_backend_id && split.n_inputs > 0) {
+            if (node_backend_id == split.backend_id && split.n_inputs > 0) {
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
                     if (src == nullptr) {
@@ -1135,7 +1134,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     // by starting a new split, the memory of the previously offloaded weights can be reused
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         const int src_backend_id = tensor_backend_id(src);
-                        if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                        if (src_backend_id != split.backend_id && !ggml_backend_sched_buffer_supported(sched, src, split.backend_id)) {
                             need_new_split = true;
                             break;
                         }
@@ -1145,8 +1144,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     if (split.n_inputs == GGML_SCHED_MAX_SPLIT_INPUTS) {
                         const size_t id = hash_id(src);
                         const int src_backend_id = sched->hv_tensor_backend_ids[id];
-                        const bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
-                        if (src_backend_id != cur_backend_id && tensor_id_copy(id, cur_backend_id, 0) == nullptr && !supported) {
+                        const bool supported = ggml_backend_sched_buffer_supported(sched, src, split.backend_id);
+                        if (src_backend_id != split.backend_id && tensor_id_copy(id, split.backend_id, 0) == nullptr && !supported) {
                             need_new_split = true;
                             break;
                         }
@@ -1154,7 +1153,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
             }
 
-            if (node_backend_id != cur_backend_id || need_new_split) {
+            if (node_backend_id != split.backend_id || need_new_split) {
                 split.i_end = i;
                 split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
                 splits_no_tp.push_back(split);
@@ -1162,7 +1161,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 split.backend_id = node_backend_id;
                 split.i_start = i;
                 split.n_inputs = 0;
-                cur_backend_id = node_backend_id;
             }
 
             // find inputs that are not on the same backend
@@ -1200,10 +1198,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     }
                 }
 
-                if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                if (src_backend_id != split.backend_id && !ggml_backend_sched_buffer_supported(sched, src, split.backend_id)) {
                     // create a copy of the input in the split's backend
-                    if (tensor_id_copy(src_id, cur_backend_id, 0) == nullptr) {
-                        ggml_backend_t backend = sched->backends[cur_backend_id];
+                    if (tensor_id_copy(src_id, split.backend_id, 0) == nullptr) {
+                        ggml_backend_t backend = sched->backends[split.backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
                             struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
                             ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
@@ -1211,7 +1209,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                                 ggml_set_input(tensor_copy);
                                 ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
                             }
-                            tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
+                            tensor_id_copy(src_id, split.backend_id, c) = tensor_copy;
                             SET_CAUSE(tensor_copy, "4.cpy");
                         }
                         const int n_inputs = split.n_inputs++;
@@ -1219,7 +1217,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         split.inputs[n_inputs] = src;
                     }
                     // fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
-                    node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+                    node->src[j] = tensor_id_copy(src_id, split.backend_id, sched->cur_copy);
                 }
             }
         }
