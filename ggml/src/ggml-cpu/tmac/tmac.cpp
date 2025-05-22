@@ -8,7 +8,6 @@
 #include "lut_mul_mat.h"
 #include "tmac.h"
 
-#define GGML_USE_TMAC
 #if defined(GGML_USE_TMAC)
 namespace ggml::cpu::tmac {
 
