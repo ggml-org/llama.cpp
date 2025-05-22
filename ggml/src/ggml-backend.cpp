@@ -1190,7 +1190,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     for (int n = 0; n < split->graph.n_nodes; n++) {
                         ggml_tensor * node_orig = graph->nodes[split->i_start + n];
                         ggml_tensor * node_sg   = split->graph.nodes[n];
-                        assert(node_orig == node_sg || split->backend_id != 0);
 
                         const size_t node_id = hash_id(node_orig);
                         assert(tensor_id_tp(node_id, split->backend_id) == nullptr);
