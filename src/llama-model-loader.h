@@ -65,11 +65,11 @@ struct llama_model_loader {
     int n_tensors = 0;
     int n_created = 0;
 
-    uint64_t n_elements = 0;
-    size_t   n_bytes    = 0;
-
     bool use_mmap = false;
     bool check_tensors;
+
+    uint64_t n_elements = 0;
+    size_t   n_bytes    = 0;
 
     llama_files files;
     llama_ftype ftype;

@@ -1246,7 +1246,6 @@ llm_graph_result_ptr llama_context::graph_build(
     return model.build_graph(
             {
                 /*.ctx         =*/ ctx,
-                /*.arch        =*/ model.arch,
                 /*.hparams     =*/ model.hparams,
                 /*.cparams     =*/ cparams,
                 /*.ubatch      =*/ ubatch,
@@ -1256,6 +1255,7 @@ llm_graph_result_ptr llama_context::graph_build(
                 /*.loras       =*/ &loras,
                 /*.memory      =*/ memory.get(),
                 /*.cross       =*/ &cross,
+                /*.arch        =*/ model.arch,
                 /*.n_outputs   =*/ n_outputs,
                 /*.cb          =*/ graph_get_cb(),
             }, gf, gtype);

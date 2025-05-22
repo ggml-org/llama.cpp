@@ -483,10 +483,10 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
     return llama_sampler_init(
         /* .iface = */ &llama_sampler_chain_i,
         /* .ctx   = */ new llama_sampler_chain {
-            /* .params      = */ params,
             /* .samplers    = */ {},
-            /* .t_sample_us = */ 0,
+            /* .params      = */ params,
             /* .n_sample    = */ 0,
+            /* .t_sample_us = */ 0,
         }
     );
 }
