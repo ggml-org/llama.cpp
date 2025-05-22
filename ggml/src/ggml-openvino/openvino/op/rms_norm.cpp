@@ -39,7 +39,7 @@ OutputVector translate_rms_norm(const NodeContext& context) {
 
     auto res = std::make_shared<ov::op::v1::Multiply>(input_node, scale);
 
-    return {res};
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

@@ -11,10 +11,9 @@ namespace op {
 OutputVector translate_add(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
 
-    auto lhs = context.get_input(0);
-    auto rhs = context.get_input(1);
-    auto add = std::make_shared<ov::op::v1::Add>(lhs, rhs);
-    return {add};
+    auto res = std::make_shared<ov::op::v1::Add>(context.get_input(0), context.get_input(1));
+
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

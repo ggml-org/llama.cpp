@@ -1,5 +1,8 @@
 #include "translate_session.hpp"
 
+#include <cstdlib>
+#include <openvino/pass/constant_folding.hpp>
+
 #include "input_model.hpp"
 
 namespace ov {
@@ -91,10 +94,17 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
             used_params.push_back(param);
         }
     }
-    if (auto diff = params.size() - used_params.size()) {
-        std::cout << diff << " parameters are not used in the model." << std::endl;
+    if (getenv("GGML_OPENVINO_PROFILING")) {
+        if (auto diff = params.size() - used_params.size()) {
+            std::cout << diff << " parameters are not used in the model." << std::endl;
+        }
     }
     resulting_model = std::make_shared<Model>(results, used_params);
+
+    ov::pass::Manager manager;
+    manager.set_per_pass_validation(true);
+    manager.register_pass<ov::pass::ConstantFolding>();
+    manager.run_passes(resulting_model);
 
     return resulting_model;
 }
