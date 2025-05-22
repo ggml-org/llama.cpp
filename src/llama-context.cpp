@@ -2423,18 +2423,13 @@ llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     return kv->seq_pos_min(seq_id);
 }
 
-llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
+llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return -1;
     }
 
     return kv->seq_pos_max(seq_id);
-}
-
-// deprecated
-void llama_kv_cache_defrag(llama_context * ctx) {
-    llama_kv_self_defrag(ctx);
 }
 
 void llama_kv_self_defrag(llama_context * ctx) {
