@@ -23,32 +23,47 @@ static void * const webgpu_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
 /* Struct definitions */
 
-// When registering the backend, we initialize the WebGPU instance.
-struct ggml_backend_webgpu_reg_context {
+// All the base objects needed to run operations on a WebGPU device
+struct webgpu_context_struct {
     wgpu::Instance instance;
+    wgpu::Adapter adapter;
+    wgpu::Device device;
+    // TODO: initialize
+    wgpu::Queue queue;
+    wgpu::Limits limits;
+    // TODO: initialize
+    wgpu::ComputePipeline memset_pipeline;
+};
+
+typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
+
+struct ggml_backend_webgpu_reg_context {
+    webgpu_context webgpu_ctx;
+
     size_t device_count;
     const char * name;
 };
 
-// When getting the (ggml) device, we create a WebGPU adapter and its associated WebGPU device.
 struct ggml_backend_webgpu_device_context {
-    // An adapter can only be used to create one device
-    wgpu::Adapter adapter;
-    wgpu::Device device;
-    wgpu::StringView device_name;
-    wgpu::StringView device_desc;
+    webgpu_context webgpu_ctx;
+
+    std::string device_name;
+    std::string device_desc;
 };
 
 struct ggml_backend_webgpu_context {
+    webgpu_context webgpu_ctx;
+
     std::string name;
-    wgpu::Device device;
 };
 
 struct ggml_backend_webgpu_buffer_context {
+    webgpu_context webgpu_ctx;
+
     wgpu::Buffer buffer;
 
-    ggml_backend_webgpu_buffer_context(wgpu::Buffer buf) :
-        buffer(buf) {
+    ggml_backend_webgpu_buffer_context(webgpu_context ctx, wgpu::Buffer buf) :
+        webgpu_ctx(ctx), buffer(buf) {
     }
 };
 
@@ -88,21 +103,16 @@ static ggml_backend_i ggml_backend_webgpu_i = {
 
 /* GGML Backend Buffer Interface */
 
-// TODO
 static void ggml_backend_webgpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    GGML_UNUSED(buffer);
+    ggml_backend_webgpu_buffer_context * ctx = static_cast<ggml_backend_webgpu_buffer_context *>(buffer->context);
+    ctx->buffer.Destroy();
+    delete ctx;
 }
 
 // TODO: what to return here?
 static void * ggml_backend_webgpu_buffer_get_base(ggml_backend_buffer_t buffer) {
     GGML_UNUSED(buffer);
     return webgpu_ptr_base;
-}
-
-// TODO
-static enum ggml_status ggml_backend_webgpu_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_init_tensor(" << buffer << " (" << buffer->context << "), " << tensor << ")");
-    return GGML_STATUS_SUCCESS;
 }
 
 // TODO
@@ -117,7 +127,7 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
 // TODO
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    WEBGPU_LOG_DEBUG("ggml_backend_vk_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
 }
 
 // TODO
@@ -138,7 +148,7 @@ static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8
 static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_webgpu_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_webgpu_buffer_get_base,
-    /* .init_tensor     = */ ggml_backend_webgpu_buffer_init_tensor,
+    /* .init_tensor     = */ NULL, // TODO: should we implement this?
     /* .memset_tensor   = */ ggml_backend_webgpu_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_webgpu_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_webgpu_buffer_get_tensor,
@@ -153,7 +163,7 @@ static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
 
 static const char * ggml_backend_webgpu_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    return ctx->device_name.data;
+    return ctx->device_name.c_str();
 }
 
 static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
@@ -165,25 +175,21 @@ static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_b
     buf_desc.size = size;
     buf_desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst;
     // TODO: error handling
-    wgpu::Buffer buf = ctx->device.CreateBuffer(&buf_desc);
+    wgpu::Buffer buf = ctx->webgpu_ctx->device.CreateBuffer(&buf_desc);
 
-    ggml_backend_webgpu_buffer_context * buf_ctx = new ggml_backend_webgpu_buffer_context(buf);
+    ggml_backend_webgpu_buffer_context * buf_ctx = new ggml_backend_webgpu_buffer_context(ctx->webgpu_ctx, buf);
 
     return ggml_backend_buffer_init(buft, ggml_backend_webgpu_buffer_interface, buf_ctx, size);
 }
 
 static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    wgpu::Limits limits;
-    ctx->device.GetLimits(&limits);
-    return limits.minStorageBufferOffsetAlignment;
+    return ctx->webgpu_ctx->limits.minStorageBufferOffsetAlignment;
 }
 
 static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    wgpu::Limits limits;
-    ctx->device.GetLimits(&limits);
-    return limits.maxBufferSize;
+    return ctx->webgpu_ctx->limits.maxBufferSize;
 }
 
 /* End GGML Backend Buffer Type Interface */
@@ -198,9 +204,7 @@ static const char * ggml_backend_webgpu_host_buffer_type_name(ggml_backend_buffe
 // WebGPU doesn't specify a memory map alignment like Vulkan, so we use the same value as the storage buffer alignment
 static size_t ggml_backend_webgpu_host_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    wgpu::Limits limits;
-    ctx->device.GetLimits(&limits);
-    return limits.minStorageBufferOffsetAlignment;
+    return ctx->webgpu_ctx->limits.minStorageBufferOffsetAlignment;
 }
 
 /* End GGML Backend Host Buffer Type Interface */
@@ -209,21 +213,19 @@ static size_t ggml_backend_webgpu_host_buffer_type_get_alignment(ggml_backend_bu
 
 static const char * ggml_backend_webgpu_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
-    return ctx->device_name.data;
+    return ctx->device_name.c_str();
 }
 
 static const char * ggml_backend_webgpu_device_get_description(ggml_backend_dev_t dev) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
-    return ctx->device_desc.data;
+    return ctx->device_desc.c_str();
 }
 
 static void ggml_backend_webgpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
-    wgpu::Limits limits;
-    ctx->device.GetLimits(&limits);
     // TODO: what do we actually want to return here?
-    *free = limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
-    *total = limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
+    *free = ctx->webgpu_ctx->limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
+    *total = ctx->webgpu_ctx->limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
 }
 
 static enum ggml_backend_dev_type ggml_backend_webgpu_device_get_type(ggml_backend_dev_t dev) {
@@ -258,9 +260,33 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
 
     ggml_backend_webgpu_device_context * dev_ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
 
+    wgpu::DeviceDescriptor deviceDescriptor;
+    deviceDescriptor.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous, 
+        [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+    });
+    deviceDescriptor.SetUncapturedErrorCallback(
+        [](const wgpu::Device& device, wgpu::ErrorType reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+    });
+    webgpu_context webgpu_ctx = dev_ctx->webgpu_ctx;
+    dev_ctx->webgpu_ctx->instance.WaitAny(dev_ctx->webgpu_ctx->adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,
+        [webgpu_ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+            if (status != wgpu::RequestDeviceStatus::Success) {
+                GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
+                return;
+            }
+            webgpu_ctx->device = device;
+        }),
+        UINT64_MAX
+    );
+    GGML_ASSERT(dev_ctx->webgpu_ctx->device != nullptr);
+
     static ggml_backend_webgpu_context backend_ctx;
-    backend_ctx.name = GGML_WEBGPU_NAME + std::string(": ") + std::string(dev_ctx->device_name.data);
-    backend_ctx.device = dev_ctx->device;
+    backend_ctx.name = GGML_WEBGPU_NAME + std::string(": ") + dev_ctx->device_name;
+    backend_ctx.webgpu_ctx = dev_ctx->webgpu_ctx;
 
     static ggml_backend backend = {
         /* .guid      = */ ggml_backend_webgpu_guid(),
@@ -363,7 +389,8 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     WEBGPU_LOG_DEBUG("ggml_backend_reg_get_device()");
 
     ggml_backend_webgpu_reg_context * reg_ctx = static_cast<ggml_backend_webgpu_reg_context *>(reg->context);
-    static ggml_backend_webgpu_device_context device_ctx;
+
+    webgpu_context ctx = reg_ctx->webgpu_ctx;
 
     wgpu::RequestAdapterOptions options = {};
     auto callback = [](wgpu::RequestAdapterStatus status, wgpu::Adapter adapter, const char *message, void *userdata) {
@@ -373,38 +400,20 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
         }
         *static_cast<wgpu::Adapter *>(userdata) = adapter;
     };
-    auto callbackMode = wgpu::CallbackMode::WaitAnyOnly;
-    void *userdata = &device_ctx.adapter;
-    reg_ctx->instance.WaitAny(reg_ctx->instance.RequestAdapter(&options, callbackMode, callback, userdata), UINT64_MAX);
-    GGML_ASSERT(device_ctx.adapter != nullptr);
+    void *userdata = &ctx->adapter;
+    ctx->instance.WaitAny(ctx->instance.RequestAdapter(&options, wgpu::CallbackMode::WaitAnyOnly, callback, userdata), UINT64_MAX);
+    GGML_ASSERT(ctx->adapter != nullptr);
 
-    wgpu::DeviceDescriptor deviceDescriptor;
-    deviceDescriptor.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous, 
-        [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
-            GGML_UNUSED(device);
-            GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
-    });
-    deviceDescriptor.SetUncapturedErrorCallback(
-        [](const wgpu::Device& device, wgpu::ErrorType reason, wgpu::StringView message) {
-            GGML_UNUSED(device);
-            GGML_LOG_ERROR("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
-    });
-    reg_ctx->instance.WaitAny(device_ctx.adapter.RequestDevice(&deviceDescriptor, callbackMode,
-        [](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
-            if (status != wgpu::RequestDeviceStatus::Success) {
-                GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
-                return;
-            }
-            device_ctx.device = std::move(device);
-        }),
-        UINT64_MAX
-    );
-    GGML_ASSERT(device_ctx.device != nullptr);
+    ctx->adapter.GetLimits(&ctx->limits);
 
     wgpu::AdapterInfo info{};
-    device_ctx.adapter.GetInfo(&info);
-    device_ctx.device_name = info.device;
-    device_ctx.device_desc = info.description;
+    ctx->adapter.GetInfo(&info);
+
+    static ggml_backend_webgpu_device_context device_ctx;
+    device_ctx.webgpu_ctx = ctx;
+    device_ctx.device_name = std::string(info.device.data);
+    device_ctx.device_desc = std::string(info.description.data);
+
     GGML_LOG_INFO("ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | device_desc: %s\n", 
         info.vendorID, info.vendor.data, info.architecture.data, info.deviceID, info.device.data, info.description.data);
 
@@ -430,14 +439,18 @@ static const struct ggml_backend_reg_i ggml_backend_webgpu_reg_i = {
 ggml_backend_reg_t ggml_backend_webgpu_reg() {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_reg()");
 
+    webgpu_context webgpu_ctx = std::make_shared<webgpu_context_struct>();
+
     static ggml_backend_webgpu_reg_context ctx;
+    ctx.webgpu_ctx = webgpu_ctx;
     ctx.name = GGML_WEBGPU_NAME;
     ctx.device_count = 1;
 
+
     wgpu::InstanceDescriptor instanceDescriptor{};
     instanceDescriptor.capabilities.timedWaitAnyEnable = true;
-    ctx.instance = wgpu::CreateInstance(&instanceDescriptor);
-    GGML_ASSERT(ctx.instance != nullptr);
+    webgpu_ctx->instance = wgpu::CreateInstance(&instanceDescriptor);
+    GGML_ASSERT(webgpu_ctx->instance != nullptr);
 
     static ggml_backend_reg reg = {
         /* .api_version = */ GGML_BACKEND_API_VERSION,
