@@ -2776,7 +2776,7 @@ static void ggml_cann_mul_mat_id_quant(ggml_backend_cann_context& ctx, ggml_tens
     } else {
         GGML_ABORT("MUL_MAT_ID only support quant type Q4_0 and Q8_0 ");
     }
-     
+
     // src0_row [D, M, 1, 1] weight without permute
     src0_row.ne[2] = 1;
     src0_row.ne[3] = 1;
@@ -2838,7 +2838,7 @@ static void ggml_cann_mul_mat_id_quant(ggml_backend_cann_context& ctx, ggml_tens
             dst_row.data = dst_tmp_ptr;
             dst_row.src[0] = &src0_row;
             dst_row.src[1] = &src1_row;
-        
+
             ggml_cann_mul_mat(ctx, &dst_row);
         }
     }
