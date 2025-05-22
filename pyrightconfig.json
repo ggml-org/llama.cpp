@@ -1,6 +1,6 @@
 {
   "extraPaths": ["gguf-py"],
-  "pythonVersion": "3.9",
+  "pythonVersion": "3.10",
   "pythonPlatform": "All",
   "reportUnusedImport": "warning",
   "reportDuplicateImport": "error",
@@ -11,7 +11,7 @@
     {
       // TODO: make this version override work correctly
       "root": "gguf-py",
-      "pythonVersion": "3.8",
+      "pythonVersion": "3.10",
     },
     {
       // uses match expressions in steps.py
@@ -19,4 +19,7 @@
       "pythonVersion": "3.10",
     },
   ],
- }
+  "exclude": [
+    "tools/mtmd/legacy-models",
+  ]
+}
