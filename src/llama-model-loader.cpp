@@ -64,14 +64,14 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_IQ3_S:    return "IQ3_S - 3.4375 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ3_M:    return "IQ3_S mix - 3.66 bpw";
         case LLAMA_FTYPE_MOSTLY_TMAC_BN_0:      return "TMAC_BN_0";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_0:   return "TMAC_W2G64_0 - 2.5 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_1:   return "TMAC_W2G64_1 - 3.0 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_0:  return "TMAC_W2G128_0 - 2.25 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_1:  return "TMAC_W2G128_1 - 2.5 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_0:   return "TMAC_W4G64_0 - 4.5 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_1:   return "TMAC_W4G64_1 - 5.0 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_0:  return "TMAC_W4G128_0 - 4.25 bpw";
-        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_1:  return "TMAC_W4G128_1 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_0:   return "TMAC_W2G64_0 - 2.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G64_1:   return "TMAC_W2G64_1 - 2.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_0:  return "TMAC_W2G128_0 - 2.125 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W2G128_1:  return "TMAC_W2G128_1 - 2.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_0:   return "TMAC_W4G64_0 - 4.25 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G64_1:   return "TMAC_W4G64_1 - 4.5 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_0:  return "TMAC_W4G128_0 - 4.125 bpw";
+        case LLAMA_FTYPE_MOSTLY_TMAC_W4G128_1:  return "TMAC_W4G128_1 - 4.25 bpw";
 
         default: return "unknown, may not work";
     }
