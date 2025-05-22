@@ -1328,6 +1328,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
                     }
+                    fprintf(stderr, "%s: 100 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 } else if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id) &&
                            !(src->buffer && ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src->buffer)))) {
@@ -1348,6 +1349,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
                     }
+                    fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
             }
