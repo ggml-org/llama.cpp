@@ -43,6 +43,9 @@ virtgpu_ioctl_gem_close(struct virtgpu *gpu, uint32_t gem_handle)
 
    const int ret = virtgpu_ioctl(gpu, DRM_IOCTL_GEM_CLOSE, &args);
    assert(!ret);
+#ifdef NDEBUG
+   UNUSED(ret);
+#endif
 }
 
 static void *

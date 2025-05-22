@@ -64,7 +64,7 @@ static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer
 }
 
 static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 

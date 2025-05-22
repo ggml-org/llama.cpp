@@ -41,17 +41,27 @@
 #define BREAKPOINT \
   breakpoint()
 
+#ifndef NDEBUG
 #define IMPLEMENTED							\
   printf("INFO: ### reached implemented function %s\n", __func__)
+#else
+#define IMPLEMENTED							\
+  do {} while(0)
+#endif
 
+#ifndef NDEBUG
 #define IMPLEMENTED_ONCE						\
   do {									\
     static bool first = true;						\
     if (first) {							\
       printf("INFO: ### reached implemented function %s\n", __func__);  \
-      first = true;							\
+      first = false;							\
     }									\
   } while(0)
+#else
+#define IMPLEMENTED_ONCE			\
+  do {} while(0)
+#endif
 
 #define RMT_LOG_DEBUG(msg) std::cerr << msg << std::endl
 

@@ -165,6 +165,9 @@ static inline size_t
 vn_sizeof_uint64_t(const uint64_t *val)
 {
   assert(sizeof(*val) == 8);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 8;
 }
 
@@ -217,6 +220,9 @@ static inline size_t
 vn_sizeof_int32_t(const int32_t *val)
 {
   assert(sizeof(*val) == 4);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 4;
 }
 
@@ -327,6 +333,9 @@ static inline size_t
 vn_sizeof_uint32_t(const uint32_t *val)
 {
   assert(sizeof(*val) == 4);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 4;
 }
 

@@ -71,6 +71,10 @@ create_virtgpu() {
   result = virtgpu_init_context(gpu);
   assert(result == APIR_SUCCESS);
 
+#ifdef NDEBUG
+   UNUSED(result);
+#endif
+
   virtgpu_init_shmem_blob_mem(gpu);
 
   gpu->reply_shmem = virtgpu_shmem_create(gpu, 16384);

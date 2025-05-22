@@ -31,6 +31,7 @@
 void thks_bye();
 void breakpoint();
 
+#ifndef NDEBUG
 inline void
 INFO(const char *format, ...) {
   va_list argptr;
@@ -39,6 +40,10 @@ INFO(const char *format, ...) {
   fprintf(stderr, "\n");
   va_end(argptr);
 }
+#else
+inline void
+INFO(...) {}
+#endif
 
 inline void
 WARNING(const char *format, ...) {

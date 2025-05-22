@@ -124,7 +124,7 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     /* .context     = */ gpu,
   };
 
-  RMT_LOG_DEBUG("ggml_backend_remoting_frontend_reg() hello :wave:");
+  INFO("ggml_backend_remoting_frontend_reg() hello :wave:");
 
   ggml_backend_remoting_reg_init_devices(&reg);
 
