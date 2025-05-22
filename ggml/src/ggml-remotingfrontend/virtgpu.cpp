@@ -208,8 +208,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
 
    drmFreeVersion(version);
 
-   if (VN_DEBUG(INIT))
-      vn_log(gpu->instance, "using DRM device %s", node_path);
+   INFO(gpu->instance, "using DRM device %s", node_path);
 
    return APIR_SUCCESS;
 }

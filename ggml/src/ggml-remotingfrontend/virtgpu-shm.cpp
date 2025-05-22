@@ -72,8 +72,8 @@ void
 virtgpu_shmem_destroy(struct virtgpu *gpu,
                       struct virtgpu_shmem *shmem)
 {
-   munmap(shmem->base.mmap_ptr, shmem->base.mmap_size);
-   virtgpu_ioctl_gem_close(gpu, shmem->gem_handle);
+  munmap(shmem->base.mmap_ptr, shmem->base.mmap_size);
+  virtgpu_ioctl_gem_close(gpu, shmem->gem_handle);
 }
 
 struct vn_renderer_shmem *
