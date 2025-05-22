@@ -96,6 +96,8 @@ enum llm_type {
     LLM_TYPE_235B_A22B,
 };
 
+std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
+
 struct llama_layer_posnet {
     // resnet
     struct ggml_tensor * norm1   = nullptr;
@@ -396,7 +398,10 @@ struct llama_model {
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 
-    ggml_tensor * get_rope_factors(uint32_t n_ctx_per_seq, int il) const;
+    float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+    float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
+
+    ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
 
     // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface

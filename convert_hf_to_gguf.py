@@ -650,7 +650,11 @@ class ModelBase:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+                if "llm_config" in config:
+                    # rename for InternVL
+                    config["text_config"] = config["llm_config"]
+                return config
 
     @classmethod
     def register(cls, *names: str) -> Callable[[AnyModel], AnyModel]:
@@ -1018,6 +1022,9 @@ class TextModel(ModelBase):
         if chkhsh == "0e9433cbbb161f89e264eb32e8e64bfe69e834973ffca5d41d3948a604a3e2a3":
             # ref: https://huggingface.co/mistral-community/pixtral-12b
             res = "pixtral"
+        if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
+            # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
+            res = "seed-coder"
 
         if res is None:
             logger.warning("\n")
@@ -2286,6 +2293,9 @@ class Llama4Model(LlamaModel):
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             name_up = name.replace("gate_up_proj", "up_proj.weight")
@@ -2845,6 +2855,11 @@ class Qwen2Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.hf_arch == "Qwen2Model":
             name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
+        if "language_model." in name:
+            name = name.replace("language_model.", "") # for InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
         yield from super().modify_tensors(data_torch, name, bid)
 
 
@@ -2945,6 +2960,62 @@ class Qwen2VLVisionModel(VisionModel):
                 ]
             else:
                 return [(self.map_tensor_name(name), data_torch)]
+        return [] # skip other tensors
+
+
+@ModelBase.register("InternVisionModel")
+class InternVisionModel(VisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.INTERNVL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
+        # hidden_act
+        if hparams["hidden_act"] == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        elif hparams["hidden_act"] == "gelu":
+            self.gguf_writer.add_vision_use_gelu(True)
+        else:
+            raise ValueError(f"Unsupported hidden_act: {hparams['hidden_act']}")
+        # downsample_ratio
+        downsample_ratio = self.global_config.get("downsample_ratio")
+        assert downsample_ratio is not None
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd." in new_name:
+            return gguf.GGMLQuantizationType.F16
+        if ".position_embd." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        if name.startswith("vision_model") or name.startswith("mlp"):
+            # process visual tensors
+            # correct name
+            if name.startswith("vision_model"):
+                name = "vision_tower." + name
+            if (".ls" in name or "position_embedding" in name) and not name.endswith(".weight"):
+                name += ".weight"
+            # split QKV tensors if needed
+            if ".qkv." in name:
+                if data_torch.ndim == 2: # weight
+                    c3, _ = data_torch.shape
+                else: # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c: c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.q_proj")), wq),
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.k_proj")), wk),
+                    (self.map_tensor_name(name.replace("attn.qkv", "self_attn.v_proj")), wv),
+                ]
+            return [(self.map_tensor_name(name), data_torch)]
         return [] # skip other tensors
 
 
@@ -3599,6 +3670,11 @@ class InternLM2Model(TextModel):
         head_dim = n_embd // num_heads
         num_groups = num_heads // q_per_kv
 
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
+
         if bid is not None and f"model.layers.{bid}.attention.wqkv" in name:
             qkv = data_torch
 
@@ -3672,6 +3748,10 @@ class InternLM3Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model"):
+            # skip visual tensors
+            return []
         if name.endswith(("q_proj.weight", "q_proj.bias")):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith(("k_proj.weight", "k_proj.bias")):
@@ -5908,10 +5988,19 @@ class GraniteModel(LlamaModel):
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
 
-@ModelBase.register("GraniteMoeForCausalLM")
+@ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE_MOE
+
+    def set_gguf_parameters(self):
+        """GraniteMoeShared uses GraniteMoe parameters plus the following:
+        - shared_intermediate_size
+        """
+        super().set_gguf_parameters()
+        if shared_feed_forward_length := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_feed_forward_length)
+            logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         """In modeling_granitemoe, the JetMoe implementation of parallel experts
@@ -5923,10 +6012,19 @@ class GraniteMoeModel(GraniteModel):
         if name.endswith("block_sparse_moe.input_linear.weight"):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
-            gate, up = data_torch[..., :ffn_dim, :], data_torch[..., ffn_dim:, :]
+            gate, up = data_torch.split(ffn_dim, dim=-2)
             return [
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
+            ]
+
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams["shared_intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
             ]
 
         return super().modify_tensors(data_torch, name, bid)

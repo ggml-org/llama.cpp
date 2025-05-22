@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 #include "ggml-backend.h"
+#include "ggml-opt.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -112,6 +113,7 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_BAILINGMOE     = 32,
         LLAMA_VOCAB_PRE_TYPE_LLAMA4         = 33,
         LLAMA_VOCAB_PRE_TYPE_PIXTRAL        = 34,
+        LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 35,
     };
 
     enum llama_rope_type {
@@ -352,7 +354,7 @@ extern "C" {
         float    yarn_beta_fast;   // YaRN low correction dim
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
-        float    defrag_thold;     // defragment the KV cache if holes/size > thold, < 0 disabled (default)
+        float    defrag_thold;     // defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
@@ -368,9 +370,11 @@ extern "C" {
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
-        bool offload_kqv; // whether to offload the KQV ops (including the KV cache) to GPU
-        bool flash_attn;  // whether to use flash attention [EXPERIMENTAL]
-        bool no_perf;     // whether to measure performance timings
+        bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
+        bool flash_attn;  // use flash attention [EXPERIMENTAL]
+        bool no_perf;     // measure performance timings
+        bool op_offload;  // offload host tensor operations to device
+        bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     };
 
     // model quantization parameters
@@ -451,6 +455,10 @@ extern "C" {
                              const char ** paths,
                                  size_t    n_paths,
               struct llama_model_params    params);
+
+    LLAMA_API void llama_model_save_to_file(
+            const struct llama_model * model,
+                        const char * path_model);
 
     DEPRECATED(LLAMA_API void llama_free_model(struct llama_model * model),
             "use llama_model_free instead");
@@ -732,10 +740,18 @@ extern "C" {
                        llama_pos   p1,
                              int   d);
 
+    // Returns the smallest position present in the KV cache for the specified sequence
+    // This is typically non-zero only for SWA caches
+    // Return -1 if the sequence is empty
+    LLAMA_API llama_pos llama_kv_self_seq_pos_min(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id);
+
     // Returns the largest position present in the KV cache for the specified sequence
+    // Return -1 if the sequence is empty
     LLAMA_API llama_pos llama_kv_self_seq_pos_max(
             struct llama_context * ctx,
-                     llama_seq_id   seq_id);
+                    llama_seq_id   seq_id);
 
     // Defragment the KV cache
     // This will be applied:
@@ -945,9 +961,12 @@ extern "C" {
     // Requires KV cache.
     // For encode-decoder contexts, processes the batch using the decoder.
     // Positive return values does not mean a fatal error, but rather a warning.
-    //   0 - success
-    //   1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)
-    // < 0 - error. the KV cache state is restored to the state before this call
+    // Upon non-zero return values, the KV cache state is restored to the state before this call
+    //    0 - success
+    //    1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)
+    //    2 - aborted
+    //   -1 - invalid input batch
+    // < -1 - error
     LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
               struct llama_batch   batch);
@@ -1439,6 +1458,37 @@ extern "C" {
     LLAMA_API struct llama_perf_sampler_data llama_perf_sampler      (const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_print(const struct llama_sampler * chain);
     LLAMA_API void                           llama_perf_sampler_reset(      struct llama_sampler * chain);
+
+    //
+    // training
+    //
+
+    // function that returns whether or not a given tensor contains trainable parameters
+    typedef bool (*llama_opt_param_filter)(const struct ggml_tensor * tensor, void * userdata);
+
+    // always returns true
+    LLAMA_API bool llama_opt_param_filter_all(const struct ggml_tensor * tensor, void * userdata);
+
+    struct llama_opt_params {
+        uint32_t n_ctx_train; // assumed context size post training, use context size specified in llama_context if 0
+
+        llama_opt_param_filter param_filter; // callback for determining which tensors contain trainable parameters
+        void * param_filter_ud;              // userdata for determining which tensors contain trainable parameters
+
+        ggml_opt_get_optimizer_params get_opt_pars; // callback for calculating optimizer parameters
+        void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
+    };
+
+    LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
+
+    LLAMA_API void llama_opt_epoch(
+            struct llama_context    * lctx,
+            ggml_opt_dataset_t        dataset,
+            ggml_opt_result_t         result_train,
+            ggml_opt_result_t         result_eval,
+            int64_t                   idata_split,
+            ggml_opt_epoch_callback   callback_train,
+            ggml_opt_epoch_callback   callback_eval);
 
 #ifdef __cplusplus
 }

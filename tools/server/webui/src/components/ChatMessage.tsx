@@ -83,13 +83,20 @@ export default function ChatMessage({
 
   if (!viewingChat) return null;
 
+  const isUser = msg.role === 'user';
+
   return (
-    <div className="group" id={id}>
+    <div
+      className="group"
+      id={id}
+      role="group"
+      aria-description={`Message from ${msg.role}`}
+    >
       <div
         className={classNames({
           chat: true,
-          'chat-start': msg.role !== 'user',
-          'chat-end': msg.role === 'user',
+          'chat-start': !isUser,
+          'chat-end': isUser,
         })}
       >
         {msg.extra && msg.extra.length > 0 && (
@@ -99,7 +106,7 @@ export default function ChatMessage({
         <div
           className={classNames({
             'chat-bubble markdown': true,
-            'chat-bubble bg-transparent': msg.role !== 'user',
+            'chat-bubble bg-transparent': !isUser,
           })}
         >
           {/* textarea for editing message */}
@@ -142,7 +149,7 @@ export default function ChatMessage({
               ) : (
                 <>
                   {/* render message as markdown */}
-                  <div dir="auto">
+                  <div dir="auto" tabIndex={0}>
                     {thought && (
                       <ThoughtProcess
                         isThinking={!!isThinking && !!isPending}
@@ -196,13 +203,18 @@ export default function ChatMessage({
           })}
         >
           {siblingLeafNodeIds && siblingLeafNodeIds.length > 1 && (
-            <div className="flex gap-1 items-center opacity-60 text-sm">
+            <div
+              className="flex gap-1 items-center opacity-60 text-sm"
+              role="navigation"
+              aria-description={`Message version ${siblingCurrIdx + 1} of ${siblingLeafNodeIds.length}`}
+            >
               <button
                 className={classNames({
                   'btn btn-sm btn-ghost p-1': true,
                   'opacity-20': !prevSibling,
                 })}
                 onClick={() => prevSibling && onChangeSibling(prevSibling)}
+                aria-label="Previous message version"
               >
                 <ChevronLeftIcon className="h-4 w-4" />
               </button>
@@ -215,6 +227,7 @@ export default function ChatMessage({
                   'opacity-20': !nextSibling,
                 })}
                 onClick={() => nextSibling && onChangeSibling(nextSibling)}
+                aria-label="Next message version"
               >
                 <ChevronRightIcon className="h-4 w-4" />
               </button>
@@ -223,7 +236,7 @@ export default function ChatMessage({
           {/* user message */}
           {msg.role === 'user' && (
             <BtnWithTooltips
-              className="btn-mini show-on-hover w-8 h-8"
+              className="btn-mini w-8 h-8"
               onClick={() => setEditingContent(msg.content)}
               disabled={msg.content === null}
               tooltipsContent="Edit message"
@@ -236,7 +249,7 @@ export default function ChatMessage({
             <>
               {!isPending && (
                 <BtnWithTooltips
-                  className="btn-mini show-on-hover w-8 h-8"
+                  className="btn-mini w-8 h-8"
                   onClick={() => {
                     if (msg.content !== null) {
                       onRegenerateMessage(msg as Message);
@@ -250,10 +263,7 @@ export default function ChatMessage({
               )}
             </>
           )}
-          <CopyButton
-            className="btn-mini show-on-hover w-8 h-8"
-            content={msg.content}
-          />
+          <CopyButton className="btn-mini w-8 h-8" content={msg.content} />
         </div>
       )}
     </div>
@@ -271,6 +281,8 @@ function ThoughtProcess({
 }) {
   return (
     <div
+      role="button"
+      aria-label="Toggle thought process display"
       tabIndex={0}
       className={classNames({
         'collapse bg-none': true,
@@ -292,7 +304,11 @@ function ThoughtProcess({
           )}
         </div>
       </div>
-      <div className="collapse-content text-base-content/70 text-sm p-1">
+      <div
+        className="collapse-content text-base-content/70 text-sm p-1"
+        tabIndex={0}
+        aria-description="Thought process content"
+      >
         <div className="border-l-2 border-base-content/20 pl-4 mb-4">
           <MarkdownDisplay content={content} />
         </div>

@@ -28,13 +28,13 @@ function AppLayout() {
   return (
     <>
       <Sidebar />
-      <div
+      <main
         className="drawer-content grow flex flex-col h-screen w-screen mx-auto px-4 overflow-auto bg-base-100"
         id="main-scroll"
       >
         <Header />
         <Outlet />
-      </div>
+      </main>
       {
         <SettingDialog
           show={showSettings}

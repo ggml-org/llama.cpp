@@ -307,7 +307,7 @@ jobs:
         run: |
           cd build
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 2700
+          ctest -L main --verbose --timeout 3600
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04

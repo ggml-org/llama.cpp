@@ -34,11 +34,61 @@ static std::string k_system =
 R"(Transcript of a never ending dialog, where the User interacts with an Assistant.
 The Assistant is helpful, kind, honest, good at writing, and never fails to answer the User's requests immediately and with precision.
 
-User: Recommend a nice restaurant in the area.
-Assistant: I recommend the restaurant "The Golden Duck". It is a 5 star restaurant with a great view of the city. The food is delicious and the service is excellent. The prices are reasonable and the portions are generous. The restaurant is located at 123 Main Street, New York, NY 10001. The phone number is (212) 555-1234. The hours are Monday through Friday from 11:00 am to 10:00 pm. The restaurant is closed on Saturdays and Sundays.
-User: Who is Richard Feynman?
-Assistant: Richard Feynman was an American physicist who is best known for his work in quantum mechanics and particle physics. He was awarded the Nobel Prize in Physics in 1965 for his contributions to the development of quantum electrodynamics. He was a popular lecturer and author, and he wrote several books, including "Surely You're Joking, Mr. Feynman!" and "What Do You Care What Other People Think?".
-User:)";
+User:
+Recommend a nice restaurant in the area.
+Assistant:
+I recommend the restaurant "The Golden Duck". It is a 5 star restaurant with a great view of the city. The food is delicious and the service is excellent. The prices are reasonable and the portions are generous. The restaurant is located at 123 Main Street, New York, NY 10001. The phone number is (212) 555-1234. The hours are Monday through Friday from 11:00 am to 10:00 pm. The restaurant is closed on Saturdays and Sundays.
+User:
+Who is Richard Feynman?
+Assistant:
+Richard Feynman was an American physicist who is best known for his work in quantum mechanics and particle physics. He was awarded the Nobel Prize in Physics in 1965 for his contributions to the development of quantum electrodynamics. He was a popular lecturer and author, and he wrote several books, including "Surely You're Joking, Mr. Feynman!" and "What Do You Care What Other People Think?".
+)";
+
+static std::vector<std::string> k_questions = {
+    "What is the tallest mountain in the world?",
+    "Who was the first person to win two Nobel Prizes?",
+    "Which country invented paper?",
+    "What organ is primarily responsible for pumping blood throughout the body?",
+    "Which planet is known for its prominent ring system?",
+    "Who directed the movie 'Inception'?",
+    "What is the freezing point of water in Fahrenheit?",
+    "Which animal is known to have the longest lifespan?",
+    "What language has the most native speakers worldwide?",
+    "What is the capital city of Canada?",
+    "Who is credited with inventing the World Wide Web?",
+    "Which metal is liquid at room temperature?",
+    "What is the term for an animal that eats both plants and meat?",
+    "Who painted 'The Starry Night'?",
+    "What gas do humans exhale that plants use for photosynthesis?",
+    "What year did World War II end?",
+    "Which continent has the most countries?",
+    "Who wrote the novel 'Frankenstein'?",
+    "What does DNA stand for?",
+    "What is the main ingredient in traditional Japanese miso soup?"
+};
+
+static std::vector<std::string> k_answers = {
+    "The tallest mountain in the world is Mount Everest.",
+    "Marie Curie was the first person to win two Nobel Prizes.",
+    "Paper was invented in China.",
+    "The heart is the organ responsible for pumping blood.",
+    "Saturn is known for its prominent ring system.",
+    "Christopher Nolan directed the movie 'Inception'.",
+    "The freezing point of water in Fahrenheit is 32°F.",
+    "The bowhead whale is known to have the longest lifespan among mammals.",
+    "Mandarin Chinese has the most native speakers in the world.",
+    "The capital city of Canada is Ottawa.",
+    "Tim Berners-Lee is credited with inventing the World Wide Web.",
+    "Mercury is the metal that is liquid at room temperature.",
+    "An animal that eats both plants and meat is called an omnivore.",
+    "'The Starry Night' was painted by Vincent van Gogh.",
+    "Humans exhale carbon dioxide, which plants use in photosynthesis.",
+    "World War II ended in 1945.",
+    "Africa is the continent with the most countries.",
+    "The novel 'Frankenstein' was written by Mary Shelley.",
+    "DNA stands for Deoxyribonucleic Acid.",
+    "The main ingredient in traditional Japanese miso soup is fermented soybean paste."
+};
 
 static std::vector<std::string> k_prompts = {
     "What is the meaning of life?",
@@ -49,7 +99,7 @@ static std::vector<std::string> k_prompts = {
     "What is the best way to learn a new language?",
     "How to get a job at Google?",
     "If you could have any superpower, what would it be?",
-    "I want to learn how to play the piano.",
+    "I want to learn how to play the piano. What would be the best way to do it?",
 };
 
 struct client {
@@ -68,6 +118,7 @@ struct client {
     int64_t t_start_prompt;
     int64_t t_start_gen;
 
+    int32_t n_past    = 0;
     int32_t n_prompt  = 0;
     int32_t n_decoded = 0;
     int32_t i_batch   = -1;
@@ -107,6 +158,7 @@ int main(int argc, char ** argv) {
     common_params params;
 
     params.n_predict = 128;
+    params.n_junk = 0;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
@@ -127,6 +179,12 @@ int main(int argc, char ** argv) {
     const bool cont_batching = params.cont_batching;
 
     const bool dump_kv_cache = params.dump_kv_cache;
+
+    // is the system prompt shared in the cache
+    const bool is_sp_shared = params.is_pp_shared;
+
+    // extra text to insert in each client's prompt in order to make it larger
+    const int32_t n_junk = params.n_junk;
 
     // init llama.cpp
     llama_backend_init();
@@ -169,6 +227,7 @@ int main(int argc, char ** argv) {
     }
 
     std::vector<llama_token> tokens_system;
+
     tokens_system = common_tokenize(ctx, k_system, true);
     const int32_t n_tokens_system = tokens_system.size();
 
@@ -190,7 +249,7 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: n_parallel = %d, n_sequences = %d, cont_batching = %d, system tokens = %d\n", __func__, n_clients, n_seq, cont_batching, n_tokens_system);
     LOG_INF("\n");
 
-    {
+    if (is_sp_shared) {
         LOG_INF("%s: Evaluating the system prompt ...\n", __func__);
 
         for (int32_t i = 0; i < n_tokens_system; ++i) {
@@ -228,7 +287,7 @@ int main(int argc, char ** argv) {
 
             client.i_batch = batch.n_tokens;
 
-            common_batch_add(batch, client.sampled, n_tokens_system + client.n_prompt + client.n_decoded, { client.id + 1 }, true);
+            common_batch_add(batch, client.sampled, client.n_past++, { client.id + 1 }, true);
 
             client.n_decoded += 1;
         }
@@ -254,8 +313,22 @@ int main(int argc, char ** argv) {
                     client.t_start_gen    = 0;
 
                     client.input    = k_prompts[rand() % k_prompts.size()];
-                    client.prompt   = client.input + "\nAssistant:";
                     client.response = "";
+
+                    // construct the prompt:
+                    // [system prompt] + [junk] + [user prompt]
+                    client.n_past = 0;
+                    client.prompt = "";
+                    if (is_sp_shared) {
+                        client.n_past = n_tokens_system;
+                    } else {
+                        client.prompt += k_system;
+                    }
+                    for (int i = 0; i < n_junk; ++i) {
+                        const int r = rand() % k_questions.size();
+                        client.prompt += "User:\n" + k_questions[r] + "\nAssistant:\n " + k_answers[r] + "\n";
+                    }
+                    client.prompt += "User:\n" + client.input + "\nAssistant:\n";
 
                     common_sampler_reset(client.smpl);
 
@@ -264,7 +337,7 @@ int main(int argc, char ** argv) {
                     tokens_prompt = common_tokenize(ctx, client.prompt, false);
 
                     for (size_t i = 0; i < tokens_prompt.size(); ++i) {
-                        common_batch_add(batch, tokens_prompt[i], i + n_tokens_system, { client.id + 1 }, false);
+                        common_batch_add(batch, tokens_prompt[i], client.n_past++, { client.id + 1 }, false);
                     }
 
                     // extract the logits only for the last token
@@ -363,10 +436,9 @@ int main(int argc, char ** argv) {
                 //        client.id, client.seq_id, id, client.n_decoded, client.i_batch, token_str.c_str());
 
                 if (client.n_decoded > 2 &&
-                        (llama_vocab_is_eog(vocab, id) ||
-                         (params.n_predict > 0 && client.n_decoded + client.n_prompt >= params.n_predict) ||
-                         client.response.find("User:") != std::string::npos ||
-                         client.response.find('\n') != std::string::npos)) {
+                    (llama_vocab_is_eog(vocab, id) ||
+                     (params.n_predict > 0 && client.n_decoded >= params.n_predict) ||
+                     client.response.find("User:") != std::string::npos)) {
                     // basic reverse prompt
                     const size_t pos = client.response.find("User:");
                     if (pos != std::string::npos) {

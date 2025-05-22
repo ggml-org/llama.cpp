@@ -33,9 +33,6 @@
 #define KEY_PROJ_TYPE           "clip.projector_type"
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
 
-#define KEY_USE_GLU_MLP         "clip.use_glu_mlp"  // for qwen2.5vl
-#define KEY_USE_RMS_NORM        "clip.use_rms_norm" // for qwen2.5vl
-
 #define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
 #define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
@@ -56,12 +53,16 @@
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
 #define TN_ATTN_V          "%s.blk.%d.attn_v.%s"
 #define TN_ATTN_OUTPUT     "%s.blk.%d.attn_out.%s"
+#define TN_ATTN_K_NORM     "%s.blk.%d.attn_k_norm.%s"
+#define TN_ATTN_Q_NORM     "%s.blk.%d.attn_q_norm.%s"
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
-#define TN_LN_1            "%s.blk.%d.ln1.%s"
-#define TN_LN_2            "%s.blk.%d.ln2.%s"
+#define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
+#define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
+#define TN_LS_1            "%s.blk.%d.ls1.%s" // layer scale
+#define TN_LS_2            "%s.blk.%d.ls2.%s" // layer scale
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
@@ -93,6 +94,9 @@
 #define TN_GLM_ADAPTER_GATE     "adapter.linear.gate.%s"
 #define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
 
+// align x to upper multiple of n
+#define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+
 enum projector_type {
     PROJECTOR_TYPE_MLP,
     PROJECTOR_TYPE_MLP_NORM,
@@ -105,6 +109,7 @@ enum projector_type {
     PROJECTOR_TYPE_IDEFICS3,
     PROJECTOR_TYPE_PIXTRAL,
     PROJECTOR_TYPE_QWEN25VL,
+    PROJECTOR_TYPE_INTERNVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -119,6 +124,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GEMMA3,    "gemma3"},
     { PROJECTOR_TYPE_IDEFICS3,  "idefics3"},
     { PROJECTOR_TYPE_PIXTRAL,   "pixtral"},
+    { PROJECTOR_TYPE_INTERNVL,  "internvl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {

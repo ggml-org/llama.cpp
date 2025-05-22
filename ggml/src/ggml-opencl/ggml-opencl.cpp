@@ -4855,8 +4855,6 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
             if (!any_on_device) {
                 return false;
             }
-            GGML_ASSERT(ggml_is_contiguous(src0));
-            GGML_ASSERT(ggml_is_contiguous(src1));
             func = ggml_cl_add;
             break;
         case GGML_OP_MUL:

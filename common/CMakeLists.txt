@@ -73,6 +73,8 @@ add_library(${TARGET} STATIC
     minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
+    regex-partial.cpp
+    regex-partial.h
     sampling.cpp
     sampling.h
     speculative.cpp
@@ -119,8 +121,8 @@ if (LLAMA_LLGUIDANCE)
 
     ExternalProject_Add(llguidance_ext
         GIT_REPOSITORY https://github.com/guidance-ai/llguidance
-        # v0.7.10:
-        GIT_TAG 0309d2a6bf40abda35344a362edc71e06d5009f8
+        # v0.7.20 (+ fix to build on GCC 15):
+        GIT_TAG b5b8b64dba11c4e4ee6b1d1450d3a3ae279891e8
         PREFIX ${CMAKE_BINARY_DIR}/llguidance
         SOURCE_DIR ${LLGUIDANCE_SRC}
         BUILD_IN_SOURCE TRUE

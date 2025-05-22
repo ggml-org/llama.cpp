@@ -65,3 +65,21 @@ def test_ctx_shift_disabled_long_prompt():
     assert res.status_code != 200
     assert "error" in res.body
     assert "exceeds the available context size" in res.body["error"]["message"]
+
+def test_ctx_shift_disabled_stream():
+    global server
+    server.disable_ctx_shift = True
+    server.start()
+    res = server.make_stream_request("POST", "/v1/completions", data={
+        "n_predict": 256,
+        "prompt": "Once",
+        "stream": True,
+    })
+    content = ""
+    for data in res:
+        choice = data["choices"][0]
+        if choice["finish_reason"] == "length":
+            assert len(content) > 0
+        else:
+            assert choice["finish_reason"] is None
+            content += choice["text"]

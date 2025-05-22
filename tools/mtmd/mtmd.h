@@ -10,6 +10,7 @@
 #include <stdbool.h>
 
 #ifdef __cplusplus
+#include <string>
 #include <vector>
 #include <cinttypes>
 #include <memory>
