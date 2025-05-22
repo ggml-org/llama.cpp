@@ -36,9 +36,15 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
   vn_encode_ggml_tensor(encoder, tensor);
 
-  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
-  if (!shmem) {
-    FATAL("Couldn't allocate the guest-host shared buffer :/");
+  struct vn_renderer_shmem *shmem;
+  if (size > gpu->data_shmem->mmap_size) {
+    shmem = virtgpu_shmem_create(gpu, size);
+    WARNING("%s: 0x%lx | %dkB | %dMB", __func__, size, (int)size/1024, (int)size/1024/1024);
+    if (!shmem) {
+      FATAL("Couldn't allocate the guest-host shared buffer :/");
+    }
+  } else {
+    shmem = gpu->data_shmem;
   }
 
   memcpy(shmem->mmap_ptr, data, size);
@@ -51,7 +57,9 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
-  virtgpu_shmem_destroy(gpu, shmem->shmem);
+  if (shmem != gpu->data_shmem) {
+    virtgpu_shmem_destroy(gpu, shmem->shmem);
+  }
 
   return;
 }
@@ -67,10 +75,17 @@ apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
   vn_encode_ggml_tensor(encoder, tensor);
 
-  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
-  if (!shmem) {
-    FATAL("Couldn't allocate the guest-host shared buffer :/");
+  struct vn_renderer_shmem *shmem;
+  if (size > gpu->data_shmem->mmap_size) {
+    shmem = virtgpu_shmem_create(gpu, size);
+    WARNING("%s: 0x%lx | %dkB | %dMB", __func__, size, (int)size/1024, (int)size/1024/1024);
+    if (!shmem) {
+      FATAL("Couldn't allocate the guest-host shared buffer :/");
+    }
+  } else {
+    shmem = gpu->data_shmem;
   }
+
   vn_encode_virtgpu_shmem_res_id(encoder, shmem->res_id);
   vn_encode_size_t(encoder, &offset);
   vn_encode_size_t(encoder, &size);
@@ -81,7 +96,9 @@ apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
-  virtgpu_shmem_destroy(gpu, shmem->shmem);
+  if (shmem != gpu->data_shmem) {
+    virtgpu_shmem_destroy(gpu, shmem->shmem);
+  }
 }
 
 void

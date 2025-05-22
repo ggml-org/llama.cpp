@@ -77,10 +77,15 @@ create_virtgpu() {
 
   virtgpu_init_shmem_blob_mem(gpu);
 
-  gpu->reply_shmem = virtgpu_shmem_create(gpu, 16384);
+  gpu->reply_shmem = virtgpu_shmem_create(gpu, 0x4000);
+  gpu->data_shmem = virtgpu_shmem_create(gpu, 0x13b0000); // 19MiB
 
   if (!gpu->reply_shmem) {
-    FATAL("%s: failed to create the reply shared memory page :/", __func__);
+    FATAL("%s: failed to create the shared reply memory pages :/", __func__);
+  }
+
+  if (!gpu->data_shmem) {
+    FATAL("%s: failed to create the shared data memory pages :/", __func__);
   }
 
   struct vn_cs_encoder *encoder;
@@ -208,7 +213,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
 
    drmFreeVersion(version);
 
-   INFO(gpu->instance, "using DRM device %s", node_path);
+   INFO("using DRM device %s", node_path);
 
    return APIR_SUCCESS;
 }

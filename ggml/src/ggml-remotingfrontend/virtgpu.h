@@ -88,6 +88,7 @@ struct virtgpu {
 
   /* KP */
   struct vn_renderer_shmem *reply_shmem;
+  struct vn_renderer_shmem *data_shmem;
 };
 
 
