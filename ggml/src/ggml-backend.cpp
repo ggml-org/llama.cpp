@@ -1226,6 +1226,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         split.i_end = graph->n_nodes;
         // GGML_ASSERT(!split.tensor_parallel);
         split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
+        splits_no_tp.push_back(split);
     }
 
     for (size_t i_split = 0; i_split < splits_no_tp.size(); i_split++) {
