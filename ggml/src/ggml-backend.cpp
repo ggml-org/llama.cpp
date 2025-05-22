@@ -1172,11 +1172,18 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 split->i_end = i;
                 {
                     const ggml_cgraph tmp = ggml_graph_view(graph, split->i_start, split->i_end);
-                    if (split->tensor_parallel && split->backend_id > 0) {
+                    int isplit_main = i_split;
+                    while (sched->splits[isplit_main].tensor_parallel) {
+                        isplit_main--;
+                        assert(isplit_main >= 0);
+                    }
+                    const int backend_id_main = sched->splits[isplit_main].backend_id;
+
+                    if (split->backend_id == backend_id_main) {
+                        split->graph = tmp;
+                    } else {
                         split->graph = *ggml_new_graph_custom(sched->ctx, tmp.size, /*grads =*/ false);
                         dup_graph(sched->ctx, &tmp, &split->graph, /*expand =*/ false);
-                    } else {
-                        split->graph = tmp;
                     }
                 }
                 if (split->tensor_parallel) {
