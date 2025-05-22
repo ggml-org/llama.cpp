@@ -1218,13 +1218,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split.inputs[n_inputs] = src;
                     }
-                    fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
+                    // fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
             }
         }
         split.i_end = graph->n_nodes;
-        GGML_ASSERT(!split.tensor_parallel);
+        // GGML_ASSERT(!split.tensor_parallel);
         split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
     }
 
