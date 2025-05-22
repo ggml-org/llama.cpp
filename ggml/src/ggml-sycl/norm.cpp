@@ -27,17 +27,18 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
     // sum up partial sums
     mean_var = warp_reduce_sum(mean_var, item_ct1);
     if  (block_size > WARP_SIZE) {
-        int warp_id = tid / WARP_SIZE;
-        int lane_id = tid % WARP_SIZE;
-        if (lane_id == 0) {
-            s_sum[warp_id] = mean_var;
+        const auto sub_group = item_ct1.get_sub_group();
+        const auto sg_id = sub_group.get_group_linear_id();
+        const auto wi_in_sg = sub_group.get_local_linear_id();
+        if (wi_in_sg == 0) {
+            s_sum[sg_id] = mean_var;
         }
         item_ct1.barrier(sycl::access::fence_space::local_space);
         mean_var = 0.f;
-        size_t nreduce = nwarps / WARP_SIZE;
+        const size_t nreduce = (nwarps + WARP_SIZE - 1) / WARP_SIZE;
         for (size_t i = 0; i < nreduce; i += 1)
         {
-            mean_var += s_sum[lane_id + i * WARP_SIZE];
+            mean_var += s_sum[wi_in_sg + i * WARP_SIZE];
         }
         mean_var = warp_reduce_sum(mean_var, item_ct1);
     }
@@ -165,19 +166,19 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
     // sum up partial sums
     tmp = warp_reduce_sum(tmp, item_ct1);
     if (block_size > WARP_SIZE) {
-
-        int warp_id = item_ct1.get_local_id(2) / WARP_SIZE;
-        int lane_id = item_ct1.get_local_id(2) % WARP_SIZE;
-        if (lane_id == 0) {
-            s_sum[warp_id] = tmp;
+        const auto sub_group = item_ct1.get_sub_group();
+        const auto sg_id = sub_group.get_group_linear_id();
+        const auto wi_in_sg = sub_group.get_local_linear_id();
+        if (wi_in_sg == 0) {
+            s_sum[sg_id] = tmp;
         }
 
         item_ct1.barrier(sycl::access::fence_space::local_space);
-        size_t nreduce = nwarps / WARP_SIZE;
+        const size_t nreduce = (nwarps + WARP_SIZE - 1) / WARP_SIZE;
         tmp = 0.f;
         for (size_t i = 0; i < nreduce; i += 1)
         {
-            tmp += s_sum[lane_id + i * WARP_SIZE];
+            tmp += s_sum[wi_in_sg + i * WARP_SIZE];
         }
         tmp = warp_reduce_sum(tmp, item_ct1);
     }
