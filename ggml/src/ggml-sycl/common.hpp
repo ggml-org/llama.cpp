@@ -13,6 +13,7 @@
 #ifndef GGML_SYCL_COMMON_HPP
 #define GGML_SYCL_COMMON_HPP
 
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 
@@ -469,6 +470,23 @@ static __dpct_inline__ float warp_reduce_max(float x,
             item_ct1.get_sub_group(), x, mask));
     }
     return x;
+}
+
+/* Helper for Computing the linear offset into an 4-dimensional ggml_tensor given
+per-dimension sizes, strides, and indices */
+template<int N>
+static __dpct_inline__ size_t calculate_offset(const std::array<int, N> & dims, const std::array<int, N> & strides, const std::array<int, N> & indices) {
+    size_t offset = 0;
+#pragma unroll
+    for (int i = 0; i < N; i++) {
+        auto index_i = indices[i];
+        // Handle wrap-around for indices that exceed dimensions
+        if (indices[i] >= dims[i]) {
+            index_i = indices[i] % dims[i];
+        }
+        offset += strides[i] * index_i;
+    }
+    return offset;
 }
 
 // Helper for vec loading aligned data

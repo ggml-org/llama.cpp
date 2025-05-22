@@ -1,10 +1,13 @@
 #include "norm.hpp"
+#include "ggml-sycl/common.hpp"
 
 static void norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
 
     const int nrows = item_ct1.get_group_range(2);
     const int nchannels = item_ct1.get_group_range(1);
+    const int nsamples    = item_ct1.get_group_range(0);
+
     const int nthreads = item_ct1.get_local_range(2);
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
@@ -13,8 +16,11 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
     const int tid = item_ct1.get_local_id(2);
     const int nwarps = nthreads / WARP_SIZE;
 
-    x += sample  * stride_sample + channel * stride_channel + row * stride_row;
-    dst += ((sample * nchannels + channel) * nrows + row) * ncols;
+    const auto strided_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {stride_sample, stride_channel, stride_row}, {sample, channel, row});
+    const auto packed_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
+
+    x += strided_offset;
+    dst += packed_offset;
 
     sycl::float2 mean_var = sycl::float2(0.f, 0.f);
 
@@ -144,16 +150,22 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
 
     const int nrows = item_ct1.get_group_range(2);
     const int nchannels = item_ct1.get_group_range(1);
+    const int nsamples = item_ct1.get_group_range(0);
+
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
     const int row     = item_ct1.get_group(2);
+
     const int nthreads = item_ct1.get_local_range(2);
 
     const int tid = item_ct1.get_local_id(2);
     const int nwarps = nthreads / WARP_SIZE;
 
-    x   += sample*stride_sample + channel*stride_channel + row*stride_row;
-    dst += ((sample*nchannels + channel)*nrows + row)*ncols;
+    const auto strided_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {stride_sample, stride_channel, stride_row}, {sample, channel, row});
+    const auto packed_offset = calculate_offset<3>({nsamples, nchannels, nrows}, {nchannels * nrows * ncols, nrows * ncols, ncols}, {sample, channel, row});
+
+    x   += strided_offset;
+    dst += packed_offset;
 
 
     float tmp = 0.0f; // partial sum for thread in warp
