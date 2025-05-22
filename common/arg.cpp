@@ -1460,7 +1460,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.swa_full = true;
         }
-    ));
+    ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
@@ -1686,7 +1686,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.warmup = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -2073,13 +2073,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.grp_attn_w = value;
         }
     ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_MAIN}));
-    add_opt(common_arg(
-        {"-dkvc", "--dump-kv-cache"},
-        "verbose print of the KV cache",
-        [](common_params & params) {
-            params.dump_kv_cache = true;
-        }
-    ));
     add_opt(common_arg(
         {"-nkvo", "--no-kv-offload"},
         "disable KV offload",
@@ -2896,6 +2889,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.chat_template = read_file(value);
         }
     ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_TEMPLATE_FILE"));
+    add_opt(common_arg(
+        {"--no-prefill-assistant"},
+        string_format(
+            "whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)\n"
+            "when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled\n"
+        ),
+        [](common_params & params) {
+            params.prefill_assistant = false;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_NO_PREFILL_ASSISTANT"));
     add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),

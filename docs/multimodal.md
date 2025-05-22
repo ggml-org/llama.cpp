@@ -74,4 +74,7 @@ NOTE: some models may require large context window, for example: `-c 8192`
 (tool_name) -hf ggml-org/InternVL3-2B-Instruct-GGUF
 (tool_name) -hf ggml-org/InternVL3-8B-Instruct-GGUF
 (tool_name) -hf ggml-org/InternVL3-14B-Instruct-GGUF
+
+# Llama 4 Scout
+(tool_name) -hf ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF
 ```

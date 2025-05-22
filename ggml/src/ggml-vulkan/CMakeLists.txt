@@ -54,6 +54,11 @@ if (Vulkan_FOUND)
         -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
     )
 
+    set(VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS "")
+    if (CMAKE_BUILD_TYPE AND CMAKE_BUILD_TYPE MATCHES "Debug|Release|MinSizeRel|RelWithDebInfo")
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS --config=${CMAKE_BUILD_TYPE})
+    endif()
+
     # Test all shader extensions
     test_shader_extension_support(
         "GL_KHR_cooperative_matrix"
@@ -149,7 +154,7 @@ if (Vulkan_FOUND)
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
         CMAKE_ARGS ${VULKAN_SHADER_GEN_CMAKE_ARGS}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build .
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS}
         INSTALL_COMMAND ${CMAKE_COMMAND} --install .
         INSTALL_DIR ${CMAKE_BINARY_DIR}
     )

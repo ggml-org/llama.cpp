@@ -231,12 +231,14 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         while (i < n_tokens) { // split into batches
             text_batch.n_tokens = 0; // clear the batch
             for (; i < n_tokens && text_batch.n_tokens < n_batch; i++) {
+                int32_t j = text_batch.n_tokens;
+                text_batch.token   [j]    = tokens[i];
+                text_batch.pos     [j]    = n_past++;
+                text_batch.n_seq_id[j]    = 1;
+                text_batch.seq_id  [j][0] = seq_id;
+                text_batch.logits  [j]    = false;
+
                 text_batch.n_tokens++;
-                text_batch.token   [i]    = tokens[i];
-                text_batch.pos     [i]    = n_past++;
-                text_batch.n_seq_id[i]    = 1;
-                text_batch.seq_id  [i][0] = seq_id;
-                text_batch.logits  [i]    = false;
             }
             bool is_last_token = (i == n_tokens);
             if (logits_last && is_last_token) {

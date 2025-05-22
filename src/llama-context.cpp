@@ -857,11 +857,17 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -1;
     }
 
+    if (!inp_batch.pos) {
+        if (inp_batch.seq_id) {
+            LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
+            return -1;
+        }
+    }
+
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
     // temporary allocate memory for the input batch if needed
-    // TODO: this is incorrect for multiple sequences because get_pos_max() is the maximum across all sequences
-    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->get_pos_max() + 1);
+    llama_batch_allocr batch_allocr(inp_batch, inp_batch.pos ? -1 : kv_self->seq_pos_max(0) + 1);
 
     const llama_batch & batch = batch_allocr.batch;
 
@@ -2289,64 +2295,50 @@ int32_t llama_apply_adapter_cvec(
 }
 
 //
-// kv cache view
-//
-
-llama_kv_cache_view llama_kv_cache_view_init(const llama_context * ctx, int32_t n_seq_max) {
-    const auto * kv = ctx->get_kv_self();
-    if (kv == nullptr) {
-        LLAMA_LOG_WARN("%s: the context does not have a KV cache\n", __func__);
-        return {};
-    }
-
-    return llama_kv_cache_view_init(*kv, n_seq_max);
-}
-
-void llama_kv_cache_view_update(const llama_context * ctx, llama_kv_cache_view * view) {
-    const auto * kv = ctx->get_kv_self();
-    if (kv == nullptr) {
-        LLAMA_LOG_WARN("%s: the context does not have a KV cache\n", __func__);
-        return;
-    }
-
-    llama_kv_cache_view_update(view, kv);
-}
-
-//
 // kv cache
 //
 
 // deprecated
-int32_t llama_get_kv_cache_token_count(const llama_context * ctx) {
-    return llama_kv_self_n_tokens(ctx);
-}
-
 int32_t llama_kv_self_n_tokens(const llama_context * ctx) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return 0;
     }
 
-    return kv->get_n_tokens();
+    int32_t res = 0;
+
+    for (uint32_t s = 0; s < ctx->get_cparams().n_seq_max; s++) {
+        const llama_pos p0 = kv->seq_pos_min(s);
+        const llama_pos p1 = kv->seq_pos_max(s);
+
+        if (p0 >= 0) {
+            res += (p1 - p0) + 1;
+        }
+    }
+
+    return res;
 }
 
 // deprecated
-int32_t llama_get_kv_cache_used_cells(const llama_context * ctx) {
-    return llama_kv_self_used_cells(ctx);
-}
-
+// note: this is the same as above - will be removed anyway, so it's ok
 int32_t llama_kv_self_used_cells(const llama_context * ctx) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return 0;
     }
 
-    return kv->get_used_cells();
-}
+    int32_t res = 0;
 
-// deprecated
-void llama_kv_cache_clear(llama_context * ctx) {
-    llama_kv_self_clear(ctx);
+    for (uint32_t s = 0; s < ctx->get_cparams().n_seq_max; s++) {
+        const llama_pos p0 = kv->seq_pos_min(s);
+        const llama_pos p1 = kv->seq_pos_max(s);
+
+        if (p0 >= 0) {
+            res += (p1 - p0) + 1;
+        }
+    }
+
+    return res;
 }
 
 void llama_kv_self_clear(llama_context * ctx) {
@@ -2356,15 +2348,6 @@ void llama_kv_self_clear(llama_context * ctx) {
     }
 
     kv->clear();
-}
-
-// deprecated
-bool llama_kv_cache_seq_rm(
-        llama_context * ctx,
-         llama_seq_id   seq_id,
-            llama_pos   p0,
-            llama_pos   p1) {
-    return llama_kv_self_seq_rm(ctx, seq_id, p0, p1);
 }
 
 bool llama_kv_self_seq_rm(
@@ -2378,16 +2361,6 @@ bool llama_kv_self_seq_rm(
     }
 
     return kv->seq_rm(seq_id, p0, p1);
-}
-
-// deprecated
-void llama_kv_cache_seq_cp(
-        llama_context * ctx,
-         llama_seq_id   seq_id_src,
-         llama_seq_id   seq_id_dst,
-            llama_pos   p0,
-            llama_pos   p1) {
-    llama_kv_self_seq_cp(ctx, seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_kv_self_seq_cp(
@@ -2404,13 +2377,6 @@ void llama_kv_self_seq_cp(
     kv->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
-// deprecated
-void llama_kv_cache_seq_keep(
-        llama_context * ctx,
-         llama_seq_id   seq_id) {
-    llama_kv_self_seq_keep(ctx, seq_id);
-}
-
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = ctx->get_kv_self();
     if (!kv) {
@@ -2418,16 +2384,6 @@ void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     }
 
     kv->seq_keep(seq_id);
-}
-
-// deprecated
-void llama_kv_cache_seq_add(
-        llama_context * ctx,
-         llama_seq_id   seq_id,
-            llama_pos   p0,
-            llama_pos   p1,
-            llama_pos   delta) {
-    llama_kv_self_seq_add(ctx, seq_id, p0, p1, delta);
 }
 
 void llama_kv_self_seq_add(
@@ -2442,16 +2398,6 @@ void llama_kv_self_seq_add(
     }
 
     kv->seq_add(seq_id, p0, p1, delta);
-}
-
-// deprecated
-void llama_kv_cache_seq_div(
-        llama_context * ctx,
-         llama_seq_id   seq_id,
-            llama_pos   p0,
-            llama_pos   p1,
-                  int   d) {
-    llama_kv_self_seq_div(ctx, seq_id, p0, p1, d);
 }
 
 void llama_kv_self_seq_div(
@@ -2477,12 +2423,7 @@ llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     return kv->seq_pos_min(seq_id);
 }
 
-// deprecated
-llama_pos llama_kv_cache_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_kv_self_seq_pos_max(ctx, seq_id);
-}
-
-llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
+llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
         return -1;
@@ -2506,11 +2447,6 @@ void llama_kv_self_defrag(llama_context * ctx) {
     kv->defrag_sched(-1.0f);
 }
 
-// deprecated
-bool llama_kv_cache_can_shift(const llama_context * ctx) {
-    return llama_kv_self_can_shift(ctx);
-}
-
 bool llama_kv_self_can_shift(const llama_context * ctx) {
     const auto * kv = ctx->get_kv_self();
     if (!kv) {
@@ -2518,11 +2454,6 @@ bool llama_kv_self_can_shift(const llama_context * ctx) {
     }
 
     return kv->get_can_shift();
-}
-
-// deprecated
-void llama_kv_cache_update(llama_context * ctx) {
-    llama_kv_self_update(ctx);
 }
 
 // llama state API

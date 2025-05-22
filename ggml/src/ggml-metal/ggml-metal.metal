@@ -856,6 +856,7 @@ kernel void kernel_tanh(
 constant float GELU_COEF_A     = 0.044715f;
 constant float GELU_QUICK_COEF = -1.702f;
 constant float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
+constant float SQRT_2_INV      = 0.70710678118654752440084436210484f;
 
 kernel void kernel_gelu(
     device const float * src0,
@@ -895,6 +896,42 @@ kernel void kernel_gelu_quick_4(
     device const float4 & x = src0[tpig];
 
     dst[tpig] = x*(1.0f/(1.0f+exp(GELU_QUICK_COEF*x)));
+}
+
+// based on Abramowitz and Stegun formula 7.1.26 or similar Hastings' approximation
+// ref: https://www.johndcook.com/blog/python_erf/
+constant float p_erf  = 0.3275911f;
+constant float a1_erf = 0.254829592f;
+constant float a2_erf = -0.284496736f;
+constant float a3_erf = 1.421413741f;
+constant float a4_erf = -1.453152027f;
+constant float a5_erf = 1.061405429f;
+
+template<typename T>
+T erf_approx(T x) {
+    T sign_x = sign(x);
+    x = fabs(x);
+    T t = 1.0f / (1.0f + p_erf * x);
+    T y = 1.0f - (((((a5_erf * t + a4_erf) * t) + a3_erf) * t + a2_erf) * t + a1_erf) * t * exp(-x * x);
+    return sign_x * y;
+}
+
+kernel void kernel_gelu_erf(
+    device const float * src0,
+    device       float * dst,
+    uint tpig[[thread_position_in_grid]]) {
+    device const float & x = src0[tpig];
+
+    dst[tpig] = 0.5f*x*(1.0f+erf_approx<float>(x*SQRT_2_INV));
+}
+
+kernel void kernel_gelu_erf_4(
+    device const float4 * src0,
+    device       float4 * dst,
+    uint tpig[[thread_position_in_grid]]) {
+    device const float4 & x = src0[tpig];
+
+    dst[tpig] = 0.5f*x*(1.0f+erf_approx<float4>(x*SQRT_2_INV));
 }
 
 kernel void kernel_silu(
@@ -3255,7 +3292,7 @@ template<
     typename kd4x4_t, // key type in device memory
     short nl_k,
     void (*deq_k)(device const kd4x4_t *, short, thread k4x4_t &),
-    typename vd4x4_t, // key type in device memory
+    typename vd4x4_t, // value type in device memory
     short nl_v,
     void (*deq_v)(device const vd4x4_t *, short, thread v4x4_t &),
     short DK,        // K head size
@@ -3776,7 +3813,7 @@ template<
     typename kd4_t, // key type in device memory
     short nl_k,
     void (*deq_k_t4)(device const kd4_t *, short, thread k4_t &),
-    typename vd4_t, // key type in device memory
+    typename vd4_t, // value type in device memory
     short nl_v,
     void (*deq_v_t4)(device const vd4_t *, short, thread v4_t &),
     short DK,       // K head size

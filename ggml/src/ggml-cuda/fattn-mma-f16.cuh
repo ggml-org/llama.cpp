@@ -772,7 +772,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     GGML_UNUSED(stride_mask); GGML_UNUSED(jt); GGML_UNUSED(tile_K);
     GGML_UNUSED(tile_V); GGML_UNUSED(tile_mask); GGML_UNUSED(Q_B);
     GGML_UNUSED(VKQ_C); GGML_UNUSED(KQ_max); GGML_UNUSED(KQ_rowsum);
-    GGML_UNUSED(kb0);
+    GGML_UNUSED(kb0); GGML_UNUSED(tile_Q);
     NO_DEVICE_CODE;
 #endif // NEW_MMA_AVAILABLE
 }

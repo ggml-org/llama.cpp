@@ -54,7 +54,7 @@ docker run --privileged -it \
     -v $HOME/llama.cpp/ci-cache:/ci-cache \
     -v $HOME/llama.cpp/ci-results:/ci-results \
     -v $PWD:/ws -w /ws \
-    mthreads/musa:rc3.1.1-devel-ubuntu22.04
+    mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
 ```
 
 Inside the container, execute the following commands:

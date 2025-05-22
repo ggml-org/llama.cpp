@@ -330,7 +330,6 @@ struct common_params {
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
-    bool dump_kv_cache     = false; // dump the KV cache contents for debugging purposes
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
@@ -369,6 +368,7 @@ struct common_params {
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
 
     std::vector<std::string> api_keys;
 
@@ -428,6 +428,11 @@ struct common_params {
 
     // common params
     std::string out_file; // output filename for all example programs
+    // optional callback for model loading progress and cancellation:
+    // called with a progress value between 0.0 and 1.0.
+    // return false from callback to abort model loading or true to continue
+    llama_progress_callback load_progress_callback = NULL;
+    void *                  load_progress_callback_user_data = NULL;
 };
 
 // call once at the start of a program if it uses libcommon
@@ -615,16 +620,6 @@ std::string common_detokenize(
               const struct llama_vocab * vocab,
         const std::vector<llama_token> & tokens,
                                   bool   special = true);
-
-//
-// KV cache utils
-//
-
-// Dump the KV cache view with the number of sequences per cell.
-void common_kv_cache_dump_view(const llama_kv_cache_view & view, int row_size = 80);
-
-// Dump the KV cache view showing individual sequences in each cell (long output).
-void common_kv_cache_dump_view_seqs(const llama_kv_cache_view & view, int row_size = 40);
 
 //
 // Embedding utils

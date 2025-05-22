@@ -178,8 +178,6 @@ int main(int argc, char ** argv) {
     // insert new requests as soon as the previous one is done
     const bool cont_batching = params.cont_batching;
 
-    const bool dump_kv_cache = params.dump_kv_cache;
-
     // is the system prompt shared in the cache
     const bool is_sp_shared = params.is_pp_shared;
 
@@ -241,8 +239,6 @@ int main(int argc, char ** argv) {
     int32_t n_total_gen    = 0;
     int32_t n_cache_miss   = 0;
 
-    struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, n_clients);
-
     const auto t_main_start = ggml_time_us();
 
     LOG_INF("%s: Simulating parallel requests from clients:\n", __func__);
@@ -272,11 +268,6 @@ int main(int argc, char ** argv) {
     LOG_INF("Processing requests ...\n\n");
 
     while (true) {
-        if (dump_kv_cache) {
-            llama_kv_cache_view_update(ctx, &kvc_view);
-            common_kv_cache_dump_view_seqs(kvc_view, 40);
-        }
-
         common_batch_clear(batch);
 
         // decode any currently ongoing sequences
