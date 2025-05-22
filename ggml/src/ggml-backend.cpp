@@ -1096,21 +1096,21 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     }
 
     // pass 5: split graph, find tensors that need to be copied
+    std::vector<ggml_backend_sched_split> splits_no_tp;
     {
-        int i_split = 0;
-        struct ggml_backend_sched_split * split = &sched->splits[0];
+        ggml_backend_sched_split split;
         // find the backend of the first split, skipping view ops
-        int i = 0;
+        int i = 0; // graph node index
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
             if (!ggml_is_view_op(node->op)) {
-                split->backend_id = tensor_backend_id(node);
+                split.backend_id = tensor_backend_id(node);
                 break;
             }
         }
-        split->i_start = 0;
-        split->n_inputs = 0;
-        int cur_backend_id = split->backend_id;
+        split.i_start = 0;
+        split.n_inputs = 0;
+        int cur_backend_id = split.backend_id;
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
@@ -1124,10 +1124,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
-            if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
+            if (node_backend_id == cur_backend_id && split.n_inputs > 0) {
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
-                    if (src == NULL) {
+                    if (src == nullptr) {
                         continue;
                     }
 
@@ -1142,7 +1142,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     }
                     // check if the split has too many inputs
                     // FIXME: count the number of inputs instead of only checking when full
-                    if (split->n_inputs == GGML_SCHED_MAX_SPLIT_INPUTS) {
+                    if (split.n_inputs == GGML_SCHED_MAX_SPLIT_INPUTS) {
                         const size_t id = hash_id(src);
                         const int src_backend_id = sched->hv_tensor_backend_ids[id];
                         const bool supported = ggml_backend_sched_buffer_supported(sched, src, cur_backend_id);
@@ -1155,18 +1155,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             }
 
             if (node_backend_id != cur_backend_id || need_new_split) {
-                split->i_end = i;
-                i_split++;
-                if (i_split >= sched->splits_capacity) {
-                    sched->splits_capacity *= 2;
-                    sched->splits = (ggml_backend_sched_split *)
-                        realloc(sched->splits, sched->splits_capacity * sizeof(struct ggml_backend_sched_split));
-                    GGML_ASSERT(sched->splits != NULL);
-                }
-                split = &sched->splits[i_split];
-                split->backend_id = node_backend_id;
-                split->i_start = i;
-                split->n_inputs = 0;
+                split.i_end = i;
+                split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
+                splits_no_tp.push_back(split);
+
+                split.backend_id = node_backend_id;
+                split.i_start = i;
+                split.n_inputs = 0;
                 cur_backend_id = node_backend_id;
             }
 
@@ -1219,20 +1214,30 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                             tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
                             SET_CAUSE(tensor_copy, "4.cpy");
                         }
-                        const int n_inputs = split->n_inputs++;
+                        const int n_inputs = split.n_inputs++;
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
-                        split->inputs[n_inputs] = src;
+                        split.inputs[n_inputs] = src;
                     }
                     fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
             }
         }
-        split->i_end = graph->n_nodes;
-        GGML_ASSERT(!split->tensor_parallel);
-        split->graph = ggml_graph_view(graph, split->i_start, split->i_end);
-        sched->n_splits = i_split + 1;
+        split.i_end = graph->n_nodes;
+        GGML_ASSERT(!split.tensor_parallel);
+        split.graph = ggml_graph_view(graph, split.i_start, split.i_end);
     }
+
+    for (size_t i_split = 0; i_split < splits_no_tp.size(); i_split++) {
+        if (int(i_split) >= sched->splits_capacity) {
+            sched->splits_capacity *= 2;
+            sched->splits = (ggml_backend_sched_split *)
+                realloc(sched->splits, sched->splits_capacity * sizeof(struct ggml_backend_sched_split));
+            GGML_ASSERT(sched->splits != NULL);
+        }
+        sched->splits[i_split] = splits_no_tp[i_split];
+    }
+    sched->n_splits = splits_no_tp.size();
 
     if (sched->debug) {
         ggml_backend_sched_print_assignments(sched, graph);
