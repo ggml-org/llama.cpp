@@ -2954,36 +2954,9 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.threadpool=*/ tp,
     };
 
-#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
-    struct timespec t0, t1, t2, t3, t4;
-    long d12, d32, d43;
-    bool log_time = true;
-    int log_node_n = 0;
-    if (log_time) {
-        clock_gettime(CLOCK_MONOTONIC, &t0);
-    }
-#endif
-
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
-#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
-        if ((node->op == GGML_OP_MUL_MAT)) {
-            log_node_n = node_n;
-            log_time = true;
-        } else {
-            log_time = false;
-        }
-        if (log_time) {
-            clock_gettime(CLOCK_MONOTONIC, &t1);
-        }
-#endif
         ggml_compute_forward(&params, node);
-
-#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
-        if (log_time) {
-            clock_gettime(CLOCK_MONOTONIC, &t2);
-        }
-#endif
 
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
@@ -2992,24 +2965,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         }
 
         if (node_n + 1 < cgraph->n_nodes) {
-#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
-            if (log_time) {
-                clock_gettime(CLOCK_MONOTONIC, &t3);
-            }
-#endif
-
             ggml_barrier_numa_aware(state->threadpool, state->ith, node_n % GGML_BARRIER_NODE_LAST);
-
-#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
-            if (log_time) {
-                clock_gettime(CLOCK_MONOTONIC, &t4);
-                d12 = (t2.tv_sec - t1.tv_sec) * 1e9 + (t2.tv_nsec - t1.tv_nsec);
-                d32 = (t3.tv_sec - t2.tv_sec) * 1e9 + (t3.tv_nsec - t2.tv_nsec);
-                d43 = (t4.tv_sec - t3.tv_sec) * 1e9 + (t4.tv_nsec - t3.tv_nsec);
-                printf("%s, op: %d, ith: %d, cpu: %d, d12: %ld, d32: %ld, d43: %ld, t1: %ld, t2: %ld, t3: %ld, t4: %ld\n", \
-                    __func__, node->op, state->ith, sched_getcpu(), d12, d32, d43, t1.tv_nsec, t2.tv_nsec, t3.tv_nsec, t4.tv_nsec);
-            }
-#endif
         }
     }
 
