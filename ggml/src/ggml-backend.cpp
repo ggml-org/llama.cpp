@@ -1188,6 +1188,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         const size_t node_id = hash_id(node_orig);
                         assert(tensor_id_tp(node_id, split->backend_id) == nullptr);
                         tensor_id_tp(node_id, split->backend_id) = node_sg;
+                        tensor_backend_id(node_sg) = split->backend_id;
                     }
 
                     const int i_gpu  = split->backend_id;
