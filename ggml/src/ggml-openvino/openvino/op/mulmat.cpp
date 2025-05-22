@@ -25,12 +25,13 @@ OutputVector translate_mulmat(const NodeContext& context) {
     int op_case = context.get_op_case();
     FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported MULMAT case");
 
+    ov::Output<Node> res;
+
     if (op_case == 1) {
         auto src0 = context.get_input(0);
         auto src1 = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
         auto result_lp = std::make_shared<ov::op::v0::MatMul>(src1, src0, false, true);
-        auto result = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
-        return {result};
+        res = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
     } else {
         /*
         Two cases here:
@@ -118,10 +119,10 @@ OutputVector translate_mulmat(const NodeContext& context) {
         }
 
         auto result_lp = std::make_shared<ov::op::v0::MatMul>(A, B, false, true);
-        auto result = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
-
-        return {result};
+        res = std::make_shared<ov::op::v0::Convert>(result_lp, context.get_output_type(0));
     }
+
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

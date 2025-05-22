@@ -22,16 +22,15 @@ OutputVector translate_cont(const NodeContext& context) {
 
     auto src_shape = context.get_input_shape(0).to_shape();
     auto dst_shape = context.get_output_shape(0).to_shape();
+    ov::Output<Node> res;
 
     if (op_case == 1) {
         // The input comes from a PERMUTE
         dst_shape[1] = -1;
-        auto result = std::make_shared<ov::op::v1::Reshape>(
+        res = std::make_shared<ov::op::v1::Reshape>(
             context.get_input(0),
             ov::op::v0::Constant::create(ov::element::i64, {dst_shape.size()}, dst_shape),
             false);
-
-        return {result};
     } else {
         // The input comes from a VIEW
         // Currently all cases are slicing at lowest dim
@@ -43,13 +42,13 @@ OutputVector translate_cont(const NodeContext& context) {
         std::vector<int64_t> end = {(int64_t)src_shape[0], INT_MAX, split_addr + (int64_t)src_shape[2]};
         std::vector<int64_t> strides = {1, 1, 1};
 
-        auto begin_const = ov::op::v0::Constant::create(ov::element::i64, {begin.size()}, begin);
+        auto begin_const = ov::op::v0::Constant::create(element::i64, {begin.size()}, begin);
         auto end_const = ov::op::v0::Constant::create(ov::element::i64, {end.size()}, end);
         auto strides_const = ov::op::v0::Constant::create(ov::element::i64, {strides.size()}, strides);
-        auto slice = std::make_shared<ov::op::v8::Slice>(context.get_input(0), begin_const, end_const, strides_const);
-
-        return {slice};
+        res = std::make_shared<ov::op::v8::Slice>(context.get_input(0), begin_const, end_const, strides_const);
     }
+
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

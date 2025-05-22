@@ -12,7 +12,7 @@ OutputVector translate_mul(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
 
     auto res = std::make_shared<ov::op::v1::Multiply>(context.get_input(0), context.get_input(1));
-    return {res};
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

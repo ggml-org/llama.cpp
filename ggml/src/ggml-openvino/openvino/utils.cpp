@@ -47,6 +47,17 @@ std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node>& node, 
     return get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(node), dims);
 }
 
+OutputVector rename_outputs_with_suffix(const OutputVector& outputs, const std::string& suffix) {
+    for (const auto& output : outputs) {
+        auto node = output.get_node_shared_ptr();
+        std::string name = node->get_friendly_name();
+        name += "_";
+        name += suffix;
+        node->set_friendly_name(name);
+    }
+    return outputs;
+}
+
 }  // namespace ggml
 }  // namespace frontend
 }  // namespace ov

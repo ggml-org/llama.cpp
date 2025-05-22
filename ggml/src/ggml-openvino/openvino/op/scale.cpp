@@ -19,7 +19,7 @@ OutputVector translate_scale(const NodeContext& context) {
 
     auto res = std::make_shared<ov::op::v1::Multiply>(context.get_input(0), scale_node);
 
-    return {res};
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

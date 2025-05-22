@@ -33,6 +33,7 @@ OutputVector translate_cpy(const NodeContext& context) {
     auto src0 = context.get_input(0);
     auto src1 = context.get_input(1);
     auto past_token_len = context.get_input("past_token_len");
+    ov::Output<Node> res;
 
     auto src0_shape = context.get_input_shape(0).to_shape();
     auto output_shape = context.get_output_shape(0).to_shape();
@@ -63,8 +64,7 @@ OutputVector translate_cpy(const NodeContext& context) {
             indices,
             ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{1}));
 
-        auto res = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices, src0);
-        return {res};
+        res = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices, src0);
     } else {
         // Write V to cache_v
         int64_t total_head_size = src0_shape[1];
@@ -99,10 +99,10 @@ OutputVector translate_cpy(const NodeContext& context) {
             ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, -1}),
             false);
 
-        auto res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{src1_left, reshaped_src0, src1_right}, 2);
-
-        return {res};
+        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{src1_left, reshaped_src0, src1_right}, 2);
     }
+
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op
