@@ -30,7 +30,7 @@ OutputVector translate_get_rows(const NodeContext& context) {
         res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type(0));
     }
 
-    return {res};
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

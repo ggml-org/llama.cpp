@@ -37,8 +37,8 @@ OutputVector translate_reshape(const NodeContext& context) {
                                          {3},
                                          std::vector<int64_t>{(int64_t)output_shape[0], -1, (int64_t)output_shape[2]});
     }
-    Output<Node> res = std::make_shared<ov::op::v1::Reshape>(context.get_input(0), new_shape_node, false);
-    return {res};
+    auto res = std::make_shared<ov::op::v1::Reshape>(context.get_input(0), new_shape_node, false);
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op

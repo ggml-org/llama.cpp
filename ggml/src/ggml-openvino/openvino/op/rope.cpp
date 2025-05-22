@@ -52,6 +52,8 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 OutputVector translate_rope(const NodeContext& context) {
     num_inputs_check(context, 2, 3);
 
+    ov::Output<Node> res;
+
     auto data_node = context.get_input(0);
     auto pos_node = context.get_input(1);
     pos_node = std::make_shared<ov::op::v0::Convert>(pos_node, ov::element::f32);
@@ -141,9 +143,7 @@ OutputVector translate_rope(const NodeContext& context) {
             ov::element::i64,
             Shape{3},
             std::vector<int64_t>{-1, input_shape[1].get_length(), input_shape[2].get_length()});
-        auto reshaped = std::make_shared<ov::op::v1::Reshape>(stack, shape_const, false);
-
-        return {reshaped};
+        res = std::make_shared<ov::op::v1::Reshape>(stack, shape_const, false);
     } else {
         auto slice_node =
             std::make_shared<ov::op::v1::Split>(data_node,
@@ -160,9 +160,10 @@ OutputVector translate_rope(const NodeContext& context) {
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_0, sin_theta_node),
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_1, cos_theta_node));
 
-        auto res_node = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 2);
-        return {res_node};
+        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 2);
     }
+
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op
