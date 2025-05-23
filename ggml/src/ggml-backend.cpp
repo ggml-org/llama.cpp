@@ -1217,7 +1217,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     dup_graph(sched->ctx, &split_main.graph, &split.graph, /*deep =*/ false);
 
                     for (int n = 0; n < split.graph.n_nodes; n++) {
-                        ggml_format_name(split.graph.nodes[n], "%s (parallel %d)", split.graph.nodes[n]->name, i_gpu);
+                        std::string name = split.graph.nodes[n]->name;
+                        ggml_format_name(split.graph.nodes[n], "%s (parallel %d)", name.c_str(), i_gpu);
                     }
 
                     splits_tp.push_back(split);

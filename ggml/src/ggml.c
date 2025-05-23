@@ -1714,6 +1714,7 @@ struct ggml_tensor * ggml_set_name(struct ggml_tensor * tensor, const char * nam
 struct ggml_tensor * ggml_format_name(struct ggml_tensor * tensor, const char * fmt, ...) {
     va_list args;
     va_start(args, fmt);
+    assert(tensor->name != fmt);
     vsnprintf(tensor->name, sizeof(tensor->name), fmt, args);
     va_end(args);
     return tensor;
