@@ -64,34 +64,61 @@ namespace ggml_cuda_mma {
 
     template <int I_, int J_, typename T>
     struct tile {
+        static constexpr int warp_size = ggml_cuda_get_physical_warp_size();
         static constexpr int I  = I_;
         static constexpr int J  = J_;
-        static constexpr int ne = I * J / WARP_SIZE;
+        static constexpr int ne = I * J / warp_size;
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 8 && (J == 4 || J == 8)) {
-                return threadIdx.x / 4;
-            } else if constexpr (I == 16 && J == 8) {
-                return (l / 2) * 8 + threadIdx.x / 4;
-            } else if constexpr (I == 16 && J == 16) {
-                return ((l / 2) % 2) * 8 + threadIdx.x / 4;
-            } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            if constexpr (warp_size == 32) {
+                if constexpr (I == 8 && (J == 4 || J == 8)) {
+                    return threadIdx.x / 4;
+                } else if constexpr (I == 16 && J == 8) {
+                    return (l / 2) * 8 + threadIdx.x / 4;
+                } else if constexpr (I == 16 && J == 16) {
+                    return ((l / 2) % 2) * 8 + threadIdx.x / 4;
+                } else {
+                    static_assert(I == -1 && J == -1, "template specialization not implemented");
+                }
+            } else if constexpr (warp_size == 64) {
+                if constexpr (I == 8 && (J == 4 || J == 8)) {
+                    return threadIdx.x / 4;
+                } else if constexpr (I == 16 && J == 8) {
+                    return threadIdx.x % 16;
+                } else if constexpr (I == 16 && J == 16) {
+                    return 4 * (threadIdx.x / 16) + l;
+                } else {
+                    static_assert(I == -1 && J == -1, "template specialization not implemented");
+                }
             }
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 8 && J == 4) {
-                return threadIdx.x % 4;
-            } else if constexpr (I == 8 && J == 8) {
-                return 4 * l + threadIdx.x % 4;
-            } else if constexpr (I == 16 && J == 8) {
-                return 2 * (threadIdx.x % 4) + l % 2;
-            } else if constexpr (I == 16 && J == 16) {
-                return 8 * (l / 4) + 2 * (threadIdx.x % 4) + l % 2;
-            } else {
-                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            if constexpr (warp_size == 32) {
+                if constexpr (I == 8 && J == 4) {
+                    return threadIdx.x % 4;
+                } else if constexpr (I == 8 && J == 8) {
+                    return 4 * l + threadIdx.x % 4;
+                } else if constexpr (I == 16 && J == 8) {
+                    return 2 * (threadIdx.x % 4) + l % 2;
+                } else if constexpr (I == 16 && J == 16) {
+                    return 8 * (l / 4) + 2 * (threadIdx.x % 4) + l % 2;
+                } else {
+                    static_assert(I == -1 && J == -1, "template specialization not implemented");
+                }
+            } else if constexpr (warp_size == 64) {
+                if constexpr (I == 8 && J == 4) {
+                    return threadIdx.x % 4;
+                } else if constexpr (I == 8 && J == 8) {
+                    return 4 * l + threadIdx.x % 4;
+                } else if constexpr (I == 16 && J == 8) {
+                    return 2 * (threadIdx.x / 16) + l;
+                } else if constexpr (I == 16 && J == 16) {
+                    return threadIdx.x % 16;
+                } else {
+                    static_assert(I == -1 && J == -1, "template specialization not implemented");
+                }
             }
         }
     };
@@ -386,6 +413,26 @@ namespace ggml_cuda_mma {
             : "+r"(Dxi[4]), "+r"(Dxi[5]), "+r"(Dxi[6]), "+r"(Dxi[7])
             : "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[3]));
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#else
+        GGML_UNUSED(D);
+        GGML_UNUSED(A);
+        GGML_UNUSED(B);
+        NO_DEVICE_CODE;
+#endif // NEW_MMA_AVAILABLE
+    }
+
+    static __device__ __forceinline__ void mma(
+            tile<16, 16, int> & D, const tile<16, 8, int> & A, const tile<16, 8, int> & B) {
+#if defined(AMD_MMA_AVAILABLE)
+#if defined(CDNA3)
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;                          
+        int32x4_t* acc = (int32x4_t*) D.x;
+        acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t*) A.x)[0], 
+                                                       ((int64_t*) B.x)[0], 
+                                                       acc[0], 
+                                                       0, 0, 0);    
+#elif defined(CDNA2) || defined(CDNA)
+#endif
 #else
         GGML_UNUSED(D);
         GGML_UNUSED(A);
