@@ -128,7 +128,7 @@ int main(void) {
 
     if (common_has_curl()) {
         printf("test-arg-parser: test curl-related functions\n\n");
-        const char * GOOD_URL = "https://raw.githubusercontent.com/ggml-org/llama.cpp/refs/heads/master/README.md";
+        const char * GOOD_URL = "https://ggml.ai/";
         const char * BAD_URL  = "https://www.google.com/404";
         const char * BIG_FILE = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v1.bin";
 

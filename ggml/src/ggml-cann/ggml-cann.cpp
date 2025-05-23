@@ -1672,7 +1672,8 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_mul_mat(ctx, dst);
             break;
         case GGML_OP_MUL_MAT_ID:
-            return false;
+            ggml_cann_mul_mat_id(ctx, dst);
+            break;
         case GGML_OP_SCALE:
             ggml_cann_scale(ctx, dst);
             break;
@@ -2030,7 +2031,22 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
         }
         case GGML_OP_MUL_MAT_ID:
-            return false;
+            switch (op->src[0]->type) {
+                case GGML_TYPE_F16:
+                case GGML_TYPE_F32:
+                    return true;
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+#ifdef ASCEND_310P
+                    // Q4 && Q8 per group is not suppor on 310p device
+                    return false;
+#endif
+                    // only support contiguous for quantized types.
+                    return ggml_is_contiguous(op->src[0]) &&
+                            ggml_is_contiguous(op->src[1]);
+                default:
+                    return false;
+            }
         // embedding
         case GGML_OP_GET_ROWS: {
             switch (op->src[0]->type) {

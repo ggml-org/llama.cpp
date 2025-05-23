@@ -43,12 +43,13 @@ test parameters:
   -ub, --ubatch-size <n>                    (default: 512)
   -ctk, --cache-type-k <t>                  (default: f16)
   -ctv, --cache-type-v <t>                  (default: f16)
-  -t, --threads <n>                         (default: 16)
+  -dt, --defrag-thold <f>                   (default: -1)
+  -t, --threads <n>                         (default: system dependent)
   -C, --cpu-mask <hex,hex>                  (default: 0x0)
   --cpu-strict <0|1>                        (default: 0)
   --poll <0...100>                          (default: 50)
   -ngl, --n-gpu-layers <n>                  (default: 99)
-  -rpc, --rpc <rpc_servers>                 (default: )
+  -rpc, --rpc <rpc_servers>                 (default: none)
   -sm, --split-mode <none|layer|row>        (default: layer)
   -mg, --main-gpu <i>                       (default: 0)
   -nkvo, --no-kv-offload <0|1>              (default: 0)
@@ -62,7 +63,7 @@ test parameters:
 
 Multiple values can be given for each parameter by separating them with ','
 or by specifying the parameter multiple times. Ranges can be given as
-'start-end' or 'start-end+step' or 'start-end*mult'.
+'first-last' or 'first-last+step' or 'first-last*mult'.
 ```
 
 llama-bench can perform three types of tests:
@@ -78,10 +79,6 @@ Each test is repeated the number of times given by `-r`, and the results are ave
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
 
 For a description of the other options, see the [main example](../main/README.md).
-
-Note:
-
-- When using SYCL backend, there would be hang issue in some cases. Please set `--mmp 0`.
 
 ## Examples
 

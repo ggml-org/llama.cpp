@@ -123,8 +123,8 @@ int main(int argc, char ** argv) {
 
                 common_batch_clear(batch);
 
-                for (int i = 0; i < pp; ++i) {
-                    for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
+                for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
+                    for (int i = 0; i < pp; ++i) {
                         common_batch_add(batch, 0, i, { j }, false);
                     }
                 }

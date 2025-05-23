@@ -24,8 +24,6 @@ int main(int argc, char ** argv){
     // max. number of additional tokens to draft if match is found
     const int n_draft = params.speculative.n_max;
 
-    const bool dump_kv_cache = params.dump_kv_cache;
-
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -110,18 +108,9 @@ int main(int argc, char ** argv){
 
     llama_batch batch_tgt = llama_batch_init(params.n_ctx, 0, 1);
 
-    // debug
-    struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, 1);
-
     const auto t_dec_start = ggml_time_us();
 
     while (true) {
-        // debug
-        if (dump_kv_cache) {
-            llama_kv_cache_view_update(ctx, &kvc_view);
-            common_kv_cache_dump_view_seqs(kvc_view, 40);
-        }
-
         // print current draft sequence
         LOG_DBG("drafted %s\n", string_from(ctx, draft).c_str());
 

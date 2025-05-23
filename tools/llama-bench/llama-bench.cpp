@@ -211,12 +211,18 @@ static std::vector<int> parse_int_range(const std::string & s) {
         for (int i = first; i <= last;) {
             result.push_back(i);
 
+            int prev_i = i;
+
             if (op == '+') {
                 i += step;
             } else if (op == '*') {
                 i *= step;
             } else {
                 throw std::invalid_argument("invalid range format");
+            }
+
+            if (i <= prev_i) {
+                throw std::invalid_argument("invalid range");
             }
         }
         search_start = match.suffix().first;
@@ -239,6 +245,7 @@ struct cmd_params {
     std::vector<int>                 n_ubatch;
     std::vector<ggml_type>           type_k;
     std::vector<ggml_type>           type_v;
+    std::vector<float>               defrag_thold;
     std::vector<int>                 n_threads;
     std::vector<std::string>         cpu_mask;
     std::vector<bool>                cpu_strict;
@@ -274,6 +281,7 @@ static const cmd_params cmd_params_defaults = {
     /* n_ubatch             */ { 512 },
     /* type_k               */ { GGML_TYPE_F16 },
     /* type_v               */ { GGML_TYPE_F16 },
+    /* defrag_thold         */ { -1.0f },
     /* n_threads            */ { cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
@@ -335,6 +343,8 @@ static void print_usage(int /* argc */, char ** argv) {
            join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>                  (default: %s)\n",
            join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
+    printf("  -dt, --defrag-thold <f>                   (default: %s)\n",
+           join(cmd_params_defaults.defrag_thold, ",").c_str());
     printf("  -t, --threads <n>                         (default: %s)\n",
            join(cmd_params_defaults.n_threads, ",").c_str());
     printf("  -C, --cpu-mask <hex,hex>                  (default: %s)\n",
@@ -368,7 +378,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
         "or by specifying the parameter multiple times. Ranges can be given as\n"
-        "'start-end' or 'start-end+step' or 'start-end*mult'.\n");
+        "'first-last' or 'first-last+step' or 'first-last*mult'.\n");
 }
 
 static ggml_type ggml_type_from_name(const std::string & s) {
@@ -519,6 +529,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.type_v.insert(params.type_v.end(), types.begin(), types.end());
+            } else if (arg == "-dt" || arg == "--defrag-thold") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<float>(argv[i], split_delim);
+                params.defrag_thold.insert(params.defrag_thold.end(), p.begin(), p.end());
             } else if (arg == "-t" || arg == "--threads") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -670,7 +687,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                auto value = argv[i];
+                auto * value = argv[i];
                 /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
                 if (buft_list.empty()) {
                     // enumerate all the devices and add their buffer types to the list
@@ -702,7 +719,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     // memory leak present in the implementation
                     // over in arg.cpp. Acceptable because we
                     // only parse these args once in this program.
-                    auto override_group = value;
+                    auto * override_group = value;
                     if (value[override_group_span_len] == '\0') {
                         value = &value[override_group_span_len];
                         last_group = true;
@@ -713,7 +730,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     std::vector<llama_model_tensor_buft_override> group_tensor_buft_overrides{};
                     auto override_span_len = std::strcspn(override_group, ";");
                     while (override_span_len > 0) {
-                        auto override = override_group;
+                        auto * override = override_group;
                         if (override_group[override_span_len] != '\0') {
                             override_group[override_span_len] = '\0';
                             override_group = &override_group[override_span_len + 1];
@@ -726,9 +743,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                             break;
                         }
                         override[tensor_name_span_len] = '\0';
-                        auto tensor_name = override;
-                        auto buffer_type = &override[tensor_name_span_len + 1];
+                        auto * tensor_name = override;
+                        auto * buffer_type = &override[tensor_name_span_len + 1];
                         if (buft_list.find(buffer_type) == buft_list.end()) {
+                            printf("error: unrecognized buffer type '%s'\n", buffer_type);
                             printf("Available buffer types:\n");
                             for (const auto & it : buft_list) {
                                 printf("  %s\n", ggml_backend_buft_name(it.second));
@@ -825,6 +843,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.type_v.empty()) {
         params.type_v = cmd_params_defaults.type_v;
     }
+    if (params.defrag_thold.empty()) {
+        params.defrag_thold = cmd_params_defaults.defrag_thold;
+    }
     if (params.n_gpu_layers.empty()) {
         params.n_gpu_layers = cmd_params_defaults.n_gpu_layers;
     }
@@ -883,6 +904,7 @@ struct cmd_params_instance {
     int                n_ubatch;
     ggml_type          type_k;
     ggml_type          type_v;
+    float              defrag_thold;
     int                n_threads;
     std::string        cpu_mask;
     bool               cpu_strict;
@@ -959,15 +981,17 @@ struct cmd_params_instance {
     llama_context_params to_llama_cparams() const {
         llama_context_params cparams = llama_context_default_params();
 
-        cparams.n_ctx       = n_prompt + n_gen + n_depth;
-        cparams.n_batch     = n_batch;
-        cparams.n_ubatch    = n_ubatch;
-        cparams.type_k      = type_k;
-        cparams.type_v      = type_v;
-        cparams.offload_kqv = !no_kv_offload;
-        cparams.flash_attn  = flash_attn;
-        cparams.embeddings  = embeddings;
-        cparams.op_offload  = !no_op_offload;
+        cparams.n_ctx        = n_prompt + n_gen + n_depth;
+        cparams.n_batch      = n_batch;
+        cparams.n_ubatch     = n_ubatch;
+        cparams.type_k       = type_k;
+        cparams.type_v       = type_v;
+        cparams.defrag_thold = defrag_thold;
+        cparams.offload_kqv  = !no_kv_offload;
+        cparams.flash_attn   = flash_attn;
+        cparams.embeddings   = embeddings;
+        cparams.op_offload   = !no_op_offload;
+        cparams.swa_full     = false;
 
         return cparams;
     }
@@ -992,6 +1016,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
     for (const auto & tv : params.type_v)
+    for (const auto & defrag_thold : params.defrag_thold)
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
     for (const auto & nt : params.n_threads)
@@ -1012,6 +1037,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
+                /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1044,6 +1070,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
+                /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1076,6 +1103,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_ubatch     = */ nub,
                 /* .type_k       = */ tk,
                 /* .type_v       = */ tv,
+                /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
@@ -1117,6 +1145,7 @@ struct test {
     int                      poll;
     ggml_type                type_k;
     ggml_type                type_v;
+    float                    defrag_thold;
     int                      n_gpu_layers;
     llama_split_mode         split_mode;
     int                      main_gpu;
@@ -1151,6 +1180,7 @@ struct test {
         poll           = inst.poll;
         type_k         = inst.type_k;
         type_v         = inst.type_v;
+        defrag_thold   = inst.defrag_thold;
         n_gpu_layers   = inst.n_gpu_layers;
         split_mode     = inst.split_mode;
         main_gpu       = inst.main_gpu;
@@ -1206,6 +1236,7 @@ struct test {
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
             "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
+            "defrag_thold",
             "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
             "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
         };
@@ -1225,7 +1256,7 @@ struct test {
             field == "use_mmap" || field == "embeddings") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "defrag_thold") {
             return FLOAT;
         }
         return STRING;
@@ -1292,6 +1323,7 @@ struct test {
                                             std::to_string(flash_attn),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
+                                            std::to_string(defrag_thold),
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
@@ -1558,6 +1590,9 @@ struct markdown_printer : public printer {
         if (params.type_v.size() > 1 || params.type_v != cmd_params_defaults.type_v) {
             fields.emplace_back("type_v");
         }
+        if (params.defrag_thold.size() > 1 || params.defrag_thold != cmd_params_defaults.defrag_thold) {
+            fields.emplace_back("defrag_thold");
+        }
         if (params.main_gpu.size() > 1 || params.main_gpu != cmd_params_defaults.main_gpu) {
             fields.emplace_back("main_gpu");
         }
@@ -1703,7 +1738,7 @@ struct sql_printer : public printer {
     }
 };
 
-static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -1720,14 +1755,19 @@ static void test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
         for (int i = 1; i < n_tokens; i++) {
             tokens[i] = std::rand() % n_vocab;
         }
-        llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
+        int res = llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
+        if (res != 0) {
+            fprintf(stderr, "%s: failed to decode prompt batch, res = %d\n", __func__, res);
+            return false;
+        }
         n_processed += n_tokens;
     }
 
     llama_synchronize(ctx);
+    return true;
 }
 
-static void test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -1737,10 +1777,15 @@ static void test_gen(llama_context * ctx, int n_gen, int n_threads) {
     llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
 
     for (int i = 0; i < n_gen; i++) {
-        llama_decode(ctx, llama_batch_get_one(&token, 1));
+        int res = llama_decode(ctx, llama_batch_get_one(&token, 1));
+        if (res != 0) {
+            fprintf(stderr, "%s: failed to decode generation batch, res = %d\n", __func__, res);
+            return false;
+        }
         llama_synchronize(ctx);
         token = std::rand() % n_vocab;
     }
+    return true;
 }
 
 static void llama_null_log_callback(enum ggml_log_level level, const char * text, void * user_data) {
@@ -1783,10 +1828,11 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "warning: sanitizer enabled, performance may be affected\n");
 #endif
 
-    cmd_params params = parse_cmd_params(argc, argv);
-
     // initialize backends
     ggml_backend_load_all();
+
+    cmd_params params = parse_cmd_params(argc, argv);
+
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
         fprintf(stderr, "%s: error: CPU backend is not loaded\n", __func__);
@@ -1884,13 +1930,21 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
             }
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+            bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+            if (!res) {
+                fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                exit(1);
+            }
         }
         if (t.n_gen > 0) {
             if (params.progress) {
                 fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
             }
-            test_gen(ctx, 1, t.n_threads);
+            bool res = test_gen(ctx, 1, t.n_threads);
+            if (!res) {
+                fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                exit(1);
+            }
         }
 
         for (int i = 0; i < params.reps; i++) {
@@ -1901,7 +1955,11 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run depth\n", __func__);
+                    exit(1);
+                }
             }
 
             uint64_t t_start = get_time_ns();
@@ -1911,14 +1969,22 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
+                    exit(1);
+                }
             }
             if (t.n_gen > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run gen\n", __func__);
+                    exit(1);
+                }
             }
 
             uint64_t t_ns = get_time_ns() - t_start;

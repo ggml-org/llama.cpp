@@ -15,6 +15,32 @@ function(detect_host_compiler)
     set(HOST_CXX_COMPILER "${HOST_CXX_COMPILER}" PARENT_SCOPE)
 endfunction()
 
+# Function to test shader extension support
+# Parameters:
+#  EXTENSION_NAME - Name of the extension to test (e.g., "GL_EXT_integer_dot_product")
+#  TEST_SHADER_FILE - Path to the test shader file
+#  RESULT_VARIABLE - Name of the variable to set (ON/OFF) based on test result
+function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VARIABLE)
+    execute_process(
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}"
+        OUTPUT_VARIABLE glslc_output
+        ERROR_VARIABLE glslc_error
+    )
+
+    if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
+        message(STATUS "${EXTENSION_NAME} not supported by glslc")
+        set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
+    else()
+        message(STATUS "${EXTENSION_NAME} supported by glslc")
+        set(${RESULT_VARIABLE} ON PARENT_SCOPE)
+        add_compile_definitions(${RESULT_VARIABLE})
+
+        # Ensure the extension support is forwarded to vulkan-shaders-gen
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -D${RESULT_VARIABLE}=ON)
+        set(VULKAN_SHADER_GEN_CMAKE_ARGS "${VULKAN_SHADER_GEN_CMAKE_ARGS}" PARENT_SCOPE)
+    endif()
+endfunction()
+
 if (Vulkan_FOUND)
     message(STATUS "Vulkan found")
 
@@ -23,69 +49,40 @@ if (Vulkan_FOUND)
                              ../../include/ggml-vulkan.h
                             )
 
-    # Compile a test shader to determine whether GL_KHR_cooperative_matrix is supported.
-    # If it's not, there will be an error to stderr.
-    # If it's supported, set a define to indicate that we should compile those shaders
-    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
-                    OUTPUT_VARIABLE glslc_output
-                    ERROR_VARIABLE glslc_error)
+    set(VULKAN_SHADER_GEN_CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
+        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
 
-    if (${glslc_error} MATCHES ".*extension not supported: GL_KHR_cooperative_matrix.*")
-        message(STATUS "GL_KHR_cooperative_matrix not supported by glslc")
-        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT OFF)
-    else()
-        message(STATUS "GL_KHR_cooperative_matrix supported by glslc")
-        set(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT ON)
-        add_compile_definitions(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    set(VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS "")
+    if (CMAKE_BUILD_TYPE AND CMAKE_BUILD_TYPE MATCHES "Debug|Release|MinSizeRel|RelWithDebInfo")
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS --config=${CMAKE_BUILD_TYPE})
     endif()
 
-    # Compile a test shader to determine whether GL_NV_cooperative_matrix2 is supported.
-    # If it's not, there will be an error to stderr.
-    # If it's supported, set a define to indicate that we should compile those shaders
-    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
-                    OUTPUT_VARIABLE glslc_output
-                    ERROR_VARIABLE glslc_error)
+    # Test all shader extensions
+    test_shader_extension_support(
+        "GL_KHR_cooperative_matrix"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat_support.comp"
+        "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
+    )
 
-    if (${glslc_error} MATCHES ".*extension not supported: GL_NV_cooperative_matrix2.*")
-        message(STATUS "GL_NV_cooperative_matrix2 not supported by glslc")
-        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT OFF)
-    else()
-        message(STATUS "GL_NV_cooperative_matrix2 supported by glslc")
-        set(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT ON)
-        add_compile_definitions(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-    endif()
+    test_shader_extension_support(
+        "GL_NV_cooperative_matrix2"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_coopmat2_support.comp"
+        "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
+    )
 
-    # Compile a test shader to determine whether GL_EXT_integer_dot_product is supported.
-    # If it's not, there will be an error to stderr.
-    # If it's supported, set a define to indicate that we should compile those shaders
-    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
-                    OUTPUT_VARIABLE glslc_output
-                    ERROR_VARIABLE glslc_error)
+    test_shader_extension_support(
+        "GL_EXT_integer_dot_product"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_integer_dot_support.comp"
+        "GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT"
+    )
 
-    if (${glslc_error} MATCHES ".*extension not supported: GL_EXT_integer_dot_product.*")
-        message(STATUS "GL_EXT_integer_dot_product not supported by glslc")
-        set(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT OFF)
-    else()
-        message(STATUS "GL_EXT_integer_dot_product supported by glslc")
-        set(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT ON)
-        add_compile_definitions(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
-    endif()
-
-    # Compile a test shader to determine whether GL_EXT_bfloat16 is supported.
-    # If it's not, there will be an error to stderr.
-    # If it's supported, set a define to indicate that we should compile those shaders
-    execute_process(COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_bfloat16_support.comp"
-                    OUTPUT_VARIABLE glslc_output
-                    ERROR_VARIABLE glslc_error)
-
-    if (${glslc_error} MATCHES ".*extension not supported: GL_EXT_bfloat16.*")
-        message(STATUS "GL_EXT_bfloat16 not supported by glslc")
-        set(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT OFF)
-    else()
-        message(STATUS "GL_EXT_bfloat16 supported by glslc")
-        set(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT ON)
-        add_compile_definitions(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-    endif()
+    test_shader_extension_support(
+        "GL_EXT_bfloat16"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/test_bfloat16_support.comp"
+        "GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT"
+    )
 
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
@@ -124,16 +121,8 @@ if (Vulkan_FOUND)
         add_compile_definitions(GGML_VULKAN_RUN_TESTS)
     endif()
 
-    if (NOT CMAKE_CROSSCOMPILING)
-        add_subdirectory(vulkan-shaders)
-        if (MSVC)
-            foreach(CONFIG ${CMAKE_CONFIGURATION_TYPES})
-                string(TOUPPER ${CONFIG} CONFIG)
-                set_target_properties(vulkan-shaders-gen PROPERTIES
-                    RUNTIME_OUTPUT_DIRECTORY_${CONFIG} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            endforeach()
-        endif()
-    else()
+    # Set up toolchain for host compilation whether cross-compiling or not
+    if (CMAKE_CROSSCOMPILING)
         if (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN)
             set(HOST_CMAKE_TOOLCHAIN_FILE ${GGML_VULKAN_SHADERS_GEN_TOOLCHAIN})
         else()
@@ -146,25 +135,31 @@ if (Vulkan_FOUND)
             configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake/host-toolchain.cmake.in ${CMAKE_BINARY_DIR}/host-toolchain.cmake @ONLY)
             set(HOST_CMAKE_TOOLCHAIN_FILE ${CMAKE_BINARY_DIR}/host-toolchain.cmake)
         endif()
-        message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
-
-        include(ExternalProject)
-        # Native build through ExternalProject_Add
-        ExternalProject_Add(
-            vulkan-shaders-gen
-            SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
-            CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE}
-                    -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
-                    -DGGML_VULKAN_COOPMAT_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_COOPMAT2_GLSLC_SUPPORT=${GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT=${GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT}
-                    -DGGML_VULKAN_BFLOAT16_GLSLC_SUPPORT=${GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT}
-            BUILD_COMMAND ${CMAKE_COMMAND} --build .
-            INSTALL_COMMAND ${CMAKE_COMMAND} --install .
-            INSTALL_DIR ${CMAKE_BINARY_DIR}
-        )
-        ExternalProject_Add_StepTargets(vulkan-shaders-gen build install)
+    else()
+        # For non-cross-compiling, use empty toolchain (use host compiler)
+        set(HOST_CMAKE_TOOLCHAIN_FILE "")
     endif()
+
+    # Always use ExternalProject_Add approach
+    include(ExternalProject)
+
+    # Add toolchain file if cross-compiling
+    if (CMAKE_CROSSCOMPILING)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
+        message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+    endif()
+
+    # Native build through ExternalProject_Add
+    ExternalProject_Add(
+        vulkan-shaders-gen
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
+        CMAKE_ARGS ${VULKAN_SHADER_GEN_CMAKE_ARGS}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS}
+        INSTALL_COMMAND ${CMAKE_COMMAND} --install .
+        INSTALL_DIR ${CMAKE_BINARY_DIR}
+    )
+    ExternalProject_Add_StepTargets(vulkan-shaders-gen build install)
+
     set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
     set (_ggml_vk_genshaders_cmd ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/vulkan-shaders-gen${_ggml_vk_host_suffix})
     set (_ggml_vk_header     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp)
@@ -175,9 +170,8 @@ if (Vulkan_FOUND)
     file(GLOB _ggml_vk_shader_deps "${_ggml_vk_input_dir}/*.comp")
     set (_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen)
 
-    if (CMAKE_CROSSCOMPILING)
-        set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build vulkan-shaders-gen-install)
-    endif()
+    # Add build and install dependencies for all builds
+    set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build vulkan-shaders-gen-install)
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
