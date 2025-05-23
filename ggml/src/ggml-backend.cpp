@@ -1269,8 +1269,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             }
 
             for (int n = 0; n < split.graph.n_nodes; n++) {
-                ggml_tensor * node = split.graph.nodes[n];
-                tensor_id_tp(hash_id(node), split.backend_id) = node;
+                ggml_tensor * node_orig = graph->nodes[split.i_start + n];
+                ggml_tensor * node_sg   = split.graph.nodes[n];
+                tensor_id_tp(hash_id(node_orig), split.backend_id) = node_sg;
             }
         }
     }
