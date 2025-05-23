@@ -1422,6 +1422,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         sched->splits[i_split] = splits_tp[i_split];
         fprintf(stderr, "%s: split%d backend_id=%d i_start=%d i_end=%d\n",
             __func__, int(i_split), sched->splits[i_split].backend_id, sched->splits[i_split].i_start, sched->splits[i_split].i_end);
+        for (int n = 0; n < sched->splits[i_split].graph.n_nodes; n++) {
+            fprintf(stderr, "%s:   - %d: %s\n", __func__, n, sched->splits[i_split].graph.nodes[n]->name);
+        }
     }
     sched->n_splits = splits_tp.size();
 
