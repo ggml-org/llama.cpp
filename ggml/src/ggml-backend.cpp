@@ -1250,11 +1250,16 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 GGML_ASSERT(ne01 == ne0);
                 GGML_ASSERT(ne01 % n_gpus == 0);
 
+                GGML_ASSERT(src0->op == GGML_OP_NONE);
+                src0 = ggml_dup_tensor_layout(sched->ctx, src0);
+                src0->data = ((void **) dst->src[0]->extra)[i_gpu]; // FIXME
+                dst->src[0] = src0;
+                tensor_backend_id(src0) = split.backend_id;
+
                 const int64_t row_low  = ne01 *  i_gpu   /n_gpus;
                 const int64_t row_high = ne01 * (i_gpu+1)/n_gpus;
                 const int64_t row_diff = row_high - row_low;
 
-                src0->data  = ((void **) src0->extra)[i_gpu];
                 src0->ne[1] = row_diff;
                 src0->nb[2] = src0->ne[1]*src0->nb[1];
                 src0->nb[3] = src0->ne[2]*src0->nb[2];
