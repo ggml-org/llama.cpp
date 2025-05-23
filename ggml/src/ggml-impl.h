@@ -629,6 +629,11 @@ static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             new_tensor->src[i] = map_tensor(tensor_map, ctx, tensor->src[i], deep);
         }
+    } else {
+        new_tensor->view_src = tensor->view_src;
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            new_tensor->src[i] = tensor->src[i];
+        }
     }
 
     return new_tensor;
