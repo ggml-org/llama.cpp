@@ -539,27 +539,37 @@ inline void debug_print_tensor(const std::string & prefix, const ggml_tensor * t
     GGML_SYCL_DEBUG("%s", suffix.c_str());
 }
 
+// Use scope_op_debug_print to log operations coming from running a model
 struct scope_op_debug_print {
-    scope_op_debug_print(const std::string & func, const ggml_tensor * dst, std::size_t num_src,
-                         const std::string & suffix = "") :
-        func(func) {
+    // Use string_views to avoid the cost of creating a string and concatenating them
+    // string_views must be alive for as long as the object is alive
+    // scope_op_debug_print are used with string literals in practice which are stored in constant space so always accessible
+    scope_op_debug_print(const std::string_view & func, const std::string_view & func_suffix, const ggml_tensor * dst,
+                         std::size_t num_src, const std::string_view & suffix = "") :
+        func(func),
+        func_suffix(func_suffix) {
         if (LIKELY(!g_ggml_sycl_debug)) {
             return;
         }
-        GGML_SYCL_DEBUG("[SYCL][OP] call %s:", func.c_str());
+        GGML_SYCL_DEBUG("[SYCL][OP] call %s%s:", func.data(), func_suffix.data());
         debug_print_tensor(" dst", dst);
         if (dst) {
             for (std::size_t i = 0; i < num_src; ++i) {
                 debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
             }
         }
-        GGML_SYCL_DEBUG("%s\n", suffix.c_str());
+        GGML_SYCL_DEBUG("%s\n", suffix.data());
     }
 
-    ~scope_op_debug_print() { GGML_SYCL_DEBUG("[SYCL][OP] call %s done\n", func.c_str()); }
+    scope_op_debug_print(const std::string_view & func, const ggml_tensor * dst, std::size_t num_src,
+                         const std::string_view & suffix = "") :
+        scope_op_debug_print(func, "", dst, num_src, suffix) {}
+
+    ~scope_op_debug_print() { GGML_SYCL_DEBUG("[SYCL][OP] call %s%s done\n", func.data(), func_suffix.data()); }
 
   private:
-    std::string func;
+    std::string_view func;
+    std::string_view func_suffix;
 };
 
 #endif // GGML_SYCL_COMMON_HPP
