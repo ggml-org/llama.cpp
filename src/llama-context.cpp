@@ -628,6 +628,18 @@ void llama_context::set_causal_attn(bool value) {
     cparams.causal_attn = value;
 }
 
+void llama_context::set_causal_attn(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.causal_attn = value;
+}
+
+void llama_context::set_mpt_head(int32_t value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.curr_mtp = value;
+}
+
 void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -2219,6 +2231,11 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
 
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
+}
+
+void llama_set_mpt_head(llama_context * ctx, int32_t n_mtp) {
+    GGML_ASSERT(n_mtp <= llama_model_n_mtp(llama_get_model(ctx)));
+    ctx->set_mpt_head(n_mtp);
 }
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {

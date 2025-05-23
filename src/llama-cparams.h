@@ -32,6 +32,11 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
 
+    // multi-token predict
+    // 0 means not using MTP
+    // N means using the nth MTP head
+    int32_t curr_mtp = 0;
+
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;

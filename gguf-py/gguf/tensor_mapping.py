@@ -458,7 +458,20 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm2",                   # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_3",   # Grok
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
-            "encoder.layer.{bid}.layer_norm_2"              # jina-v2-code
+            "encoder.layer.{bid}.layer_norm_2",             # jina-v2-code
+            "model.layers.{bid}.final_layernorm",           # xiaomi mimo
+        ),
+
+        MODEL_TENSOR.MTP_INP_PROJ: (
+            "model.layers.{bid}.input_proj", # xiaomi mimo
+        ),
+
+        MODEL_TENSOR.MTP_TOKEN_NORM: (
+            "model.layers.{bid}.token_layernorm", # xiaomi mimo
+        ),
+
+        MODEL_TENSOR.MTP_HIDDEN_NORM: (
+            "model.layers.{bid}.hidden_layernorm", # xiaomi mimo
         ),
 
         MODEL_TENSOR.SSM_IN: (

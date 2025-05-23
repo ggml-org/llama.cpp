@@ -1809,7 +1809,8 @@ class StableLMModel(TextModel):
     "MistralForCausalLM",
     "MixtralForCausalLM",
     "VLlama3ForCausalLM",
-    "LlavaForConditionalGeneration")
+    "LlavaForConditionalGeneration",
+)
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -2865,6 +2866,32 @@ class WavTokenizerDecModel(TextModel):
         self.gguf_writer.add_convnext_block_count     (self.hparams["convnext"]["n_layer"])
 
         self.gguf_writer.add_causal_attention(False)
+
+
+@ModelBase.register("MiMoForCausalLM")
+class MimoModel(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.QWEN2
+    n_multi_token_predict: int
+    n_layers_no_mtp: int
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.n_multi_token_predict = self.hparams["num_nextn_predict_layers"]
+        self.n_layers_no_mtp = self.block_count
+        self.block_count = self.block_count + self.n_multi_token_predict
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        print(self.hparams)
+        self.gguf_writer.add_n_multi_token_predict(self.hparams["num_nextn_predict_layers"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "mtp_layers" in name and bid is not None:
+            name = name.replace(".mtp_layers", ".layers")
+            for i in range(self.n_multi_token_predict):
+                name = name.replace(f"layers.{i}.", f"layers.{self.n_layers_no_mtp + i}.")
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen2MoeForCausalLM")

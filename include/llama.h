@@ -502,6 +502,12 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
 
+    // If model supports multi-token predict, this returns number of tokens ; returns 0 otherwise
+    LLAMA_API int32_t llama_model_n_mtp(const struct llama_model * model);
+
+    // Get the i-th multi-token predict model (used by speculative decoding)
+    LLAMA_API struct llama_model * llama_model_get_mtp(struct llama_model * model, int32_t i);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
@@ -868,6 +874,9 @@ extern "C" {
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
+
+    // Set whether to use multi-token predict head ; 0 means no MTP
+    LLAMA_API void llama_set_mpt_head(struct llama_context * ctx, int32_t n_mtp);
 
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.

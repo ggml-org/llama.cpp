@@ -463,6 +463,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         GGML_ASSERT(hparams.n_expert_used == 0);
     }
 
+    // multi-token predict
+    ml.get_key(LLM_KV_N_MULTI_TOKEN_PREDICT, hparams.n_mtp, false);
+
     // zero-out the array hparams
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
     std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
@@ -2397,6 +2400,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+                        // optional MTP (multi token predict), used by Xiaomi Mimo
+                        layer.mtp_inp_proj    = create_tensor(tn(LLM_TENSOR_MTP_INP_PROJ,    "weight", i), {n_embd*2, n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.mtp_token_norm  = create_tensor(tn(LLM_TENSOR_MTP_TOKEN_NORM,  "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.mtp_hidden_norm = create_tensor(tn(LLM_TENSOR_MTP_HIDDEN_NORM, "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.layer_out_norm  = create_tensor(tn(LLM_TENSOR_LAYER_OUT_NORM,  "weight", i), {n_embd}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
             case LLM_ARCH_QWEN2MOE:
@@ -4348,6 +4357,10 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: ssm_d_state      = %u\n",     __func__, hparams.ssm_d_state);
         LLAMA_LOG_INFO("%s: ssm_dt_rank      = %u\n",     __func__, hparams.ssm_dt_rank);
         LLAMA_LOG_INFO("%s: ssm_dt_b_c_rms   = %d\n",     __func__, hparams.ssm_dt_b_c_rms);
+    }
+
+    if (hparams.n_mtp) {
+        LLAMA_LOG_INFO("%s: n_mtp            = %u\n",     __func__, hparams.n_mtp);
     }
 
     LLAMA_LOG_INFO("%s: model type       = %s\n",     __func__, type_name().c_str());
@@ -6575,6 +6588,7 @@ struct llm_build_qwen2 : public llm_graph_context {
         ggml_tensor * inpL;
 
         inpL = build_inp_embd(model.tok_embd);
+        ggml_tensor * inp_embd = inpL;
 
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
@@ -6582,7 +6596,19 @@ struct llm_build_qwen2 : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv_unified();
 
         for (int il = 0; il < n_layer; ++il) {
+            bool is_mtp = model.layers[il].mtp_inp_proj != nullptr;
             ggml_tensor * inpSA = inpL;
+
+            // multi token predict
+            // https://huggingface.co/XiaomiMiMo/MiMo-7B-RL/blob/main/modeling_mimo.py
+            if (is_mtp) {
+                ggml_tensor * tmp = build_norm(inp_embd,
+                        model.layers[il].mtp_token_norm,
+                        NULL,
+                        LLM_NORM_RMS, il);
+                tmp = ggml_concat(ctx0, inpL, tmp, 0); // concat prev state with token embd
+                inpL = build_lora_mm(model.layers[il].mtp_inp_proj, tmp);
+            }
 
             // norm
             cur = build_norm(inpL,
@@ -6655,6 +6681,12 @@ struct llm_build_qwen2 : public llm_graph_context {
             cb(cur, "ffn_out", il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
+
+            if (is_mtp && model.layers[il].layer_out_norm) {
+                cur = build_norm(cur,
+                        model.layers[il].layer_out_norm, NULL,
+                        LLM_NORM_RMS, il);
+            }
 
             cur = build_cvec(cur, il);
             cb(cur, "l_out", il);
@@ -13588,6 +13620,10 @@ int32_t llama_model_n_head(const llama_model * model) {
 
 int32_t llama_model_n_head_kv(const llama_model * model) {
     return model->hparams.n_head_kv();
+}
+
+int32_t llama_model_n_mtp(const llama_model * model) {
+    return model->hparams.n_mtp;
 }
 
 // deprecated

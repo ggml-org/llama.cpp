@@ -118,6 +118,7 @@ class Keys:
         EMBEDDING_SCALE                   = "{arch}.embedding_scale"
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
+        N_MULTI_TOKEN_PREDICT             = "{arch}.n_multi_token_predict"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -392,6 +393,9 @@ class MODEL_TENSOR(IntEnum):
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
     LAYER_OUT_NORM       = auto()
+    MTP_INP_PROJ         = auto()
+    MTP_TOKEN_NORM       = auto() # token_layernorm
+    MTP_HIDDEN_NORM      = auto() # hidden_layernorm
     SSM_IN               = auto()
     SSM_CONV1D           = auto()
     SSM_X                = auto()
@@ -671,6 +675,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_UP_EXP:                "blk.{bid}.ffn_up_exps",
     MODEL_TENSOR.FFN_EXP_PROBS_B:           "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
+    MODEL_TENSOR.MTP_INP_PROJ:              "blk.{bid}.mtp_inp_proj",
+    MODEL_TENSOR.MTP_TOKEN_NORM:            "blk.{bid}.mtp_token_norm",
+    MODEL_TENSOR.MTP_HIDDEN_NORM:           "blk.{bid}.mtp_hidden_norm",
     MODEL_TENSOR.SSM_IN:                    "blk.{bid}.ssm_in",
     MODEL_TENSOR.SSM_CONV1D:                "blk.{bid}.ssm_conv1d",
     MODEL_TENSOR.SSM_X:                     "blk.{bid}.ssm_x",
@@ -1186,6 +1193,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.MTP_INP_PROJ, # xiaomi mimo
+        MODEL_TENSOR.MTP_HIDDEN_NORM, # xiaomi mimo
+        MODEL_TENSOR.MTP_TOKEN_NORM, # xiaomi mimo
+        MODEL_TENSOR.LAYER_OUT_NORM, # xiaomi mimo
     ],
     MODEL_ARCH.QWEN2VL: [
         MODEL_TENSOR.TOKEN_EMBD,
