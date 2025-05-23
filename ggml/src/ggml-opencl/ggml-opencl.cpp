@@ -307,6 +307,7 @@ struct ggml_backend_opencl_context {
     cl_program program_rope;
     cl_program program_scale;
     cl_program program_silu;
+    cl_program program_sigmoid;
     cl_program program_softmax_f32;
     cl_program program_softmax_f16;
     cl_program program_softmax_4_f32;
@@ -323,6 +324,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gelu, kernel_gelu_4;
     cl_kernel kernel_gelu_quick, kernel_gelu_quick_4;
     cl_kernel kernel_relu;
+    cl_kernel kernel_sigmoid_f32, kernel_sigmoid_f16;
     cl_kernel kernel_clamp;
     cl_kernel kernel_norm;
     cl_kernel kernel_rms_norm;
@@ -1057,6 +1059,23 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_sum_rows_f32 = clCreateKernel(backend_ctx->program_sum_rows_f32, "kernel_sum_rows_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // sigmoid
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "sigmoid.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("sigmoid.cl");
+#endif
+        backend_ctx->program_sigmoid =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_sigmoid_f32 = clCreateKernel(backend_ctx->program_sigmoid, "kernel_sigmoid_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_sigmoid_f16 = clCreateKernel(backend_ctx->program_sigmoid, "kernel_sigmoid_f16", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -1939,7 +1958,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_GELU_QUICK:
-                   return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                    return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                case GGML_UNARY_OP_SIGMOID:
+                    return ggml_is_contiguous(op->src[0]);
                 default:
                     return false;
             }
@@ -3759,6 +3780,58 @@ static void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const
 #endif
 }
 
+static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+
+    UNUSED(src1);
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+    cl_command_queue queue = backend_ctx->queue;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_kernel kernel;
+    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        kernel = backend_ctx->kernel_sigmoid_f32;
+    } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+        kernel = backend_ctx->kernel_sigmoid_f16;
+    } else {
+        GGML_ASSERT(false && "Unsupported data types for sigmoid (input and output must be both f32 or f16)");
+    }
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
+
+    const int64_t n = ggml_nelements(dst);
+
+    size_t global_work_size[] = {(size_t)n, 1, 1};
+    size_t local_work_size[] = {64, 1, 1};
+
+    size_t * local_work_size_ptr = local_work_size;
+    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+    }
+
+#ifdef GGML_OPENCL_PROFILING
+    cl_event evt;
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
+
+    g_profiling_info.emplace_back();
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
+#else
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
+#endif
+}
+
 static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -5508,6 +5581,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                         return false;
                     }
                     func = ggml_cl_relu;
+                    break;
+                case GGML_UNARY_OP_SIGMOID:
+                    if (!any_on_device) {
+                        return false;
+                    }
+                    func = ggml_cl_sigmoid;
                     break;
                 default:
                     return false;
