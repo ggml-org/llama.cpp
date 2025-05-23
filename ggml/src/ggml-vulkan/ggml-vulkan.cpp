@@ -1041,6 +1041,11 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 struct vk_instance_t {
     vk::Instance instance;
 
+#ifdef GGML_VULKAN_DEBUG_UTILS
+    bool debug_utils_support = false;  // VK_EXT_debug_utils enabled
+    PFN_vkSetDebugUtilsObjectNameEXT pfnSetDebugUtilsObjectNameEXT = {};
+#endif
+
     std::vector<size_t> device_indices;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
@@ -1179,6 +1184,16 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         throw e;
     }
     pipeline->compiled = true;
+
+#ifdef GGML_VULKAN_DEBUG_UTILS
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsObjectNameInfoEXT duoni;
+        duoni.objectType = vk::ObjectType::ePipeline;
+        duoni.pObjectName = pipeline->name.c_str();
+        duoni.objectHandle = reinterpret_cast<uint64_t>(pipeline->pipeline.operator VkPipeline_T *());
+        vk_instance.pfnSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+    }
+#endif
 
     {
         std::lock_guard<std::mutex> guard(device->mutex);
@@ -3561,6 +3576,10 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
+#ifdef GGML_VULKAN_DEBUG_UTILS
+static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+#endif
+
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
         return;
@@ -3581,7 +3600,9 @@ static void ggml_vk_instance_init() {
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-
+#ifdef GGML_VULKAN_DEBUG_UTILS
+    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions);
+#endif
     std::vector<const char*> layers;
 
     if (validation_ext) {
@@ -3594,6 +3615,11 @@ static void ggml_vk_instance_init() {
 #ifdef __APPLE__
     if (portability_enumeration_ext) {
         extensions.push_back("VK_KHR_portability_enumeration");
+    }
+#endif
+#ifdef GGML_VULKAN_DEBUG_UTILS
+    if (debug_utils_ext) {
+        extensions.push_back("VK_EXT_debug_utils");
     }
 #endif
     vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions);
@@ -3619,6 +3645,14 @@ static void ggml_vk_instance_init() {
     vk_instance.instance = vk::createInstance(instance_create_info);
     vk_instance_initialized = true;
 
+#ifdef GGML_VULKAN_DEBUG_UTILS
+    if (debug_utils_ext) {
+        vk_instance.pfnSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
+        vk_instance.debug_utils_support = vk_instance.pfnSetDebugUtilsObjectNameEXT != nullptr;
+    }
+#endif
+
+    size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
@@ -10338,6 +10372,24 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 
     UNUSED(instance_extensions);
 }
+
+#ifdef GGML_VULKAN_DEBUG_UTILS
+// Extension availability
+static bool ggml_vk_instance_debug_utils_ext_available(
+    const std::vector<vk::ExtensionProperties> & instance_extensions) {
+    // Check for portability enumeration extension for MoltenVK support
+    for (const auto & properties : instance_extensions) {
+        if (strcmp("VK_EXT_debug_utils", properties.extensionName) == 0) {
+            return true;
+        }
+    }
+
+    std::cerr << "ggml_vulkan: WARNING: Instance extension VK_EXT_debug_utils not found." << std::endl;
+    return false;
+
+    UNUSED(instance_extensions);
+}
+#endif
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
