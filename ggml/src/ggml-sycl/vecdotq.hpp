@@ -285,7 +285,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
     }
 
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
-                     const block_q8_1 * __restrict__ bq8_1, const int & iqs, int /* nblocks */) {
+                     const int8_t* q8_1_quant_ptr, const sycl::half2& q8_1_ds, const int & iqs, int /* nblocks */) {
         const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset;
         const ggml_half d     = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset));
         int             v[q4_0_traits::vdr_mmvq];
@@ -295,11 +295,11 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
 
         for (size_t i = 0; i < q4_0_traits::vdr_mmvq; ++i) {
             v[i]         = get_int_from_uint8(bq4_0, iqs + i);
-            u[2 * i + 0] = get_int_from_int8_aligned(bq8_1->qs, iqs + i);
-            u[2 * i + 1] = get_int_from_int8_aligned(bq8_1->qs, iqs + i + q4_0_traits::qi);
+            u[2 * i + 0] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+            u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
         }
 
-        return vec_dot_q4_0_q8_1_impl(v, u, d, bq8_1->ds);
+        return vec_dot_q4_0_q8_1_impl(v, u, d, q8_1_ds);
     };
 };
 
@@ -347,20 +347,20 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
     using q4_k_traits = typename q4_k_block::traits;
 
     float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
-                     const block_q8_1 * __restrict__ bq8_1, const int & iqs, int nblocks) {
-        const int ib = ibx_offset / (QK_K / 2);
+                     const int8_t* q8_1_quant_ptr, const sycl::half2& q8_1_ds, const int & iqs, int nblocks) {
+        // const int ib = ibx_offset / (QK_K / 2);
 
-        const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
-        const uint8_t *    qs             = base + ibx_offset;
-        const int          total_qs_bytes = nblocks * (QK_K / 2);
-        const uint8_t *    scs            = base + total_qs_bytes + ib * K_SCALE_SIZE;
-        const ggml_half2 * dms            = reinterpret_cast<const ggml_half2 *>(base + d_offset);
+        // const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
+        // const uint8_t *    qs             = base + ibx_offset;
+        // const int          total_qs_bytes = nblocks * (QK_K / 2);
+        // const uint8_t *    scs            = base + total_qs_bytes + ib * K_SCALE_SIZE;
+        // const ggml_half2 * dms            = reinterpret_cast<const ggml_half2 *>(base + d_offset);
 
-        const int        bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
-        const int *      q4         = (const int *) (qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
-        const uint16_t * scales     = (const uint16_t *) scs;
+        // const int        bq8_offset = QR4_K * ((iqs / 2) / (QI8_1 / 2));
+        // const int *      q4         = (const int *) (qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
+        // const uint16_t * scales     = (const uint16_t *) scs;
 
-        return vec_dot_q4_K_q8_1_common(q4, scales, *dms, bq8_1, iqs);
+        // return vec_dot_q4_K_q8_1_common(q4, scales, *dms, bq8_1, iqs);
     }
 };
 
