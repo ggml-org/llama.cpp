@@ -47,7 +47,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
 
       {/* Confirm Modal */}
       {confirmState.isOpen && (
-        <div className="modal modal-open z-[1000]">
+        <div className="modal modal-open z-[1100]">
           <div className="modal-box">
             <h3 className="font-bold text-lg">{confirmState.message}</h3>
             <div className="modal-action">
@@ -70,7 +70,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
 
       {/* Alert Modal */}
       {alertState.isOpen && (
-        <div className="modal modal-open z-[1000]">
+        <div className="modal modal-open z-[1100]">
           <div className="modal-box">
             <h3 className="font-bold text-lg">{alertState.message}</h3>
             <div className="modal-action">
