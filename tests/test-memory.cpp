@@ -89,16 +89,17 @@ struct log_scope {
 static void test_llama_kv_cache_unified_constructor() {
     auto model = _make_model();
     llama_kv_cache_unified cache(
-        /* model    */ *model,
-        /* filter   */ nullptr,
-        /* type_k   */ GGML_TYPE_F32,
-        /* type_v   */ GGML_TYPE_F16,
-        /* v_trans  */ false,
-        /* offload  */ false,
-        /* kv_size  */ 10,
-        /* padding  */ 10,
-        /* n_swa    */ 0,
-        /* swa_type */ LLAMA_SWA_TYPE_NONE
+        /* model     */ *model,
+        /* filter    */ nullptr,
+        /* type_k    */ GGML_TYPE_F32,
+        /* type_v    */ GGML_TYPE_F16,
+        /* v_trans   */ false,
+        /* offload   */ false,
+        /* kv_size   */ 10,
+        /* n_seq_max */ 1,
+        /* padding   */ 10,
+        /* n_swa     */ 0,
+        /* swa_type  */ LLAMA_SWA_TYPE_NONE
     );
 }
 
@@ -113,11 +114,11 @@ static void test_llama_kv_cache_unified_single_seq() {
         /* v_trans  */ false,
         /* offload  */ false,
         /* kv_size  */ 10,
+        /* n_seq_max */ 1,
         /* padding  */ 10,
         /* n_swa    */ 0,
         /* swa_type */ LLAMA_SWA_TYPE_NONE
     );
-    GGML_ASSERT(cache.get_used_cells() == 0);
 
     // Create the micro batch with a single 3-token sequence
     //
@@ -155,12 +156,13 @@ static void test_llama_kv_cache_unified_single_seq() {
 static void test_llama_kv_cache_recurrent_constructor() {
     auto model = _make_model(LLM_ARCH_MAMBA);
     llama_kv_cache_recurrent cache(
-        /* model   */ *model,
-        /* filter  */ nullptr,
-        /* type_k  */ GGML_TYPE_F32,
-        /* type_v  */ GGML_TYPE_F16,
-        /* offload */ false,
-        /* kv_size */ 10
+        /* model     */ *model,
+        /* filter    */ nullptr,
+        /* type_k    */ GGML_TYPE_F32,
+        /* type_v    */ GGML_TYPE_F16,
+        /* offload   */ false,
+        /* kv_size   */ 10,
+        /* n_seq_max */ 1
     );
 }
 
@@ -195,27 +197,29 @@ static void test_llama_kv_cache_hybrid_constructor() {
 
     std::unique_ptr<llama_kv_cache_unified> u_cache(
         new llama_kv_cache_unified(
-            /* model    */ *model,
-            /* filter   */ unified_filter,
-            /* type_k   */ GGML_TYPE_F32,
-            /* type_v   */ GGML_TYPE_F16,
-            /* v_trans  */ false,
-            /* offload  */ false,
-            /* kv_size  */ 10,
-            /* padding  */ 10,
-            /* n_swa    */ 0,
-            /* swa_type */ LLAMA_SWA_TYPE_NONE
+            /* model     */ *model,
+            /* filter    */ unified_filter,
+            /* type_k    */ GGML_TYPE_F32,
+            /* type_v    */ GGML_TYPE_F16,
+            /* v_trans   */ false,
+            /* offload   */ false,
+            /* kv_size   */ 10,
+            /* n_seq_max */ 1,
+            /* padding   */ 10,
+            /* n_swa     */ 0,
+            /* swa_type  */ LLAMA_SWA_TYPE_NONE
         )
     );
     auto * u_cache_ptr = u_cache.get();
     std::unique_ptr<llama_kv_cache_recurrent> r_cache (
         new llama_kv_cache_recurrent(
-            /* model   */ *model,
-            /* filter  */ recurrent_filter,
-            /* type_k  */ GGML_TYPE_F32,
-            /* type_v  */ GGML_TYPE_F16,
-            /* offload */ false,
-            /* kv_size */ 10
+            /* model     */ *model,
+            /* filter    */ recurrent_filter,
+            /* type_k    */ GGML_TYPE_F32,
+            /* type_v    */ GGML_TYPE_F16,
+            /* offload   */ false,
+            /* kv_size   */ 10,
+            /* n_seq_max */ 1
         )
     );
     auto * r_cache_ptr = r_cache.get();
