@@ -282,8 +282,8 @@ Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team 
 
 ## Updates
 ### Basic Flash Attention Support
-The basic FA kernel with aclnnops has been added in aclnn_ops.cpp. 
-Currently, the FA only supports the cases with FP16 KV tensors and NO logit softcap. 
+The basic FA kernel with aclnnops has been added in aclnn_ops.cpp.
+Currently, the FA only supports the cases with FP16 KV tensors and NO logit softcap.
 Since the aclnn interface for flash attention cannot support the logit softcap, we will only update the quantized version in the future.
 
 Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang@pku.edu.cn), Ruiyang Ma (ruiyang@stu.pku.edu.cn), and Guojie Luo (gluo@pku.edu.cn).
