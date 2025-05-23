@@ -20,6 +20,7 @@
 #include "../src/llama-model.h"
 
 #include "common.h"
+#include "ggml.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -57,6 +58,43 @@ static std::shared_ptr<llama_model> _make_model(
     }
 
     return model;
+}
+
+static llama_batch _make_batch(
+    std::vector<std::vector<llama_token>>  token_seqs,
+    std::vector<std::vector<llama_seq_id>> seq_ids) {
+    GGML_ASSERT(token_seqs.size() == seq_ids.size());
+
+    size_t total_tokens = 0;
+    for (const auto & token_seq : token_seqs) {
+        total_tokens += token_seq.size();
+    }
+    size_t max_seq_ids = 0;
+    for (const auto & seq_ids_i : seq_ids) {
+        max_seq_ids = std::max(max_seq_ids, seq_ids_i.size());
+    }
+    llama_batch batch = llama_batch_init(total_tokens, 0, max_seq_ids);
+
+    for (size_t i = 0; i < token_seqs.size(); ++i) {
+        const auto& token_seq = token_seqs[i];
+        const auto& seq_ids_i = seq_ids[i];
+        for (int pos = 0; pos < (int)token_seq.size(); ++pos) {
+            common_batch_add(batch, token_seq[pos], pos, seq_ids_i, false);
+        }
+    }
+    return batch;
+}
+
+static bool is_source_tensor(ggml_tensor * child, ggml_tensor * parent) {
+    if (!child || !parent) return false;
+    for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
+        if (child->src[i] == parent) {
+            return true;
+        } else if (child->src[i] != nullptr && is_source_tensor(child->src[i], parent)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 struct log_scope {
@@ -121,33 +159,47 @@ static void test_llama_kv_cache_unified_single_seq() {
     );
 
     // Create the micro batch with a single 3-token sequence
-    //
-    // NOTE: A bunch of these asserts were just me figuring out how the batches
-    //  relate to each other, but they're left for future readers to help in the
-    //  same understanding process.
-    llama_seq_id seq_id = 42;
-    llama_batch batch = llama_batch_init(3, 0, 1);
-    common_batch_add(batch, 101, 0, {seq_id}, false);
-    common_batch_add(batch, 1,   1, {seq_id}, false);
-    common_batch_add(batch, 102, 2, {seq_id}, false);
-    llama_sbatch sbatch(batch, 0, true, false);
-    GGML_ASSERT(batch.n_tokens == 3);
-    GGML_ASSERT(sbatch.n_tokens == 3);
-    GGML_ASSERT(!sbatch.seq.empty());
-    llama_ubatch ubatch = sbatch.split_simple(4);
-    printf("ubatch.n_seqs=%d\n", ubatch.n_seqs);
-    GGML_ASSERT(ubatch.n_seqs == 3);
-    GGML_ASSERT(ubatch.n_seq_tokens == 1);
-    GGML_ASSERT(ubatch.n_tokens == 3);
-    GGML_ASSERT(ubatch.seq_id[0][0] == seq_id);
-    GGML_ASSERT(ubatch.seq_id[1][0] == seq_id);
-    GGML_ASSERT(ubatch.seq_id[2][0] == seq_id);
+    llama_batch batch1 = _make_batch({{101, 1, 102}}, {{42}});
+    llama_sbatch sbatch1 = cache.sbatch_init(batch1, false);
+    llama_ubatch ubatch1 = cache.ubatch_next(sbatch1, 4, false);
 
     // Find a slot for a new sequence
-    GGML_ASSERT(cache.find_slot(ubatch));
+    GGML_ASSERT(cache.find_slot(ubatch1));
+
+    // Cache the k/v for a single layer in this slot
+    ggml_context * ctx = ggml_init({10240, NULL, false});
+    ggml_tensor * k1 = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, model->hparams.n_embd_k_gqa(0));
+    ggml_tensor * v1 = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, model->hparams.n_embd_v_gqa(0));
+    ggml_tensor * k1_view = cache.cpy_k(ctx, k1, 0);
+    ggml_tensor * v1_view = cache.cpy_v(ctx, v1, 0);
+    GGML_ASSERT(is_source_tensor(k1_view, k1));
+    GGML_ASSERT(is_source_tensor(v1_view, v1));
+
+    // Create a second batch with different tokens and find a slot for it
+    llama_batch batch2 = _make_batch({{1, 2, 3, 4}}, {{5}});
+    llama_sbatch sbatch2 = cache.sbatch_init(batch2, false);
+    llama_ubatch ubatch2 = cache.ubatch_next(sbatch2, 4, false);
+    GGML_ASSERT(cache.find_slot(ubatch2));
+
+    // Add some different tensors
+    ggml_tensor * k2 = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, model->hparams.n_embd_k_gqa(0));
+    ggml_tensor * v2 = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, model->hparams.n_embd_v_gqa(0));
+    ggml_tensor * k2_view = cache.cpy_k(ctx, k2, 0);
+    ggml_tensor * v2_view = cache.cpy_v(ctx, v2, 0);
+    GGML_ASSERT(is_source_tensor(k2_view, k2));
+    GGML_ASSERT(is_source_tensor(v2_view, v2));
+
+    // Make sure first batch's k/v aren't cache hit
+    GGML_ASSERT(!is_source_tensor(k2_view, k1));
+    GGML_ASSERT(!is_source_tensor(v2_view, v1));
+
+    // Re-find the slot for the first batch and make sure they cache hit
+    GGML_ASSERT(cache.find_slot(ubatch1));
 
     // Clean up
-    llama_batch_free(batch);
+    llama_batch_free(batch1);
+    llama_batch_free(batch2);
+    ggml_free(ctx);
 }
 
 /*- Recurrent Cache ----------------------------------------------------------*/
