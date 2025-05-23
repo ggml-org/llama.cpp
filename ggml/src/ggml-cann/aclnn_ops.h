@@ -720,7 +720,7 @@ void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  * @details This function implements the memory-efficient Flash Attention algorithm
  *          for computing scaled dot-product attention with hardware acceleration.
  *          The result is stored in the destination tensor `dst`.
- *          
+ *
  *          This operation is accelerated using the CANN backend to improve runtime performance.
  *
  * @param ctx The CANN context used for operations.

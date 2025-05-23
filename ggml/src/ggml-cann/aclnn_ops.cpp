@@ -2898,14 +2898,14 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                                     ggml_nelements(src0) * faElemSize);
 
             int64_t* src0_f16_ne = src0->ne;
-            size_t   src0_f16_nb[GGML_MAX_DIMS];        
+            size_t   src0_f16_nb[GGML_MAX_DIMS];
             src0_f16_nb[0] = sizeof(uint16_t);
             for(int i = 1; i < GGML_MAX_DIMS; ++i){
                 src0_f16_nb[i] = src0_f16_nb[i - 1] * src0_f16_ne[i - 1];
             }
 
             acl_src0_f16_tensor = ggml_cann_create_tensor(
-                src0_f16_buffer, faDataType, faElemSize, 
+                src0_f16_buffer, faDataType, faElemSize,
                 src0_f16_ne, src0_f16_nb, GGML_MAX_DIMS
             );
             aclnn_cast(ctx, acl_src0_f32_tensor, acl_src0_f16_tensor, faDataType);
@@ -2914,7 +2914,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             acl_src0_f16_tensor = ggml_cann_create_tensor(src0);
         }
 
-        // Step 2: create the acl tensors for src1 (Key), src2 (Value), 
+        // Step 2: create the acl tensors for src1 (Key), src2 (Value),
         //         and the direct output from FusedInferAttention
 
         acl_src1_f16_tensor = ggml_cann_create_tensor(src1);
@@ -2932,24 +2932,23 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         }
 
         acl_dst_f16_tensor = ggml_cann_create_tensor(
-            out_f16_buffer, faDataType, faElemSize, 
+            out_f16_buffer, faDataType, faElemSize,
             out_f16_ne, out_f16_nb, GGML_MAX_DIMS
         );
 
-
         // Step 3: create the PSEShift tensor if needed
         //         this tensor is considered as mask (f16) in the llama.cpp
-    
+
         aclTensor* bcast_pse_tensor = nullptr;
         int64_t bcast_pse_ne[GGML_MAX_DIMS];
         size_t bcast_pse_nb[GGML_MAX_DIMS];
         ggml_cann_pool_alloc bcast_pse_allocator(ctx.pool());
         void* bcast_pse_buffer = nullptr;
-        
+
         if(src3 != nullptr){
             bcast_pse_buffer = bcast_pse_allocator.alloc(
                             ggml_nelements(src3) * src0->ne[2] * sizeof(uint16_t));
-            
+
             if(src0->ne[1] > 1){
                 // Case 1: broadcast pse for prefill stage with multiple head
                 aclTensor* acl_mask_f16_tensor = ggml_cann_create_tensor(src3);
@@ -2964,7 +2963,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 }
 
                 bcast_pse_tensor = ggml_cann_create_tensor(
-                    bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t), 
+                    bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t),
                     bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS);
 
                 int64_t repeats[] = {1, src0->ne[2], 1, 1};
@@ -2977,7 +2976,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 size_t* trunc_pse_nb = src3->nb;
 
                 aclTensor* acl_mask_f16_trunc_tensor = ggml_cann_create_tensor(
-                    src3->data, ACL_FLOAT16, sizeof(uint16_t), 
+                    src3->data, ACL_FLOAT16, sizeof(uint16_t),
                     trunc_pse_ne, trunc_pse_nb, GGML_MAX_DIMS);
 
                 bcast_pse_ne[0] = src3->ne[0];
@@ -2991,7 +2990,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 }
 
                 bcast_pse_tensor = ggml_cann_create_tensor(
-                    bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t), 
+                    bcast_pse_buffer, ACL_FLOAT16, sizeof(uint16_t),
                     bcast_pse_ne, bcast_pse_nb, GGML_MAX_DIMS);
 
                 int64_t repeats[] = {1, src0->ne[2], 1, 1};
@@ -3007,8 +3006,8 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 const int64_t n_head = src0->ne[2];
                 const int n_heads_log2_floor = 1u << (uint32_t)floor(log2(n_head));
                 float m0 = powf(2.0f, -(maxBias) / n_heads_log2_floor);
-                float m1 = powf(2.0f, -(maxBias / 2.0f) / n_heads_log2_floor); 
-                    // init arange
+                float m1 = powf(2.0f, -(maxBias / 2.0f) / n_heads_log2_floor);
+                // init arange
                 ggml_cann_pool_alloc arange_allocator(ctx.pool(),
                                                     ne2_ne3 * faElemSize);
                 void* tmp_arange_buffer = arange_allocator.get();
@@ -3076,11 +3075,11 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 int64_t tmp_mk_base_ne[] = {ne2_ne3};
                 size_t tmp_mk_base_nb[] = {faElemSize};
                 aclTensor* tmp_mk_base_tensor = ggml_cann_create_tensor(
-                    tmp_mk_base_buffer, faDataType, faElemSize, 
+                    tmp_mk_base_buffer, faDataType, faElemSize,
                     tmp_mk_base_ne, tmp_mk_base_nb,
                     GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
                 aclTensor* tmp_arange_tensor = ggml_cann_create_tensor(
-                    tmp_arange_buffer, faDataType, faElemSize, 
+                    tmp_arange_buffer, faDataType, faElemSize,
                     tmp_mk_base_ne, tmp_mk_base_nb,
                     GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
                 aclnn_pow_tensor_tensor(ctx, tmp_mk_base_tensor, tmp_arange_tensor);
@@ -3095,12 +3094,12 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 aclTensor* tmp_mk_tensor = ggml_cann_create_tensor(
                     tmp_mk_base_buffer, faDataType, faElemSize,
                     tmp_mk_ne, tmp_mk_nb, GGML_MAX_DIMS,
-                    ACL_FORMAT_ND);   
+                    ACL_FORMAT_ND);
                 GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, bcast_pse_tensor, tmp_mk_tensor);
 
                 ggml_cann_release_resources(ctx, tmp_arange1_tensor, tmp_arange2_tensor,
                     tmp_mk_base1_tensor, tmp_mk_base2_tensor, tmp_mk_base_tensor,
-                    tmp_arange_tensor, tmp_mk_tensor);                    
+                    tmp_arange_tensor, tmp_mk_tensor);
             }
         }
 
@@ -3128,7 +3127,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
 
         // Step 5: launch the FusedInferAttentionScoreV2 kernel.
         // Refer to https://gitee.com/ascend/cann-ops-adv/blob/master/docs/FusedInferAttentionScoreV2.md
-        
+
         GGML_CANN_CALL_ACLNN_OP(ctx, FusedInferAttentionScoreV2,
             acl_q_tensor, acl_k_tensor_list, acl_v_tensor_list, // q, k, v
             bcast_pse_tensor, nullptr, // pse, mask
@@ -3170,20 +3169,20 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
                 perm_out_f16_nb[i] = perm_out_f16_nb[i - 1] * perm_out_f16_ne[i - 1];
             }
             aclTensor* acl_perm_out_f16_tensor = ggml_cann_create_tensor(
-                perm_out_f16_buffer, faDataType, faElemSize, 
+                perm_out_f16_buffer, faDataType, faElemSize,
                 perm_out_f16_ne, perm_out_f16_nb, GGML_MAX_DIMS);
             aclnn_permute(ctx, acl_dst_f16_tensor, acl_perm_out_f16_tensor, new_dim, GGML_MAX_DIMS);
-            aclnn_cast(ctx, 
+            aclnn_cast(ctx,
                 acl_perm_out_f16_tensor, acl_dst_tensor, ggml_cann_type_mapping(dst->type));
             ggml_cann_release_resources(ctx, acl_perm_out_f16_tensor);
         }else{
             // only need to permute
             aclnn_permute(ctx, acl_dst_f16_tensor, acl_dst_tensor, new_dim, GGML_MAX_DIMS);
         }
-        ggml_cann_release_resources(ctx, acl_src0_f16_tensor, 
-                                         acl_src1_f16_tensor, 
-                                         acl_src2_f16_tensor, 
-                                         acl_dst_f16_tensor, 
+        ggml_cann_release_resources(ctx, acl_src0_f16_tensor,
+                                         acl_src1_f16_tensor,
+                                         acl_src2_f16_tensor,
+                                         acl_dst_f16_tensor,
                                          acl_dst_tensor);
         if(src3 != nullptr){
             ggml_cann_release_resources(ctx, bcast_pse_tensor);
