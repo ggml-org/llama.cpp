@@ -2,6 +2,17 @@ import { useState } from 'react';
 import { MessageExtra } from '../utils/types';
 import toast from 'react-hot-toast';
 import { useAppContext } from '../utils/app.context';
+import * as pdfjs from 'pdfjs-dist';
+import pdfjsWorkerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { TextContent, TextItem } from 'pdfjs-dist/types/src/display/api';
+
+pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
+
+// This file handles uploading extra context items (a.k.a files)
+// It allows processing these kinds of files:
+// - image files (converted to base64)
+// - text files (including code files)
+// - pdf (converted to text)
 
 // Interface describing the API returned by the hook
 export interface ChatExtraContextApi {
@@ -13,7 +24,7 @@ export interface ChatExtraContextApi {
 }
 
 export function useChatExtraContext(): ChatExtraContextApi {
-  const { serverProps } = useAppContext();
+  const { serverProps, config } = useAppContext();
   const [items, setItems] = useState<MessageExtra[]>([]);
 
   const addItems = (newItems: MessageExtra[]) => {
@@ -28,6 +39,8 @@ export function useChatExtraContext(): ChatExtraContextApi {
     setItems([]);
   };
 
+  const isSupportVision = serverProps?.modalities?.vision;
+
   const onFileAdded = (files: File[]) => {
     for (const file of files) {
       const mimeType = file.type;
@@ -38,7 +51,7 @@ export function useChatExtraContext(): ChatExtraContextApi {
       }
 
       if (mimeType.startsWith('image/')) {
-        if (!serverProps?.modalities?.vision) {
+        if (!isSupportVision) {
           toast.error('Multimodal is not supported by this server or model.');
           break;
         }
@@ -69,7 +82,43 @@ export function useChatExtraContext(): ChatExtraContextApi {
         toast.error('Video and audio files are not supported yet.');
         break;
       } else if (mimeType.startsWith('application/pdf')) {
-        toast.error('PDF files are not supported yet.');
+        if (config.pdfAsImage && !isSupportVision) {
+          toast(
+            'Multimodal is not supported, PDF will be converted to text instead of image.'
+          );
+          break;
+        }
+
+        const promise =
+          config.pdfAsImage && isSupportVision
+            ? convertPDFToImage(file).then((base64Urls) => {
+                addItems(
+                  base64Urls.map((base64Url) => ({
+                    type: 'imageFile',
+                    name: file.name,
+                    base64Url,
+                  }))
+                );
+              })
+            : convertPDFToText(file).then((content) => {
+                if (isSupportVision) {
+                  toast.success(
+                    'PDF file converted to text. You can also convert it to image, see in Settings.'
+                  );
+                }
+                addItems([
+                  {
+                    type: 'textFile',
+                    name: file.name,
+                    content,
+                  },
+                ]);
+              });
+
+        promise.catch((error) => {
+          console.error(error);
+          toast.error('Failed to parse PDF file.');
+        });
         break;
       } else {
         // Because there can be many text file types (like code file), we will not check the mime type
@@ -105,11 +154,69 @@ export function useChatExtraContext(): ChatExtraContextApi {
   };
 }
 
+async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        resolve(event.target.result as ArrayBuffer);
+      } else {
+        reject(new Error('Failed to read file.'));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
+async function convertPDFToText(file: File): Promise<string> {
+  const buffer = await getFileAsBuffer(file);
+  const pdf = await pdfjs.getDocument(buffer).promise;
+  const numPages = pdf.numPages;
+  const textContentPromises: Promise<TextContent>[] = [];
+  for (let i = 1; i <= numPages; i++) {
+    textContentPromises.push(
+      pdf.getPage(i).then((page) => page.getTextContent())
+    );
+  }
+  const textContents = await Promise.all(textContentPromises);
+  const textItems = textContents.flatMap((textContent: TextContent) =>
+    textContent.items.map((item) => (item as TextItem).str ?? '')
+  );
+  return textItems.join('\n');
+}
+
+// returns list of base64 images
+async function convertPDFToImage(file: File): Promise<string[]> {
+  const buffer = await getFileAsBuffer(file);
+  const doc = await pdfjs.getDocument(buffer).promise;
+  const pages: Promise<string>[] = [];
+
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const viewport = page.getViewport({ scale: 1.5 });
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    if (!ctx) {
+      throw new Error('Failed to get 2D context from canvas');
+    }
+    const task = page.render({ canvasContext: ctx, viewport: viewport });
+    pages.push(
+      task.promise.then(() => {
+        return canvas.toDataURL();
+      })
+    );
+  }
+
+  return await Promise.all(pages);
+}
+
 // WARN: vibe code below
 // This code is a heuristic to determine if a string is likely not binary.
 // It is necessary because input file can have various mime types which we don't have time to investigate.
 // For example, a python file can be text/plain, application/x-python, etc.
-export function isLikelyNotBinary(str: string): boolean {
+function isLikelyNotBinary(str: string): boolean {
   const options = {
     prefixLength: 1024 * 10, // Check the first 10KB of the string
     suspiciousCharThresholdRatio: 0.15, // Allow up to 15% suspicious chars

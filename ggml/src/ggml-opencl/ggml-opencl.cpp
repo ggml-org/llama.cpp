@@ -27,6 +27,7 @@
 #include <cmath>
 #include <memory>
 #include <charconv>
+#include <mutex>
 
 #undef MIN
 #undef MAX
@@ -74,6 +75,7 @@ struct ggml_cl_version {
     cl_uint minor = 0;
 };
 
+
 struct ggml_cl_compiler_version {
     ADRENO_CL_COMPILER_TYPE type;
     int major = -1;
@@ -90,6 +92,14 @@ struct ggml_cl_compiler_version {
         return same(t, x, y, z) || newer_than(t, x, y, z);
     }
 };
+
+static size_t align_to(size_t value, size_t to_alignment) {
+    GGML_ASSERT(to_alignment && "Invalid alignment (must be non-zero)");
+    GGML_ASSERT((to_alignment & (to_alignment - 1)) == 0 && "to_alignment must be power-of-two");
+
+    return ((value + to_alignment - 1) / to_alignment) * to_alignment;
+}
+
 
 // Parses a version string of form "XX.YY ". On an error returns ggml_cl_version with all zeroes.
 static ggml_cl_version parse_cl_version(std::string_view str) {
@@ -221,13 +231,25 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
     return { type, major, minor, patch };
 }
 
+struct ggml_backend_opencl_context;
+
 // backend device context
 struct ggml_backend_opencl_device_context {
     cl_platform_id platform;
     std::string platform_name;
 
-    cl_device_id device;
-    std::string device_name;
+    cl_device_id   device;
+    std::string    device_name;
+    cl_device_type device_type;
+    std::string    device_version;
+
+    // Initialized by ggml_cl2_init().
+    ggml_backend_opencl_context * backend_ctx = nullptr;
+
+    // Initialized by ggml_backend_opencl_device_get_buffer_type()
+    ggml_backend_buffer_type buffer_type;
+
+    cl_context context = nullptr;
 };
 
 // backend context
@@ -247,6 +269,8 @@ struct ggml_backend_opencl_context {
     ggml_cl_compiler_version adreno_cl_compiler_version;
 
     int adreno_wave_size;
+
+    cl_bool non_uniform_workgroups;
 
     cl_context context;
     cl_command_queue queue;
@@ -344,15 +368,8 @@ struct ggml_backend_opencl_context {
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 };
 
-static ggml_backend_device                 g_ggml_backend_opencl_device;
-static ggml_backend_opencl_device_context  g_ggml_ctx_dev_main {
-    /*.platform         =*/ nullptr,
-    /*.platform_nane    =*/ "",
-    /*.device           =*/ nullptr,
-    /*.device_name      =*/ "",
-};
-
-static int ggml_backend_opencl_n_devices = 0;
+// All registered devices with a default device in the front.
+static std::vector<ggml_backend_device> g_ggml_backend_opencl_devices;
 
 // Profiling
 #ifdef GGML_OPENCL_PROFILING
@@ -1107,25 +1124,19 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
     GGML_LOG_CONT("\n");
 }
 
-static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
-    static bool initialized = false;
-    static ggml_backend_opencl_context *backend_ctx = nullptr;
+// XXX static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+// XXX    static bool initialized = false;
+// XXX    static ggml_backend_opencl_context *backend_ctx = nullptr;
 
-    if (initialized) {
-        return backend_ctx;
-    }
+static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev);
 
-    ggml_backend_opencl_device_context *dev_ctx = (ggml_backend_opencl_device_context *)dev->context;
-    GGML_ASSERT(dev_ctx);
-    GGML_ASSERT(dev_ctx->platform == nullptr);
-    GGML_ASSERT(dev_ctx->device == nullptr);
-    GGML_ASSERT(backend_ctx == nullptr);
+namespace /* anonymous */ {
+extern struct ggml_backend_device_i ggml_backend_opencl_device_i;
+}
 
-    initialized = true;
-    backend_ctx = new ggml_backend_opencl_context();
-    backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
-
-    cl_int err;
+// Look for available and suitable devices.
+static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_reg * reg) {
+    std::vector<ggml_backend_device> found_devices;
 
 #ifdef GGML_OPENCL_PROFILING
     GGML_LOG_INFO("ggml_opencl: OpenCL profiling enabled\n");
@@ -1158,11 +1169,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     struct cl_device devices[NDEV];
     unsigned n_devices = 0;
     struct cl_device * default_device = NULL;
+    unsigned           default_platform_number = 0;
 
     cl_platform_id platform_ids[NPLAT];
     if (clGetPlatformIDs(NPLAT, platform_ids, &n_platforms) != CL_SUCCESS) {
         GGML_LOG_ERROR("ggml_opencl: plaform IDs not available.\n");
-        return backend_ctx;
+        return found_devices;
     }
 
     for (unsigned i = 0; i < n_platforms; i++) {
@@ -1197,19 +1209,22 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
         }
 
         if (default_device == NULL && p->default_device != NULL) {
-            default_device = p->default_device;
+            default_device          = p->default_device;
+            default_platform_number = i;
         }
     }
 
     if (n_devices == 0) {
         GGML_LOG_ERROR("ggml_opencl: could find any OpenCL devices.\n");
-        return backend_ctx;
+        return found_devices;
     }
 
-    char * user_platform_string = getenv("GGML_OPENCL_PLATFORM");
-    char * user_device_string = getenv("GGML_OPENCL_DEVICE");
-    int user_platform_number = -1;
-    int user_device_number = -1;
+    char *      user_platform_string = getenv("GGML_OPENCL_PLATFORM");
+    char *      user_device_string   = getenv("GGML_OPENCL_DEVICE");
+    int         user_platform_number = -1;
+    int         user_device_number   = -1;
+    cl_device * candidate_devices    = nullptr;
+    unsigned    n_candidate_devices  = 0;
 
     unsigned n;
     if (user_platform_string != NULL && sscanf(user_platform_string, " %u", &n) == 1 && n < n_platforms) {
@@ -1224,12 +1239,11 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
             GGML_LOG_ERROR("ggml_opencl: invalid device number %d\n", user_device_number);
             exit(1);
         }
-        default_device = &platform->devices[user_device_number];
+        default_device      = &platform->devices[user_device_number];
+        candidate_devices   = platform->devices;
+        n_candidate_devices = platform->n_devices;
     } else {
-
-        struct cl_device * selected_devices = devices;
-        unsigned n_selected_devices = n_devices;
-
+        // Choose a platform by matching a substring.
         if (user_platform_number == -1 && user_platform_string != NULL && user_platform_string[0] != 0) {
             for (unsigned i = 0; i < n_platforms; i++) {
                 struct cl_platform * p = &platforms[i];
@@ -1244,20 +1258,20 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
                 exit(1);
             }
         }
-        if (user_platform_number != -1) {
-            struct cl_platform * p = &platforms[user_platform_number];
-            selected_devices = p->devices;
-            n_selected_devices = p->n_devices;
-            default_device = p->default_device;
-            if (n_selected_devices == 0) {
-                GGML_LOG_ERROR("ggml_opencl: selected platform '%s' does not have any devices.\n", p->name);
-                exit(1);
-            }
+
+        int                  platform_idx = user_platform_number != -1 ? user_platform_number : default_platform_number;
+        struct cl_platform * p            = &platforms[platform_idx];
+        candidate_devices                 = p->devices;
+        n_candidate_devices               = p->n_devices;
+        default_device                    = p->default_device;
+        if (n_candidate_devices == 0) {
+            GGML_LOG_ERROR("ggml_opencl: selected platform '%s' does not have any devices.\n", p->name);
+            exit(1);
         }
 
         if (user_device_number == -1 && user_device_string != NULL && user_device_string[0] != 0) {
-            for (unsigned i = 0; i < n_selected_devices; i++) {
-                struct cl_device * d = &selected_devices[i];
+            for (unsigned i = 0; i < n_candidate_devices; i++) {
+                struct cl_device * d = &candidate_devices[i];
                 if (strstr(d->name, user_device_string) != NULL) {
                     user_device_number = d->number;
                     break;
@@ -1269,71 +1283,145 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
             }
         }
         if (user_device_number != -1) {
-            selected_devices = &devices[user_device_number];
-            n_selected_devices = 1;
-            default_device = &selected_devices[0];
+            candidate_devices   = &devices[user_device_number];
+            n_candidate_devices = 1;
+            default_device      = &candidate_devices[0];
         }
 
-        GGML_ASSERT(n_selected_devices > 0);
+        GGML_ASSERT(n_candidate_devices > 0);
 
         if (default_device == NULL) {
-            default_device = &selected_devices[0];
+            default_device = &candidate_devices[0];
         }
     }
 
-    GGML_LOG_INFO("ggml_opencl: selecting platform: '%s'\n", default_device->platform->name);
-    GGML_LOG_INFO("ggml_opencl: selecting device: '%s (%s)'\n", default_device->name, default_device->version);
-    if (default_device->type != CL_DEVICE_TYPE_GPU) {
-        GGML_LOG_WARN("ggml_opencl: warning, not a GPU: '%s'.\n", default_device->name);
+    GGML_ASSERT(n_candidate_devices != 0 && candidate_devices);
+
+    // Put the default device in front.
+    for (unsigned i = 1; i < n_candidate_devices; i++) {
+        if (&candidate_devices[i] == default_device) {
+            std::swap(candidate_devices[0], candidate_devices[i]);
+            default_device = &candidate_devices[0];
+            break;
+        }
     }
 
-    dev_ctx->platform = default_device->platform->id;
-    dev_ctx->device = default_device->id;
-    backend_ctx->device = default_device->id;
+    GGML_LOG_INFO("ggml_opencl: selected platform: '%s'\n", default_device->platform->name);
 
-    if (strstr(default_device->name, "Adreno") ||
-        strstr(default_device->name, "Qualcomm") ||
-        strstr(default_device->version, "Adreno")) {
+    std::vector<cl_device_id> device_ids;
+    for (auto dev = candidate_devices, dev_end = candidate_devices + n_candidate_devices; dev != dev_end; dev++) {
+        device_ids.push_back(dev->id);
+    }
+
+    cl_int                err;
+    cl_context            shared_context;
+    cl_context_properties properties[] = { (intptr_t) CL_CONTEXT_PLATFORM, (intptr_t) default_device->platform->id, 0 };
+
+    CL_CHECK(
+        (shared_context = clCreateContext(properties, device_ids.size(), device_ids.data(), NULL, NULL, &err), err));
+
+    for (auto dev = candidate_devices, dev_end = candidate_devices + n_candidate_devices; dev != dev_end; dev++) {
+        GGML_LOG_INFO("\nggml_opencl: device: '%s (%s)'\n", dev->name, dev->version);
+
+        auto dev_ctx = std::unique_ptr<ggml_backend_opencl_device_context>(new ggml_backend_opencl_device_context{
+            /*.platform         =*/dev->platform->id,
+            /*.platform_nane    =*/dev->platform->name,
+            /*.device           =*/dev->id,
+            /*.device_name      =*/dev->name,
+            /*.device_type      =*/dev->type,
+            /*.device_version   =*/dev->version,
+            /*.backend_ctx      =*/nullptr,
+            /*.buffer_type      =*/{},
+            /*.context          =*/shared_context,
+        });
+
+        found_devices.push_back(ggml_backend_device{
+            /* .iface   = */ ggml_backend_opencl_device_i,
+            /* .reg     = */ reg,
+            /* .context = */ dev_ctx.get(),
+        });
+
+        if (!ggml_cl2_init(&found_devices.back())) {
+            found_devices.pop_back();
+            GGML_LOG_INFO("ggml_opencl: drop unsupported device.\n");
+            continue;
+        }
+
+        dev_ctx.release();
+    }
+
+    if (found_devices.size()) {
+        auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(found_devices.front().context);
+        GGML_LOG_INFO("ggml_opencl: default device: '%s (%s)'\n", dev_ctx->device_name.c_str(),
+                      dev_ctx->device_version.c_str());
+
+        if (dev_ctx->device_type != CL_DEVICE_TYPE_GPU) {
+            GGML_LOG_WARN("ggml_opencl: warning, the default device is not a GPU: '%s'.\n",
+                          dev_ctx->device_name.c_str());
+        }
+    }
+
+    return found_devices;
+}
+
+// Initialize device if it is supported (returns nullptr if it is not).
+static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
+    GGML_ASSERT(dev);
+    GGML_ASSERT(dev->context);
+
+    ggml_backend_opencl_device_context * dev_ctx = (ggml_backend_opencl_device_context *) dev->context;
+    GGML_ASSERT(dev_ctx->platform);
+    GGML_ASSERT(dev_ctx->device);
+
+    if (dev_ctx->backend_ctx) {
+        return dev_ctx->backend_ctx;
+    }
+
+    auto backend_ctx        = std::make_unique<ggml_backend_opencl_context>();
+    backend_ctx->device     = dev_ctx->device;
+    backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
+
+    if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
+        strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
+        strstr(dev_ctx->device_version.c_str(), "Adreno")) {
         backend_ctx->gpu_family = GPU_FAMILY::ADRENO;
         // Usually device version contains the detailed device name
-        backend_ctx->adreno_gen = get_adreno_gpu_gen(default_device->version);
+        backend_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_version.c_str());
         if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::ADRENO_UNKNOWN) {
-            backend_ctx->adreno_gen = get_adreno_gpu_gen(default_device->name);
+            backend_ctx->adreno_gen = get_adreno_gpu_gen(dev_ctx->device_name.c_str());
         }
 
         // Use wave size of 64 for all Adreno GPUs.
         backend_ctx->adreno_wave_size = 64;
-    } else if (strstr(default_device->name, "Intel")) {
+    } else if (strstr(dev_ctx->device_name.c_str(), "Intel")) {
         backend_ctx->gpu_family = GPU_FAMILY::INTEL;
     } else {
-        GGML_LOG_ERROR("Unsupported GPU: %s\n", default_device->name);
+        GGML_LOG_ERROR("Unsupported GPU: %s\n", dev_ctx->device_name.c_str());
         backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
-        return backend_ctx;
+        return nullptr;
     }
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
         GGML_LOG_ERROR("ggml_opencl: Adreno-specific kernels should not be enabled for non-Adreno GPUs; "
             "run on an Adreno GPU or recompile with CMake option `-DGGML_OPENCL_USE_ADRENO_KERNELS=OFF`\n");
-        return backend_ctx;
+        return nullptr;
     }
 #endif
 
     // Populate backend device name
-    dev_ctx->platform_name = default_device->platform->name;
-    dev_ctx->device_name = default_device->name;
-    backend_ctx->device_name = default_device->name;
+    backend_ctx->device_name = dev_ctx->device_name;
 
     // A local ref of cl_device_id for convenience
     cl_device_id device = backend_ctx->device;
 
-    ggml_cl_version platform_version = get_opencl_platform_version(default_device->platform->id);
+    ggml_cl_version platform_version = get_opencl_platform_version(dev_ctx->platform);
 
     // Check device OpenCL version, OpenCL 2.0 or above is required
     ggml_cl_version opencl_c_version = get_opencl_c_version(platform_version, device);
     if (opencl_c_version.major < 2) {
         GGML_LOG_ERROR("ggml_opencl: OpenCL 2.0 or above is required\n");
-        return backend_ctx;
+        return nullptr;
     }
 
     // Check driver version
@@ -1364,7 +1452,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     // fp16 is required
     if (!backend_ctx->fp16_support) {
         GGML_LOG_ERROR("ggml_opencl: device does not support FP16\n");
-        return backend_ctx;
+        return nullptr;
     }
 
     // If OpenCL 3.0 is supported, then check for cl_khr_subgroups, which becomes
@@ -1373,7 +1461,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
         strstr(ext_buffer, "cl_intel_subgroups") == NULL) {
         GGML_LOG_ERROR("ggml_opencl: device does not support subgroups (cl_khr_subgroups or cl_intel_subgroups) "
             "(note that subgroups is an optional feature in OpenCL 3.0)\n");
-        return backend_ctx;
+        return nullptr;
     }
 
     cl_uint base_align_in_bits;
@@ -1397,6 +1485,15 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("ggml_opencl: SVM atomics support: %s\n",
         svm_caps & CL_DEVICE_SVM_ATOMICS ? "true" : "false");
 
+    if (opencl_c_version.major >= 3) {
+        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT, sizeof(cl_bool),
+                                 &backend_ctx->non_uniform_workgroups, 0));
+    } else {
+        GGML_ASSERT(opencl_c_version.major == 2);
+        // Non-uniform workgroup sizes is mandatory feature in v2.x.
+        backend_ctx->non_uniform_workgroups = true;
+    }
+
     // Print out configurations
 #ifdef GGML_OPENCL_SOA_Q
     GGML_LOG_INFO("ggml_opencl: flattening quantized weights representation as struct of arrays (GGML_OPENCL_SOA_Q)\n");
@@ -1406,14 +1503,10 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("ggml_opencl: using kernels optimized for Adreno (GGML_OPENCL_USE_ADRENO_KERNELS)\n");
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-    cl_context_properties properties[] = {
-        (intptr_t)CL_CONTEXT_PLATFORM, (intptr_t)dev_ctx->platform, 0
-    };
-
-    CL_CHECK((backend_ctx->context = clCreateContext(properties, 1, &device, NULL, NULL, &err), err));
+    cl_int err;
 
     // A local ref of cl_context for convenience
-    cl_context context = backend_ctx->context;
+    cl_context context = backend_ctx->context = dev_ctx->context;
 
     //CL_CHECK((queue = clCreateCommandQueue(context, device, CL_QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE, &err),
     //    (err != CL_INVALID_QUEUE_PROPERTIES && err != CL_INVALID_VALUE ? err :
@@ -1426,7 +1519,7 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->queue = clCreateCommandQueue(context, device, command_queue_props, &err), err));
 
     // Load kernels
-    load_cl_kernels(backend_ctx, opencl_c_version);
+    load_cl_kernels(backend_ctx.get(), opencl_c_version);
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // Allocate intermediate buffers and images
@@ -1456,10 +1549,8 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     CL_CHECK((backend_ctx->B_d_max   = clCreateBuffer(context, 0, max_B_d_bytes,   NULL, &err), err));
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-    // For now we support a single devices
-    ggml_backend_opencl_n_devices = 1;
-
-    return backend_ctx;
+    dev_ctx->backend_ctx = backend_ctx.release();
+    return dev_ctx->backend_ctx;
 }
 
 static void ggml_cl2_free(void) {
@@ -1664,9 +1755,45 @@ static void ggml_backend_opencl_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
+// Syncronizes the 'backend_ctx's device with others so that commands
+// enqueued to it won't start until commands in the other devices have
+// completed.
+static void sync_with_other_backends(ggml_backend_opencl_context * backend_ctx) {
+    if (g_ggml_backend_opencl_devices.size() < 2)
+      return; // No other devices to synchronize with.
+
+    std::vector<cl_event> events;
+    events.reserve(g_ggml_backend_opencl_devices.size());
+
+    for (ggml_backend_device & backend_dev : g_ggml_backend_opencl_devices) {
+        auto * other_backend_ctx = ggml_cl2_init(&backend_dev);
+        if (backend_ctx != other_backend_ctx) {
+            cl_event ev;
+            CL_CHECK(clEnqueueMarkerWithWaitList(other_backend_ctx->queue, 0, nullptr, &ev));
+            CL_CHECK(clFlush(other_backend_ctx->queue));
+            events.push_back(ev);
+        }
+    }
+
+    CL_CHECK(clEnqueueBarrierWithWaitList(backend_ctx->queue, events.size(), events.data(), nullptr));
+    for (auto ev : events) {
+        CL_CHECK(clReleaseEvent(ev));
+    }
+}
+
+static void sync_with_other_backends(ggml_backend_t backend) {
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+    sync_with_other_backends(backend_ctx);
+}
+
 static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+
+        // NOTE: this may oversynchronize by synchronizing with
+        //       backends/devices which don't compute 'cgraph's
+        //       dependencies.
+        sync_with_other_backends(backend);
 
         if (node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
@@ -2058,15 +2185,16 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         // The original tensor memory is divided into scales and quants, i.e.,
         // we first store scales, then quants.
         // Create subbuffer for scales.
-        region.origin = extra_orig->offset + tensor->view_offs + offset;
+        region.origin = align_to(extra_orig->offset + tensor->view_offs + offset, backend_ctx->alignment);
         region.size = size_d;
         extra->d = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
+        auto previous_origin = region.origin;
 
         // Create subbuffer for quants.
-        region.origin = extra_orig->offset + tensor->view_offs + offset + size_d;
+        region.origin = align_to(previous_origin + size_d, backend_ctx->alignment);
         region.size = size_q;
         extra->q = clCreateSubBuffer(
             extra_orig->data_device, CL_MEM_READ_WRITE,
@@ -2271,8 +2399,8 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
     cl_context context = backend_ctx->context;
     cl_command_queue queue = backend_ctx->queue;
 
-    // Make sure all previously submitted commands are finished.
-    CL_CHECK(clFinish(queue));
+    // Make sure all previously submitted commands in other devices are finished.
+    sync_with_other_backends(backend_ctx);
 
 #ifdef GGML_OPENCL_SOA_Q
     // In end-to-end runs, get_tensor is usually used to get back the logits,
@@ -2376,13 +2504,8 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 }
 
 static size_t ggml_backend_opencl_buffer_type_get_alignment(ggml_backend_buffer_type_t buffer_type) {
-    // FIXME: not thread safe, device may not be initialized yet
-    static cl_uint alignment = -1;
-    if (alignment == (cl_uint)-1) {
-        ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer_type->device);
-        alignment = backend_ctx->alignment;
-    }
-    return alignment;
+    ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(buffer_type->device);
+    return backend_ctx->alignment;
 }
 
 static size_t ggml_backend_opencl_buffer_type_get_max_size(ggml_backend_buffer_type_t buffer_type) {
@@ -2408,16 +2531,6 @@ static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
     /* .get_alloc_size   = */ NULL,
     /* .is_host          = */ NULL,
 };
-
-ggml_backend_buffer_type_t ggml_backend_opencl_buffer_type() {
-    static ggml_backend_buffer_type buffer_type = {
-        /* .iface   = */ ggml_backend_opencl_buffer_type_interface,
-        /* .device  = */ &g_ggml_backend_opencl_device,
-        /* .context = */ nullptr,
-    };
-
-    return &buffer_type;
-}
 
 //
 // backend device
@@ -2476,9 +2589,15 @@ static ggml_backend_t ggml_backend_opencl_device_init(ggml_backend_dev_t dev, co
 }
 
 static ggml_backend_buffer_type_t ggml_backend_opencl_device_get_buffer_type(ggml_backend_dev_t dev) {
-    return ggml_backend_opencl_buffer_type();
+    auto * dev_ctx = static_cast<ggml_backend_opencl_device_context *>(dev->context);
 
-    GGML_UNUSED(dev);
+    dev_ctx->buffer_type = ggml_backend_buffer_type{
+        /* .iface   = */ ggml_backend_opencl_buffer_type_interface,
+        /* .device  = */ dev,
+        /* .context = */ nullptr,
+    };
+
+    return &dev_ctx->buffer_type;
 }
 
 static ggml_backend_buffer_t ggml_backend_opencl_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
@@ -2494,12 +2613,21 @@ static bool ggml_backend_opencl_device_supports_op(ggml_backend_dev_t dev, const
 }
 
 static bool ggml_backend_opencl_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return buft->iface.get_name == ggml_backend_opencl_buffer_type_get_name;
+    // Check 'dev' and 'buffer_type' are not objects belonging to this backend.
+    if (dev->iface.get_name != ggml_backend_opencl_device_get_name ||
+        buft->iface.get_name != ggml_backend_opencl_buffer_type_get_name) {
+        return false;
+    }
 
-    GGML_UNUSED(dev);
+    // Check cl_context is the same. clEnqueue* commands may not use
+    // buffers from another cl_context.
+    ggml_backend_opencl_context * backend_ctx0 = ggml_cl2_init(dev);
+    ggml_backend_opencl_context * backend_ctx1 = ggml_cl2_init(buft->device);
+    return backend_ctx0->context == backend_ctx1->context;
 }
 
-static struct ggml_backend_device_i ggml_backend_opencl_device_i = {
+namespace /* anonymous */ {
+struct ggml_backend_device_i ggml_backend_opencl_device_i = {
     /* .get_name             = */ ggml_backend_opencl_device_get_name,
     /* .get_description      = */ ggml_backend_opencl_device_get_description,
     /* .get_memory           = */ ggml_backend_opencl_device_get_memory,
@@ -2516,6 +2644,7 @@ static struct ggml_backend_device_i ggml_backend_opencl_device_i = {
     /* .event_free           = */ NULL,
     /* .event_synchronize    = */ NULL,
 };
+}
 
 // Backend registry
 
@@ -2526,15 +2655,15 @@ static const char * ggml_backend_opencl_reg_get_name(ggml_backend_reg_t reg) {
 }
 
 static size_t ggml_backend_opencl_reg_device_count(ggml_backend_reg_t reg) {
-    return ggml_backend_opencl_n_devices;
+    return g_ggml_backend_opencl_devices.size();
 
     GGML_UNUSED(reg);
 }
 
 static ggml_backend_dev_t ggml_backend_opencl_reg_device_get(ggml_backend_reg_t reg, size_t index) {
-    GGML_ASSERT(index == 0);
+    GGML_ASSERT(index < ggml_backend_opencl_reg_device_count(reg));
 
-    return &g_ggml_backend_opencl_device;
+    return &g_ggml_backend_opencl_devices[index];
 
     GGML_UNUSED(reg);
     GGML_UNUSED(index);
@@ -2548,27 +2677,23 @@ static struct ggml_backend_reg_i ggml_backend_opencl_reg_i = {
 };
 
 ggml_backend_reg_t ggml_backend_opencl_reg(void) {
-    // TODO: make this thread-safe somehow?
+    static std::mutex mutex;
     static ggml_backend_reg reg;
     static bool initialized = false;
+    std::lock_guard<std::mutex> lock(mutex);
 
-    if (!initialized) {
-        reg = ggml_backend_reg {
-            /* .api_version = */ GGML_BACKEND_API_VERSION,
-            /* .iface   = */ ggml_backend_opencl_reg_i,
-            /* .context = */ NULL,
-        };
-
-        g_ggml_backend_opencl_device = ggml_backend_device {
-            /* .iface   = */ ggml_backend_opencl_device_i,
-            /* .reg     = */ &reg,
-            /* .context = */ &g_ggml_ctx_dev_main,
-        };
-
-        ggml_cl2_init(&g_ggml_backend_opencl_device);
-
-        initialized = true;
+    if (initialized) {
+        return &reg;
     }
+    initialized = true;
+
+    g_ggml_backend_opencl_devices = ggml_opencl_probe_devices(&reg);
+
+    reg = ggml_backend_reg{
+        /* .api_version = */ GGML_BACKEND_API_VERSION,
+        /* .iface       = */ ggml_backend_opencl_reg_i,
+        /* .context     = */ NULL,
+    };
 
     return &reg;
 }
@@ -2942,14 +3067,19 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
         size_t global_work_size[] = {(size_t)n, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
+        size_t * local_work_size_ptr = local_work_size;
+        if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+            local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+        }
+
 #ifdef GGML_OPENCL_PROFILING
         cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
         g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
     } else {
         unsigned int nth = MIN(64, ne0);
@@ -3077,14 +3207,19 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
         size_t global_work_size[] = {(size_t)n, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
+        size_t * local_work_size_ptr = local_work_size;
+        if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+            local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+        }
+
 #ifdef GGML_OPENCL_PROFILING
         cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
         g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
     } else {
         unsigned int nth = MIN(64, ne0);
@@ -3233,14 +3368,19 @@ static void ggml_cl_silu(ggml_backend_t backend, const ggml_tensor * src0, const
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
+    size_t * local_work_size_ptr = local_work_size;
+    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+    }
+
 #ifdef GGML_OPENCL_PROFILING
     cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
     g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
 }
 
@@ -3273,14 +3413,19 @@ static void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
+    size_t * local_work_size_ptr = local_work_size;
+    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+    }
+
 #ifdef GGML_OPENCL_PROFILING
     cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
     g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
 }
 
@@ -3320,14 +3465,19 @@ static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, cons
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
+    size_t * local_work_size_ptr = local_work_size;
+    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+    }
+
 #ifdef GGML_OPENCL_PROFILING
     cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
     g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
 }
 
@@ -4230,14 +4380,19 @@ static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, cons
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
+    size_t * local_work_size_ptr = local_work_size;
+    if (n % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+        local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+    }
+
 #ifdef GGML_OPENCL_PROFILING
     cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
     g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
 }
 
@@ -4418,14 +4573,19 @@ static void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * sr
         size_t global_work_size[] = {(size_t)ne00, (size_t)ne01, (size_t)ne02};
         size_t local_work_size[] = {64, 1, 1};
 
+        size_t * local_work_size_ptr = local_work_size;
+        if (ne00 % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
+            local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
+        }
+
 #ifdef GGML_OPENCL_PROFILING
         cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
 
         g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
+        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
 #else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
 #endif
     }
 }

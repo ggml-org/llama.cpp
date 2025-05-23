@@ -38,8 +38,12 @@ export default function Header() {
 
       {/* action buttons (top right) */}
       <div className="flex items-center">
-        <div className="tooltip tooltip-bottom" data-tip="Settings">
-          <button className="btn" onClick={() => setShowSettings(true)}>
+        <div
+          className="tooltip tooltip-bottom"
+          data-tip="Settings"
+          onClick={() => setShowSettings(true)}
+        >
+          <button className="btn" aria-hidden={true}>
             {/* settings button */}
             <Cog8ToothIcon className="w-5 h-5" />
           </button>

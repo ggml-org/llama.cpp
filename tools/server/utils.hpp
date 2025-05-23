@@ -583,6 +583,7 @@ static json oaicompat_completion_params_parse(const json & body) {
 static json oaicompat_completion_params_parse(
     const json & body, /* openai api json semantics */
     bool use_jinja,
+    bool prefill_assistant,
     common_reasoning_format reasoning_format,
     const struct common_chat_templates * tmpls,
     bool allow_non_text,
@@ -643,6 +644,18 @@ static json oaicompat_completion_params_parse(
         throw std::runtime_error("Expected 'messages' to be an array");
     }
     for (auto & msg : messages) {
+        std::string role = json_value(msg, "role", std::string());
+        if (role != "assistant" && !msg.contains("content")) {
+            throw std::runtime_error("All non-assistant messages must contain 'content'");
+        }
+        if (role == "assistant") {
+            if (!msg.contains("content") && !msg.contains("tool_calls")) {
+                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+            }
+            if (!msg.contains("content")) {
+                continue; // avoid errors with no content
+            }
+        }
         json & content = msg.at("content");
         if (content.is_string() || content.is_null()) {
             continue;
@@ -697,7 +710,7 @@ static json oaicompat_completion_params_parse(
 
                 // replace this chunk with a marker
                 p["type"] = "text";
-                p["text"] = MTMD_DEFAULT_IMAGE_MARKER;
+                p["text"] = mtmd_default_marker();
                 p.erase("image_url");
             }
         }
@@ -720,7 +733,7 @@ static json oaicompat_completion_params_parse(
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant";
+    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && prefill_assistant;
     common_chat_msg last_message;
     if (prefill_assistant_message) {
         last_message = inputs.messages.back();
@@ -1153,7 +1166,7 @@ public:
         tokens.clear();
     }
 
-    void resize(size_t n) {
+    void keep_first(size_t n) {
         GGML_ASSERT(n <= tokens.size());
         if (has_mtmd) {
             // we throw an error if we try to remove a token in the middle of an image

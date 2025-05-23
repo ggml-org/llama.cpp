@@ -56,60 +56,82 @@ The llama.cpp CANN backend is designed to support Ascend NPU. It utilize the abi
 
 ## Model Supports
 
-| Model Name                  | FP16  | Q8_0 | Q4_0 |
+| Model Name                  | FP16  | Q4_0 | Q8_0 |
 |:----------------------------|:-----:|:----:|:----:|
-| AquilaChat2-7B              |   √   |   √  |   √  |
-| Baichuan-7b                 |   √   |   √  |   √  |
-| Baichuan2-7B-Chat           |   √   |   √  |   √  |
-| bitnet_b1_58-large          |   √   |   √  |   √  |
-| bloom-560m                  |   √   |   x  |   √  |
-| bloomz-alpaca-560m          |   √   |   x  |   √  |
-| c4ai-command-r-35B-v01      |   x   |   x  |   x  |
-| chatglm3-6B                 |   x   |   x  |   x  |
-| chinese-alpaca-2-1.3b       |   √   |   √  |   √  |
-| CodeShell-7B                |   √   |   √  |   √  |
-| deepseek-ai_deepseek-coder-1.3B-base | x |   x  |   x  |
-| deepseek-ai_DeepSeek-V2-Lite | x   |   x  |   x   |
-| deepseek-coder-6.7B-instruct | x   |   x  |   x   |
-| DeepSeek-V2-Lite-64x1.5B    |   x   |   x  |   x  |
-| falcon-7b-instruct          |   √   |   √  |   √  |
-| flan-t5-large               |   √   |   √  |   √  |
-| gemma-2-9b-it               |   √   |   √  |   √  |
-| glm-4-9B                    |   x   |   x  |   x  |
-| gpt2                        |   √   |   √  |   √  |
-| Gpt2-163M                   |   √   |   √  |   √  |
-| granite-3B-code-instruct    |   √   |   √  |   √  |
+| Llama-2                     |   √   |   √  |   √  |
+| Llama-3                     |   √   |   √  |   √  |
+| Mistral-7B                  |   √   |   √  |   √  |
+| Mistral MOE                 |   √   |   √  |   √  |
+| DBRX                        |   -   |   -  |   -  |
+| Falcon                      |   √   |   √  |   √  |
+| Chinese LLaMA/Alpaca        |   √   |   √  |   √  |
+| Vigogne(French)             |   √   |   √  |   √  |
+| BERT                        |   x   |   x  |   x  |
+| Koala                       |   √   |   √  |   √  |
+| Baichuan                    |   √   |   √  |   √  |
+| Aquila 1 & 2                |   √   |   √  |   √  |
+| Starcoder models            |   √   |   √  |   √  |
+| Refact                      |   √   |   √  |   √  |
+| MPT                         |   √   |   √  |   √  |
+| Bloom                       |   √   |   √  |   √  |
+| Yi models                   |   √   |   √  |   √  |
+| stablelm models             |   √   |   √  |   √  |
+| DeepSeek models             |   x   |   x  |   x  |
+| Qwen models                 |   √   |   √  |   √  |
+| PLaMo-13B                   |   √   |   √  |   √  |
+| Phi models                  |   √   |   √  |   √  |
+| PhiMoE                      |   √   |   √  |   √  |
+| GPT-2                       |   √   |   √  |   √  |
+| Orion                       |   √   |   √  |   √  |
+| InternlLM2                  |   √   |   √  |   √  |
+| CodeShell                   |   √   |   √  |   √  |
+| Gemma                       |   √   |   √  |   √  |
+| Mamba                       |   √   |   √  |   √  |
+| Xverse                      |   √   |   √  |   √  |
+| command-r models            |   √   |   √  |   √  |
+| Grok-1                      |   -   |   -  |   -  |
+| SEA-LION                    |   √   |   √  |   √  |
 | GritLM-7B                   |   √   |   √  |   √  |
-| internlm2_5-7b-chat         |   √   |   √  |   √  |
-| koala-7B-HF                 |   √   |   √  |   √  |
-| Llama-2-7b-chat-hf          |   √   |   √  |   √  |
-| Llama-3-Smaug-8B            |   √   |   √  |   √  |
-| Llama2-Chinese-7b-Chat      |   √   |   √  |   √  |
-| Llama3-8B                   |   √   |   √  |   √  |
-| Llama3-8b-chinese           |   √   |   √  |   √  |
-| mamba-130m-hf               |   √   |   √  |   √  |
-| Mistral-7B-Instruct-v0.2    |   √   |   √  |   √  |
-| Mixtral-8x7B-Instruct-v0.1  |   x   |   √  |   √  |
-| mpt-7B                      |   √   |   √  |   √  |
-| OLMo-1B-hf                  |   √   |   √  |   √  |
-| OpenELM-3B-Instruct         |   √   |   √  |   √  |
-| Orion-14b-base              |   √   |   √  |   √  |
-| phi1                        |   x   |   x  |   x  |
-| phi2                        |   x   |   x  |   x  |
-| Phi-3-mini-4k-instruct      |   √   |   √  |   √  |
-| plamo-13b                   |   √   |   √  |   √  |
-| pythia-70M                  |   x   |   x  |   x  |
-| Qwen-7B                     |   √   |   √  |   √  |
-| Qwen2-1.5B-Instruct         |   √   |   x  |   √  |
-| Refact-1_6B-fim             |   √   |   √  |   √  |
-| SmolLM-135M                 |   √   |   √  |   √  |
-| stablelm-zephyr             |   x   |   x  |   x  |
-| stablelm-2-zephyr-1_6b      |   x   |   x  |   x  |
-| starcoderbase-1b            |   √   |   √  |   √  |
-| starcoder2-3b               |   √   |   √  |   √  |
-| vigogne-7b-chat             |   √   |   √  |   √  |
-| xverse-7b-chat              |   √   |   √  |   √  |
-| Yi-6b-Chat                  |   √   |   √  |   √  |
+| OLMo                        |   √   |   √  |   √  |
+| OLMo 2                      |   √   |   √  |   √  |
+| OLMoE                       |   √   |   √  |   √  |
+| Granite models              |   √   |   √  |   √  |
+| GPT-NeoX                    |   √   |   √  |   √  |
+| Pythia                      |   √   |   √  |   √  |
+| Snowflake-Arctic MoE        |   -   |   -  |   -  |
+| Smaug                       |   √   |   √  |   √  |
+| Poro 34B                    |   √   |   √  |   √  |
+| Bitnet b1.58 models         |   √   |   x  |   x  |
+| Flan-T5                     |   √   |   √  |   √  |
+| Open Elm models             |   x   |   √  |   √  |
+| chatGLM3-6B + ChatGLM4-9b +  GLMEdge-1.5b + GLMEdge-4b    |   √   |   √  |   √  |
+| GLM-4-0414                  |   √   |   √  |   √  |
+| SmolLM                      |   √   |   √  |   √  |
+| EXAONE-3.0-7.8B-Instruct    |   √   |   √  |   √  |
+| FalconMamba Models          |   √   |   √  |   √  |
+| Jais Models                 |   -   |   x  |   x  |
+| Bielik-11B-v2.3             |   √   |   √  |   √  |
+| RWKV-6                      |   -   |   √  |   √  |
+| QRWKV-6                     |   √   |   √  |   √  |
+| GigaChat-20B-A3B            |   x   |   x  |   x  |
+| Trillion-7B-preview         |   √   |   √  |   √  |
+| Ling models                 |   √   |   √  |   √  |
+
+
+**Multimodal**
+| Model Name                  | FP16  | Q4_0 | Q8_0 |
+|:----------------------------|:-----:|:----:|:----:|
+| LLaVA 1.5 models, LLaVA 1.6 models      |   x   |   x  |   x  |
+|  BakLLaVA                   |   √   |   √  |   √  |
+|  Obsidian                   |   √   |   -  |   -  |
+|  ShareGPT4V                 |   x   |   -  |   -  |
+|  MobileVLM 1.7B/3B models   |   -   |   -  |   -  |
+|  Yi-VL                      |   -   |   -  |   -  |
+|  Mini CPM                   |   √   |   √  |   √  |
+|  Moondream                  |   √   |   √  |   √  |
+|  Bunny                      |   √   |   -  |   -  |
+|  GLM-EDGE                   |   √   |   √  |   √  |
+|  Qwen2-VL                   |   √   |   √  |   √  |
 
 
 
