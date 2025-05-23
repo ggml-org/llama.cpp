@@ -4705,6 +4705,7 @@ struct llm_build_llama : public llm_graph_context {
         cur = build_lora_mm(model.output, cur);
 
         cb(cur, "result_output", -1);
+        cur = ggml_scale(ctx0, cur, 1.0f);
         res->t_logits = cur;
 
         ggml_build_forward_expand(gf, cur);
