@@ -518,12 +518,6 @@ public:
     // to the first cell of the slot.
     bool find_slot(const llama_ubatch & batch) override;
 
-    int32_t get_n_tokens()   const override;
-    int32_t get_used_cells() const override;
-
-    // TODO: better data structures to reduce the cost of this operation
-    llama_pos get_pos_max() const override;
-
     bool get_can_shift() const override;
 
     // state write/load

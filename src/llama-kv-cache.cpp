@@ -3196,35 +3196,6 @@ bool llama_kv_cache_hybrid::find_slot(const llama_ubatch & batch) {
     return found;
 }
 
-int32_t llama_kv_cache_hybrid::get_n_tokens() const {
-    // The number of tokens should be the same across all child caches
-    int32_t n_tokens = -1;
-    for (const auto & cache : m_children) {
-        const auto cache_n_tokens = cache->get_n_tokens();
-        GGML_ASSERT(n_tokens == -1 || cache_n_tokens == n_tokens);
-        n_tokens = cache_n_tokens;
-    }
-    return n_tokens;
-}
-
-int32_t llama_kv_cache_hybrid::get_used_cells() const {
-    // TODO: Is this correct?
-    // Return the largest number of used cells
-    int32_t used_cells = -1;
-    for (const auto & cache : m_children) {
-        used_cells = std::max(used_cells, cache->get_used_cells());
-    }
-    return used_cells;
-}
-
-llama_pos llama_kv_cache_hybrid::get_pos_max() const {
-    llama_pos pos_max = -1;
-    for (const auto & cache : m_children) {
-        pos_max = std::max(pos_max, cache->get_pos_max());
-    }
-    return pos_max;
-}
-
 bool llama_kv_cache_hybrid::get_can_shift() const {
     // TODO: Is this correct?
     // If any children can shift, return true
