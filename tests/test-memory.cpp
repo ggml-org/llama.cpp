@@ -127,10 +127,11 @@ static void test_llama_kv_cache_unified_single_seq() {
     //  relate to each other, but they're left for future readers to help in the
     //  same understanding process.
     llama_seq_id seq_id = 42;
-    llama_batch batch = llama_batch_init(3, 0, 1);
-    common_batch_add(batch, 101, 0, {seq_id}, false);
-    common_batch_add(batch, 1,   1, {seq_id}, false);
-    common_batch_add(batch, 102, 2, {seq_id}, false);
+    llama_batch batch = llama_batch_init(3, 0, 1);     //> Added 3 tokens, 0 padding, 1 sequence
+    //> This seq_id indicates that the token belongs to sequence with id 42.
+    common_batch_add(batch, 101, 0, {seq_id}, false);  //> Added token 101  at position 0, no padding, sequence id 42
+    common_batch_add(batch, 1,   1, {seq_id}, false);  //> Added token 1    at position 1, no padding, sequence id 42
+    common_batch_add(batch, 102, 2, {seq_id}, false);  //> Added token 102  at position 2, no padding, sequence id 42
     llama_sbatch sbatch(batch, 0, true, false);
     GGML_ASSERT(batch.n_tokens == 3);
     GGML_ASSERT(sbatch.n_tokens == 3);
@@ -146,6 +147,21 @@ static void test_llama_kv_cache_unified_single_seq() {
 
     // Find a slot for a new sequence
     GGML_ASSERT(cache.find_slot(ubatch));
+    
+    llama_batch batch2 = llama_batch_init(3, 0, 1);
+    common_batch_add(batch2, 103, 0, {seq_id}, false);
+    common_batch_add(batch2, 2,   1, {seq_id}, false);
+    common_batch_add(batch2, 104, 2, {seq_id}, false);
+    llama_sbatch sbatch2(batch2, 0, true, false);
+    llama_ubatch ubatch2 = sbatch2.split_simple(2);
+    printf("ubatch2.n_seqs=%d\n", ubatch2.n_seqs);
+    GGML_ASSERT(ubatch2.n_seqs == 2);
+    GGML_ASSERT(ubatch2.n_seq_tokens == 1);
+    GGML_ASSERT(ubatch2.n_tokens == 2);
+    GGML_ASSERT(ubatch2.seq_id[0][0] == seq_id);
+    GGML_ASSERT(ubatch2.seq_id[1][0] == seq_id);
+    
+    GGML_ASSERT(cache.find_slot(ubatch2));
 
     // Clean up
     llama_batch_free(batch);

@@ -489,7 +489,7 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
         return false;
     }
 
-//#define FIND_SLOT_DEBUG 1
+#define FIND_SLOT_DEBUG 1
 #if FIND_SLOT_DEBUG
     LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
 

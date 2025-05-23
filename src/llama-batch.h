@@ -8,7 +8,7 @@
 // very similar to llama_batch,
 // but has more metadata about sequences
 struct llama_ubatch {
-    bool equal_seqs;
+    bool equal_seqs;          //> Whether all sequences have the same length?
     // TODO: whole_seqs for embeddings?
 
     uint32_t n_tokens; // total tokens (n_seq_tokens * n_seqs)
