@@ -1234,9 +1234,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 GGML_ASSERT(dst->op == GGML_OP_MUL_MAT);
                 ggml_tensor * src0 = dst->src[0];
                 ggml_tensor * src1 = dst->src[1];
-                fprintf(stderr, "%s: 025 src0={%ld, %ld, %ld, %ld} src1={%ld, %ld, %ld, %ld} dst={%ld, %ld, %ld, %ld}\n",
-                      __func__, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
-                      dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+                // fprintf(stderr, "%s: 025 src0={%ld, %ld, %ld, %ld} src1={%ld, %ld, %ld, %ld} dst={%ld, %ld, %ld, %ld}\n",
+                //       __func__, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                //       dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
 
                 GGML_ASSERT(src0->buffer);
                 GGML_ASSERT(ggml_backend_buft_is_split(ggml_backend_buffer_get_type(src0->buffer)));
@@ -1270,9 +1270,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 dst->nb[2] = dst->ne[1]*dst->nb[1];
                 dst->nb[3] = dst->ne[2]*dst->nb[2];
 
-                fprintf(stderr, "%s: 050 src0={%ld, %ld, %ld, %ld} src1={%ld, %ld, %ld, %ld} dst={%ld, %ld, %ld, %ld}\n",
-                      __func__, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
-                      dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+                // fprintf(stderr, "%s: 050 src0={%ld, %ld, %ld, %ld} src1={%ld, %ld, %ld, %ld} dst={%ld, %ld, %ld, %ld}\n",
+                //       __func__, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                //       dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
             }
 
             for (int n = 0; n < split.graph.n_nodes; n++) {
@@ -1385,7 +1385,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split.inputs[n_inputs] = src;
                     }
-                    fprintf(stderr, "%s: 100 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
+                    // fprintf(stderr, "%s: 100 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, split.backend_id, sched->cur_copy);
                 } else if (src_backend_id != split.backend_id && !ggml_backend_sched_buffer_supported(sched, src, split.backend_id)) {
                     // create a copy of the input in the split's backend
@@ -1405,7 +1405,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split.inputs[n_inputs] = src;
                     }
-                    fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
+                    // fprintf(stderr, "%s: 200 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, split.backend_id, sched->cur_copy);
                 }
             }
