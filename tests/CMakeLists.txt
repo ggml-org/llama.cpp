@@ -185,3 +185,13 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 add_executable(test-qlutattn-quants ${CMAKE_CURRENT_SOURCE_DIR}/test_qlutattn_quants.cpp)
 target_link_libraries(test-qlutattn-quants PRIVATE ggml common)
 target_compile_features(test-qlutattn-quants PRIVATE cxx_std_11)
+
+# Add mixed precision KV cache test
+if (NOT GGML_BACKEND_DL)
+    llama_build_and_test(test-kv-cache-mixed.cpp)
+endif()
+
+# Add unified cache copy test
+if (NOT GGML_BACKEND_DL)
+    llama_build_and_test(test-unified-cache-copy.cpp)
+endif()
