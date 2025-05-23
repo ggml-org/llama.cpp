@@ -278,6 +278,13 @@ export default function ChatScreen() {
 
 function ServerInfo() {
   const { serverProps } = useAppContext();
+  const modalities = [];
+  if (serverProps?.modalities?.audio) {
+    modalities.push('audio');
+  }
+  if (serverProps?.modalities?.vision) {
+    modalities.push('vision');
+  }
   return (
     <div
       className="card card-sm shadow-sm border-1 border-base-content/20 text-base-content/70 mb-6"
@@ -291,6 +298,13 @@ function ServerInfo() {
           <br />
           <b>Build</b>: {serverProps?.build_info}
           <br />
+          {modalities.length > 0 ? (
+            <>
+              <b>Supported modalities:</b> {modalities.join(', ')}
+            </>
+          ) : (
+            ''
+          )}
         </p>
       </div>
     </div>

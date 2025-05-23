@@ -11,6 +11,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorkerSrc;
 // This file handles uploading extra context items (a.k.a files)
 // It allows processing these kinds of files:
 // - image files (converted to base64)
+// - audio files (converted to base64)
 // - text files (including code files)
 // - pdf (converted to text)
 
@@ -41,96 +42,73 @@ export function useChatExtraContext(): ChatExtraContextApi {
 
   const isSupportVision = serverProps?.modalities?.vision;
 
-  const onFileAdded = (files: File[]) => {
-    for (const file of files) {
-      const mimeType = file.type;
-      console.debug({ mimeType, file });
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error('File is too large. Maximum size is 10MB.');
-        break;
-      }
-
-      if (mimeType.startsWith('image/')) {
-        if (!isSupportVision) {
-          toast.error('Multimodal is not supported by this server or model.');
+  const onFileAdded = async (files: File[]) => {
+    try {
+      for (const file of files) {
+        const mimeType = file.type;
+        if (file.size > 10 * 1024 * 1024) {
+          toast.error('File is too large. Maximum size is 10MB.');
           break;
         }
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-          if (event.target?.result) {
-            let base64Url = event.target.result as string;
 
-            if (mimeType === 'image/svg+xml') {
-              // Convert SVG to PNG
-              base64Url = await svgBase64UrlToPngDataURL(base64Url);
-            }
+        if (mimeType.startsWith('image/')) {
+          if (!isSupportVision) {
+            toast.error('Multimodal is not supported by this server or model.');
+            break;
+          }
 
-            addItems([
-              {
+          let base64Url = await getFileAsBase64(file);
+          if (mimeType === 'image/svg+xml') {
+            // Convert SVG to PNG
+            base64Url = await svgBase64UrlToPngDataURL(base64Url);
+          }
+          addItems([
+            {
+              type: 'imageFile',
+              name: file.name,
+              base64Url,
+            },
+          ]);
+        } else if (mimeType.startsWith('video/')) {
+          toast.error('Video files are not supported yet.');
+          break;
+        } else if (mimeType.startsWith('audio/')) {
+          if (!/mpeg|wav/.test(mimeType)) {
+            toast.error('Only mp3 and wav audio files are supported.');
+            break;
+          }
+
+          // plain base64, not a data URL
+          const base64Data = await getFileAsBase64(file, false);
+          addItems([
+            {
+              type: 'audioFile',
+              name: file.name,
+              mimeType,
+              base64Data,
+            },
+          ]);
+        } else if (mimeType.startsWith('application/pdf')) {
+          if (config.pdfAsImage && !isSupportVision) {
+            toast(
+              'Multimodal is not supported, PDF will be converted to text instead of image.'
+            );
+            break;
+          }
+
+          if (config.pdfAsImage && isSupportVision) {
+            // Convert PDF to images
+            const base64Urls = await convertPDFToImage(file);
+            addItems(
+              base64Urls.map((base64Url) => ({
                 type: 'imageFile',
                 name: file.name,
                 base64Url,
-              },
-            ]);
-          }
-        };
-        reader.readAsDataURL(file);
-      } else if (
-        mimeType.startsWith('video/') ||
-        mimeType.startsWith('audio/')
-      ) {
-        toast.error('Video and audio files are not supported yet.');
-        break;
-      } else if (mimeType.startsWith('application/pdf')) {
-        if (config.pdfAsImage && !isSupportVision) {
-          toast(
-            'Multimodal is not supported, PDF will be converted to text instead of image.'
-          );
-          break;
-        }
-
-        const promise =
-          config.pdfAsImage && isSupportVision
-            ? convertPDFToImage(file).then((base64Urls) => {
-                addItems(
-                  base64Urls.map((base64Url) => ({
-                    type: 'imageFile',
-                    name: file.name,
-                    base64Url,
-                  }))
-                );
-              })
-            : convertPDFToText(file).then((content) => {
-                if (isSupportVision) {
-                  toast.success(
-                    'PDF file converted to text. You can also convert it to image, see in Settings.'
-                  );
-                }
-                addItems([
-                  {
-                    type: 'textFile',
-                    name: file.name,
-                    content,
-                  },
-                ]);
-              });
-
-        promise.catch((error) => {
-          console.error(error);
-          toast.error('Failed to parse PDF file.');
-        });
-        break;
-      } else {
-        // Because there can be many text file types (like code file), we will not check the mime type
-        // and will just check if the file is not binary.
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          if (event.target?.result) {
-            const content = event.target.result as string;
-            if (!isLikelyNotBinary(content)) {
-              toast.error('File is binary. Please upload a text file.');
-              return;
-            }
+              }))
+            );
+          } else {
+            // Convert PDF to text
+            const content = await convertPDFToText(file);
             addItems([
               {
                 type: 'textFile',
@@ -138,10 +116,40 @@ export function useChatExtraContext(): ChatExtraContextApi {
                 content,
               },
             ]);
+            if (isSupportVision) {
+              toast.success(
+                'PDF file converted to text. You can also convert it to image, see in Settings.'
+              );
+            }
           }
-        };
-        reader.readAsText(file);
+          break;
+        } else {
+          // Because there can be many text file types (like code file), we will not check the mime type
+          // and will just check if the file is not binary.
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            if (event.target?.result) {
+              const content = event.target.result as string;
+              if (!isLikelyNotBinary(content)) {
+                toast.error('File is binary. Please upload a text file.');
+                return;
+              }
+              addItems([
+                {
+                  type: 'textFile',
+                  name: file.name,
+                  content,
+                },
+              ]);
+            }
+          };
+          reader.readAsText(file);
+        }
       }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const errorMessage = `Error processing file: ${message}`;
+      toast.error(errorMessage);
     }
   };
 
@@ -152,6 +160,25 @@ export function useChatExtraContext(): ChatExtraContextApi {
     clearItems,
     onFileAdded,
   };
+}
+
+async function getFileAsBase64(file: File, outputUrl = true): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target?.result) {
+        let result = event.target.result as string;
+        if (!outputUrl) {
+          // remove base64 url prefix and correct characters
+          result = result.substring(result.indexOf(',') + 1);
+        }
+        resolve(result);
+      } else {
+        reject(new Error('Failed to read file.'));
+      }
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {

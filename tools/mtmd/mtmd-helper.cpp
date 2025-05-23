@@ -12,17 +12,7 @@ size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks) {
     size_t n_tokens = 0;
     for (size_t i = 0; i < mtmd_input_chunks_size(chunks); i++) {
         auto chunk = mtmd_input_chunks_get(chunks, i);
-        auto chunk_type = mtmd_input_chunk_get_type(chunk);
-        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-            size_t n_tokens_text;
-            mtmd_input_chunk_get_tokens_text(chunk, &n_tokens_text);
-            n_tokens += n_tokens_text;
-        } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            auto tokens_image = mtmd_input_chunk_get_tokens_image(chunk);
-            n_tokens += mtmd_image_tokens_get_n_tokens(tokens_image);
-        } else {
-            GGML_ASSERT(false && "chunk type not supported");
-        }
+        n_tokens += mtmd_input_chunk_get_n_tokens(chunk);
     }
     return n_tokens;
 }
@@ -31,17 +21,7 @@ llama_pos mtmd_helper_get_n_pos(const mtmd_input_chunks * chunks) {
     llama_pos n_pos = 0;
     for (size_t i = 0; i < mtmd_input_chunks_size(chunks); i++) {
         auto chunk = mtmd_input_chunks_get(chunks, i);
-        auto chunk_type = mtmd_input_chunk_get_type(chunk);
-        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
-            size_t n_tokens_text;
-            mtmd_input_chunk_get_tokens_text(chunk, &n_tokens_text);
-            n_pos += n_tokens_text;
-        } else if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
-            auto tokens_image = mtmd_input_chunk_get_tokens_image(chunk);
-            n_pos += mtmd_image_tokens_get_n_pos(tokens_image);
-        } else {
-            GGML_ASSERT(false && "chunk type not supported");
-        }
+        n_pos += mtmd_input_chunk_get_n_pos(chunk);
     }
     return n_pos;
 }

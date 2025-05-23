@@ -119,11 +119,12 @@ MTMD_API bool mtmd_support_audio(mtmd_context * ctx);
 //     the data is in float format (PCM F32)
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init           (uint32_t nx, uint32_t ny, const unsigned char * data);
 MTMD_API mtmd_bitmap *         mtmd_bitmap_init_from_audio(size_t n_samples,         const float         * data);
-MTMD_API uint32_t              mtmd_bitmap_get_nx  (const mtmd_bitmap * bitmap);
-MTMD_API uint32_t              mtmd_bitmap_get_ny  (const mtmd_bitmap * bitmap);
-MTMD_API const unsigned char * mtmd_bitmap_get_data(const mtmd_bitmap * bitmap);
-MTMD_API bool                  mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap);
-MTMD_API void                  mtmd_bitmap_free    (mtmd_bitmap * bitmap);
+MTMD_API uint32_t              mtmd_bitmap_get_nx     (const mtmd_bitmap * bitmap);
+MTMD_API uint32_t              mtmd_bitmap_get_ny     (const mtmd_bitmap * bitmap);
+MTMD_API const unsigned char * mtmd_bitmap_get_data   (const mtmd_bitmap * bitmap);
+MTMD_API size_t                mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap);
+MTMD_API bool                  mtmd_bitmap_is_audio   (const mtmd_bitmap * bitmap);
+MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // bitmap ID is optional, but useful for KV cache tracking
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
@@ -322,6 +323,7 @@ struct bitmap {
     uint32_t nx() { return mtmd_bitmap_get_nx(ptr.get()); }
     uint32_t ny() { return mtmd_bitmap_get_ny(ptr.get()); }
     const unsigned char * data() { return mtmd_bitmap_get_data(ptr.get()); }
+    size_t n_bytes() { return mtmd_bitmap_get_n_bytes(ptr.get()); }
     std::string id() { return mtmd_bitmap_get_id(ptr.get()); }
     void set_id(const char * id) { mtmd_bitmap_set_id(ptr.get(), id); }
 };

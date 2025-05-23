@@ -1891,6 +1891,7 @@ struct server_context {
     float slot_prompt_similarity = 0.0f;
 
     common_chat_templates_ptr chat_templates;
+    oaicompat_parser_options  oai_parser_opt;
 
     ~server_context() {
         mtmd_free(mctx);
@@ -2086,6 +2087,15 @@ struct server_context {
         }
 
         metrics.init();
+
+        oai_parser_opt = {
+            /* use_jinja             */ params_base.use_jinja,
+            /* prefill_assistant     */ params_base.prefill_assistant,
+            /* reasoning_format      */ params_base.reasoning_format,
+            /* common_chat_templates */ chat_templates.get(),
+            /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
+            /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
+        };
     }
 
     server_slot * get_slot_by_id(int id) {
@@ -4092,7 +4102,10 @@ int main(int argc, char ** argv) {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
             { "model_path",                  ctx_server.params_base.model.path },
-            { "modalities",                  json{{"vision", ctx_server.mctx != nullptr}} }, // TODO: add more in the future
+            { "modalities",                  json{
+                {"vision", ctx_server.oai_parser_opt.allow_image},
+                {"audio",  ctx_server.oai_parser_opt.allow_audio},
+            } },
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},
@@ -4183,10 +4196,10 @@ int main(int argc, char ** argv) {
                 for (auto & file : files) {
                     mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(file.data(), file.size()));
                     if (!bmp.ptr) {
-                        throw std::runtime_error("Failed to load image");
+                        throw std::runtime_error("Failed to load image or audio file");
                     }
                     // calculate bitmap hash (for KV caching)
-                    std::string hash = fnv_hash(bmp.data(), bmp.nx()*bmp.ny()*3);
+                    std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
                     bmp.set_id(hash.c_str());
                     bitmaps.entries.push_back(std::move(bmp));
                 }
@@ -4418,7 +4431,7 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_chat_completions = [&ctx_server, &params, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_chat_completions = [&ctx_server, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         LOG_DBG("request: %s\n", req.body.c_str());
         if (ctx_server.params_base.embedding) {
             res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
@@ -4427,13 +4440,9 @@ int main(int argc, char ** argv) {
 
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
-        json data = oaicompat_completion_params_parse(
+        json data = oaicompat_chat_params_parse(
             body,
-            params.use_jinja,
-            params.prefill_assistant,
-            params.reasoning_format,
-            ctx_server.chat_templates.get(),
-            ctx_server.mctx,
+            ctx_server.oai_parser_opt,
             files);
 
         handle_completions_impl(
@@ -4446,16 +4455,12 @@ int main(int argc, char ** argv) {
     };
 
     // same with handle_chat_completions, but without inference part
-    const auto handle_apply_template = [&ctx_server, &params, &res_ok](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_apply_template = [&ctx_server, &res_ok](const httplib::Request & req, httplib::Response & res) {
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files; // dummy, unused
-        json data = oaicompat_completion_params_parse(
+        json data = oaicompat_chat_params_parse(
             body,
-            params.use_jinja,
-            params.prefill_assistant,
-            params.reasoning_format,
-            ctx_server.chat_templates.get(),
-            ctx_server.mctx,
+            ctx_server.oai_parser_opt,
             files);
         res_ok(res, {{ "prompt", std::move(data.at("prompt")) }});
     };

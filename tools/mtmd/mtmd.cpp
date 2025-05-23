@@ -751,6 +751,10 @@ const unsigned char * mtmd_bitmap_get_data(const mtmd_bitmap * bitmap) {
     return bitmap->data.data();
 }
 
+size_t mtmd_bitmap_get_n_bytes(const mtmd_bitmap * bitmap) {
+    return bitmap->data.size();
+}
+
 bool mtmd_bitmap_is_audio(const mtmd_bitmap * bitmap) {
     return bitmap->is_audio;
 }
