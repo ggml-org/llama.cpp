@@ -15,6 +15,7 @@ if (CUDAToolkit_FOUND)
         # 80     == Ampere, asynchronous data loading, faster tensor core instructions
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
+        # 120    == RTX 5000, needs CUDA v12.8
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
         # XX-real    == compile CUDA code as device code for this specific architecture
@@ -23,19 +24,33 @@ if (CUDAToolkit_FOUND)
         # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
         #     for best performance and to also build real architectures for the most commonly used GPUs.
         if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+            # Use the GPUs available on this system
             set(CMAKE_CUDA_ARCHITECTURES "native")
-        elseif(GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
-            else()
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
-            endif()
         else()
-            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
+            set(ARCH_LIST "")
+
+            # Base architectures - depending on feature flags
+            if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
+                # FP16 support (Pascal and newer)
+                list(APPEND ARCH_LIST "60-virtual")
             else()
-                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+                # Maxwell and newer
+                list(APPEND ARCH_LIST "50-virtual")
             endif()
+
+            # Always included after base architecture assuming CUDA toolkit version is 11.1 or higher
+            list(APPEND ARCH_LIST "61-virtual" "70-virtual" "75-virtual" "80-virtual" "86-real")
+
+            # Version-dependent architectures for newer GPUs
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+                list(APPEND ARCH_LIST "89-real")
+            endif()
+
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
+                list(APPEND ARCH_LIST "120-real")
+            endif()
+
+            set(CMAKE_CUDA_ARCHITECTURES ${ARCH_LIST})
         endif()
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
